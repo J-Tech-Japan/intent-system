@@ -1,0 +1,24 @@
+# 変更スコープ宣言
+
+## タスク
+Projection schema の schema/mapping/public API 契約を固定するテストを先行作成する
+
+## 変更予定
+| 種別 | ファイル |
+|------|---------|
+| 作成 | `src/schema/projection-input.test.ts` |
+| 作成 | `src/schema/implementation-issue-packet.test.ts` |
+| 作成 | `src/schema/review-context-packet.test.ts` |
+| 作成 | `src/mapping/field-resolvers.test.ts` |
+| 作成 | `src/mapping/project-to-implementation-packet.test.ts` |
+| 作成 | `src/mapping/project-to-review-context-packet.test.ts` |
+| 作成 | `src/index.test.ts` |
+
+## 推定規模
+Medium
+
+## 影響範囲
+- `ProjectionInputSchema` の入力契約
+- `ImplementationIssuePacketSchema` / `ReviewContextPacketSchema` の出力契約
+- field resolver の優先順位と補完ルール
+- public API 経由の projection データフロー

@@ -1,0 +1,64 @@
+# 最終検証結果
+
+## 結果: APPROVE
+
+## 要件充足チェック
+
+タスク指示書 (`order.md`) から要件を抽出し、各要件を実コードで個別に検証した。
+
+| # | 要件（タスク指示書から抽出） | 充足 | 根拠（ファイル:行） |
+|---|---------------------------|------|-------------------|
+| 1 | projection input field 定義 | ✅ | `src/schema/projection-input.ts:7-27` — 12必須+6optional の入力スキーマ |
+| 2 | sub-slice row から packet 生成に必要な field mapping が一意に決まる | ✅ | `src/mapping/field-resolvers.ts:21-86` — 9個の純粋関数、同一入力→同一出力 |
+| 3 | implementation packet の必須 field が固定される | ✅ | `src/schema/implementation-issue-packet.ts:7-25` — 17 fields、`implementation-issue-packet.test.ts:49` で `toHaveLength(17)` |
+| 4 | review packet の必須 field が固定される | ✅ | `src/schema/review-context-packet.ts:5-13` — 7 fields、`review-context-packet.test.ts:45` で `toHaveLength(7)` |
+| 5 | review packet から parent Intent root に戻れる | ✅ | `review-context-packet.ts:10` で `parent_intent_root: z.string().min(1)` 必須、`field-resolvers.ts:84-85` でフォールバックなし直接返却、`project-to-review-context-packet.test.ts:52-59` で欠落時 validation error テスト |
+| 6 | deterministic な変換規則 | ✅ | `project-to-implementation-packet.ts:19-41`、`project-to-review-context-packet.ts:13-25` — 入出力両方 `.parse()` で検証、純粋関数のみ使用 |
+| 7 | issue_kind enum 定義 | ✅ | `src/schema/issue-kind.ts:3-10` — 6値 (`feature/bugfix/boundary-fix/verification/refactor/clarification-followup`)、Zod enum |
+| 8 | source of truth が parent Intent repo 側に残っている | ✅ | スキーマ/マッピングの定義のみで新規仕様を作っていない |
+| 9 | projected packet にしかない重要仕様を作っていない | ✅ | 全フィールドは参照資料（spec）由来 |
+| 10 | sub-slice から packet への mapping が再生成可能である | ✅ | 純粋関数、副作用なし、deterministic |
+
+## 前段 finding の再評価
+
+| finding_id | 前段判定 | 再評価 | 根拠 |
+|------------|----------|--------|------|
+| ai-review-001 | resolved | 妥当 | `projection-input.ts:12-17` に `target_path/review_mode/completion_action/landing_policy` 存在確認、`:14` で `source_concepts` optional、`:26` で `parent_intent_root` 必須 |
+| ai-review-002 | resolved | 妥当 | `implementation-issue-packet.ts:7-25` 17 fields（テスト `:49` で検証）、`review-context-packet.ts:5-13` 7 fields（テスト `:45` で検証） |
+| ai-review-003 | resolved | 妥当 | `field-resolvers.ts:84-85` — `return input.parent_intent_root` のみ。フォールバック (`?? ''`, `return ''`) 0件確認（ai-fix レポートの rg 証跡） |
+
+false positive / overreach: なし
+
+## 検証サマリー
+
+| 項目 | 状態 | 確認方法 |
+|------|------|---------|
+| テスト | ✅ | ai-fix レスポンスの `npm test` 証跡: 7 files / 26 tests passed |
+| ビルド | ✅ | ai-fix レスポンスの `npm run build` (`tsc --noEmit`) 証跡: 成功 |
+| 動作確認 | ✅ | テスト証跡で確認（統合テスト `src/index.test.ts` が public API 経由で両 packet 生成を検証） |
+
+## ポリシー違反チェック
+
+| 項目 | 結果 |
+|------|------|
+| TODO/FIXME | 0件 |
+| `any` 型 | 0件 |
+| フォールバック乱用 (`?? '...'`) | 0件 |
+| 空 catch | 0件 |
+| `@ts-ignore` / `eslint-disable` | 0件 |
+| 未使用コード | 0件 |
+
+## スコープクリープチェック
+
+- 削除ファイル: 0件（git status 上すべて `??` = 新規ファイルのみ）
+- 作成ファイル: `coder-scope.md` の宣言と一致（13 ソース/設定ファイル + 7 テストファイル）
+- タスク指示書の Out of Scope に該当する実装: なし
+
+## 成果物
+
+- 作成: `package.json`, `tsconfig.json`, `vitest.config.ts`
+- 作成: `src/index.ts`, `src/index.test.ts`
+- 作成: `src/schema/issue-kind.ts`, `src/schema/projection-input.ts`, `src/schema/implementation-issue-packet.ts`, `src/schema/review-context-packet.ts`, `src/schema/index.ts`
+- 作成: `src/schema/projection-input.test.ts`, `src/schema/implementation-issue-packet.test.ts`, `src/schema/review-context-packet.test.ts`
+- 作成: `src/mapping/field-resolvers.ts`, `src/mapping/project-to-implementation-packet.ts`, `src/mapping/project-to-review-context-packet.ts`, `src/mapping/index.ts`
+- 作成: `src/mapping/field-resolvers.test.ts`, `src/mapping/project-to-implementation-packet.test.ts`, `src/mapping/project-to-review-context-packet.test.ts`

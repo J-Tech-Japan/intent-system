@@ -1,0 +1,235 @@
+# Plan: [A1] Projection Schema
+
+## 要件分析
+
+### タスク概要
+
+`intent-system` リポジトリ（現在 README.md のみのグリーンフィールド）に、execution の sub-slice データから `implementation_issue_packet` と `review_context_packet` を生成するための projection schema を実装する。
+
+### 参照資料の確認結果
+
+| 参照資料 | 取得結果 | 内容 |
+|---------|---------|------|
+| `01-projection-schema.md` (spec) | GitHub API で取得済み | 入力フィールド、出力パケット、変換ルール、scope補完ルールの定義 |
+| `issue-projection-format.md` (rule) | GitHub API で取得済み | projection の目的、標準 artifact、フィールドマッピング、Markdown/YAML 形式 |
+| `issue-template-and-review-context.md` (rule) | GitHub API で取得済み | issue テンプレート、review context packet の共通ルール |
+| `04-mvp-sub-slices.md` (execution) | GitHub API で取得済み | A1 sub-slice の定義: projection schema を固定する |
+| `03-bootstrap-manual-operation.md` (rule) | GitHub API で取得済み | bootstrap phase の運用ルール |
+
+### 受け入れ基準（タスク指示書より）
+
+1. sub-slice row から packet 生成に必要な field mapping が一意に決まる
+2. implementation packet と review packet の両方に必要な必須 field が固定される
+3. review packet から parent Intent root に戻れる
+
+### スコープ判定
+
+| 要件 | 変更要/不要 | 根拠 |
+|------|-----------|------|
+| projection input field 定義 | **変更要** | 新規実装（リポジトリにコードなし） |
+| implementation_issue_packet schema | **変更要** | 新規実装 |
+| review_context_packet schema | **変更要** | 新規実装 |
+| deterministic 変換ルール | **変更要** | 新規実装 |
+| issue_kind enum | **変更要** | 新規実装 |
+| Markdown/YAML rendering | **不要** | Out of Scope に明記（A2 の担当） |
+| queue-state 更新ロジック | **不要** | Out of Scope に明記（B1/B2 の担当） |
+
+## 技術選定
+
+### 言語・ランタイム: TypeScript + Node.js (ESM)
+
+- スキーマ定義タスクであり、型安全性が最重要
+- Zod でランタイムバリデーション + 型推論を両立
+- A2 (Packet Generator) が下流にあり、TypeScript で統一すると依存が自然
+
+### ライブラリ
+
+| ライブラリ | 用途 | バージョン |
+|-----------|------|-----------|
+| `zod` | スキーマ定義・バリデーション | ^3 |
+| `vitest` | テストランナー | ^3 (devDependency) |
+| `typescript` | コンパイラ | ^5 (devDependency) |
+
+## 設計
+
+### ディレクトリ構成
+
+```
+intent-system/
+├── src/
+│   ├── schema/
+│   │   ├── issue-kind.ts                    (~15行) IssueKind の値定義
+│   │   ├── projection-input.ts              (~65行) 入力 Zod スキーマ + 型
+│   │   ├── implementation-issue-packet.ts   (~50行) 出力 Zod スキーマ + 型
+│   │   ├── review-context-packet.ts         (~40行) 出力 Zod スキーマ + 型
+│   │   └── index.ts                         (~10行) re-exports
+│   ├── mapping/
+│   │   ├── field-resolvers.ts               (~55行) 共通フィールド解決ロジック
+│   │   ├── project-to-implementation-packet.ts (~60行) 入力 → issue packet 変換
+│   │   ├── project-to-review-context-packet.ts (~45行) 入力 → review context 変換
+│   │   └── index.ts                         (~10行) re-exports
+│   └── index.ts                             (~10行) public API
+├── package.json
+├── tsconfig.json
+└── vitest.config.ts
+```
+
+### モジュール責務
+
+| モジュール | 責務 | 公開 API |
+|-----------|------|---------|
+| `schema/` | 型定義とバリデーション | Zod スキーマ + TypeScript 型 |
+| `mapping/` | deterministic 変換ロジック | `projectToImplementationPacket()`, `projectToReviewContextPacket()` |
+| `index.ts` | パブリック API | schema 型 + mapping 関数のみ |
+
+### 依存の方向
+
+```
+index.ts (public API)
+  └── mapping/
+  │     └── schema/
+  └── schema/
+```
+
+mapping → schema の一方向のみ。循環依存なし。
+
+## 実装ガイドライン
+
+### 1. schema/issue-kind.ts
+
+`issue_kind` の推奨値を Zod enum として定義する。
+
+```typescript
+// 値は spec の "issue_kind の推奨値" セクションより
+// feature | bugfix | boundary-fix | verification | refactor | clarification-followup
+```
+
+### 2. schema/projection-input.ts
+
+spec の "入力" セクション（projection 入力の最小セット）に基づくスキーマ。
+
+**入力フィールド（spec より）:**
+- `source_execution_unit: string` (必須)
+- `goal: string` (必須)
+- `target_repo: string` (必須)
+- `target_path: string` (必須)
+- `target_part: string` (必須)
+- `depends_on_subslices: string[]` (optional)
+- `depends_on: string[]` (optional)
+- `related_intents: string[]` (optional)
+- `source_concepts: string[]` (optional)
+- `success_signal: string` (必須)
+- `review_mode: string` (必須)
+- `completion_action: string` (必須)
+- `landing_policy: string` (必須)
+
+**Scope 補完用の追加入力（projection 時に渡されうるフィールド）:**
+- `issue_title: string` (optional - 未指定時は goal から生成)
+- `issue_kind: IssueKind` (optional - デフォルト "feature")
+- `in_scope: string[]` (optional - 未指定時に補完)
+- `out_of_scope: string[]` (optional - 未指定時に補完)
+- `parent_intent_root: string` (optional - review context に必要)
+- `clarification_return_path: string` (optional - review context に必要)
+- `verification_evidence: string[]` (optional)
+- `deterministic_review_checks: string[]` (optional - review context 用)
+- `rules_and_specs: string[]` (optional - 明示指定がある場合)
+
+### 3. schema/implementation-issue-packet.ts
+
+spec の "implementation_issue_packet 必須フィールド" に基づく。全フィールド required。
+
+### 4. schema/review-context-packet.ts
+
+spec の "review_context_packet 必須フィールド" に基づく。全フィールド required。
+
+### 5. mapping/field-resolvers.ts
+
+spec の "変換ルール" セクションに基づく共通解決ロジック:
+
+| 関数名 | ロジック |
+|--------|---------|
+| `resolveDependencies(input)` | `depends_on_subslices` を優先、なければ `depends_on`、どちらもなければ `[]` |
+| `resolveIntentReferences(input)` | `related_intents` を優先、`source_concepts` を補助として追加 |
+| `extractRulesAndSpecs(input)` | `rules_and_specs` が明示されていればそれを使う。なければ `source_concepts` から rule/spec/design パスを抽出 |
+| `resolveAcceptanceCriteria(input)` | `success_signal` を配列の初期値として展開 |
+| `resolveInScope(input)` | `in_scope` が明示されていればそれを使う。なければ `target_part` を含む最小境界を生成 |
+| `resolveOutOfScope(input)` | `out_of_scope` が明示されていればそれを使う。なければ空配列 |
+
+### 6. mapping/project-to-implementation-packet.ts
+
+```typescript
+export function projectToImplementationPacket(
+  input: ProjectionInput
+): ImplementationIssuePacket
+```
+
+- `ProjectionInput` を Zod でパースし、field-resolvers を使って全フィールドを解決
+- 戻り値は `ImplementationIssuePacket` の Zod スキーマでバリデーション
+- 変換は **純粋関数**（副作用なし、同じ入力に対して常に同じ出力）
+
+### 7. mapping/project-to-review-context-packet.ts
+
+```typescript
+export function projectToReviewContextPacket(
+  input: ProjectionInput
+): ReviewContextPacket
+```
+
+- 同様に純粋関数
+- `parent_intent_root` が未指定の場合は空文字列（呼び出し元が補完する責務）
+- `clarification_return_path` が未指定の場合も空文字列
+
+### 8. プロジェクト設定ファイル
+
+**package.json:**
+- `name`: `@intent-system/projection-schema`
+- `type`: `module`
+- `main`: `dist/index.js`
+- `exports`: `./dist/index.js`
+- `scripts`: `build`, `test`, `typecheck`
+
+**tsconfig.json:**
+- `target`: `ES2022`
+- `module`: `Node16`
+- `strict`: `true`
+- `outDir`: `dist`
+
+## テスト方針
+
+### テストファイル構成
+
+```
+src/
+├── schema/__tests__/
+│   ├── projection-input.test.ts        入力スキーマのバリデーション
+│   ├── implementation-issue-packet.test.ts  出力スキーマのバリデーション
+│   └── review-context-packet.test.ts   出力スキーマのバリデーション
+└── mapping/__tests__/
+    ├── field-resolvers.test.ts         個別フィールド解決ロジック
+    ├── project-to-implementation-packet.test.ts  統合変換テスト
+    └── project-to-review-context-packet.test.ts  統合変換テスト
+```
+
+### テスト観点
+
+1. **スキーマバリデーション**: 必須フィールド欠落時にエラー、正常入力時にパース成功
+2. **変換の決定性**: 同一入力 → 同一出力（deterministic）
+3. **フィールド優先順位**: `depends_on_subslices` > `depends_on` など
+4. **Scope 補完**: `in_scope`/`out_of_scope` 未指定時のデフォルト生成
+5. **review packet の parent 参照**: `parent_intent_root` が出力に含まれること（受け入れ基準 #3）
+
+### テストデータ
+
+spec の "標準 YAML projection 例"（A2 Engine Tick Boundary の例）を参考に、A1 sub-slice 相当のテストデータを構築する。
+
+## 注意すべきアンチパターン
+
+| アンチパターン | 本タスクでの注意点 |
+|---------------|-----------------|
+| projected packet にしかない重要仕様を作る | スキーマの制約として防ぐ必要はないが、ドキュメントで明記 |
+| 過度な汎用化 | A1 に必要な最小セットのみ定義。将来の拡張ポイントを作らない |
+| Markdown/YAML レンダリングの混入 | Out of Scope（A2 担当）。mapping は TypeScript オブジェクトの変換のみ |
+
+## 確認事項
+
+なし。全ての仕様は参照資料から確定済み。

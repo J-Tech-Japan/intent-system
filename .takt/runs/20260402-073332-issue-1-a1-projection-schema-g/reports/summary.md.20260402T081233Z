@@ -1,0 +1,31 @@
+# タスク完了サマリー
+
+## タスク
+Issue #1: [A1] Projection Schema — `execution` の sub-slice を `implementation_issue_packet` と `review_context_packet` に一意に写せる projection schema を実装可能な形で固定する。
+
+## 結果
+完了
+
+## 変更内容
+| 種別 | ファイル | 概要 |
+|------|---------|------|
+| 作成 | `package.json` | プロジェクト設定（TypeScript + Zod + Vitest） |
+| 作成 | `tsconfig.json` | TypeScript ESM 設定 |
+| 作成 | `vitest.config.ts` | Vitest テスト設定 |
+| 作成 | `src/schema/issue-kind.ts` | IssueKind 6値の Zod enum 定義 |
+| 作成 | `src/schema/projection-input.ts` | 入力スキーマ（12必須+6optional フィールド） |
+| 作成 | `src/schema/implementation-issue-packet.ts` | implementation packet スキーマ（17 fields） |
+| 作成 | `src/schema/review-context-packet.ts` | review context packet スキーマ（7 fields） |
+| 作成 | `src/schema/index.ts` | schema モジュール re-exports |
+| 作成 | `src/mapping/field-resolvers.ts` | 9個の deterministic フィールド解決関数 |
+| 作成 | `src/mapping/project-to-implementation-packet.ts` | 入力→implementation packet 変換（入出力両方 Zod 検証） |
+| 作成 | `src/mapping/project-to-review-context-packet.ts` | 入力→review context packet 変換（入出力両方 Zod 検証） |
+| 作成 | `src/mapping/index.ts` | mapping モジュール re-exports |
+| 作成 | `src/index.ts` | public API エクスポート |
+| 作成 | `src/**/*.test.ts` (7ファイル) | 単体テスト + 統合テスト（26テスト） |
+
+## 検証証跡
+- `npm test`: 7 files / 26 tests passed（ai-fix レスポンスで確認）
+- `npm run build` (`tsc --noEmit`): 成功（ai-fix レスポンスで確認）
+- AI レビュー: 初回 REJECT 3件 → 修正後 APPROVE（全件 resolved）
+- Supervisor 検証: 受け入れ基準 3件すべて充足確認、ポリシー違反 0件

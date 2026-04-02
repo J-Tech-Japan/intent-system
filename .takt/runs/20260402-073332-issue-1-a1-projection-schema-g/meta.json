@@ -1,0 +1,13 @@
+{
+  "task": "Implement using only the files in `.takt/runs/20260402-073332-issue-1-a1-projection-schema-g/context/task`.\nPrimary spec: `.takt/runs/20260402-073332-issue-1-a1-projection-schema-g/context/task/order.md`.\nUse report files in Report Directory as primary execution history.\nDo not rely on previous response or conversation summary.",
+  "piece": "default",
+  "runSlug": "20260402-073332-issue-1-a1-projection-schema-g",
+  "runRoot": ".takt/runs/20260402-073332-issue-1-a1-projection-schema-g",
+  "reportDirectory": ".takt/runs/20260402-073332-issue-1-a1-projection-schema-g/reports",
+  "contextDirectory": ".takt/runs/20260402-073332-issue-1-a1-projection-schema-g/context",
+  "logsDirectory": ".takt/runs/20260402-073332-issue-1-a1-projection-schema-g/logs",
+  "status": "completed",
+  "startTime": "2026-04-02T07:33:57.926Z",
+  "endTime": "2026-04-02T08:13:14.519Z",
+  "iterations": 7
+}

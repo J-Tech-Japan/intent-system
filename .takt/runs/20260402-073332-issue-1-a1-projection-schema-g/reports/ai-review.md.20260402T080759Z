@@ -1,0 +1,34 @@
+# AI生成コードレビュー
+
+## 結果: REJECT
+
+## サマリー
+実装はビルド/テストは通るものの、仕様取りこぼしと必須参照のフォールバックにより受け入れ基準を満たしていません。
+
+## 検証した項目
+| 観点 | 結果 | 備考 |
+|------|------|------|
+| 仮定の妥当性 | ❌ | 入力/出力フィールド数の前提が実行履歴上の仕様と不一致 |
+| API/ライブラリの実在 | ✅ | 幻覚APIはなし |
+| コンテキスト適合 | ❌ | `parent_intent_root` の扱いが acceptance と不整合 |
+| スコープ | ❌ | A1の projection schema 要件を縮小実装 |
+
+## 今回の指摘（new）
+| # | finding_id | family_tag | カテゴリ | 場所 | 問題 | 修正案 |
+|---|------------|------------|---------|------|------|--------|
+| 1 | ai-review-001 | scope-shrink | 要件取りこぼし | `src/schema/projection-input.ts:7-23` | `target_path/review_mode/completion_action/landing_policy` 未定義、`source_concepts` を必須化している | 入力スキーマを仕様どおり再定義し、必須/任意を修正 |
+| 2 | ai-review-002 | schema-mismatch | 必須フィールド欠落 | `src/schema/implementation-issue-packet.ts:7-20`, `src/schema/review-context-packet.ts:5-11` | 実行履歴上の expected field 数（implementation 17, review 7）に対し不足 | 不足フィールドを schema と projector に追加し、必須契約を固定 |
+| 3 | ai-review-003 | fallback-abuse | フォールバック濫用 | `src/mapping/field-resolvers.ts:76-82`, `src/mapping/project-to-review-context-packet.ts:19` | `parent_intent_root` を `''` にフォールバックし、親 Intent root へ戻れない packet を生成し得る | `parent_intent_root` を必須入力化し、欠落時は validation error にする |
+
+## 継続指摘（persists）
+なし
+
+## 解消済み（resolved）
+なし
+
+## 再開指摘（reopened）
+なし
+
+## REJECT判定条件
+- `new`、`persists`、または `reopened` が1件以上ある場合のみ REJECT 可
+- `finding_id` なしの指摘は無効
