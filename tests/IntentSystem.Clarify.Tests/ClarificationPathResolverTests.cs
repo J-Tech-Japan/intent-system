@@ -22,18 +22,36 @@ public sealed class ClarificationPathResolverTests
     }
 
     [Fact]
-    public void ResolveItemPath_GivenExecutionUnitAndId_ReturnsDeterministicJsonArtifactPath()
+    public void ResolveItemDirectory_GivenExecutionUnitAndId_ReturnsDeterministicItemDirectory()
     {
-        var path = ClarificationPathResolver.ResolveItemPath("A2", "question-1");
+        var path = ClarificationPathResolver.ResolveItemDirectory("A2", "question-1");
 
-        Assert.Equal(".intent-cli/clarifications/a2/question-1.json", path);
+        Assert.Equal(".intent-cli/clarifications/a2/question-1", path);
     }
 
     [Fact]
-    public void ResolveItemPath_GivenSameInputs_ReturnsSamePath()
+    public void ResolveQuestionPath_GivenExecutionUnitAndId_ReturnsMarkdownArtifactPath()
     {
-        var first = ClarificationPathResolver.ResolveItemPath("A2", "question-1");
-        var second = ClarificationPathResolver.ResolveItemPath("A2", "question-1");
+        var path = ClarificationPathResolver.ResolveQuestionPath("A2", "question-1");
+
+        Assert.Equal(".intent-cli/clarifications/a2/question-1/question.md", path);
+        Assert.DoesNotContain(".json", path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveContextPath_GivenExecutionUnitAndId_ReturnsYamlArtifactPath()
+    {
+        var path = ClarificationPathResolver.ResolveContextPath("A2", "question-1");
+
+        Assert.Equal(".intent-cli/clarifications/a2/question-1/context.yaml", path);
+        Assert.DoesNotContain(".json", path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveQuestionPath_GivenSameInputs_ReturnsSamePath()
+    {
+        var first = ClarificationPathResolver.ResolveQuestionPath("A2", "question-1");
+        var second = ClarificationPathResolver.ResolveQuestionPath("A2", "question-1");
 
         Assert.Equal(first, second);
     }
@@ -47,10 +65,10 @@ public sealed class ClarificationPathResolverTests
     }
 
     [Fact]
-    public void ResolveItemPath_GivenNullOrWhitespaceId_ThrowsArgumentException()
+    public void ResolveQuestionPath_GivenNullOrWhitespaceId_ThrowsArgumentException()
     {
-        Assert.ThrowsAny<ArgumentException>(() => ClarificationPathResolver.ResolveItemPath("A2", null!));
-        Assert.ThrowsAny<ArgumentException>(() => ClarificationPathResolver.ResolveItemPath("A2", ""));
-        Assert.ThrowsAny<ArgumentException>(() => ClarificationPathResolver.ResolveItemPath("A2", "   "));
+        Assert.ThrowsAny<ArgumentException>(() => ClarificationPathResolver.ResolveQuestionPath("A2", null!));
+        Assert.ThrowsAny<ArgumentException>(() => ClarificationPathResolver.ResolveQuestionPath("A2", ""));
+        Assert.ThrowsAny<ArgumentException>(() => ClarificationPathResolver.ResolveQuestionPath("A2", "   "));
     }
 }
