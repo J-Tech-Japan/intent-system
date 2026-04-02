@@ -13,7 +13,7 @@ public sealed class ClarifyGatewayTests
     [Fact]
     public void Apply_GivenAnsweredClarification_AdvancesArtifactToApplied()
     {
-        var clarification = CreateAnsweredClarification("A2");
+        var clarification = CreateAnsweredClarification("A2", blocking: true);
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
 
         var result = ClarifyGateway.Apply(clarification, queueState, "gateway", BaseTime);
@@ -24,22 +24,33 @@ public sealed class ClarifyGatewayTests
     }
 
     [Fact]
-    public void Apply_GivenAnsweredClarification_ResumesQueueItemFromClarifyBlocked()
+    public void Apply_GivenBlockingClarification_ResumesQueueItemToReview()
     {
-        var clarification = CreateAnsweredClarification("A2");
+        var clarification = CreateAnsweredClarification("A2", blocking: true);
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
 
         var result = ClarifyGateway.Apply(clarification, queueState, "gateway", BaseTime);
 
-        var item = result.UpdatedQueueState.Items.First(
-            i => string.Equals(i.ExecutionUnit, "A2", StringComparison.Ordinal));
-        Assert.Equal(QueueItemState.Active, item.State);
+        var item = FindItem(result.UpdatedQueueState, "A2");
+        Assert.Equal(QueueItemState.Review, item.State);
     }
 
     [Fact]
-    public void Apply_GivenAnsweredClarification_EmitsClarifyAppliedAndClarifyResolvedEvents()
+    public void Apply_GivenNonblockingClarification_ResumesQueueItemToQueued()
     {
-        var clarification = CreateAnsweredClarification("A2");
+        var clarification = CreateAnsweredClarification("A2", blocking: false);
+        var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
+
+        var result = ClarifyGateway.Apply(clarification, queueState, "gateway", BaseTime);
+
+        var item = FindItem(result.UpdatedQueueState, "A2");
+        Assert.Equal(QueueItemState.Queued, item.State);
+    }
+
+    [Fact]
+    public void Apply_GivenBlockingClarification_EmitsClarifyAppliedAndClarifyResumedEvents()
+    {
+        var clarification = CreateAnsweredClarification("A2", blocking: true);
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
 
         var result = ClarifyGateway.Apply(clarification, queueState, "gateway", BaseTime);
@@ -47,13 +58,26 @@ public sealed class ClarifyGatewayTests
         Assert.Equal(2, result.Events.Count);
         Assert.Equal("clarify-applied", result.Events[0].Event);
         Assert.Contains("clar-1", result.Events[0].Reason!, StringComparison.Ordinal);
-        Assert.Equal("clarify-resolved", result.Events[1].Event);
+        Assert.Equal("clarify-resumed", result.Events[1].Event);
+        Assert.Contains("review", result.Events[1].Reason!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Apply_GivenNonblockingClarification_ResumedEventMentionsQueued()
+    {
+        var clarification = CreateAnsweredClarification("A2", blocking: false);
+        var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
+
+        var result = ClarifyGateway.Apply(clarification, queueState, "gateway", BaseTime);
+
+        Assert.Equal("clarify-resumed", result.Events[1].Event);
+        Assert.Contains("queued", result.Events[1].Reason!, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Apply_GivenRegeneratePacketCallback_IncludesRegeneratedPacketAndEvent()
     {
-        var clarification = CreateAnsweredClarification("A2");
+        var clarification = CreateAnsweredClarification("A2", blocking: true);
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
         var mockPacket = CreateMockPacket();
 
@@ -70,7 +94,7 @@ public sealed class ClarifyGatewayTests
     [Fact]
     public void Apply_GivenNoRegenerateCallback_OmitsRegeneratedPacket()
     {
-        var clarification = CreateAnsweredClarification("A2");
+        var clarification = CreateAnsweredClarification("A2", blocking: true);
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
 
         var result = ClarifyGateway.Apply(clarification, queueState, "gateway", BaseTime);
@@ -94,7 +118,7 @@ public sealed class ClarifyGatewayTests
     [Fact]
     public void Apply_GivenQueueItemNotClarifyBlocked_ThrowsInvalidOperationException()
     {
-        var clarification = CreateAnsweredClarification("A2");
+        var clarification = CreateAnsweredClarification("A2", blocking: true);
         var queueState = CreateQueueState("A2", QueueItemState.Active);
 
         Assert.Throws<InvalidOperationException>(
@@ -104,7 +128,7 @@ public sealed class ClarifyGatewayTests
     [Fact]
     public void Apply_GivenSameInputs_ProducesDeterministicResult()
     {
-        var clarification = CreateAnsweredClarification("A2");
+        var clarification = CreateAnsweredClarification("A2", blocking: true);
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
 
         var first = ClarifyGateway.Apply(clarification, queueState, "gateway", BaseTime);
@@ -122,33 +146,63 @@ public sealed class ClarifyGatewayTests
     [Fact]
     public void Apply_DoesNotMutateOriginalClarificationOrQueueState()
     {
-        var clarification = CreateAnsweredClarification("A2");
+        var clarification = CreateAnsweredClarification("A2", blocking: true);
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
 
         _ = ClarifyGateway.Apply(clarification, queueState, "gateway", BaseTime);
 
         Assert.Equal(ClarificationStatus.Answered, clarification.Status);
-        Assert.Equal(QueueItemState.ClarifyBlocked,
-            queueState.Items.First(i => i.ExecutionUnit == "A2").State);
+        Assert.Equal(QueueItemState.ClarifyBlocked, FindItem(queueState, "A2").State);
     }
 
     [Fact]
-    public void ApplyAll_GivenMultipleAnsweredClarifications_AppliesAllAndResumesOnce()
+    public void ApplyAll_GivenMultipleBlockingClarifications_AppliesAllAndResumesToReview()
     {
         var clarifications = new[]
         {
-            CreateAnsweredClarification("A2", "clar-1"),
-            CreateAnsweredClarification("A2", "clar-2")
+            CreateAnsweredClarification("A2", blocking: true, questionId: "clar-1"),
+            CreateAnsweredClarification("A2", blocking: true, questionId: "clar-2")
         };
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
 
         var result = ClarifyGateway.ApplyAll(clarifications, queueState, "gateway", BaseTime);
 
         Assert.Equal(ClarificationStatus.Applied, result.AppliedClarification.Status);
+        Assert.Equal(QueueItemState.Review, FindItem(result.UpdatedQueueState, "A2").State);
         Assert.Equal(3, result.Events.Count);
         Assert.Equal("clarify-applied", result.Events[0].Event);
         Assert.Equal("clarify-applied", result.Events[1].Event);
-        Assert.Equal("clarify-resolved", result.Events[2].Event);
+        Assert.Equal("clarify-resumed", result.Events[2].Event);
+    }
+
+    [Fact]
+    public void ApplyAll_GivenMixedBlockingAndNonblocking_ResumesToReview()
+    {
+        var clarifications = new[]
+        {
+            CreateAnsweredClarification("A2", blocking: false, questionId: "clar-1"),
+            CreateAnsweredClarification("A2", blocking: true, questionId: "clar-2")
+        };
+        var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
+
+        var result = ClarifyGateway.ApplyAll(clarifications, queueState, "gateway", BaseTime);
+
+        Assert.Equal(QueueItemState.Review, FindItem(result.UpdatedQueueState, "A2").State);
+    }
+
+    [Fact]
+    public void ApplyAll_GivenAllNonblocking_ResumesToQueued()
+    {
+        var clarifications = new[]
+        {
+            CreateAnsweredClarification("A2", blocking: false, questionId: "clar-1"),
+            CreateAnsweredClarification("A2", blocking: false, questionId: "clar-2")
+        };
+        var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
+
+        var result = ClarifyGateway.ApplyAll(clarifications, queueState, "gateway", BaseTime);
+
+        Assert.Equal(QueueItemState.Queued, FindItem(result.UpdatedQueueState, "A2").State);
     }
 
     [Fact]
@@ -156,8 +210,8 @@ public sealed class ClarifyGatewayTests
     {
         var clarifications = new[]
         {
-            CreateAnsweredClarification("A2", "clar-1"),
-            CreateAnsweredClarification("B1", "clar-2")
+            CreateAnsweredClarification("A2", blocking: true, questionId: "clar-1"),
+            CreateAnsweredClarification("B1", blocking: true, questionId: "clar-2")
         };
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
 
@@ -179,7 +233,7 @@ public sealed class ClarifyGatewayTests
     [Fact]
     public void AllEventsShareTimestampAndExecutionUnit()
     {
-        var clarification = CreateAnsweredClarification("A2");
+        var clarification = CreateAnsweredClarification("A2", blocking: true);
         var queueState = CreateQueueState("A2", QueueItemState.ClarifyBlocked);
 
         var result = ClarifyGateway.Apply(
@@ -194,7 +248,8 @@ public sealed class ClarifyGatewayTests
         });
     }
 
-    private static ClarificationItem CreateAnsweredClarification(string executionUnit, string questionId = "clar-1")
+    private static ClarificationItem CreateAnsweredClarification(
+        string executionUnit, bool blocking, string questionId = "clar-1")
     {
         return new ClarificationItem
         {
@@ -205,7 +260,7 @@ public sealed class ClarifyGatewayTests
             Reason = "Unclear ownership of clarification return path.",
             AffectedIntents = ["intents/intent-cli/intent-tree/00-map.md"],
             AffectedExecutionUnits = [executionUnit],
-            BlockingOrNonblocking = "blocking",
+            BlockingOrNonblocking = blocking ? "blocking" : "nonblocking",
             ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
             Status = ClarificationStatus.Answered,
             CreatedAt = BaseTime.AddHours(-1),
@@ -260,6 +315,12 @@ public sealed class ClarifyGatewayTests
                 }
             ]
         };
+    }
+
+    private static QueueItem FindItem(QueueState state, string executionUnit)
+    {
+        return state.Items.First(
+            i => string.Equals(i.ExecutionUnit, executionUnit, StringComparison.Ordinal));
     }
 
     private static GeneratedPacket CreateMockPacket()

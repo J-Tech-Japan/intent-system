@@ -1,7 +1,5 @@
 using IntentSystem.Clarify.Models;
 using IntentSystem.Projection;
-using IntentSystem.Projection.Models;
-using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
 
 namespace IntentSystem.Clarify;
@@ -11,24 +9,25 @@ namespace IntentSystem.Clarify;
 /// advances the artifact to applied, optionally regenerates the issue packet,
 /// and resumes the queue item from clarify-blocked.
 ///
-/// This gateway does not modify the parent Intent repo directly; it provides
-/// the boundary contract for the resume flow. Parent Markdown updates are
-/// expected to be performed by the caller before invoking the gateway.
+/// This gateway owns the D2 resume policy that determines the target state
+/// after clarification apply:
+/// - blocking clarification → resume to review (review-time blocker resolved)
+/// - nonblocking clarification → resume to queued (re-enter queue before execution)
+///
+/// B2 QueueManager owns generic queue transitions; D2 owns the clarification-apply
+/// policy that decides which state the execution unit returns to.
+///
+/// Parent Markdown updates are expected to be performed by the caller before
+/// invoking the gateway.
 /// </summary>
 public static class ClarifyGateway
 {
+    private const string BlockingValue = "blocking";
+
     /// <summary>
-    /// Applies a clarification answer to the artifact, resumes the queue item,
-    /// and optionally regenerates the issue packet.
+    /// Applies a clarification answer to the artifact, resumes the queue item
+    /// according to the D2 resume policy, and optionally regenerates the issue packet.
     /// </summary>
-    /// <param name="clarification">The answered clarification artifact to apply.</param>
-    /// <param name="queueState">The current queue state snapshot.</param>
-    /// <param name="by">Who is performing the action.</param>
-    /// <param name="ts">Timestamp for the events.</param>
-    /// <param name="regeneratePacket">
-    /// Optional function to regenerate the issue packet after clarification apply.
-    /// If provided, the regenerated packet is included in the result.
-    /// </param>
     public static ClarifyResumeResult Apply(
         ClarificationItem clarification,
         QueueState queueState,
@@ -56,10 +55,20 @@ public static class ClarifyGateway
             Reason = $"Applied clarification {clarification.QuestionId}"
         };
 
-        var resumeResult = QueueManager.ResolveClarification(
-            queueState, clarification.ExecutionUnit, by, ts);
+        var targetState = ResolveResumeTarget(clarification);
+        var updatedState = TransitionQueueItem(
+            queueState, clarification.ExecutionUnit, targetState, ts);
 
-        var events = new List<RunEvent> { applyEvent, resumeResult.Event };
+        var resumeEvent = new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = clarification.ExecutionUnit,
+            Event = "clarify-resumed",
+            By = by,
+            Reason = $"Resumed to {FormatState(targetState)}"
+        };
+
+        var events = new List<RunEvent> { applyEvent, resumeEvent };
 
         GeneratedPacket? packet = null;
         if (regeneratePacket is not null)
@@ -77,7 +86,7 @@ public static class ClarifyGateway
         return new ClarifyResumeResult
         {
             AppliedClarification = appliedClarification,
-            UpdatedQueueState = resumeResult.UpdatedState,
+            UpdatedQueueState = updatedState,
             Events = events.ToArray(),
             RegeneratedPacket = packet
         };
@@ -86,6 +95,7 @@ public static class ClarifyGateway
     /// <summary>
     /// Applies multiple answered clarifications for the same execution unit in batch.
     /// All clarifications are advanced to applied, and the queue item is resumed once.
+    /// The resume target is determined by the strictest (blocking) clarification in the batch.
     /// </summary>
     public static ClarifyResumeResult ApplyAll(
         IReadOnlyList<ClarificationItem> answeredClarifications,
@@ -106,6 +116,7 @@ public static class ClarifyGateway
         var executionUnit = answeredClarifications[0].ExecutionUnit;
         var events = new List<RunEvent>();
         ClarificationItem? lastApplied = null;
+        var hasBlocking = false;
 
         foreach (var clarification in answeredClarifications)
         {
@@ -116,6 +127,11 @@ public static class ClarifyGateway
                 throw new InvalidOperationException(
                     $"All clarifications in a batch must share the same execution unit. " +
                     $"Expected '{executionUnit}' but found '{clarification.ExecutionUnit}'.");
+            }
+
+            if (IsBlocking(clarification))
+            {
+                hasBlocking = true;
             }
 
             lastApplied = clarification with
@@ -133,10 +149,17 @@ public static class ClarifyGateway
             });
         }
 
-        var resumeResult = QueueManager.ResolveClarification(
-            queueState, executionUnit, by, ts);
+        var targetState = hasBlocking ? QueueItemState.Review : QueueItemState.Queued;
+        var updatedState = TransitionQueueItem(queueState, executionUnit, targetState, ts);
 
-        events.Add(resumeResult.Event);
+        events.Add(new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "clarify-resumed",
+            By = by,
+            Reason = $"Resumed to {FormatState(targetState)}"
+        });
 
         GeneratedPacket? packet = null;
         if (regeneratePacket is not null)
@@ -154,9 +177,74 @@ public static class ClarifyGateway
         return new ClarifyResumeResult
         {
             AppliedClarification = lastApplied!,
-            UpdatedQueueState = resumeResult.UpdatedState,
+            UpdatedQueueState = updatedState,
             Events = events.ToArray(),
             RegeneratedPacket = packet
+        };
+    }
+
+    /// <summary>
+    /// D2 resume policy: determines the target queue state after clarification apply.
+    /// - blocking → review (review-time blocker resolved, return to review)
+    /// - nonblocking → queued (re-enter queue before execution)
+    /// </summary>
+    private static QueueItemState ResolveResumeTarget(ClarificationItem clarification)
+    {
+        return IsBlocking(clarification) ? QueueItemState.Review : QueueItemState.Queued;
+    }
+
+    private static bool IsBlocking(ClarificationItem clarification)
+    {
+        return string.Equals(clarification.BlockingOrNonblocking, BlockingValue, StringComparison.Ordinal);
+    }
+
+    private static QueueState TransitionQueueItem(
+        QueueState state, string executionUnit, QueueItemState targetState, DateTimeOffset ts)
+    {
+        var updatedItems = new QueueItem[state.Items.Count];
+        var found = false;
+
+        for (var i = 0; i < state.Items.Count; i++)
+        {
+            var item = state.Items[i];
+            if (string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            {
+                if (item.State != QueueItemState.ClarifyBlocked)
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot resume execution unit '{executionUnit}': " +
+                        $"expected state 'ClarifyBlocked' but found '{item.State}'.");
+                }
+
+                updatedItems[i] = item with { State = targetState };
+                found = true;
+            }
+            else
+            {
+                updatedItems[i] = item;
+            }
+        }
+
+        if (!found)
+        {
+            throw new InvalidOperationException(
+                $"Execution unit '{executionUnit}' not found in queue state.");
+        }
+
+        return state with
+        {
+            Items = updatedItems,
+            UpdatedAt = ts
+        };
+    }
+
+    private static string FormatState(QueueItemState state)
+    {
+        return state switch
+        {
+            QueueItemState.Review => "review",
+            QueueItemState.Queued => "queued",
+            _ => state.ToString().ToLowerInvariant()
         };
     }
 
