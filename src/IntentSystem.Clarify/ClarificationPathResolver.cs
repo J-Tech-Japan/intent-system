@@ -2,7 +2,7 @@ namespace IntentSystem.Clarify;
 
 /// <summary>
 /// Resolves deterministic artifact paths for clarification items under
-/// .intent-cli/clarifications/&lt;execution-unit&gt;/&lt;id&gt;/.
+/// .intent-cli/clarifications/&lt;execution-unit&gt;/&lt;question-id&gt;/.
 /// External artifact layout produces Markdown/YAML artifacts per the parent
 /// baseline contract. Internal JSON serialization is a separate concern.
 /// </summary>
@@ -14,22 +14,22 @@ public static class ClarificationPathResolver
         return $"{ClarificationConstants.Directory}/{sanitizedExecutionUnit}";
     }
 
-    public static string ResolveItemDirectory(string executionUnit, string id)
+    public static string ResolveItemDirectory(string executionUnit, string questionId)
     {
         var directory = ResolveDirectory(executionUnit);
-        var sanitizedId = SanitizeId(id);
+        var sanitizedId = SanitizeId(questionId);
         return $"{directory}/{sanitizedId}";
     }
 
-    public static string ResolveQuestionPath(string executionUnit, string id)
+    public static string ResolveQuestionPath(string executionUnit, string questionId)
     {
-        var itemDirectory = ResolveItemDirectory(executionUnit, id);
+        var itemDirectory = ResolveItemDirectory(executionUnit, questionId);
         return $"{itemDirectory}/{ClarificationConstants.QuestionFileName}";
     }
 
-    public static string ResolveContextPath(string executionUnit, string id)
+    public static string ResolveContextPath(string executionUnit, string questionId)
     {
-        var itemDirectory = ResolveItemDirectory(executionUnit, id);
+        var itemDirectory = ResolveItemDirectory(executionUnit, questionId);
         return $"{itemDirectory}/{ClarificationConstants.ContextFileName}";
     }
 
@@ -39,9 +39,9 @@ public static class ClarificationPathResolver
         return executionUnit.Trim().ToLowerInvariant();
     }
 
-    private static string SanitizeId(string id)
+    private static string SanitizeId(string questionId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(id);
-        return id.Trim();
+        ArgumentException.ThrowIfNullOrWhiteSpace(questionId);
+        return questionId.Trim();
     }
 }

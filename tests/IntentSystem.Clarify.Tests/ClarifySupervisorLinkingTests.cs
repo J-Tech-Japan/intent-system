@@ -12,15 +12,15 @@ public sealed class ClarifySupervisorLinkingTests
         var queueItem = CreateQueueItem("A2", QueueItemState.ClarifyBlocked);
         IReadOnlyList<ClarificationItem> clarifications =
         [
-            CreateClarification("clar-1", "A2", ClarificationState.Open),
-            CreateClarification("clar-2", "A2", ClarificationState.Answered),
-            CreateClarification("clar-3", "B1", ClarificationState.Open)
+            CreateClarification("clar-1", ["A2"], ClarificationState.Open),
+            CreateClarification("clar-2", ["A2"], ClarificationState.Answered),
+            CreateClarification("clar-3", ["B1"], ClarificationState.Open)
         ];
 
         var linked = ClarificationInbox.FindLinkedClarifications(clarifications, queueItem.ExecutionUnit);
 
         Assert.Equal(2, linked.Count);
-        Assert.All(linked, item => Assert.Equal(queueItem.ExecutionUnit, item.ExecutionUnit));
+        Assert.All(linked, item => Assert.Contains(queueItem.ExecutionUnit, item.AffectedExecutionUnits));
     }
 
     [Fact]
@@ -29,8 +29,8 @@ public sealed class ClarifySupervisorLinkingTests
         var queueItem = CreateQueueItem("A2", QueueItemState.ClarifyBlocked);
         IReadOnlyList<ClarificationItem> clarifications =
         [
-            CreateClarification("clar-1", "A2", ClarificationState.Open),
-            CreateClarification("clar-2", "A2", ClarificationState.Applied)
+            CreateClarification("clar-1", ["A2"], ClarificationState.Open),
+            CreateClarification("clar-2", ["A2"], ClarificationState.Applied)
         ];
 
         var hasPending = ClarificationInbox.HasPendingClarifications(clarifications, queueItem.ExecutionUnit);
@@ -44,8 +44,8 @@ public sealed class ClarifySupervisorLinkingTests
         var queueItem = CreateQueueItem("A2", QueueItemState.ClarifyBlocked);
         IReadOnlyList<ClarificationItem> clarifications =
         [
-            CreateClarification("clar-1", "A2", ClarificationState.Answered),
-            CreateClarification("clar-2", "A2", ClarificationState.Cancelled)
+            CreateClarification("clar-1", ["A2"], ClarificationState.Answered),
+            CreateClarification("clar-2", ["A2"], ClarificationState.Cancelled)
         ];
 
         var hasPending = ClarificationInbox.HasPendingClarifications(clarifications, queueItem.ExecutionUnit);
@@ -53,15 +53,20 @@ public sealed class ClarifySupervisorLinkingTests
         Assert.False(hasPending);
     }
 
-    private static ClarificationItem CreateClarification(string id, string executionUnit, ClarificationState state)
+    private static ClarificationItem CreateClarification(
+        string questionId, string[] affectedExecutionUnits, ClarificationState state)
     {
         return new ClarificationItem
         {
-            Id = id,
-            ExecutionUnit = executionUnit,
+            ClarificationSource = "review",
+            QuestionId = questionId,
+            QuestionText = $"Question for {questionId}",
+            Reason = "Clarification needed to unblock review.",
+            AffectedIntents = [],
+            AffectedExecutionUnits = affectedExecutionUnits,
+            BlockingOrNonblocking = "blocking",
+            ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
             State = state,
-            Question = $"Question for {executionUnit}",
-            Context = "Clarification needed to unblock review.",
             CreatedAt = DateTimeOffset.Parse("2026-04-02T10:00:00Z")
         };
     }
@@ -75,12 +80,12 @@ public sealed class ClarifySupervisorLinkingTests
             State = state,
             Dependencies = [],
             BlockedBy = [],
-            ClarificationReturnPath = ".takt/runs/20260402-191315-issue-13-d1-clarify-inbox-goal/context/task/order.md",
+            ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
             PacketPaths = new PacketPaths
             {
-                Implementation = ".intent-cli/issues/a2/implementation.md",
-                ReviewContext = ".intent-cli/issues/a2/review-context.md",
-                Yaml = ".intent-cli/issues/a2/packet.yaml"
+                Implementation = $".intent-cli/issues/{executionUnit.ToLowerInvariant()}/implementation.md",
+                ReviewContext = $".intent-cli/issues/{executionUnit.ToLowerInvariant()}/review-context.md",
+                Yaml = $".intent-cli/issues/{executionUnit.ToLowerInvariant()}/packet.yaml"
             },
             WorkerRole = "coder",
             ReviewRole = "reviewer",

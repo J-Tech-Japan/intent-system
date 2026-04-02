@@ -20,12 +20,12 @@ public static class ClarificationInbox
     {
         ArgumentNullException.ThrowIfNull(items);
 
-        var sanitizedExecutionUnit = ValidateExecutionUnit(executionUnit);
+        var validatedUnit = ValidateExecutionUnit(executionUnit);
 
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
-            if (MatchesExecutionUnit(item, sanitizedExecutionUnit) && IsPending(item))
+            if (AffectsExecutionUnit(item, validatedUnit) && IsPending(item))
             {
                 return true;
             }
@@ -40,8 +40,8 @@ public static class ClarificationInbox
     {
         ArgumentNullException.ThrowIfNull(items);
 
-        var sanitizedExecutionUnit = ValidateExecutionUnit(executionUnit);
-        return items.Where(item => MatchesExecutionUnit(item, sanitizedExecutionUnit)).ToArray();
+        var validatedUnit = ValidateExecutionUnit(executionUnit);
+        return items.Where(item => AffectsExecutionUnit(item, validatedUnit)).ToArray();
     }
 
     private static bool IsPending(ClarificationItem item)
@@ -49,9 +49,9 @@ public static class ClarificationInbox
         return item.State == ClarificationState.Open;
     }
 
-    private static bool MatchesExecutionUnit(ClarificationItem item, string executionUnit)
+    private static bool AffectsExecutionUnit(ClarificationItem item, string executionUnit)
     {
-        return string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal);
+        return item.AffectedExecutionUnits.Contains(executionUnit, StringComparer.Ordinal);
     }
 
     private static string ValidateExecutionUnit(string executionUnit)

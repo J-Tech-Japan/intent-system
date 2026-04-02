@@ -18,6 +18,7 @@ public static class ClarificationSerializer
 
         using var document = JsonDocument.Parse(json);
         ValidateArtifactKind(document.RootElement);
+        ValidateRequiredContractFields(document.RootElement);
 
         var item = JsonSerializer.Deserialize<ClarificationItem>(json, ClarifyJsonOptions.Compact)
             ?? throw new InvalidOperationException(
@@ -80,6 +81,30 @@ public static class ClarificationSerializer
         {
             throw new InvalidOperationException(
                 $"Clarification payload must use artifact_kind '{ClarificationConstants.ArtifactKind}'.");
+        }
+    }
+
+    private static readonly string[] RequiredContractFields =
+    [
+        "clarification_source",
+        "question_id",
+        "question_text",
+        "reason",
+        "affected_intents",
+        "affected_execution_units",
+        "blocking_or_nonblocking",
+        "clarification_return_path"
+    ];
+
+    private static void ValidateRequiredContractFields(JsonElement element)
+    {
+        foreach (var field in RequiredContractFields)
+        {
+            if (!element.TryGetProperty(field, out _))
+            {
+                throw new InvalidOperationException(
+                    $"Clarification payload must contain required contract field '{field}'.");
+            }
         }
     }
 
