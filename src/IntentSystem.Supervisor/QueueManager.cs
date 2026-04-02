@@ -1,0 +1,289 @@
+using IntentSystem.Supervisor.Models;
+
+namespace IntentSystem.Supervisor;
+
+/// <summary>
+/// Manages deterministic state transitions on a queue snapshot.
+/// Each method returns a new QueueState (immutable) and the RunEvent to append.
+/// The caller is responsible for persisting the snapshot and appending the event.
+/// </summary>
+public static class QueueManager
+{
+    /// <summary>
+    /// Transition a queued item to active.
+    /// </summary>
+    public static QueueTransitionResult Activate(
+        QueueState state, string executionUnit, string by, DateTimeOffset ts)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+        AssertState(item, QueueItemState.Queued, "activate");
+
+        return ApplyTransition(state, executionUnit, QueueItemState.Active, new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "activated",
+            By = by
+        });
+    }
+
+    /// <summary>
+    /// Transition an active item to review.
+    /// </summary>
+    public static QueueTransitionResult SubmitForReview(
+        QueueState state, string executionUnit, string by, DateTimeOffset ts,
+        string? linkedPr = null)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+        AssertState(item, QueueItemState.Active, "submit-for-review");
+
+        return ApplyTransition(state, executionUnit, QueueItemState.Review, new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "review-started",
+            By = by,
+            LinkedPr = linkedPr
+        });
+    }
+
+    /// <summary>
+    /// Transition a review item to fixing (repair-in-place).
+    /// </summary>
+    public static QueueTransitionResult RequestFix(
+        QueueState state, string executionUnit, string by, DateTimeOffset ts,
+        string? reason = null)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+        AssertState(item, QueueItemState.Review, "request-fix");
+
+        return ApplyTransition(state, executionUnit, QueueItemState.Fixing, new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "fix-requested",
+            By = by,
+            Reason = reason
+        });
+    }
+
+    /// <summary>
+    /// Transition a fixing item back to review (repair-in-place cycle).
+    /// </summary>
+    public static QueueTransitionResult ResubmitForReview(
+        QueueState state, string executionUnit, string by, DateTimeOffset ts,
+        string? linkedPr = null)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+        AssertState(item, QueueItemState.Fixing, "resubmit-for-review");
+
+        return ApplyTransition(state, executionUnit, QueueItemState.Review, new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "review-started",
+            By = by,
+            LinkedPr = linkedPr
+        });
+    }
+
+    /// <summary>
+    /// Transition a review item to clarify-blocked.
+    /// </summary>
+    public static QueueTransitionResult RequestClarification(
+        QueueState state, string executionUnit, string by, DateTimeOffset ts,
+        string? reason = null)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+        AssertState(item, QueueItemState.Review, "request-clarification");
+
+        return ApplyTransition(state, executionUnit, QueueItemState.ClarifyBlocked, new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "clarify-requested",
+            By = by,
+            Reason = reason
+        });
+    }
+
+    /// <summary>
+    /// Resolve a clarify-blocked item back to active.
+    /// </summary>
+    public static QueueTransitionResult ResolveClarification(
+        QueueState state, string executionUnit, string by, DateTimeOffset ts)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+        AssertState(item, QueueItemState.ClarifyBlocked, "resolve-clarification");
+
+        return ApplyTransition(state, executionUnit, QueueItemState.Active, new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "clarify-resolved",
+            By = by
+        });
+    }
+
+    /// <summary>
+    /// Complete a reviewed item.
+    /// </summary>
+    public static QueueTransitionResult Complete(
+        QueueState state, string executionUnit, string by, DateTimeOffset ts)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+        AssertState(item, QueueItemState.Review, "complete");
+
+        var result = ApplyTransition(state, executionUnit, QueueItemState.Completed, new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "completed",
+            By = by
+        });
+
+        // After completion, unblock dependents
+        var unblocked = UnblockDependents(result.UpdatedState, executionUnit, ts);
+        return result with { UpdatedState = unblocked };
+    }
+
+    /// <summary>
+    /// Recalculates blocked/queued states for all items based on current dependency resolution.
+    /// Items whose dependencies are all completed move from blocked to queued.
+    /// </summary>
+    public static QueueState RefreshDependencies(QueueState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        var completedUnits = state.Items
+            .Where(i => i.State == QueueItemState.Completed)
+            .Select(i => i.ExecutionUnit)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var updatedItems = new QueueItem[state.Items.Count];
+
+        for (var i = 0; i < state.Items.Count; i++)
+        {
+            var item = state.Items[i];
+
+            if (item.State == QueueItemState.Blocked)
+            {
+                var unresolvedDeps = item.Dependencies
+                    .Where(dep => !completedUnits.Contains(dep))
+                    .ToArray();
+
+                if (unresolvedDeps.Length == 0)
+                {
+                    updatedItems[i] = item with
+                    {
+                        State = QueueItemState.Queued,
+                        BlockedBy = []
+                    };
+                    continue;
+                }
+
+                updatedItems[i] = item with
+                {
+                    BlockedBy = unresolvedDeps
+                };
+                continue;
+            }
+
+            updatedItems[i] = item;
+        }
+
+        return state with
+        {
+            Items = updatedItems,
+            UpdatedAt = state.UpdatedAt
+        };
+    }
+
+    private static QueueState UnblockDependents(QueueState state, string completedUnit, DateTimeOffset ts)
+    {
+        return RefreshDependencies(state) with { UpdatedAt = ts };
+    }
+
+    private static QueueItem FindItem(QueueState state, string executionUnit)
+    {
+        for (var i = 0; i < state.Items.Count; i++)
+        {
+            if (string.Equals(state.Items[i].ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            {
+                return state.Items[i];
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Execution unit '{executionUnit}' not found in queue state.");
+    }
+
+    private static void AssertState(QueueItem item, QueueItemState expected, string operation)
+    {
+        if (item.State != expected)
+        {
+            throw new InvalidOperationException(
+                $"Cannot {operation} execution unit '{item.ExecutionUnit}': " +
+                $"expected state '{expected}' but found '{item.State}'.");
+        }
+    }
+
+    private static QueueTransitionResult ApplyTransition(
+        QueueState state, string executionUnit, QueueItemState newState, RunEvent runEvent)
+    {
+        var updatedItems = new QueueItem[state.Items.Count];
+
+        for (var i = 0; i < state.Items.Count; i++)
+        {
+            var item = state.Items[i];
+            if (string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            {
+                updatedItems[i] = item with { State = newState };
+            }
+            else
+            {
+                updatedItems[i] = item;
+            }
+        }
+
+        var updatedState = state with
+        {
+            Items = updatedItems,
+            UpdatedAt = runEvent.Ts
+        };
+
+        return new QueueTransitionResult
+        {
+            UpdatedState = updatedState,
+            Event = runEvent
+        };
+    }
+}
