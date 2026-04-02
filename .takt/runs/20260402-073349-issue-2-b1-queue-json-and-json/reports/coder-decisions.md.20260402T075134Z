@@ -1,0 +1,6 @@
+# 決定ログ
+
+## 1. `queueItemStateSchema` のみを公開し、複合 schema は内部に閉じる
+- **背景**: `tests/supervisor/state.test.ts` が state 値一覧と schema 自体を公開契約として固定している一方、計画では `queue-state.ts` と `run-log.ts` の Zod schema を内部詳細として隠したい要求があった
+- **検討した選択肢**: 全ての Zod schema を公開する / 全ての Zod schema を非公開にする / `state.ts` の schema のみ公開する
+- **理由**: state 値は supervisor model の中核ドメイン契約であり公開 API に含めても責務がぶれない一方、`queue-state` と `run-log` の複合 schema は操作関数と型だけで十分に利用できるため

@@ -1,0 +1,6 @@
+# 決定ログ
+
+## 1. `index.ts` 経由の統合テストを追加する
+- **背景**: `QueueItemState` が `state.ts`、`queue-state.ts`、`run-log.ts`、`index.ts` を跨いで使われ、`resumed` を含む append-only history と current snapshot の両方から execution unit の状態を復元する必要があるため
+- **検討した選択肢**: 単体テストのみで分割して検証する / `index.ts` 経由の統合テストを追加する
+- **理由**: 3つ以上のモジュールを横断するデータフローに該当し、公開 API 経由で queue snapshot と run history を同時に復元できることを固定したかったため

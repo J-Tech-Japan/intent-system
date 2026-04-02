@@ -1,0 +1,33 @@
+# アーキテクチャレビュー
+
+## 結果: REJECT
+
+## サマリー
+前回 ai-review で指摘された3件（内部定数の公開API露出、説明コメント、重複メソッド）が全て未解消のまま残存している。構造・設計・テストカバレッジ等は良好であり、この3件が解消されれば APPROVE 可能。
+
+## 確認した観点
+- [x] 構造・設計
+- [x] コード品質
+- [x] 変更スコープ
+- [x] テストカバレッジ
+- [x] デッドコード
+- [x] 呼び出しチェーン検証
+
+## 今回の指摘（new）
+なし
+
+## 継続指摘（persists）
+| # | finding_id | family_tag | 前回根拠 | 今回根拠 | 問題 | 修正案 |
+|---|------------|------------|----------|----------|------|--------|
+| 1 | F-API-INTERNAL-EXPORTS | api-surface | `src/supervisor/index.ts:6,17` | `src/supervisor/index.ts:6,17` — grep確認: 外部importゼロ | `queueStateSchemaVersion`/`resumedRunEvent` はスキーマ内部定数でありドメイン操作でも型でもない。Plan の公開API一覧にも未記載。公開は設計方針「複合schemaは内部に閉じる」と不整合 | `queue-state.ts:5`, `run-log.ts:5` の `export` を除去し、`index.ts` の re-export 行を削除 |
+| 2 | F-COMMENT-WHAT-HOW | comment-style | `tests/supervisor/state.test.ts:7,18,21` 他全テスト | 全4テストファイルに `// Given/When/Then` コメント66箇所残存 | コード動作の言い換え（What コメント）でありポリシー違反。テスト名で意図は表現済み | 全テストファイルから `// Given:`, `// When:`, `// Then:` コメント行を削除 |
+| 3 | F-DUPLICATE-METHODS-RUNLOG | duplication | `src/supervisor/run-log.ts:38-44` | `src/supervisor/run-log.ts:42-44` — `getTransitionHistory` が `filterByUnit` を呼ぶだけの完全同一実装 | 同じことをするメソッドの増殖（DRY違反）。将来の差別化は YAGNI | `getTransitionHistory` を削除し、`index.ts` の re-export・テスト側の import/使用を `filterByUnit` に統一 |
+
+## 解消済み（resolved）
+なし
+
+## 再開指摘（reopened）
+なし
+
+## REJECT判定条件
+- `persists` が3件あるため REJECT

@@ -1,0 +1,199 @@
+# Plan: B1 Queue JSON And JSONL Schema
+
+## 要件サマリ
+
+intent-system リポジトリに、`.intent-cli/queue-state.json` と `.intent-cli/runs.jsonl` の最小スキーマを TypeScript モジュールとして実装する。
+
+### 受け入れ条件
+
+1. selective block と dependency を current state で復元できる
+2. review / fix / clarify の遷移を JSONL から追跡できる
+3. queue item から packet artifact path をたどれる
+
+### 参照資料の確認
+
+| 参照資料 | 確認結果 |
+|---------|---------|
+| [03-queue-json-and-jsonl-schema.md](https://github.com/tomohisa/MyIntentHost/blob/main/intents/intent-cli/specs/03-queue-json-and-jsonl-schema.md) | 確認済み。queue-state.json / runs.jsonl の最小構造、state 値、更新ルール、制約を定義 |
+| [08-config-and-run-model.md](https://github.com/tomohisa/MyIntentHost/blob/main/intents/intent-cli/specs/08-config-and-run-model.md) | 確認済み。config.toml の責務定義。B1 スコープ外だが queue-state / runs との責務分離を確認 |
+| [03-bootstrap-manual-operation.md](https://github.com/tomohisa/MyIntentHost/blob/main/intents/intent-cli/rules/03-bootstrap-manual-operation.md) | 確認済み。bootstrap phase での手動更新ルール。スキーマ設計への直接影響なし |
+| [05-persistence-strategy.md](https://github.com/tomohisa/MyIntentHost/blob/main/intents/intent-cli/intent-tree/means/05-persistence-strategy.md) | 確認済み。JSON for state, JSONL for log, file artifact の方針 |
+
+## 要件分析
+
+### 変更要/不要の判定
+
+リポジトリが新規（README.md のみ）のため、全て新規作成が必要。
+
+| 要件 | 判定 | 根拠 |
+|------|------|------|
+| プロジェクト初期設定（package.json, tsconfig） | 新規作成 | リポジトリに設定ファイルなし |
+| queue-state.json のスキーマ型定義 | 新規作成 | ソースコードなし |
+| runs.jsonl のスキーマ型定義 | 新規作成 | ソースコードなし |
+| state 値の定義 | 新規作成 | ソースコードなし |
+| バリデーション関数 | 新規作成 | ソースコードなし |
+| JSON/JSONL パース・シリアライズ関数 | 新規作成 | ソースコードなし |
+
+## 設計
+
+### 技術選定
+
+| 項目 | 選定 | 理由 |
+|------|------|------|
+| 言語 | TypeScript | ナレッジの例示が TypeScript。CLI ツーリングに適合 |
+| ランタイム | Node.js (>=18) | ES modules サポート、LTS |
+| バリデーション | Zod | ランタイム検証 + 型推論。ナレッジで Zod スキーマに言及あり |
+| テスト | Vitest | TypeScript ネイティブ対応、高速 |
+| モジュール | ESM | TypeScript + Node.js の現行標準 |
+
+### ディレクトリ構造
+
+```
+intent-system/
+├── package.json
+├── tsconfig.json
+├── vitest.config.ts
+├── src/
+│   └── supervisor/
+│       ├── index.ts              # パブリック API（型とドメイン操作のエクスポート）
+│       ├── queue-state.ts        # queue-state.json のスキーマ定義・パース・バリデーション
+│       ├── run-log.ts            # runs.jsonl のスキーマ定義・パース・バリデーション
+│       └── state.ts              # QueueItemState 列挙型（共有型）
+└── tests/
+    └── supervisor/
+        ├── queue-state.test.ts
+        ├── run-log.test.ts
+        └── state.test.ts
+```
+
+### モジュール責務
+
+#### `src/supervisor/state.ts` (~30行)
+
+**責務:** queue item の state 値を定義する。
+
+```
+- QueueItemState: Zod enum（"queued" | "active" | "review" | "fixing" | "clarify-blocked" | "blocked" | "completed"）
+- QueueItemState 型のエクスポート
+```
+
+スペック定義の state 値:
+- `queued`, `active`, `review`, `fixing`, `clarify-blocked`, `blocked`, `completed`
+
+#### `src/supervisor/queue-state.ts` (~120行)
+
+**責務:** queue-state.json のスキーマ定義、パース、バリデーション、クエリ操作。
+
+**型定義（Zod スキーマから推論）:**
+
+```typescript
+// LinkedIssue: repo, number, url
+// PacketPaths: implementation, review_context, yaml
+// QueueItem: execution_unit, title, state, dependencies, blocked_by,
+//            clarification_return_path, packet_paths, linked_issue?,
+//            worker_role, review_role, priority
+// QueueState: schema_version, updated_at, items
+```
+
+**操作関数:**
+
+| 関数 | 責務 |
+|------|------|
+| `parseQueueState(json: string): QueueState` | JSON 文字列をパース・バリデーション。不正な場合は ZodError |
+| `serializeQueueState(state: QueueState): string` | QueueState を整形済み JSON 文字列に変換 |
+| `findItemByUnit(state: QueueState, unit: string): QueueItem \| undefined` | execution_unit で検索 |
+| `findItemsByState(state: QueueState, s: QueueItemState): QueueItem[]` | state でフィルタ |
+| `getBlockedItems(state: QueueState): QueueItem[]` | blocked_by が空でないアイテムを返す |
+| `resolvePacketPaths(item: QueueItem): PacketPaths` | queue item から packet path を取得 |
+
+#### `src/supervisor/run-log.ts` (~100行)
+
+**責務:** runs.jsonl のスキーマ定義、パース、バリデーション、クエリ操作。
+
+**型定義（Zod スキーマから推論）:**
+
+```typescript
+// RunEvent: ts, execution_unit, event (= QueueItemState | "resumed"), by
+```
+
+`event` フィールドの値: state 値に加え `"resumed"` を追加（スペックの「queue resume したら明示 event を残す」に対応）。
+
+**操作関数:**
+
+| 関数 | 責務 |
+|------|------|
+| `parseRunLog(jsonl: string): RunEvent[]` | JSONL 文字列をパース。各行をバリデーション |
+| `serializeRunEvent(event: RunEvent): string` | 1 イベントを JSON 行に変換 |
+| `appendRunEvent(existingJsonl: string, event: RunEvent): string` | 既存 JSONL にイベントを追記 |
+| `filterByUnit(events: RunEvent[], unit: string): RunEvent[]` | execution_unit でフィルタ |
+| `getTransitionHistory(events: RunEvent[], unit: string): RunEvent[]` | 特定ユニットの遷移履歴を時系列で返す |
+
+#### `src/supervisor/index.ts` (~20行)
+
+**責務:** パブリック API のエクスポート。
+
+エクスポート対象:
+- 全ての型（`QueueState`, `QueueItem`, `PacketPaths`, `LinkedIssue`, `RunEvent`, `QueueItemState`）
+- 全ての操作関数
+- Zod スキーマはエクスポートしない（内部実装詳細）
+
+### 設計判断
+
+**1. Zod スキーマを内部に閉じる理由**
+
+ナレッジの「パブリック API の公開範囲」ルール: インフラの実装詳細を公開しない。Zod スキーマはバリデーションインフラであり、消費者はドメイン型と操作関数のみを使う。
+
+**2. ファイル I/O を含めない理由**
+
+このモジュールは「supervisor state model」であり、スキーマ定義とインメモリ操作が責務。ファイル読み書きは上位層（B2 Queue Manager）の責務。パース関数は文字列を受け取り、シリアライズ関数は文字列を返す。
+
+**3. `event` フィールドに `"resumed"` を追加する理由**
+
+スペックの更新ルール: 「queue resume したら runs.jsonl に明示 event を残す」。state 値（7つ）とは別に resume イベントが必要。
+
+**4. `linked_issue` をオプショナルにする理由**
+
+スペックの制約: 「実 Issue を起票した場合は linked_issue を queue item から引けるようにしてよい」。"してよい" = optional。
+
+## 実装ガイドライン
+
+### Coder 向け指示
+
+1. **プロジェクト初期設定**
+   - `package.json`: name=`intent-system`, type=`module`, Zod と Vitest を依存に追加
+   - `tsconfig.json`: strict mode, ESM output (ES2022, NodeNext)
+   - `vitest.config.ts`: 最小構成
+
+2. **実装順序**
+   - `src/supervisor/state.ts` → `src/supervisor/queue-state.ts` → `src/supervisor/run-log.ts` → `src/supervisor/index.ts`
+
+3. **参照すべきスキーマ定義**
+   - queue-state.json の構造: スペック `03-queue-json-and-jsonl-schema.md` の「`.intent-cli/queue-state.json` の最小構造」セクション
+   - runs.jsonl の構造: 同スペックの「`.intent-cli/runs.jsonl` の最小構造」セクション
+   - state 値: 同スペックの「state 値」セクション（7値）
+
+4. **注意すべきアンチパターン**
+   - Zod スキーマを `index.ts` からエクスポートしない（インフラ詳細の漏洩）
+   - 配列の直接変更（push/splice）を使わない。イミュータブルな操作を使う
+   - `parseRunLog` で不正な行があった場合、ZodError をスローする（エラー握りつぶし禁止）
+   - TODO コメント禁止。今実装するか、実装しないか
+
+5. **バリデーション方針**
+   - `schema_version` は `"1"` 固定でバリデーション
+   - `updated_at` は ISO-8601 文字列としてバリデーション（Zod の `z.string().datetime()`）
+   - `priority` は文字列型（スペックでは `"high"` のみ例示だが、enum 制限は設けない）
+   - `worker_role`, `review_role` は文字列型（config.toml 側で定義される値なので、このモジュールでは制限しない）
+
+6. **シリアライズ方針**
+   - `serializeQueueState`: `JSON.stringify(state, null, 2)` + 末尾改行（diff-friendly、スペックの「commit 対象として扱ってよい」に対応）
+   - `serializeRunEvent`: `JSON.stringify(event)`（改行なし、1行1イベント）
+
+### 影響範囲
+
+このタスクは新規リポジトリへの初期実装のため、既存コードへの影響なし。
+
+後続タスク B2 (Queue Manager) がこのモジュールの型と操作関数に依存する。パブリック API の安定性が重要。
+
+## 確認事項
+
+なし。スペックから全ての判断が可能。

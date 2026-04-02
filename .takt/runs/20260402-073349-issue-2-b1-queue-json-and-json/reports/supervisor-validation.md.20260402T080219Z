@@ -1,0 +1,55 @@
+# 最終検証結果
+
+## 結果: REJECT
+
+## 要件充足チェック
+
+タスク指示書 (order.md) の Acceptance Criteria + Review Context から要件を抽出し、実コードで個別に検証した。
+
+| # | 要件（タスク指示書から抽出） | 充足 | 根拠（ファイル:行） |
+|---|---------------------------|------|-------------------|
+| 1 | selective block を current state で復元できる | ✅ | `src/supervisor/queue-state.ts:19-31` (QueueItem に state, blocked_by)、`src/supervisor/queue-state.ts:60-62` (getBlockedItems)、`tests/supervisor/queue-state.test.ts:151-170` |
+| 2 | dependency を current state で復元できる | ✅ | `src/supervisor/queue-state.ts:23` (dependencies フィールド)、`tests/supervisor/queue-state.test.ts:14-32` (dependency metadata preserved) |
+| 3 | review の遷移を JSONL から追跡できる | ✅ | `src/supervisor/run-log.ts:10` (event に queueItemStateSchema を含む)、`tests/supervisor/run-log.test.ts:13-29` (review イベントのパース検証) |
+| 4 | fix の遷移を JSONL から追跡できる | ✅ | `src/supervisor/run-log.ts:10` (fixing を含む state enum)、`tests/supervisor/run-log.test.ts:63-70` (fixing イベントのシリアライズ検証) |
+| 5 | clarify の遷移を JSONL から追跡できる | ✅ | `src/supervisor/state.ts:8` (clarify-blocked を state 値として定義)、`src/supervisor/run-log.ts:10` (event union に含まれる) |
+| 6 | queue item から packet artifact path をたどれる | ✅ | `src/supervisor/queue-state.ts:13-17,64-66` (packetPathsSchema, resolvePacketPaths)、`tests/supervisor/queue-state.test.ts:172-181` |
+| 7 | current state と append-only history の責務が混ざっていない | ✅ | `queue-state.ts` = snapshot 操作のみ、`run-log.ts` = JSONL 操作のみ。cross-import なし（共有は `state.ts` のみ） |
+| 8 | queue item から packet path が確実に引ける | ✅ | `src/supervisor/queue-state.ts:13-17` (implementation, review_context, yaml)、`tests/supervisor/index.test.ts:48` (統合テスト) |
+| 9 | queue item から return path が確実に引ける | ✅ | `src/supervisor/queue-state.ts:25` (clarification_return_path: z.string())、`tests/supervisor/fixtures.ts:17` (テストフィクスチャで定義) |
+| 10 | commit 対象として扱っても diff が読める shape を保っている | ✅ | `src/supervisor/queue-state.ts:49` (JSON.stringify with 2-space indent + trailing newline)、`tests/supervisor/queue-state.test.ts:104-115` |
+
+全要件が充足されている。
+
+## 前段 finding の再評価
+
+| finding_id | 前段判定 | 再評価 | 根拠 |
+|------------|----------|--------|------|
+| F-API-INTERNAL-EXPORTS | new | 部分的妥当 | `queueStateSchemaVersion` / `resumedRunEvent` はドメイン定数でありインフラ関数ではない（知識文書の REJECT 基準「インフラ層の関数がパブリック API からエクスポートされている」に厳密には非該当）。ただし plan の操作関数テーブルにこれらの定数は含まれておらず (`reports/plan.md:83-97`)、`index.ts:6,15` の re-export は plan の公開 API 定義を超えている。coder-decisions.md が「複合 schema は内部に閉じる」と決定しており、これらの定数は Zod schema の構成要素 (`z.literal(queueStateSchemaVersion)`) であることから、内部に閉じるべきスコープに含まれる。**re-export の削除は妥当な修正**。 |
+| F-COMMENT-WHAT-HOW | new | 妥当 | テスト全4ファイルの Given/When/Then コメントが「コードの動作をそのまま自然言語で言い換えている」に該当。例: `state.test.ts:7` "Given: the documented supervisor states" → L8-16 のコードの言い換え。テスト名が十分に説明的（例: "should expose the documented queue item states in order"）であり、コメント削除で情報損失なし。ポリシー REJECT 基準「説明コメント（What/How のコメント）」に該当。 |
+| F-DUPLICATE-METHODS-RUNLOG | new | overreach | `reports/plan.md:96-97` が `filterByUnit` と `getTransitionHistory` を別 API として明示定義。セマンティクスが異なる（汎用フィルタ vs 遷移追跡）。ポリシー DRY 条項「指示書や plan にない追加抽象化を要求する場合、その必要性が根拠付きで説明されている」に照らし、片方の削除は plan の設計判断に反する。`tests/supervisor/index.test.ts:44` と `tests/supervisor/run-log.test.ts:115-132` が `getTransitionHistory` をテスト契約に組み込み済み。 |
+
+## 検証サマリー
+
+| 項目 | 状態 | 確認方法 |
+|------|------|---------|
+| テスト | ⚠️ | implement ムーブメントの自己レポート: 4 test files / 22 tests passed (`previous_responses/implement.1.20260402T075152Z.md`)。独立した実行ログ・CI 証跡はなし |
+| ビルド | ⚠️ | implement ムーブメントの自己レポート: `tsc --noEmit` 成功 (`previous_responses/implement.1.20260402T075152Z.md`)。独立した実行ログ・CI 証跡はなし |
+| 動作確認 | ⚠️ | 統合テスト (`index.test.ts`) が公開 API 経由で queue snapshot + run history の復元を検証。E2E や手動確認の証跡はなし |
+
+## 成果物
+
+- 作成: `package.json`, `tsconfig.json`, `vitest.config.ts`
+- 作成: `src/supervisor/state.ts`, `src/supervisor/queue-state.ts`, `src/supervisor/run-log.ts`, `src/supervisor/index.ts`
+- 作成: `tests/supervisor/fixtures.ts`, `tests/supervisor/state.test.ts`, `tests/supervisor/queue-state.test.ts`, `tests/supervisor/run-log.test.ts`, `tests/supervisor/index.test.ts`
+
+## 未完了項目（REJECT理由）
+
+| # | 項目 | 理由 |
+|---|------|------|
+| 1 | F-COMMENT-WHAT-HOW 未対応 | テスト全4ファイルの Given/When/Then コメント（`state.test.ts:7,18,21,26,29,30,36,38,40,43`, `queue-state.test.ts:15,28,34,45,56,63,66,70,73,77,80,84,96,98,100,106,110,112,118,127,134,145,151,163,172,177`, `run-log.test.ts:14,24,31,37,39,45,49,51,55,61,63,65,68,72,82,87,89,100,107,115,121,126` , `index.test.ts:16,38,46`）がポリシー違反（説明コメント禁止）。テスト名で意図は表現済みのため、コメント削除のみで解消可能 |
+| 2 | F-API-INTERNAL-EXPORTS 未対応（re-export 部分） | `index.ts:6` の `queueStateSchemaVersion` re-export と `index.ts:15` の `resumedRunEvent` re-export を削除し、モジュール内部定数に閉じる。plan の公開 API テーブルに含まれていない定数の公開を是正 |
+
+**注記**: F-DUPLICATE-METHODS-RUNLOG は plan の設計判断に基づく意図的な API 分離であり overreach と判定。対応不要。
+
+**ai_fix 実行証跡**: `previous_responses/` に ai_fix レスポンスが存在しない。ai_review の REJECT 後に修正ステップが実行されずに supervise に到達している。

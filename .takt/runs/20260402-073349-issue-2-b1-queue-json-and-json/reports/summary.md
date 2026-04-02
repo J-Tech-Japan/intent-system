@@ -1,0 +1,31 @@
+# タスク完了サマリー
+
+## タスク
+`.intent-cli/queue-state.json` と `.intent-cli/runs.jsonl` の最小 schema を、selective block と run trace が復元できる形で TypeScript + Zod モジュールとして固定する (Issue #2: [B1] Queue JSON And JSONL Schema)。
+
+## 結果
+完了
+
+## 変更内容
+| 種別 | ファイル | 概要 |
+|------|---------|------|
+| 作成 | `package.json` | プロジェクト初期設定（zod, vitest, typescript 依存） |
+| 作成 | `tsconfig.json` | TypeScript strict 設定（NodeNext, ES2022） |
+| 作成 | `vitest.config.ts` | テストランナー設定 |
+| 作成 | `src/supervisor/state.ts` | QueueItemState の 7 値 Zod enum 定義 |
+| 作成 | `src/supervisor/queue-state.ts` | QueueState スキーマ + パース/クエリ操作関数（parseQueueState, serializeQueueState, findItemByUnit, findItemsByState, getBlockedItems, resolvePacketPaths） |
+| 作成 | `src/supervisor/run-log.ts` | RunEvent スキーマ + JSONL パース/追記操作関数（parseRunLog, serializeRunEvent, appendRunEvent, filterByUnit, getTransitionHistory） |
+| 作成 | `src/supervisor/index.ts` | パブリック API barrel エクスポート |
+| 作成 | `tests/supervisor/fixtures.ts` | テスト用ファクトリ関数（createQueueItem, createQueueState, createRunEvent） |
+| 作成 | `tests/supervisor/state.test.ts` | state 値の契約テスト (3 tests) |
+| 作成 | `tests/supervisor/queue-state.test.ts` | queue-state パース/シリアライズ/クエリテスト (10 tests) |
+| 作成 | `tests/supervisor/run-log.test.ts` | run-log パース/シリアライズ/クエリテスト (8 tests) |
+| 作成 | `tests/supervisor/index.test.ts` | 公開 API 統合テスト (1 test) |
+| 作成 | `tests/supervisor/contracts.test.ts` | 公開 API 契約 + 禁止コメント不在の再発防止テスト (2 tests) |
+| 作成 | `tests/raw-modules.d.ts` | `?raw` import 用型宣言 |
+
+## 検証証跡
+- `npm run build` (`tsc --noEmit`): エラーなし — supervise ムーブメントで実行確認
+- `npm run test` (`vitest run`): 5 test files / 24 tests passed (vitest v3.2.4, 250ms) — supervise ムーブメントで実行確認
+- 全 10 要件を実コードで個別検証し充足確認済み（supervisor-validation.md に詳細記載）
+- レビュー指摘 3 件すべて resolved（F-API-INTERNAL-EXPORTS, F-COMMENT-WHAT-HOW は修正完了、F-DUPLICATE-METHODS-RUNLOG は overreach 判定）
