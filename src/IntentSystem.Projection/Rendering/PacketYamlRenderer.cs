@@ -5,67 +5,89 @@ namespace IntentSystem.Projection.Rendering;
 
 public static class PacketYamlRenderer
 {
-    public static string Render(ImplementationIssuePacket packet)
+    public static string Render(ImplementationIssuePacket implementationPacket, ReviewContextPacket reviewContextPacket)
     {
-        ArgumentNullException.ThrowIfNull(packet);
+        ArgumentNullException.ThrowIfNull(implementationPacket);
+        ArgumentNullException.ThrowIfNull(reviewContextPacket);
 
         var sb = new StringBuilder();
 
-        AppendScalar(sb, "issue_title", packet.IssueTitle);
-        AppendScalar(sb, "issue_kind", FormatIssueKind(packet.IssueKind));
-        AppendScalar(sb, "source_execution_unit", packet.SourceExecutionUnit);
-        AppendScalar(sb, "goal", packet.Goal);
-        AppendList(sb, "in_scope", packet.InScope);
-        AppendList(sb, "out_of_scope", packet.OutOfScope);
-        AppendScalar(sb, "target_repo", packet.TargetRepo);
-        AppendScalar(sb, "target_path", packet.TargetPath);
-        AppendScalar(sb, "target_part", packet.TargetPart);
-        AppendList(sb, "dependencies", packet.Dependencies);
-        AppendList(sb, "technical_baseline", packet.TechnicalBaseline);
-        AppendList(sb, "project_local_guide", packet.ProjectLocalGuide);
-        AppendList(sb, "intent_baseline", packet.IntentBaseline);
-        AppendList(sb, "intent_references", packet.IntentReferences);
-        AppendList(sb, "rules_and_specs", packet.RulesAndSpecs);
-        AppendList(sb, "acceptance_criteria", packet.AcceptanceCriteria);
-        AppendList(sb, "verification_evidence", packet.VerificationEvidence);
-        AppendScalar(sb, "review_mode", packet.ReviewMode);
-        AppendScalar(sb, "completion_action", packet.CompletionAction);
-        AppendScalar(sb, "landing_policy", packet.LandingPolicy);
+        sb.AppendLine("implementation_issue_packet:");
+        AppendImplementationSection(sb, implementationPacket);
+        sb.AppendLine("review_context_packet:");
+        AppendReviewContextSection(sb, reviewContextPacket);
 
         return sb.ToString();
     }
 
-    private static void AppendScalar(StringBuilder sb, string key, string value)
+    private static void AppendImplementationSection(StringBuilder sb, ImplementationIssuePacket packet)
     {
+        AppendScalar(sb, "issue_title", packet.IssueTitle, indent: 2);
+        AppendScalar(sb, "issue_kind", FormatIssueKind(packet.IssueKind), indent: 2);
+        AppendScalar(sb, "source_execution_unit", packet.SourceExecutionUnit, indent: 2);
+        AppendScalar(sb, "goal", packet.Goal, indent: 2);
+        AppendList(sb, "in_scope", packet.InScope, indent: 2);
+        AppendList(sb, "out_of_scope", packet.OutOfScope, indent: 2);
+        AppendScalar(sb, "target_repo", packet.TargetRepo, indent: 2);
+        AppendScalar(sb, "target_path", packet.TargetPath, indent: 2);
+        AppendScalar(sb, "target_part", packet.TargetPart, indent: 2);
+        AppendList(sb, "dependencies", packet.Dependencies, indent: 2);
+        AppendList(sb, "technical_baseline", packet.TechnicalBaseline, indent: 2);
+        AppendList(sb, "project_local_guide", packet.ProjectLocalGuide, indent: 2);
+        AppendList(sb, "intent_baseline", packet.IntentBaseline, indent: 2);
+        AppendList(sb, "intent_references", packet.IntentReferences, indent: 2);
+        AppendList(sb, "rules_and_specs", packet.RulesAndSpecs, indent: 2);
+        AppendList(sb, "acceptance_criteria", packet.AcceptanceCriteria, indent: 2);
+        AppendList(sb, "verification_evidence", packet.VerificationEvidence, indent: 2);
+        AppendScalar(sb, "review_mode", packet.ReviewMode, indent: 2);
+        AppendScalar(sb, "completion_action", packet.CompletionAction, indent: 2);
+        AppendScalar(sb, "landing_policy", packet.LandingPolicy, indent: 2);
+    }
+
+    private static void AppendReviewContextSection(StringBuilder sb, ReviewContextPacket packet)
+    {
+        AppendScalar(sb, "source_execution_unit", packet.SourceExecutionUnit, indent: 2);
+        AppendScalar(sb, "parent_intent_root", packet.ParentIntentRoot, indent: 2);
+        AppendList(sb, "intent_references", packet.IntentReferences, indent: 2);
+        AppendList(sb, "rules_and_specs", packet.RulesAndSpecs, indent: 2);
+        AppendList(sb, "acceptance_criteria", packet.AcceptanceCriteria, indent: 2);
+        AppendList(sb, "deterministic_review_checks", packet.DeterministicReviewChecks, indent: 2);
+        AppendScalar(sb, "clarification_return_path", packet.ClarificationReturnPath, indent: 2);
+    }
+
+    private static void AppendScalar(StringBuilder sb, string key, string value, int indent)
+    {
+        var prefix = new string(' ', indent);
         if (NeedsQuoting(value))
         {
-            sb.AppendLine($"{key}: \"{EscapeYamlString(value)}\"");
+            sb.AppendLine($"{prefix}{key}: \"{EscapeYamlString(value)}\"");
         }
         else
         {
-            sb.AppendLine($"{key}: {value}");
+            sb.AppendLine($"{prefix}{key}: {value}");
         }
     }
 
-    private static void AppendList(StringBuilder sb, string key, IReadOnlyList<string> items)
+    private static void AppendList(StringBuilder sb, string key, IReadOnlyList<string> items, int indent)
     {
+        var prefix = new string(' ', indent);
         if (items.Count == 0)
         {
-            sb.AppendLine($"{key}: []");
+            sb.AppendLine($"{prefix}{key}: []");
             return;
         }
 
-        sb.AppendLine($"{key}:");
+        sb.AppendLine($"{prefix}{key}:");
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
             if (NeedsQuoting(item))
             {
-                sb.AppendLine($"  - \"{EscapeYamlString(item)}\"");
+                sb.AppendLine($"{prefix}  - \"{EscapeYamlString(item)}\"");
             }
             else
             {
-                sb.AppendLine($"  - {item}");
+                sb.AppendLine($"{prefix}  - {item}");
             }
         }
     }

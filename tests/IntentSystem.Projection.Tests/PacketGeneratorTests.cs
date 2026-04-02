@@ -35,12 +35,13 @@ public sealed class PacketGeneratorTests
     {
         var result = PacketGenerator.Generate(CreateRow(), CreateContext());
 
+        Assert.Contains("implementation_issue_packet:", result.PacketYaml, StringComparison.Ordinal);
+        Assert.Contains("review_context_packet:", result.PacketYaml, StringComparison.Ordinal);
         Assert.Contains("issue_title:", result.PacketYaml, StringComparison.Ordinal);
         Assert.Contains("issue_kind: feature", result.PacketYaml, StringComparison.Ordinal);
         Assert.Contains("source_execution_unit: A2", result.PacketYaml, StringComparison.Ordinal);
-        Assert.Contains("goal:", result.PacketYaml, StringComparison.Ordinal);
-        Assert.Contains("acceptance_criteria:", result.PacketYaml, StringComparison.Ordinal);
-        Assert.Contains("verification_evidence:", result.PacketYaml, StringComparison.Ordinal);
+        Assert.Contains("deterministic_review_checks:", result.PacketYaml, StringComparison.Ordinal);
+        Assert.Contains("clarification_return_path:", result.PacketYaml, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -48,9 +49,9 @@ public sealed class PacketGeneratorTests
     {
         var result = PacketGenerator.Generate(CreateRow(), CreateContext());
 
-        Assert.Equal(".takt/packets/a2/implementation.md", result.Paths.Implementation);
-        Assert.Equal(".takt/packets/a2/review-context.md", result.Paths.ReviewContext);
-        Assert.Equal(".takt/packets/a2/packet.yaml", result.Paths.Yaml);
+        Assert.Equal(".intent-cli/issues/a2/implementation.md", result.Paths.Implementation);
+        Assert.Equal(".intent-cli/issues/a2/review-context.md", result.Paths.ReviewContext);
+        Assert.Equal(".intent-cli/issues/a2/packet.yaml", result.Paths.Yaml);
     }
 
     [Fact]

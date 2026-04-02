@@ -6,32 +6,45 @@ namespace IntentSystem.Projection.Tests;
 public sealed class PacketYamlRendererTests
 {
     [Fact]
-    public void Render_GivenPacket_IncludesAllTopLevelKeys()
+    public void Render_GivenPackets_IncludesBothTopLevelSections()
     {
-        var yaml = PacketYamlRenderer.Render(CreatePacket());
+        var yaml = PacketYamlRenderer.Render(CreateImplementationPacket(), CreateReviewContextPacket());
 
-        Assert.Contains("issue_title:", yaml, StringComparison.Ordinal);
-        Assert.Contains("issue_kind:", yaml, StringComparison.Ordinal);
-        Assert.Contains("source_execution_unit:", yaml, StringComparison.Ordinal);
-        Assert.Contains("goal:", yaml, StringComparison.Ordinal);
-        Assert.Contains("in_scope:", yaml, StringComparison.Ordinal);
-        Assert.Contains("out_of_scope:", yaml, StringComparison.Ordinal);
-        Assert.Contains("target_repo:", yaml, StringComparison.Ordinal);
-        Assert.Contains("target_path:", yaml, StringComparison.Ordinal);
-        Assert.Contains("target_part:", yaml, StringComparison.Ordinal);
-        Assert.Contains("dependencies:", yaml, StringComparison.Ordinal);
-        Assert.Contains("technical_baseline:", yaml, StringComparison.Ordinal);
-        Assert.Contains("acceptance_criteria:", yaml, StringComparison.Ordinal);
-        Assert.Contains("verification_evidence:", yaml, StringComparison.Ordinal);
-        Assert.Contains("review_mode:", yaml, StringComparison.Ordinal);
-        Assert.Contains("completion_action:", yaml, StringComparison.Ordinal);
-        Assert.Contains("landing_policy:", yaml, StringComparison.Ordinal);
+        Assert.Contains("implementation_issue_packet:", yaml, StringComparison.Ordinal);
+        Assert.Contains("review_context_packet:", yaml, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Render_GivenPacket_FormatsIssueKindAsKebabCase()
+    public void Render_GivenPackets_IncludesImplementationFields()
     {
-        var yaml = PacketYamlRenderer.Render(CreatePacket());
+        var yaml = PacketYamlRenderer.Render(CreateImplementationPacket(), CreateReviewContextPacket());
+
+        Assert.Contains("  issue_title:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  issue_kind:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  source_execution_unit:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  goal:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  in_scope:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  out_of_scope:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  target_repo:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  acceptance_criteria:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  verification_evidence:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  review_mode:", yaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_GivenPackets_IncludesReviewContextFields()
+    {
+        var yaml = PacketYamlRenderer.Render(CreateImplementationPacket(), CreateReviewContextPacket());
+
+        Assert.Contains("  parent_intent_root:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  deterministic_review_checks:", yaml, StringComparison.Ordinal);
+        Assert.Contains("  clarification_return_path:", yaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_GivenPackets_FormatsIssueKindAsKebabCase()
+    {
+        var yaml = PacketYamlRenderer.Render(CreateImplementationPacket(), CreateReviewContextPacket());
 
         Assert.Contains("issue_kind: feature", yaml, StringComparison.Ordinal);
     }
@@ -39,8 +52,8 @@ public sealed class PacketYamlRendererTests
     [Fact]
     public void Render_GivenBoundaryFixKind_FormatsAsKebabCase()
     {
-        var packet = CreatePacket() with { IssueKind = IssueKind.BoundaryFix };
-        var yaml = PacketYamlRenderer.Render(packet);
+        var implPacket = CreateImplementationPacket() with { IssueKind = IssueKind.BoundaryFix };
+        var yaml = PacketYamlRenderer.Render(implPacket, CreateReviewContextPacket());
 
         Assert.Contains("issue_kind: boundary-fix", yaml, StringComparison.Ordinal);
     }
@@ -48,41 +61,42 @@ public sealed class PacketYamlRendererTests
     [Fact]
     public void Render_GivenEmptyList_RendersEmptyArraySyntax()
     {
-        var packet = CreatePacket() with { RulesAndSpecs = [] };
-        var yaml = PacketYamlRenderer.Render(packet);
+        var implPacket = CreateImplementationPacket() with { RulesAndSpecs = [] };
+        var yaml = PacketYamlRenderer.Render(implPacket, CreateReviewContextPacket());
 
         Assert.Contains("rules_and_specs: []", yaml, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Render_GivenListItems_RendersAsBulletedItems()
+    public void Render_GivenListItems_RendersAsIndentedBulletedItems()
     {
-        var yaml = PacketYamlRenderer.Render(CreatePacket());
+        var yaml = PacketYamlRenderer.Render(CreateImplementationPacket(), CreateReviewContextPacket());
 
-        Assert.Contains("  - A1", yaml, StringComparison.Ordinal);
+        Assert.Contains("    - A1", yaml, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Render_GivenValueWithSpecialChars_QuotesTheValue()
     {
-        var packet = CreatePacket() with { Goal = "Fix the projection: schema contract" };
-        var yaml = PacketYamlRenderer.Render(packet);
+        var implPacket = CreateImplementationPacket() with { Goal = "Fix the projection: schema contract" };
+        var yaml = PacketYamlRenderer.Render(implPacket, CreateReviewContextPacket());
 
         Assert.Contains("goal: \"Fix the projection: schema contract\"", yaml, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Render_GivenSamePacket_ProducesIdenticalOutput()
+    public void Render_GivenSamePackets_ProducesIdenticalOutput()
     {
-        var packet = CreatePacket();
+        var implPacket = CreateImplementationPacket();
+        var reviewPacket = CreateReviewContextPacket();
 
-        var first = PacketYamlRenderer.Render(packet);
-        var second = PacketYamlRenderer.Render(packet);
+        var first = PacketYamlRenderer.Render(implPacket, reviewPacket);
+        var second = PacketYamlRenderer.Render(implPacket, reviewPacket);
 
         Assert.Equal(first, second);
     }
 
-    private static ImplementationIssuePacket CreatePacket()
+    private static ImplementationIssuePacket CreateImplementationPacket()
     {
         return new ImplementationIssuePacket
         {
@@ -106,6 +120,24 @@ public sealed class PacketYamlRendererTests
             ReviewMode = "manual-review",
             CompletionAction = "open-pr",
             LandingPolicy = "squash"
+        };
+    }
+
+    private static ReviewContextPacket CreateReviewContextPacket()
+    {
+        return new ReviewContextPacket
+        {
+            SourceExecutionUnit = "A2",
+            ParentIntentRoot = "intents/intent-cli/intent-tree/00-map.md",
+            IntentReferences = ["intents/intent-cli/intent-tree/00-map.md"],
+            RulesAndSpecs = ["intents/rules/issue-projection-format.md"],
+            AcceptanceCriteria = ["generates implementation.md", "generates packet.yaml"],
+            DeterministicReviewChecks =
+            [
+                "packet generator does not carry queue policy",
+                "artifact path is stable per execution unit"
+            ],
+            ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md"
         };
     }
 }

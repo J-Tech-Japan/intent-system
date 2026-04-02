@@ -2,7 +2,7 @@ namespace IntentSystem.Projection;
 
 public static class PacketPathResolver
 {
-    private const string PacketsDirectory = ".takt/packets";
+    private const string PacketsDirectory = ".intent-cli/issues";
     private const string ImplementationFileName = "implementation.md";
     private const string ReviewContextFileName = "review-context.md";
     private const string PacketYamlFileName = "packet.yaml";

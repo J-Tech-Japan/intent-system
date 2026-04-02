@@ -26,7 +26,7 @@ public static class PacketGenerator
         {
             ImplementationMarkdown = ImplementationMarkdownRenderer.Render(implementationPacket),
             ReviewContextMarkdown = ReviewContextMarkdownRenderer.Render(reviewContextPacket),
-            PacketYaml = PacketYamlRenderer.Render(implementationPacket),
+            PacketYaml = PacketYamlRenderer.Render(implementationPacket, reviewContextPacket),
             Paths = paths
         };
     }

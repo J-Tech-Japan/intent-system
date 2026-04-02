@@ -7,9 +7,9 @@ public sealed class PacketPathResolverTests
     {
         var paths = PacketPathResolver.Resolve("A2");
 
-        Assert.Equal(".takt/packets/a2/implementation.md", paths.Implementation);
-        Assert.Equal(".takt/packets/a2/review-context.md", paths.ReviewContext);
-        Assert.Equal(".takt/packets/a2/packet.yaml", paths.Yaml);
+        Assert.Equal(".intent-cli/issues/a2/implementation.md", paths.Implementation);
+        Assert.Equal(".intent-cli/issues/a2/review-context.md", paths.ReviewContext);
+        Assert.Equal(".intent-cli/issues/a2/packet.yaml", paths.Yaml);
     }
 
     [Fact]
@@ -26,7 +26,7 @@ public sealed class PacketPathResolverTests
     {
         var paths = PacketPathResolver.Resolve("  B1  ");
 
-        Assert.Equal(".takt/packets/b1/implementation.md", paths.Implementation);
+        Assert.Equal(".intent-cli/issues/b1/implementation.md", paths.Implementation);
     }
 
     [Fact]
