@@ -7,7 +7,7 @@ namespace IntentSystem.Clarify.Tests;
 public sealed class ClarificationSerializerTests
 {
     [Fact]
-    public void Serialize_GivenOpenClarification_ContainsCanonicalExecutionUnitAndStatusFields()
+    public void Serialize_GivenOpenClarification_ContainsCanonicalExecutionUnitStatusAndAffectedExecutionUnitsFields()
     {
         var item = CreateOpenItem();
 
@@ -23,6 +23,9 @@ public sealed class ClarificationSerializerTests
         Assert.Equal("Which queue field owns the return path?", root.GetProperty("question_text").GetString());
         Assert.Equal("Queue manager stores clarification_return_path but it is unclear which field is canonical.", root.GetProperty("reason").GetString());
         Assert.Equal(JsonValueKind.Array, root.GetProperty("affected_intents").ValueKind);
+        var affectedExecutionUnits = root.GetProperty("affected_execution_units");
+        Assert.Equal(JsonValueKind.Array, affectedExecutionUnits.ValueKind);
+        Assert.Equal(["A2", "B1"], affectedExecutionUnits.EnumerateArray().Select(element => element.GetString()!).ToArray());
         Assert.Equal("blocking", root.GetProperty("blocking_or_nonblocking").GetString());
         Assert.Equal("intents/rules/issue-template-and-review-context.md", root.GetProperty("clarification_return_path").GetString());
     }
@@ -55,6 +58,7 @@ public sealed class ClarificationSerializerTests
           "question_text": "Which queue field owns the return path?",
           "reason": "Queue manager stores clarification_return_path but it is unclear which field is canonical.",
           "affected_intents": ["intents/intent-cli/intent-tree/00-map.md"],
+          "affected_execution_units": ["A2", "B1"],
           "blocking_or_nonblocking": "blocking",
           "clarification_return_path": "intents/rules/issue-template-and-review-context.md",
           "status": "answered",
@@ -112,6 +116,7 @@ public sealed class ClarificationSerializerTests
           "question_text": "Missing status field",
           "reason": "test",
           "affected_intents": [],
+          "affected_execution_units": ["A2"],
           "blocking_or_nonblocking": "blocking",
           "clarification_return_path": "path.md",
           "created_at": "2026-04-02T10:00:00Z"
@@ -122,6 +127,31 @@ public sealed class ClarificationSerializerTests
             () => ClarificationSerializer.Deserialize(json));
 
         Assert.Contains("status", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Deserialize_GivenMissingAffectedExecutionUnits_ThrowsInvalidOperationException()
+    {
+        var json = """
+        {
+          "artifact_kind": "clarification",
+          "clarification_source": "review",
+          "question_id": "clar-1",
+          "execution_unit": "A2",
+          "question_text": "Missing affected_execution_units field",
+          "reason": "test",
+          "affected_intents": [],
+          "blocking_or_nonblocking": "blocking",
+          "clarification_return_path": "path.md",
+          "status": "open",
+          "created_at": "2026-04-02T10:00:00Z"
+        }
+        """;
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => ClarificationSerializer.Deserialize(json));
+
+        Assert.Contains("affected_execution_units", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -168,6 +198,7 @@ public sealed class ClarificationSerializerTests
           "question_text": "Which queue field owns the return path?",
           "reason": "Unclear ownership.",
           "affected_intents": [],
+          "affected_execution_units": ["A2"],
           "blocking_or_nonblocking": "blocking",
           "clarification_return_path": "intents/rules/issue-template-and-review-context.md",
           "status": "answered",

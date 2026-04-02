@@ -93,6 +93,7 @@ public sealed class ClarificationInboxTests
             QuestionText = $"Question for {questionId}",
             Reason = "Clarification needed to continue execution.",
             AffectedIntents = [],
+            AffectedExecutionUnits = [executionUnit],
             BlockingOrNonblocking = "blocking",
             ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
             Status = status,

@@ -52,6 +52,7 @@ public static class ClarificationSerializer
         foreach (var element in document.RootElement.EnumerateArray())
         {
             ValidateArtifactKind(element);
+            ValidateRequiredContractFields(element);
         }
 
         var items = JsonSerializer.Deserialize<ClarificationItem[]>(json, ClarifyJsonOptions.Compact)
@@ -92,6 +93,7 @@ public static class ClarificationSerializer
         "question_text",
         "reason",
         "affected_intents",
+        "affected_execution_units",
         "blocking_or_nonblocking",
         "clarification_return_path",
         "status"

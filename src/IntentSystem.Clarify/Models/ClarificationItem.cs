@@ -20,7 +20,7 @@ public sealed record ClarificationItem
 
     public required IReadOnlyList<string> AffectedIntents { get; init; }
 
-    public IReadOnlyList<string> AffectedExecutionUnits { get; init; } = [];
+    public required IReadOnlyList<string> AffectedExecutionUnits { get; init; }
 
     public required string BlockingOrNonblocking { get; init; }
 

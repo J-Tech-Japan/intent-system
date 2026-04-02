@@ -64,6 +64,7 @@ public sealed class ClarifySupervisorLinkingTests
             QuestionText = $"Question for {questionId}",
             Reason = "Clarification needed to unblock review.",
             AffectedIntents = [],
+            AffectedExecutionUnits = [executionUnit],
             BlockingOrNonblocking = "blocking",
             ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
             Status = status,
