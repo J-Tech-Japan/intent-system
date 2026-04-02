@@ -25,7 +25,7 @@ public static class ClarificationInbox
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
-            if (AffectsExecutionUnit(item, validatedUnit) && IsPending(item))
+            if (MatchesExecutionUnit(item, validatedUnit) && IsPending(item))
             {
                 return true;
             }
@@ -41,17 +41,17 @@ public static class ClarificationInbox
         ArgumentNullException.ThrowIfNull(items);
 
         var validatedUnit = ValidateExecutionUnit(executionUnit);
-        return items.Where(item => AffectsExecutionUnit(item, validatedUnit)).ToArray();
+        return items.Where(item => MatchesExecutionUnit(item, validatedUnit)).ToArray();
     }
 
     private static bool IsPending(ClarificationItem item)
     {
-        return item.State == ClarificationState.Open;
+        return item.Status == ClarificationStatus.Open;
     }
 
-    private static bool AffectsExecutionUnit(ClarificationItem item, string executionUnit)
+    private static bool MatchesExecutionUnit(ClarificationItem item, string executionUnit)
     {
-        return item.AffectedExecutionUnits.Contains(executionUnit, StringComparer.Ordinal);
+        return string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal);
     }
 
     private static string ValidateExecutionUnit(string executionUnit)

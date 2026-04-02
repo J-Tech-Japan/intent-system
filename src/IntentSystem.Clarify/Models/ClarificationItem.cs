@@ -12,19 +12,21 @@ public sealed record ClarificationItem
 
     public required string QuestionId { get; init; }
 
+    public required string ExecutionUnit { get; init; }
+
     public required string QuestionText { get; init; }
 
     public required string Reason { get; init; }
 
     public required IReadOnlyList<string> AffectedIntents { get; init; }
 
-    public required IReadOnlyList<string> AffectedExecutionUnits { get; init; }
+    public IReadOnlyList<string> AffectedExecutionUnits { get; init; } = [];
 
     public required string BlockingOrNonblocking { get; init; }
 
     public required string ClarificationReturnPath { get; init; }
 
-    public required ClarificationState State { get; init; }
+    public required ClarificationStatus Status { get; init; }
 
     public required DateTimeOffset CreatedAt { get; init; }
 

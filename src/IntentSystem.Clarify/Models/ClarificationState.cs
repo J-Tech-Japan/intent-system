@@ -1,6 +1,6 @@
 namespace IntentSystem.Clarify.Models;
 
-public enum ClarificationState
+public enum ClarificationStatus
 {
     Open,
     Answered,

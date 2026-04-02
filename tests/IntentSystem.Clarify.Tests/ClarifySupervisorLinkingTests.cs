@@ -12,15 +12,15 @@ public sealed class ClarifySupervisorLinkingTests
         var queueItem = CreateQueueItem("A2", QueueItemState.ClarifyBlocked);
         IReadOnlyList<ClarificationItem> clarifications =
         [
-            CreateClarification("clar-1", ["A2"], ClarificationState.Open),
-            CreateClarification("clar-2", ["A2"], ClarificationState.Answered),
-            CreateClarification("clar-3", ["B1"], ClarificationState.Open)
+            CreateClarification("clar-1", "A2", ClarificationStatus.Open),
+            CreateClarification("clar-2", "A2", ClarificationStatus.Answered),
+            CreateClarification("clar-3", "B1", ClarificationStatus.Open)
         ];
 
         var linked = ClarificationInbox.FindLinkedClarifications(clarifications, queueItem.ExecutionUnit);
 
         Assert.Equal(2, linked.Count);
-        Assert.All(linked, item => Assert.Contains(queueItem.ExecutionUnit, item.AffectedExecutionUnits));
+        Assert.All(linked, item => Assert.Equal(queueItem.ExecutionUnit, item.ExecutionUnit));
     }
 
     [Fact]
@@ -29,8 +29,8 @@ public sealed class ClarifySupervisorLinkingTests
         var queueItem = CreateQueueItem("A2", QueueItemState.ClarifyBlocked);
         IReadOnlyList<ClarificationItem> clarifications =
         [
-            CreateClarification("clar-1", ["A2"], ClarificationState.Open),
-            CreateClarification("clar-2", ["A2"], ClarificationState.Applied)
+            CreateClarification("clar-1", "A2", ClarificationStatus.Open),
+            CreateClarification("clar-2", "A2", ClarificationStatus.Applied)
         ];
 
         var hasPending = ClarificationInbox.HasPendingClarifications(clarifications, queueItem.ExecutionUnit);
@@ -44,8 +44,8 @@ public sealed class ClarifySupervisorLinkingTests
         var queueItem = CreateQueueItem("A2", QueueItemState.ClarifyBlocked);
         IReadOnlyList<ClarificationItem> clarifications =
         [
-            CreateClarification("clar-1", ["A2"], ClarificationState.Answered),
-            CreateClarification("clar-2", ["A2"], ClarificationState.Cancelled)
+            CreateClarification("clar-1", "A2", ClarificationStatus.Answered),
+            CreateClarification("clar-2", "A2", ClarificationStatus.Cancelled)
         ];
 
         var hasPending = ClarificationInbox.HasPendingClarifications(clarifications, queueItem.ExecutionUnit);
@@ -54,19 +54,19 @@ public sealed class ClarifySupervisorLinkingTests
     }
 
     private static ClarificationItem CreateClarification(
-        string questionId, string[] affectedExecutionUnits, ClarificationState state)
+        string questionId, string executionUnit, ClarificationStatus status)
     {
         return new ClarificationItem
         {
             ClarificationSource = "review",
             QuestionId = questionId,
+            ExecutionUnit = executionUnit,
             QuestionText = $"Question for {questionId}",
             Reason = "Clarification needed to unblock review.",
             AffectedIntents = [],
-            AffectedExecutionUnits = affectedExecutionUnits,
             BlockingOrNonblocking = "blocking",
             ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
-            State = state,
+            Status = status,
             CreatedAt = DateTimeOffset.Parse("2026-04-02T10:00:00Z")
         };
     }

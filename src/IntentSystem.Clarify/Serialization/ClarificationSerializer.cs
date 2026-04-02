@@ -8,7 +8,7 @@ public static class ClarificationSerializer
     public static string Serialize(ClarificationItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
-        ValidateStateInvariant(item);
+        ValidateStatusInvariant(item);
         return JsonSerializer.Serialize(item, ClarifyJsonOptions.Indented);
     }
 
@@ -23,7 +23,7 @@ public static class ClarificationSerializer
         var item = JsonSerializer.Deserialize<ClarificationItem>(json, ClarifyJsonOptions.Compact)
             ?? throw new InvalidOperationException(
                 "Clarification payload deserialized to null.");
-        ValidateStateInvariant(item);
+        ValidateStatusInvariant(item);
         return item;
     }
 
@@ -32,7 +32,7 @@ public static class ClarificationSerializer
         ArgumentNullException.ThrowIfNull(items);
         foreach (var item in items)
         {
-            ValidateStateInvariant(item);
+            ValidateStatusInvariant(item);
         }
 
         return JsonSerializer.Serialize(items, ClarifyJsonOptions.Indented);
@@ -59,7 +59,7 @@ public static class ClarificationSerializer
                 "Clarification collection payload deserialized to null.");
         foreach (var item in items)
         {
-            ValidateStateInvariant(item);
+            ValidateStatusInvariant(item);
         }
 
         return items;
@@ -88,12 +88,13 @@ public static class ClarificationSerializer
     [
         "clarification_source",
         "question_id",
+        "execution_unit",
         "question_text",
         "reason",
         "affected_intents",
-        "affected_execution_units",
         "blocking_or_nonblocking",
-        "clarification_return_path"
+        "clarification_return_path",
+        "status"
     ];
 
     private static void ValidateRequiredContractFields(JsonElement element)
@@ -108,20 +109,20 @@ public static class ClarificationSerializer
         }
     }
 
-    private static void ValidateStateInvariant(ClarificationItem item)
+    private static void ValidateStatusInvariant(ClarificationItem item)
     {
         var hasAnswer = item.Answer is not null;
         var hasAnsweredAt = item.AnsweredAt.HasValue;
 
-        switch (item.State)
+        switch (item.Status)
         {
-            case ClarificationState.Open when hasAnswer || hasAnsweredAt:
+            case ClarificationStatus.Open when hasAnswer || hasAnsweredAt:
                 throw new InvalidOperationException(
                     "Open clarification items must not contain answer metadata.");
-            case ClarificationState.Answered or ClarificationState.Applied
+            case ClarificationStatus.Answered or ClarificationStatus.Applied
                 when !hasAnswer || !hasAnsweredAt:
                 throw new InvalidOperationException(
-                    $"Clarification items in state '{item.State}' must contain answer and answered_at.");
+                    $"Clarification items in status '{item.Status}' must contain answer and answered_at.");
         }
     }
 }
