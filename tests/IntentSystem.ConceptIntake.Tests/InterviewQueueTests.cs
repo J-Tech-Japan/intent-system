@@ -75,7 +75,7 @@ public sealed class InterviewQueueTests
     }
 
     [Fact]
-    public void ApplyAnswer_GivenOpenItem_ReturnsAppliedResultWithRecommendedUpdates()
+    public void ApplyAnswer_GivenOpenItem_ReturnsAppliedResultWithRecommendedUpdatesAndReturnPaths()
     {
         var item = CreateItem("iq-1", "blocking", InterviewQueueItemStatus.Open);
         var updates = new[] { "Update auth strategy document" };
@@ -86,7 +86,7 @@ public sealed class InterviewQueueTests
         Assert.Equal("Use OAuth2 with PKCE.", result.AppliedItem.Answer);
         Assert.Equal(BaseTime, result.AppliedItem.AnsweredAt);
         Assert.Equal(updates, result.RecommendedUpdates);
-        Assert.Equal(item.ClarificationReturnPath, result.ClarificationReturnPath);
+        Assert.Equal(item.ReturnToIntentPaths, result.ReturnToIntentPaths);
     }
 
     [Fact]
@@ -137,14 +137,15 @@ public sealed class InterviewQueueTests
     {
         return new InterviewQueueItem
         {
+            DomainSlug = domainSlug,
+            SourceConceptRef = "intents/intent-cli/concepts/auth-oauth2.md",
             QuestionId = questionId,
             QuestionText = $"Question for {questionId}",
             Reason = "Explore unknown area.",
             Affects = ["auth-oauth2"],
             BlockingOrNonblocking = blockingOrNonblocking,
             Status = status,
-            DomainSlug = domainSlug,
-            ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
+            ReturnToIntentPaths = ["intents/intent-cli/intent-tree/means/auth-oauth2.md"],
             CreatedAt = BaseTime.AddHours(-1)
         };
     }

@@ -76,7 +76,7 @@ public static class InterviewQueue
         {
             AppliedItem = appliedItem,
             RecommendedUpdates = recommendedUpdates,
-            ClarificationReturnPath = item.ClarificationReturnPath
+            ReturnToIntentPaths = item.ReturnToIntentPaths
         };
     }
 

@@ -11,5 +11,5 @@ public sealed record InterviewAnswerResult
 
     public required IReadOnlyList<string> RecommendedUpdates { get; init; }
 
-    public required string ClarificationReturnPath { get; init; }
+    public required IReadOnlyList<string> ReturnToIntentPaths { get; init; }
 }

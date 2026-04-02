@@ -5,5 +5,5 @@ public enum InterviewQueueItemStatus
     Open,
     Answered,
     Applied,
-    Skipped
+    Cancelled
 }

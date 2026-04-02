@@ -66,14 +66,16 @@ public static class InterviewQueueSerializer
 
     private static readonly string[] RequiredFields =
     [
+        "artifact_kind",
+        "domain_slug",
+        "source_concept_ref",
         "question_id",
         "question_text",
         "reason",
         "affects",
         "blocking_or_nonblocking",
         "status",
-        "domain_slug",
-        "clarification_return_path"
+        "return_to_intent_paths"
     ];
 
     private static void ValidateRequiredFields(JsonElement element)
