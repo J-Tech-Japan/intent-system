@@ -75,7 +75,8 @@ public static class InterviewQueueSerializer
         "affects",
         "blocking_or_nonblocking",
         "status",
-        "return_to_intent_paths"
+        "return_to_intent_paths",
+        "answer"
     ];
 
     private static void ValidateRequiredFields(JsonElement element)

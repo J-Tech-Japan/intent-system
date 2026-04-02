@@ -31,13 +31,16 @@ public sealed class InterviewQueueSerializerTests
     }
 
     [Fact]
-    public void Serialize_GivenOpenItem_OmitsNullAnswerFields()
+    public void Serialize_GivenOpenItem_IncludesAnswerAsNullInCanonicalShape()
     {
         var item = CreateOpenItem();
 
         var serialized = InterviewQueueSerializer.Serialize(item);
+        using var document = JsonDocument.Parse(serialized);
+        var root = document.RootElement;
 
-        Assert.DoesNotContain("\"answer\"", serialized, StringComparison.Ordinal);
+        Assert.True(root.TryGetProperty("answer", out var answerElement));
+        Assert.Equal(JsonValueKind.Null, answerElement.ValueKind);
         Assert.DoesNotContain("\"answered_at\"", serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("\"recommended_updates\"", serialized, StringComparison.Ordinal);
     }
@@ -101,6 +104,7 @@ public sealed class InterviewQueueSerializerTests
           "blocking_or_nonblocking": "blocking",
           "status": "open",
           "return_to_intent_paths": [],
+          "answer": null,
           "created_at": "2026-04-02T11:00:00Z"
         }
         """;
@@ -125,6 +129,7 @@ public sealed class InterviewQueueSerializerTests
           "blocking_or_nonblocking": "blocking",
           "status": "open",
           "return_to_intent_paths": [],
+          "answer": null,
           "created_at": "2026-04-02T11:00:00Z"
         }
         """;
@@ -149,6 +154,7 @@ public sealed class InterviewQueueSerializerTests
           "affects": [],
           "blocking_or_nonblocking": "blocking",
           "status": "open",
+          "answer": null,
           "created_at": "2026-04-02T11:00:00Z"
         }
         """;
@@ -187,6 +193,7 @@ public sealed class InterviewQueueSerializerTests
           "blocking_or_nonblocking": "blocking",
           "status": "applied",
           "return_to_intent_paths": [],
+          "answer": null,
           "created_at": "2026-04-02T11:00:00Z"
         }
         """;
@@ -195,6 +202,31 @@ public sealed class InterviewQueueSerializerTests
             () => InterviewQueueSerializer.Deserialize(json));
 
         Assert.Contains("must contain answer", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Deserialize_GivenMissingAnswerField_ThrowsInvalidOperationException()
+    {
+        var json = """
+        {
+          "artifact_kind": "interview",
+          "domain_slug": "auth",
+          "source_concept_ref": "ref.md",
+          "question_id": "iq-1",
+          "question_text": "test",
+          "reason": "test",
+          "affects": [],
+          "blocking_or_nonblocking": "blocking",
+          "status": "open",
+          "return_to_intent_paths": [],
+          "created_at": "2026-04-02T11:00:00Z"
+        }
+        """;
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => InterviewQueueSerializer.Deserialize(json));
+
+        Assert.Contains("answer", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

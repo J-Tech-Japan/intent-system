@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace IntentSystem.ConceptIntake.Models;
 
 /// <summary>
@@ -30,6 +32,11 @@ public sealed record InterviewQueueItem
 
     public required DateTimeOffset CreatedAt { get; init; }
 
+    /// <summary>
+    /// Answer is part of the canonical outward interview artifact contract.
+    /// It is always serialized, even when null for open questions.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public string? Answer { get; init; }
 
     public DateTimeOffset? AnsweredAt { get; init; }
