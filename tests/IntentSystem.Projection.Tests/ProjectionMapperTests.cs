@@ -22,6 +22,23 @@ public sealed class ProjectionMapperTests
         Assert.Equal(["A0", "B1"], packet.Dependencies);
         Assert.Equal(
             [
+                "C# / .NET",
+                ".NET 10.0.100+ baseline",
+                "dnx or dotnet tool exec",
+                "do not switch to Node or TypeScript toolchain",
+                "do not commit node_modules or vendor artifacts"
+            ],
+            packet.TechnicalBaseline);
+        Assert.Equal(["AGENTS.md", "CLAUDE.md"], packet.ProjectLocalGuide);
+        Assert.Equal(
+            [
+                "parent Intent repo remains the source of truth",
+                "projection schema fixes the contract only",
+                "issue body must contain the implementation-critical intent summary"
+            ],
+            packet.IntentBaseline);
+        Assert.Equal(
+            [
                 "intents/intent-cli/intent-tree/00-map.md",
                 "intents/rules/issue-projection-format.md",
                 "intents/intent-cli/specs/01-projection-schema.md",
@@ -36,7 +53,13 @@ public sealed class ProjectionMapperTests
                 "intents/intent-cli/design/projection-architecture.md"
             ],
             packet.RulesAndSpecs);
-        Assert.Equal([row.SuccessSignal], packet.AcceptanceCriteria);
+        Assert.Equal(
+            [
+                "sub-slice row maps deterministically to implementation and review packets",
+                "implementation packet carries verification evidence",
+                "review context packet carries deterministic review checks and clarification return path"
+            ],
+            packet.AcceptanceCriteria);
         Assert.Equal(
             [
                 "contract-reviewed",
@@ -156,7 +179,13 @@ public sealed class ProjectionMapperTests
                 "intents/intent-cli/design/projection-architecture.md"
             ],
             packet.RulesAndSpecs);
-        Assert.Equal([row.SuccessSignal], packet.AcceptanceCriteria);
+        Assert.Equal(
+            [
+                "sub-slice row maps deterministically to implementation and review packets",
+                "implementation packet carries verification evidence",
+                "review context packet carries deterministic review checks and clarification return path"
+            ],
+            packet.AcceptanceCriteria);
         Assert.Equal(
             [
                 "source of truth remains in the parent intent repository",
@@ -201,6 +230,12 @@ public sealed class ProjectionMapperTests
             IssueKind = IssueKind.Feature,
             ParentIntentRoot = "intents/intent-cli/intent-tree/00-map.md",
             ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
+            AcceptanceCriteria =
+            [
+                "sub-slice row maps deterministically to implementation and review packets",
+                "implementation packet carries verification evidence",
+                "review context packet carries deterministic review checks and clarification return path"
+            ],
             DeterministicReviewChecks =
             [
                 "source of truth remains in the parent intent repository",
@@ -212,6 +247,21 @@ public sealed class ProjectionMapperTests
                 "contract-reviewed",
                 "tests-passing",
                 "acceptance-criteria-checked"
+            ],
+            TechnicalBaseline =
+            [
+                "C# / .NET",
+                ".NET 10.0.100+ baseline",
+                "dnx or dotnet tool exec",
+                "do not switch to Node or TypeScript toolchain",
+                "do not commit node_modules or vendor artifacts"
+            ],
+            ProjectLocalGuide = ["AGENTS.md", "CLAUDE.md"],
+            IntentBaseline =
+            [
+                "parent Intent repo remains the source of truth",
+                "projection schema fixes the contract only",
+                "issue body must contain the implementation-critical intent summary"
             ],
             AdditionalInScope = ["implementation packet"],
             OutOfScope = ["rendering implementation", "workflow engine"]
@@ -232,6 +282,9 @@ public sealed class ProjectionMapperTests
         Assert.Equal(expected.TargetPath, actual.TargetPath);
         Assert.Equal(expected.TargetPart, actual.TargetPart);
         Assert.Equal(expected.Dependencies, actual.Dependencies);
+        Assert.Equal(expected.TechnicalBaseline, actual.TechnicalBaseline);
+        Assert.Equal(expected.ProjectLocalGuide, actual.ProjectLocalGuide);
+        Assert.Equal(expected.IntentBaseline, actual.IntentBaseline);
         Assert.Equal(expected.IntentReferences, actual.IntentReferences);
         Assert.Equal(expected.RulesAndSpecs, actual.RulesAndSpecs);
         Assert.Equal(expected.AcceptanceCriteria, actual.AcceptanceCriteria);

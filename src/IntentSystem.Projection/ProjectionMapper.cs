@@ -23,9 +23,12 @@ public static class ProjectionMapper
             TargetPath = row.TargetPath,
             TargetPart = row.TargetPart,
             Dependencies = SelectDependencies(row),
+            TechnicalBaseline = context.TechnicalBaseline.ToArray(),
+            ProjectLocalGuide = context.ProjectLocalGuide.ToArray(),
+            IntentBaseline = context.IntentBaseline.ToArray(),
             IntentReferences = BuildIntentReferences(row),
             RulesAndSpecs = ExtractRulesAndSpecs(row),
-            AcceptanceCriteria = [row.SuccessSignal],
+            AcceptanceCriteria = BuildAcceptanceCriteria(row, context),
             VerificationEvidence = BuildVerificationEvidence(context),
             ReviewMode = row.ReviewMode,
             CompletionAction = row.CompletionAction,
@@ -46,7 +49,7 @@ public static class ProjectionMapper
             ParentIntentRoot = context.ParentIntentRoot,
             IntentReferences = BuildIntentReferences(row),
             RulesAndSpecs = ExtractRulesAndSpecs(row),
-            AcceptanceCriteria = [row.SuccessSignal],
+            AcceptanceCriteria = BuildAcceptanceCriteria(row, context),
             DeterministicReviewChecks = context.DeterministicReviewChecks.ToArray(),
             ClarificationReturnPath = context.ClarificationReturnPath
         };
@@ -104,6 +107,13 @@ public static class ProjectionMapper
         }
 
         return context.VerificationEvidence.ToArray();
+    }
+
+    private static string[] BuildAcceptanceCriteria(SubSliceRow row, ProjectionContext context)
+    {
+        return context.AcceptanceCriteria.Count > 0
+            ? context.AcceptanceCriteria.ToArray()
+            : [row.SuccessSignal];
     }
 
     private static string[] ExtractRulesAndSpecs(SubSliceRow row)

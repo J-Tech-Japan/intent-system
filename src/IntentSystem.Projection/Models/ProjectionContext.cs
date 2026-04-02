@@ -10,9 +10,17 @@ public sealed record ProjectionContext
 
     public required string ClarificationReturnPath { get; init; }
 
+    public IReadOnlyList<string> AcceptanceCriteria { get; init; } = [];
+
     public IReadOnlyList<string> DeterministicReviewChecks { get; init; } = [];
 
     public IReadOnlyList<string> VerificationEvidence { get; init; } = [];
+
+    public IReadOnlyList<string> TechnicalBaseline { get; init; } = [];
+
+    public IReadOnlyList<string> ProjectLocalGuide { get; init; } = [];
+
+    public IReadOnlyList<string> IntentBaseline { get; init; } = [];
 
     public IReadOnlyList<string> AdditionalInScope { get; init; } = [];
 

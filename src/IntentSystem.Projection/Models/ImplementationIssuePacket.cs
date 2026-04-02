@@ -22,6 +22,12 @@ public sealed record ImplementationIssuePacket
 
     public required IReadOnlyList<string> Dependencies { get; init; }
 
+    public required IReadOnlyList<string> TechnicalBaseline { get; init; }
+
+    public required IReadOnlyList<string> ProjectLocalGuide { get; init; }
+
+    public required IReadOnlyList<string> IntentBaseline { get; init; }
+
     public required IReadOnlyList<string> IntentReferences { get; init; }
 
     public required IReadOnlyList<string> RulesAndSpecs { get; init; }
