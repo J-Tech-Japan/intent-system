@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\IntentSystem.Clarify\IntentSystem.Clarify.csproj" />
+    <ProjectReference Include="..\..\src\IntentSystem.Projection\IntentSystem.Projection.csproj" />
     <ProjectReference Include="..\..\src\IntentSystem.Supervisor\IntentSystem.Supervisor.csproj" />
   </ItemGroup>
 
