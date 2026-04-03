@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\IntentSystem.WorkerAdapter\IntentSystem.WorkerAdapter.csproj" />
+    <ProjectReference Include="..\..\src\IntentSystem.Workflow\IntentSystem.Workflow.csproj" />
   </ItemGroup>
 
 </Project>

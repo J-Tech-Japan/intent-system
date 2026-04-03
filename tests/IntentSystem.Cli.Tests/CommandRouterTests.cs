@@ -119,6 +119,25 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenWorkflowRunCommand_DispatchesToWorkflowRunRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateWorkflowQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "workflows", "C2.yaml"),
+            CreateWorkflowDefinitionJson());
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["workflow", "run", "C2"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Workflow run artifact generated for C2", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenQueueTransitionCommand_DispatchesToQueueTransitionRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -281,6 +300,43 @@ public sealed class CommandRouterTests
           deterministic_review_checks:
             - "definition shape stays canonical"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
+    private static string CreateWorkflowDefinitionJson()
+    {
+        return """
+        {
+          "execution_unit": "C2",
+          "packet_paths": {
+            "implementation": ".intent-cli/issues/C2/implementation.md",
+            "review_context": ".intent-cli/issues/C2/review-context.md",
+            "yaml": ".intent-cli/issues/C2/packet.yaml"
+          },
+          "worker_roles": {
+            "worker": "coder",
+            "reviewer": "reviewer"
+          },
+          "dependency_snapshot": ["A1"],
+          "entry_conditions": ["A1 completed"],
+          "steps": [
+            {
+              "kind": "implement",
+              "role": "coder",
+              "on_success": ["review"],
+              "on_failure": []
+            },
+            {
+              "kind": "review",
+              "role": "reviewer",
+              "on_success": ["complete"],
+              "on_failure": ["comment-findings"]
+            }
+          ],
+          "success_signal": "workflow render writes workflow artifact",
+          "review_mode": "deterministic-review",
+          "completion_action": "wait-for-deterministic-review"
+        }
         """;
     }
 
