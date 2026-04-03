@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\IntentSystem.Cli\IntentSystem.Cli.csproj" />
     <ProjectReference Include="..\..\src\IntentSystem.Supervisor\IntentSystem.Supervisor.csproj" />
+    <ProjectReference Include="..\..\src\IntentSystem.WorkerAdapter\IntentSystem.WorkerAdapter.csproj" />
     <ProjectReference Include="..\..\src\IntentSystem.Workflow\IntentSystem.Workflow.csproj" />
   </ItemGroup>
 
