@@ -17,10 +17,9 @@ public sealed class ProgramTests
             tempDirectory.CreateFile(
                 Path.Combine("repo", ".intent-cli", "config.toml"),
                 """
-                [project]
-                domain = "intent-system"
-                workflow_engine = "intent-cli"
-                artifact_root = ".intent-cli/artifacts"
+                default_domain = "intent-cli"
+                workflow_engine = "takt"
+                artifact_root = ".intent-cli"
                 """);
             var workingDirectory = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
             using var consoleScope = new ConsoleScope();
@@ -32,7 +31,8 @@ public sealed class ProgramTests
             var configPathLine = GetRequiredOutputLine(output, "Config path: ");
 
             Assert.Equal(0, exitCode);
-            Assert.Contains("Domain: intent-system", output, StringComparison.Ordinal);
+            Assert.Contains("Domain: intent-cli", output, StringComparison.Ordinal);
+            Assert.Contains("Workflow engine: takt", output, StringComparison.Ordinal);
             Assert.True(Directory.Exists(repoRootLine), $"Expected repo root directory to exist, but got '{repoRootLine}'.");
             Assert.True(File.Exists(configPathLine), $"Expected config path to exist, but got '{configPathLine}'.");
             Assert.EndsWith(

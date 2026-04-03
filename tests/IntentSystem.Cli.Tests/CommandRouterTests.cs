@@ -48,7 +48,7 @@ public sealed class CommandRouterTests
         var exitCode = CommandRouter.Execute(["project", "status"], context, writer);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("intent-system", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("intent-cli", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -76,8 +76,8 @@ public sealed class CommandRouterTests
             {
                 Project = new ProjectConfig
                 {
-                    Domain = "intent-system",
-                    WorkflowEngine = "intent-cli",
+                    Domain = "intent-cli",
+                    WorkflowEngine = "takt",
                     ArtifactRoot = ".intent-cli"
                 }
             }

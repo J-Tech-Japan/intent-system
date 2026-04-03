@@ -5,19 +5,18 @@ namespace IntentSystem.Cli.Tests;
 public sealed class CliConfigLoaderTests
 {
     [Fact]
-    public void Load_GivenProjectSection_RestoresRuntimeConfig()
+    public void Load_GivenCanonicalRootKeys_RestoresRuntimeConfig()
     {
         var toml = """
-        [project]
-        domain = "intent-system"
-        workflow_engine = "intent-cli"
+        default_domain = "intent-cli"
+        workflow_engine = "takt"
         artifact_root = ".intent-cli"
         """;
 
         var config = CliConfigLoader.Load(toml);
 
-        Assert.Equal("intent-system", config.Project.Domain);
-        Assert.Equal("intent-cli", config.Project.WorkflowEngine);
+        Assert.Equal("intent-cli", config.Project.Domain);
+        Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
     }
 
@@ -28,21 +27,37 @@ public sealed class CliConfigLoaderTests
         var configPath = tempDirectory.CreateFile(
             ".intent-cli/config.toml",
             """
-            [project]
-            domain = "intent-system"
-            workflow_engine = "intent-cli"
+            default_domain = "intent-cli"
+            workflow_engine = "takt"
             artifact_root = ".intent-cli"
             """);
 
         var config = CliConfigLoader.LoadFromFile(configPath);
 
-        Assert.Equal("intent-system", config.Project.Domain);
-        Assert.Equal("intent-cli", config.Project.WorkflowEngine);
+        Assert.Equal("intent-cli", config.Project.Domain);
+        Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
     }
 
     [Fact]
-    public void Load_GivenMissingProjectSection_ThrowsInvalidOperationException()
+    public void Load_GivenLegacyProjectSection_StillSupportsFutureRicherShape()
+    {
+        var toml = """
+        [project]
+        domain = "intent-cli"
+        workflow_engine = "takt"
+        artifact_root = ".intent-cli"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal("intent-cli", config.Project.Domain);
+        Assert.Equal("takt", config.Project.WorkflowEngine);
+        Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
+    }
+
+    [Fact]
+    public void Load_GivenMissingCanonicalRootKeys_ThrowsInvalidOperationException()
     {
         var toml = """
         [queue]
@@ -56,8 +71,7 @@ public sealed class CliConfigLoaderTests
     public void Load_GivenMissingRequiredField_ThrowsInvalidOperationException()
     {
         var toml = """
-        [project]
-        domain = "intent-system"
+        default_domain = "intent-cli"
         artifact_root = ".intent-cli"
         """;
 
