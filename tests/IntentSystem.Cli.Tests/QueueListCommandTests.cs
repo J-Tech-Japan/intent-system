@@ -21,7 +21,7 @@ public sealed class QueueListCommandTests
         var context = CreateContext(repoRoot);
         using var writer = new StringWriter();
 
-        var exitCode = QueueListCommand.Execute(context, writer);
+        var exitCode = QueueListCommand.Execute(context, [], writer);
 
         var output = writer.ToString();
         Assert.Equal(0, exitCode);
@@ -41,7 +41,7 @@ public sealed class QueueListCommandTests
         var context = CreateContext(repoRoot);
         using var writer = new StringWriter();
 
-        var exitCode = QueueListCommand.Execute(context, writer);
+        var exitCode = QueueListCommand.Execute(context, [], writer);
 
         Assert.Equal(0, exitCode);
         Assert.Contains("No queue state found", writer.ToString(), StringComparison.Ordinal);

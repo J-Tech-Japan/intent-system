@@ -2,9 +2,10 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class ProjectStatusCommand
 {
-    public static int Execute(CliContext context, TextWriter writer)
+    public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
         writer.WriteLine($"Domain: {context.Config.Project.Domain}");
