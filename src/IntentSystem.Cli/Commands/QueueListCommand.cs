@@ -1,5 +1,3 @@
-using IntentSystem.Supervisor.Serialization;
-
 namespace IntentSystem.Cli.Commands;
 
 internal static class QueueListCommand
@@ -10,14 +8,11 @@ internal static class QueueListCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        var queueStatePath = context.GetQueueStatePath();
-        if (!File.Exists(queueStatePath))
+        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
+        if (queueState is null)
         {
-            writer.WriteLine($"No queue state found at {queueStatePath}");
             return 0;
         }
-
-        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
 
         writer.WriteLine("Execution Unit | State | Priority | Dependencies | Title");
         foreach (var item in queueState.Items)
