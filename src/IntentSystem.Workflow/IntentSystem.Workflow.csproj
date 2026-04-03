@@ -6,4 +6,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\IntentSystem.Projection\IntentSystem.Projection.csproj" />
+    <ProjectReference Include="..\IntentSystem.Supervisor\IntentSystem.Supervisor.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -100,6 +100,25 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateWorkflowQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "C2", "packet.yaml"),
+            CreateWorkflowPacketYaml());
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["workflow", "render", "C2"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Workflow definition rendered for C2", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenQueueTransitionCommand_DispatchesToQueueTransitionRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -178,6 +197,91 @@ public sealed class CommandRouterTests
                 }
             ]
         };
+    }
+
+    private static QueueState CreateWorkflowQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "C2",
+                    Title = "Workflow render command",
+                    State = QueueItemState.Queued,
+                    Dependencies = ["A1"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/C2/implementation.md",
+                        ReviewContext = ".intent-cli/issues/C2/review-context.md",
+                        Yaml = ".intent-cli/issues/C2/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
+    private static string CreateWorkflowPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "[C2] Workflow Render Command"
+          issue_kind: "feature"
+          source_execution_unit: "C2"
+          goal: "Render workflow definition artifact from queue and packet sources."
+          in_scope:
+            - "cli workflow render command"
+          out_of_scope:
+            - "workflow execution"
+          target_repo: "J-Tech-Japan/intent-system"
+          target_path: "."
+          target_part: "cli workflow render command"
+          dependencies:
+            - "G1"
+            - "B2"
+            - "C1"
+            - "C2"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "C1 and C2 are fixed baselines"
+          intent_references:
+            - "ICL.E.SLICES"
+          rules_and_specs:
+            - "intents/intent-cli/specs/07-workflow-definition-and-takt-adapter.md"
+          acceptance_criteria:
+            - "workflow render writes workflow artifact"
+          verification_evidence:
+            - "contract-reviewed"
+            - "tests-passing"
+            - "acceptance-criteria-checked"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+        
+        review_context_packet:
+          source_execution_unit: "C2"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.E.SLICES"
+          rules_and_specs:
+            - "intents/intent-cli/specs/07-workflow-definition-and-takt-adapter.md"
+          acceptance_criteria:
+            - "workflow render writes workflow artifact"
+          deterministic_review_checks:
+            - "definition shape stays canonical"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
     }
 
     private sealed class TemporaryDirectory : IDisposable
