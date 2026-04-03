@@ -3,6 +3,7 @@ using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
+using IntentSystem.WorkerAdapter.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -135,6 +136,25 @@ public sealed class CommandRouterTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Workflow run artifact generated for C2", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenWorkflowStatusCommand_DispatchesToWorkflowStatusRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "workflows", "C2.yaml"),
+            CreateWorkflowDefinitionJson());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "workflows", "C2.run.json"),
+            CreateWorkflowRunArtifactJson());
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["workflow", "status", "C2"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Run status: Running", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -338,6 +358,36 @@ public sealed class CommandRouterTests
           "completion_action": "wait-for-deterministic-review"
         }
         """;
+    }
+
+    private static string CreateWorkflowRunArtifactJson()
+    {
+        return WorkerAdapterSerializer.SerializeResult(
+            new WorkerAdapter.Models.WorkerAdapterResult
+            {
+                RunStatus = WorkerAdapter.Models.WorkerAdapterRunStatus.Running,
+                StepStatuses =
+                [
+                    new WorkerAdapter.Models.WorkerAdapterStepStatus
+                    {
+                        Step = Workflow.Models.WorkflowStepKind.Implement,
+                        Status = WorkerAdapter.Models.WorkerAdapterStepState.Running
+                    },
+                    new WorkerAdapter.Models.WorkerAdapterStepStatus
+                    {
+                        Step = Workflow.Models.WorkflowStepKind.Review,
+                        Status = WorkerAdapter.Models.WorkerAdapterStepState.Pending
+                    }
+                ],
+                ReviewResult = new WorkerAdapter.Models.WorkerReviewResult
+                {
+                    Disposition = WorkerAdapter.Models.WorkerReviewDisposition.Pending
+                },
+                ReviewCommentRefs = [],
+                ClarificationRequests = [],
+                ResultSummary = "Workflow run artifact initialized for C2.",
+                RunLogRefs = [".intent-cli/workflows/C2.run.json"]
+            });
     }
 
     private sealed class TemporaryDirectory : IDisposable
