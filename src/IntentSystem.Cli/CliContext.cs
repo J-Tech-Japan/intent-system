@@ -23,6 +23,11 @@ internal sealed record CliContext
         return CliRuntimeContracts.GetQueueStatePath(RepoRoot);
     }
 
+    public string GetRunLogPath()
+    {
+        return CliRuntimeContracts.GetRunLogPath(RepoRoot);
+    }
+
     public string ResolveArtifactRootPath()
     {
         var artifactRoot = Config.Project.ArtifactRoot;

@@ -5,6 +5,7 @@ internal static class CliRuntimeContracts
     public const string IntentCliDirectoryName = ".intent-cli";
     public const string ConfigFileName = "config.toml";
     public const string QueueStateFileName = "queue-state.json";
+    public const string RunLogFileName = "runs.jsonl";
     public const string ProjectSectionName = "project";
     public const string DefaultDomainKey = "default_domain";
     public const string DomainKey = "domain";
@@ -26,5 +27,10 @@ internal static class CliRuntimeContracts
     public static string GetQueueStatePath(string repoRoot)
     {
         return Path.Combine(GetIntentCliDirectoryPath(repoRoot), QueueStateFileName);
+    }
+
+    public static string GetRunLogPath(string repoRoot)
+    {
+        return Path.Combine(GetIntentCliDirectoryPath(repoRoot), RunLogFileName);
     }
 }

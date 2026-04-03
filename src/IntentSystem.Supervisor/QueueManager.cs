@@ -9,6 +9,29 @@ namespace IntentSystem.Supervisor;
 /// </summary>
 public static class QueueManager
 {
+    public static QueueTransitionResult TransitionNonBlocking(
+        QueueState state,
+        string executionUnit,
+        QueueItemState targetState,
+        string by,
+        DateTimeOffset ts)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        ValidateNonBlockingTargetState(targetState);
+        FindItem(state, executionUnit);
+
+        return ApplyTransition(state, executionUnit, targetState, new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = MapNonBlockingEventName(targetState),
+            By = by
+        });
+    }
+
     /// <summary>
     /// Transition a queued item to active.
     /// </summary>
@@ -230,6 +253,38 @@ public static class QueueManager
     private static QueueState UnblockDependents(QueueState state, string completedUnit, DateTimeOffset ts)
     {
         return RefreshDependencies(state) with { UpdatedAt = ts };
+    }
+
+    private static void ValidateNonBlockingTargetState(QueueItemState targetState)
+    {
+        if (targetState is QueueItemState.Blocked or QueueItemState.ClarifyBlocked)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported queue transition target state '{FormatState(targetState)}'.");
+        }
+    }
+
+    private static string MapNonBlockingEventName(QueueItemState targetState)
+    {
+        return targetState switch
+        {
+            QueueItemState.Queued => "queued",
+            QueueItemState.Active => "activated",
+            QueueItemState.Review => "review-started",
+            QueueItemState.Fixing => "fix-requested",
+            QueueItemState.Completed => "completed",
+            _ => throw new InvalidOperationException(
+                $"Unsupported queue transition target state '{FormatState(targetState)}'.")
+        };
+    }
+
+    private static string FormatState(QueueItemState state)
+    {
+        return state switch
+        {
+            QueueItemState.ClarifyBlocked => "clarify-blocked",
+            _ => state.ToString().ToLowerInvariant()
+        };
     }
 
     private static QueueItem FindItem(QueueState state, string executionUnit)
