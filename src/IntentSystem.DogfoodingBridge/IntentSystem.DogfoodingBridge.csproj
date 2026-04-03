@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\IntentSystem.Clarify\IntentSystem.Clarify.csproj" />
+    <ProjectReference Include="..\IntentSystem.ConceptIntake\IntentSystem.ConceptIntake.csproj" />
+    <ProjectReference Include="..\IntentSystem.DomainBinding\IntentSystem.DomainBinding.csproj" />
+    <ProjectReference Include="..\IntentSystem.Supervisor\IntentSystem.Supervisor.csproj" />
+    <ProjectReference Include="..\IntentSystem.Workflow\IntentSystem.Workflow.csproj" />
+  </ItemGroup>
+
+</Project>
