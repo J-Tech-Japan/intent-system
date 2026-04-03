@@ -23,7 +23,7 @@ public static class PacketPathResolver
 
     private static string SanitizeExecutionUnit(string executionUnit)
     {
-        return executionUnit.Trim().ToLowerInvariant();
+        return executionUnit.Trim();
     }
 }
 

@@ -7,9 +7,9 @@ public sealed class PacketPathResolverTests
     {
         var paths = PacketPathResolver.Resolve("A2");
 
-        Assert.Equal(".intent-cli/issues/a2/implementation.md", paths.Implementation);
-        Assert.Equal(".intent-cli/issues/a2/review-context.md", paths.ReviewContext);
-        Assert.Equal(".intent-cli/issues/a2/packet.yaml", paths.Yaml);
+        Assert.Equal(".intent-cli/issues/A2/implementation.md", paths.Implementation);
+        Assert.Equal(".intent-cli/issues/A2/review-context.md", paths.ReviewContext);
+        Assert.Equal(".intent-cli/issues/A2/packet.yaml", paths.Yaml);
     }
 
     [Fact]
@@ -22,20 +22,20 @@ public sealed class PacketPathResolverTests
     }
 
     [Fact]
-    public void Resolve_GivenExecutionUnitWithWhitespace_TrimsAndNormalizes()
+    public void Resolve_GivenExecutionUnitWithWhitespace_TrimsAndPreservesCasing()
     {
         var paths = PacketPathResolver.Resolve("  B1  ");
 
-        Assert.Equal(".intent-cli/issues/b1/implementation.md", paths.Implementation);
+        Assert.Equal(".intent-cli/issues/B1/implementation.md", paths.Implementation);
     }
 
     [Fact]
-    public void Resolve_GivenMixedCaseExecutionUnit_NormalizesToLowerCase()
+    public void Resolve_GivenDifferentCasing_ReturnsDifferentPaths()
     {
         var paths = PacketPathResolver.Resolve("A2");
         var pathsLower = PacketPathResolver.Resolve("a2");
 
-        Assert.Equal(paths, pathsLower);
+        Assert.NotEqual(paths, pathsLower);
     }
 
     [Fact]

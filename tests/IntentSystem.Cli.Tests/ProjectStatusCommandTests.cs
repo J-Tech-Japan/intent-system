@@ -13,7 +13,7 @@ public sealed class ProjectStatusCommandTests
         var context = CreateContext(repoRoot, ".intent-cli");
         using var writer = new StringWriter();
 
-        var exitCode = ProjectStatusCommand.Execute(context, writer);
+        var exitCode = ProjectStatusCommand.Execute(context, [], writer);
 
         var output = writer.ToString();
         Assert.Equal(0, exitCode);
@@ -30,7 +30,7 @@ public sealed class ProjectStatusCommandTests
         var context = CreateContext(repoRoot, ".intent-cli/artifacts");
         using var writer = new StringWriter();
 
-        _ = ProjectStatusCommand.Execute(context, writer);
+        _ = ProjectStatusCommand.Execute(context, [], writer);
 
         Assert.Contains(
             Path.Combine(repoRoot, ".intent-cli", "artifacts"),

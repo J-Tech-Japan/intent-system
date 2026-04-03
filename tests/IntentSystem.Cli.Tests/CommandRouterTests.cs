@@ -29,11 +29,11 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
-    public void Execute_GivenRegisteredStubCommand_WritesNotYetImplementedMessage()
+    public void Execute_GivenKnownGroupAndUnknownSubcommand_WritesNotYetImplementedMessage()
     {
         using var writer = new StringWriter();
 
-        var exitCode = CommandRouter.Execute(["projection", "generate"], CreateContext("/tmp/intent-system"), writer);
+        var exitCode = CommandRouter.Execute(["projection", "status"], CreateContext("/tmp/intent-system"), writer);
 
         Assert.Equal(1, exitCode);
         Assert.Contains("not yet implemented", writer.ToString(), StringComparison.OrdinalIgnoreCase);

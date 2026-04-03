@@ -49,9 +49,9 @@ public sealed class PacketGeneratorTests
     {
         var result = PacketGenerator.Generate(CreateRow(), CreateContext());
 
-        Assert.Equal(".intent-cli/issues/a2/implementation.md", result.Paths.Implementation);
-        Assert.Equal(".intent-cli/issues/a2/review-context.md", result.Paths.ReviewContext);
-        Assert.Equal(".intent-cli/issues/a2/packet.yaml", result.Paths.Yaml);
+        Assert.Equal(".intent-cli/issues/A2/implementation.md", result.Paths.Implementation);
+        Assert.Equal(".intent-cli/issues/A2/review-context.md", result.Paths.ReviewContext);
+        Assert.Equal(".intent-cli/issues/A2/packet.yaml", result.Paths.Yaml);
     }
 
     [Fact]

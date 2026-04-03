@@ -2,7 +2,7 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class CommandRouter
 {
-    private delegate int CommandHandler(CliContext context, TextWriter writer);
+    private delegate int CommandHandler(CliContext context, string[] args, TextWriter writer);
 
     private static readonly string[] CommandGroups =
     [
@@ -23,6 +23,11 @@ internal static class CommandRouter
             ["project"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["status"] = ProjectStatusCommand.Execute
+            },
+            ["projection"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["generate"] = ProjectionGenerateCommand.Generate,
+                ["regenerate"] = ProjectionGenerateCommand.Regenerate
             },
             ["queue"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -62,7 +67,7 @@ internal static class CommandRouter
         if (ImplementedCommands.TryGetValue(group, out var subcommands)
             && subcommands.TryGetValue(subcommand, out var handler))
         {
-            return handler(context, writer);
+            return handler(context, args[2..], writer);
         }
 
         writer.WriteLine($"Command '{group} {subcommand}' is not yet implemented.");
