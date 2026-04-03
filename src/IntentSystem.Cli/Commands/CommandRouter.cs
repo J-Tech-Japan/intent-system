@@ -1,0 +1,80 @@
+namespace IntentSystem.Cli.Commands;
+
+internal static class CommandRouter
+{
+    private delegate int CommandHandler(CliContext context, TextWriter writer);
+
+    private static readonly string[] CommandGroups =
+    [
+        "project",
+        "projection",
+        "queue",
+        "run",
+        "review",
+        "interview",
+        "clarify",
+        "workflow",
+        "intake"
+    ];
+
+    private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, CommandHandler>> ImplementedCommands =
+        new Dictionary<string, IReadOnlyDictionary<string, CommandHandler>>(StringComparer.Ordinal)
+        {
+            ["project"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["status"] = ProjectStatusCommand.Execute
+            },
+            ["queue"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["list"] = QueueListCommand.Execute
+            }
+        };
+
+    public static int Execute(string[] args, CliContext context, TextWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        if (args.Length == 0)
+        {
+            WriteHelp(writer);
+            return 0;
+        }
+
+        if (args.Length < 2)
+        {
+            writer.WriteLine("A command group and subcommand are required.");
+            WriteHelp(writer);
+            return 1;
+        }
+
+        var group = args[0];
+        var subcommand = args[1];
+
+        if (!CommandGroups.Contains(group, StringComparer.Ordinal))
+        {
+            writer.WriteLine($"Unknown command group '{group}'.");
+            WriteHelp(writer);
+            return 1;
+        }
+
+        if (ImplementedCommands.TryGetValue(group, out var subcommands)
+            && subcommands.TryGetValue(subcommand, out var handler))
+        {
+            return handler(context, writer);
+        }
+
+        writer.WriteLine($"Command '{group} {subcommand}' is not yet implemented.");
+        return 1;
+    }
+
+    private static void WriteHelp(TextWriter writer)
+    {
+        writer.WriteLine("Available command groups:");
+        foreach (var group in CommandGroups)
+        {
+            writer.WriteLine($"- {group}");
+        }
+    }
+}
