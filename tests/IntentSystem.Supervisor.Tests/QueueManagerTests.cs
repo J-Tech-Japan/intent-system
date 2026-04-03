@@ -218,6 +218,47 @@ public sealed class QueueManagerTests
         Assert.NotNull(result.Event);
     }
 
+    [Fact]
+    public void TransitionNonBlocking_GivenCompletedTarget_UpdatesSelectedItemOnly()
+    {
+        var selectedItem = CreateItem("A1", QueueItemState.Active);
+        var otherItem = CreateItem("B1", QueueItemState.Blocked) with
+        {
+            Dependencies = ["A1"],
+            BlockedBy = ["A1"]
+        };
+        var state = CreateState([selectedItem, otherItem]);
+
+        var result = QueueManager.TransitionNonBlocking(
+            state,
+            "A1",
+            QueueItemState.Completed,
+            "intent-cli",
+            BaseTime);
+
+        Assert.Equal(QueueItemState.Completed, FindItem(result.UpdatedState, "A1").State);
+        Assert.Equal(QueueItemState.Blocked, FindItem(result.UpdatedState, "B1").State);
+        Assert.Equal(["A1"], FindItem(result.UpdatedState, "B1").BlockedBy);
+        Assert.Equal("completed", result.Event.Event);
+        Assert.Equal("intent-cli", result.Event.By);
+    }
+
+    [Fact]
+    public void TransitionNonBlocking_GivenBlockedTarget_ThrowsInvalidOperationException()
+    {
+        var state = CreateState(QueueItemState.Active);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => QueueManager.TransitionNonBlocking(
+                state,
+                "A1",
+                QueueItemState.Blocked,
+                "intent-cli",
+                BaseTime));
+
+        Assert.Contains("Unsupported queue transition target state 'blocked'", exception.Message, StringComparison.Ordinal);
+    }
+
     private static QueueState CreateState(QueueItemState itemState)
     {
         return CreateState([CreateItem("A1", itemState)]);

@@ -99,6 +99,22 @@ public sealed class CommandRouterTests
         Assert.Contains("Next candidate", writer.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_GivenQueueTransitionCommand_DispatchesToQueueTransitionRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["queue", "transition", "A2", "completed"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Transitioned A2 to completed", writer.ToString(), StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
