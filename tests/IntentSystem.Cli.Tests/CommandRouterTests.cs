@@ -67,6 +67,38 @@ public sealed class CommandRouterTests
         Assert.Contains("A2", writer.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_GivenQueueShowCommand_DispatchesToQueueShowRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["queue", "show", "A2"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Execution unit: A2", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenQueueNextCommand_DispatchesToQueueNextRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["queue", "next"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Next candidate", writer.ToString(), StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -109,6 +141,24 @@ public sealed class CommandRouterTests
                     WorkerRole = "coder",
                     ReviewRole = "reviewer",
                     Priority = "high"
+                },
+                new QueueItem
+                {
+                    ExecutionUnit = "A3",
+                    Title = "Queue read commands",
+                    State = QueueItemState.Queued,
+                    Dependencies = [],
+                    BlockedBy = [],
+                    ClarificationReturnPath = ".takt/runs/20260403-101234-issue-33-g3-queue-show-and-next/context/task/order.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/A3/implementation.md",
+                        ReviewContext = ".intent-cli/issues/A3/review-context.md",
+                        Yaml = ".intent-cli/issues/A3/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "normal"
                 }
             ]
         };

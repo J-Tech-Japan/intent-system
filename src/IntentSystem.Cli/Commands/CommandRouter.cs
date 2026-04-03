@@ -31,7 +31,9 @@ internal static class CommandRouter
             },
             ["queue"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
-                ["list"] = QueueListCommand.Execute
+                ["list"] = QueueListCommand.Execute,
+                ["show"] = QueueShowCommand.Execute,
+                ["next"] = QueueNextCommand.Execute
             }
         };
 
