@@ -2,7 +2,11 @@ namespace IntentSystem.Projection;
 
 public static class ProjectionArtifactWriter
 {
-    public static void Write(GeneratedPacket packet, string repoRoot, bool overwrite)
+    public static void Write(
+        GeneratedPacket packet,
+        string repoRoot,
+        bool overwrite,
+        bool allowExistingPacketYaml = false)
     {
         ArgumentNullException.ThrowIfNull(packet);
         ArgumentException.ThrowIfNullOrWhiteSpace(repoRoot);
@@ -11,7 +15,7 @@ public static class ProjectionArtifactWriter
 
         if (!overwrite)
         {
-            ValidateTargetsDoNotExist(writeTargets);
+            ValidateTargetsDoNotExist(writeTargets, allowExistingPacketYaml);
         }
 
         foreach (var target in writeTargets)
@@ -41,10 +45,18 @@ public static class ProjectionArtifactWriter
         ];
     }
 
-    private static void ValidateTargetsDoNotExist(IReadOnlyList<ArtifactWriteTarget> writeTargets)
+    private static void ValidateTargetsDoNotExist(
+        IReadOnlyList<ArtifactWriteTarget> writeTargets,
+        bool allowExistingPacketYaml)
     {
-        foreach (var target in writeTargets)
+        for (var index = 0; index < writeTargets.Count; index++)
         {
+            var target = writeTargets[index];
+            if (allowExistingPacketYaml && index == writeTargets.Count - 1)
+            {
+                continue;
+            }
+
             if (File.Exists(target.Path))
             {
                 throw new InvalidOperationException($"Artifact already exists at {target.Path}.");

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using IntentSystem.Projection;
 using IntentSystem.Projection.Serialization;
 
@@ -39,34 +38,43 @@ internal static class ProjectionGenerateCommand
         }
 
         var executionUnit = args[0];
-        var sourcePath = ProjectionSourcePathResolver.Resolve(context.RepoRoot, executionUnit);
-        if (!File.Exists(sourcePath))
+        var packetYamlPath = ResolvePacketYamlPath(context.RepoRoot, executionUnit);
+        if (!File.Exists(packetYamlPath))
         {
-            writer.WriteLine($"Projection source bundle was not found at {sourcePath}");
+            writer.WriteLine($"Projection packet YAML was not found at {packetYamlPath}");
             return 1;
         }
 
         try
         {
-            var bundle = ProjectionSourceSerializer.Deserialize(File.ReadAllText(sourcePath));
-            EnsureExecutionUnitMatches(executionUnit, bundle.Row.SourceExecutionUnit);
-            var packet = PacketGenerator.Generate(bundle.Row, bundle.Context);
+            var packetContract = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetYamlPath));
+            EnsureExecutionUnitMatches(executionUnit, packetContract.ImplementationIssuePacket.SourceExecutionUnit);
+            var packet = PacketGenerator.Generate(
+                packetContract.ImplementationIssuePacket,
+                packetContract.ReviewContextPacket);
 
             ProjectionArtifactWriter.Write(
                 packet,
                 context.RepoRoot,
-                overwrite: mode == ProjectionCommandMode.Regenerate);
+                overwrite: mode == ProjectionCommandMode.Regenerate,
+                allowExistingPacketYaml: mode == ProjectionCommandMode.Generate);
 
             writer.WriteLine($"Projection artifacts generated for {executionUnit}.");
             return 0;
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
-            or JsonException)
+            or IOException)
         {
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    private static string ResolvePacketYamlPath(string repoRoot, string executionUnit)
+    {
+        var paths = PacketPathResolver.Resolve(executionUnit);
+        return Path.Combine(repoRoot, paths.Yaml.Replace('/', Path.DirectorySeparatorChar));
     }
 
     private static void EnsureExecutionUnitMatches(string requestedExecutionUnit, string bundleExecutionUnit)

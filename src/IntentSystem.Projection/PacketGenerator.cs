@@ -30,4 +30,31 @@ public static class PacketGenerator
             Paths = paths
         };
     }
+
+    public static GeneratedPacket Generate(
+        ImplementationIssuePacket implementationPacket,
+        ReviewContextPacket reviewContextPacket)
+    {
+        ArgumentNullException.ThrowIfNull(implementationPacket);
+        ArgumentNullException.ThrowIfNull(reviewContextPacket);
+
+        if (!string.Equals(
+                implementationPacket.SourceExecutionUnit,
+                reviewContextPacket.SourceExecutionUnit,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Implementation packet execution unit must match review context execution unit.");
+        }
+
+        var paths = PacketPathResolver.Resolve(implementationPacket.SourceExecutionUnit);
+
+        return new GeneratedPacket
+        {
+            ImplementationMarkdown = ImplementationMarkdownRenderer.Render(implementationPacket),
+            ReviewContextMarkdown = ReviewContextMarkdownRenderer.Render(reviewContextPacket),
+            PacketYaml = PacketYamlRenderer.Render(implementationPacket, reviewContextPacket),
+            Paths = paths
+        };
+    }
 }

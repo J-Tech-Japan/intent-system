@@ -13,13 +13,13 @@ public sealed class ProjectionArtifactWriterTests
 
         Assert.Equal(
             packet.ImplementationMarkdown,
-            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "g2", "implementation.md")));
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "implementation.md")));
         Assert.Equal(
             packet.ReviewContextMarkdown,
-            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "g2", "review-context.md")));
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "review-context.md")));
         Assert.Equal(
             packet.PacketYaml,
-            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "g2", "packet.yaml")));
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "packet.yaml")));
     }
 
     [Fact]
@@ -29,7 +29,7 @@ public sealed class ProjectionArtifactWriterTests
         var repoRoot = tempDirectory.CreateDirectory("repo");
         var packet = ProjectionTestData.CreatePacket();
         var implementationPath = tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "issues", "g2", "implementation.md"),
+            Path.Combine("repo", ".intent-cli", "issues", "G2", "implementation.md"),
             "existing implementation");
 
         var exception = Assert.Throws<InvalidOperationException>(
@@ -37,8 +37,8 @@ public sealed class ProjectionArtifactWriterTests
 
         Assert.Contains("already exists", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("existing implementation", File.ReadAllText(implementationPath));
-        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "g2", "review-context.md")));
-        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "g2", "packet.yaml")));
+        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "review-context.md")));
+        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "packet.yaml")));
     }
 
     [Fact]
@@ -48,26 +48,53 @@ public sealed class ProjectionArtifactWriterTests
         var repoRoot = tempDirectory.CreateDirectory("repo");
         var packet = ProjectionTestData.CreatePacket();
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "issues", "g2", "implementation.md"),
+            Path.Combine("repo", ".intent-cli", "issues", "G2", "implementation.md"),
             "stale implementation");
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "issues", "g2", "review-context.md"),
+            Path.Combine("repo", ".intent-cli", "issues", "G2", "review-context.md"),
             "stale review context");
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "issues", "g2", "packet.yaml"),
+            Path.Combine("repo", ".intent-cli", "issues", "G2", "packet.yaml"),
             "stale packet yaml");
 
         ProjectionArtifactWriter.Write(packet, repoRoot, overwrite: true);
 
         Assert.Equal(
             packet.ImplementationMarkdown,
-            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "g2", "implementation.md")));
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "implementation.md")));
         Assert.Equal(
             packet.ReviewContextMarkdown,
-            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "g2", "review-context.md")));
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "review-context.md")));
         Assert.Equal(
             packet.PacketYaml,
-            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "g2", "packet.yaml")));
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "packet.yaml")));
+    }
+
+    [Fact]
+    public void Write_GivenExistingPacketYamlAndAllowExistingPacketYaml_OverwritesOnlyPacketYaml()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var packet = ProjectionTestData.CreatePacket();
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G2", "packet.yaml"),
+            "stale packet yaml");
+
+        ProjectionArtifactWriter.Write(
+            packet,
+            repoRoot,
+            overwrite: false,
+            allowExistingPacketYaml: true);
+
+        Assert.Equal(
+            packet.ImplementationMarkdown,
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "implementation.md")));
+        Assert.Equal(
+            packet.ReviewContextMarkdown,
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "review-context.md")));
+        Assert.Equal(
+            packet.PacketYaml,
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "packet.yaml")));
     }
 
     private sealed class TemporaryDirectory : IDisposable
