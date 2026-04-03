@@ -22,7 +22,7 @@ public sealed class DogfoodingBridgeMapperTests
             interviewItems);
 
         Assert.Equal("F2", bridge.QueueInput.ExecutionUnit);
-        Assert.Equal(".intent-cli/packets/F2/implementation.md", bridge.QueueInput.PacketPaths.Implementation);
+        Assert.Equal(".intent-cli/issues/F2/implementation.md", bridge.QueueInput.PacketPaths.Implementation);
         Assert.Equal(["C1", "D2", "E2", "F1"], bridge.QueueInput.Dependencies);
         Assert.Equal("coder", bridge.QueueInput.WorkerRole);
         Assert.Equal("reviewer", bridge.QueueInput.ReviewRole);
@@ -104,9 +104,9 @@ public sealed class DogfoodingBridgeMapperTests
             ExecutionUnit = "F2",
             PacketPaths = new WorkflowPacketPaths
             {
-                Implementation = ".intent-cli/packets/F2/implementation.md",
-                ReviewContext = ".intent-cli/packets/F2/review-context.md",
-                Yaml = ".intent-cli/packets/F2/packet.yaml"
+                Implementation = ".intent-cli/issues/F2/implementation.md",
+                ReviewContext = ".intent-cli/issues/F2/review-context.md",
+                Yaml = ".intent-cli/issues/F2/packet.yaml"
             },
             WorkerRoles = roles,
             DependencySnapshot = ["C1", "D2", "E2", "F1"],

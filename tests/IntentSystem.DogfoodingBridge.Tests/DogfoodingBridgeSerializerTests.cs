@@ -60,9 +60,9 @@ public sealed class DogfoodingBridgeSerializerTests
           "queue_input": {
             "execution_unit": "F2",
             "packet_paths": {
-              "implementation": ".intent-cli/packets/F2/implementation.md",
-              "review_context": ".intent-cli/packets/F2/review-context.md",
-              "yaml": ".intent-cli/packets/F2/packet.yaml"
+              "implementation": ".intent-cli/issues/F2/implementation.md",
+              "review_context": ".intent-cli/issues/F2/review-context.md",
+              "yaml": ".intent-cli/issues/F2/packet.yaml"
             },
             "dependencies": ["C1", "D2", "E2", "F1"],
             "clarification_return_path": "intents/rules/issue-template-and-review-context.md",
@@ -72,9 +72,9 @@ public sealed class DogfoodingBridgeSerializerTests
           "workflow_input": {
             "execution_unit": "F2",
             "packet_paths": {
-              "implementation": ".intent-cli/packets/F2/implementation.md",
-              "review_context": ".intent-cli/packets/F2/review-context.md",
-              "yaml": ".intent-cli/packets/F2/packet.yaml"
+              "implementation": ".intent-cli/issues/F2/implementation.md",
+              "review_context": ".intent-cli/issues/F2/review-context.md",
+              "yaml": ".intent-cli/issues/F2/packet.yaml"
             },
             "dependency_snapshot": ["C1", "D2", "E2", "F1"],
             "worker_roles": {
@@ -177,9 +177,9 @@ public sealed class DogfoodingBridgeSerializerTests
                 ExecutionUnit = "F2",
                 PacketPaths = new IntentSystem.Supervisor.Models.PacketPaths
                 {
-                    Implementation = ".intent-cli/packets/F2/implementation.md",
-                    ReviewContext = ".intent-cli/packets/F2/review-context.md",
-                    Yaml = ".intent-cli/packets/F2/packet.yaml"
+                    Implementation = ".intent-cli/issues/F2/implementation.md",
+                    ReviewContext = ".intent-cli/issues/F2/review-context.md",
+                    Yaml = ".intent-cli/issues/F2/packet.yaml"
                 },
                 Dependencies = ["C1", "D2", "E2", "F1"],
                 ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
@@ -191,9 +191,9 @@ public sealed class DogfoodingBridgeSerializerTests
                 ExecutionUnit = "F2",
                 PacketPaths = new IntentSystem.Workflow.Models.WorkflowPacketPaths
                 {
-                    Implementation = ".intent-cli/packets/F2/implementation.md",
-                    ReviewContext = ".intent-cli/packets/F2/review-context.md",
-                    Yaml = ".intent-cli/packets/F2/packet.yaml"
+                    Implementation = ".intent-cli/issues/F2/implementation.md",
+                    ReviewContext = ".intent-cli/issues/F2/review-context.md",
+                    Yaml = ".intent-cli/issues/F2/packet.yaml"
                 },
                 DependencySnapshot = ["C1", "D2", "E2", "F1"],
                 WorkerRoles = new IntentSystem.Workflow.Models.WorkerRoles
