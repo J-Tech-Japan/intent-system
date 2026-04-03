@@ -36,6 +36,8 @@ public sealed class DogfoodingBridgeSerializerTests
         Assert.DoesNotContain("\"source_path\"", serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("\"state\"", serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("\"blocked_by\"", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("intents/private-domain/", serialized, StringComparison.Ordinal);
+        Assert.Contains("private-intent-ref:backend", serialized, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -88,8 +90,8 @@ public sealed class DogfoodingBridgeSerializerTests
           "return_routes": {
             "clarification_return_path": "intents/rules/issue-template-and-review-context.md",
             "interview_return_to_intent_paths": [
-              "intents/private-domain/intent-tree/backend.md",
-              "intents/private-domain/intent-tree/shared.md"
+              "private-intent-ref:backend",
+              "private-intent-ref:shared"
             ]
           }
         }
@@ -103,8 +105,8 @@ public sealed class DogfoodingBridgeSerializerTests
         Assert.Equal("coder", contract.WorkflowInput.WorkerRoles.Worker);
         Assert.Equal(
             [
-                "intents/private-domain/intent-tree/backend.md",
-                "intents/private-domain/intent-tree/shared.md"
+                "private-intent-ref:backend",
+                "private-intent-ref:shared"
             ],
             contract.ReturnRoutes.InterviewReturnToIntentPaths);
     }
@@ -210,8 +212,8 @@ public sealed class DogfoodingBridgeSerializerTests
                 ClarificationReturnPath = "intents/rules/issue-template-and-review-context.md",
                 InterviewReturnToIntentPaths =
                 [
-                    "intents/private-domain/intent-tree/backend.md",
-                    "intents/private-domain/intent-tree/shared.md"
+                    "private-intent-ref:backend",
+                    "private-intent-ref:shared"
                 ]
             }
         };

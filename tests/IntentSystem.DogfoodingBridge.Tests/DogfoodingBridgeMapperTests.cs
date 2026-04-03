@@ -47,10 +47,13 @@ public sealed class DogfoodingBridgeMapperTests
             bridge.ReturnRoutes.ClarificationReturnPath);
         Assert.Equal(
             [
-                "intents/private-domain/intent-tree/backend.md",
-                "intents/private-domain/intent-tree/shared.md"
+                "private-intent-ref:backend",
+                "private-intent-ref:shared"
             ],
             bridge.ReturnRoutes.InterviewReturnToIntentPaths);
+        Assert.DoesNotContain(
+            bridge.ReturnRoutes.InterviewReturnToIntentPaths,
+            value => value.Contains("intents/private-domain/", StringComparison.Ordinal));
     }
 
     [Fact]

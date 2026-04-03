@@ -23,6 +23,7 @@ public static class DogfoodingBridgeMapper
 
         var interviewReturnPaths = interviewQueueItems
             .SelectMany(item => item.ReturnToIntentPaths)
+            .Select(RedactInterviewReturnPath)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
@@ -70,5 +71,19 @@ public static class DogfoodingBridgeMapper
             throw new InvalidOperationException(
                 $"Binding execution unit '{binding.ExecutionUnit}' must match workflow execution unit '{workflowDefinition.ExecutionUnit}'.");
         }
+    }
+
+    private static string RedactInterviewReturnPath(string returnPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(returnPath);
+
+        var token = Path.GetFileNameWithoutExtension(returnPath);
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            throw new InvalidOperationException(
+                $"Interview return path '{returnPath}' could not be converted to a public-safe token.");
+        }
+
+        return $"private-intent-ref:{token}";
     }
 }
