@@ -145,6 +145,42 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRunStartCommand_DispatchesToRunStartRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateRunStartQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreateRunStartPacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalGitFactory = RunStartCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = RunStartCommand.TimestampFactory;
+
+        try
+        {
+            RunStartCommand.GitCommandRunnerFactory = () => new FakeRunStartGitRunner();
+            RunStartCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T09:30:00Z");
+
+            var exitCode = CommandRouter.Execute(["run", "start", "G14"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run started for G14", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunStartCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunStartCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -476,6 +512,42 @@ public sealed class CommandRouterTests
         };
     }
 
+    private static QueueState CreateRunStartQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G14",
+                    Title = "Run start command",
+                    State = QueueItemState.Queued,
+                    Dependencies = [],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G14/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G14/review-context.md",
+                        Yaml = ".intent-cli/issues/G14/packet.yaml"
+                    },
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 56,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/issues/56"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
     private static QueueState CreateReviewCommentQueueState()
     {
         return new QueueState
@@ -737,6 +809,56 @@ public sealed class CommandRouterTests
         """;
     }
 
+    private static string CreateRunStartPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "[G14] Run Start Command"
+          issue_kind: "feature"
+          source_execution_unit: "G14"
+          goal: "Create isolated worktree and activate queue item."
+          in_scope:
+            - "run start command"
+          out_of_scope:
+            - "worker start"
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli run start command"
+          dependencies:
+            - "G13"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "run start stays thin"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/08-config-and-run-model.md"
+          acceptance_criteria:
+            - "isolated worktree created"
+          verification_evidence:
+            - "tests-passing"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+        
+        review_context_packet:
+          source_execution_unit: "G14"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/08-config-and-run-model.md"
+          acceptance_criteria:
+            - "isolated worktree created"
+          deterministic_review_checks:
+            - "run start remains thin"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
     private static string CreateReviewRunLog()
     {
         return """
@@ -850,6 +972,19 @@ public sealed class CommandRouterTests
             {
                 ExitCode = 0,
                 StdOut = "git@github.com:J-Tech-Japan/intent-system.git" + Environment.NewLine,
+                StdErr = string.Empty
+            };
+        }
+    }
+
+    private sealed class FakeRunStartGitRunner : IGitCommandRunner
+    {
+        public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            return new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = string.Empty,
                 StdErr = string.Empty
             };
         }

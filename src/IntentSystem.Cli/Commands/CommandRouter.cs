@@ -29,6 +29,10 @@ internal static class CommandRouter
                 ["generate"] = ProjectionGenerateCommand.Generate,
                 ["regenerate"] = ProjectionGenerateCommand.Regenerate
             },
+            ["run"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["start"] = RunStartCommand.Execute
+            },
             ["workflow"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["render"] = WorkflowRenderCommand.Execute,

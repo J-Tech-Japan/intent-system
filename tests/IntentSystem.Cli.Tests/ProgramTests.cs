@@ -20,6 +20,7 @@ public sealed class ProgramTests
                 default_domain = "intent-cli"
                 workflow_engine = "takt"
                 artifact_root = ".intent-cli"
+                worktree_root = ".intent-cli/worktrees"
                 """);
             var workingDirectory = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
             using var consoleScope = new ConsoleScope();

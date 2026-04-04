@@ -11,6 +11,8 @@ internal static class CliRuntimeContracts
     public const string DomainKey = "domain";
     public const string WorkflowEngineKey = "workflow_engine";
     public const string ArtifactRootKey = "artifact_root";
+    public const string WorktreeRootKey = "worktree_root";
+    public const string DefaultWorktreeRoot = ".intent-cli/worktrees";
 
     public static string GetIntentCliDirectoryPath(string repoRoot)
     {

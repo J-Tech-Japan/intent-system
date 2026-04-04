@@ -11,6 +11,7 @@ public sealed class CliConfigLoaderTests
         default_domain = "intent-cli"
         workflow_engine = "takt"
         artifact_root = ".intent-cli"
+        worktree_root = ".intent-cli/worktrees"
         """;
 
         var config = CliConfigLoader.Load(toml);
@@ -18,6 +19,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("intent-cli", config.Project.Domain);
         Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
+        Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
     }
 
     [Fact]
@@ -30,6 +32,7 @@ public sealed class CliConfigLoaderTests
             default_domain = "intent-cli"
             workflow_engine = "takt"
             artifact_root = ".intent-cli"
+            worktree_root = ".intent-cli/worktrees"
             """);
 
         var config = CliConfigLoader.LoadFromFile(configPath);
@@ -37,6 +40,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("intent-cli", config.Project.Domain);
         Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
+        Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
     }
 
     [Fact]
@@ -47,6 +51,7 @@ public sealed class CliConfigLoaderTests
         domain = "intent-cli"
         workflow_engine = "takt"
         artifact_root = ".intent-cli"
+        worktree_root = ".intent-cli/worktrees"
         """;
 
         var config = CliConfigLoader.Load(toml);
@@ -54,6 +59,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("intent-cli", config.Project.Domain);
         Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
+        Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
     }
 
     [Fact]
