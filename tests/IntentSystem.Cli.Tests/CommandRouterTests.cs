@@ -181,6 +181,46 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRunSubmitCommand_DispatchesToRunSubmitRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G14"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateRunSubmitQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreateRunSubmitPacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalGitFactory = RunSubmitCommand.GitCommandRunnerFactory;
+        var originalPublisherFactory = RunSubmitCommand.PublisherFactory;
+        var originalTimestampFactory = RunSubmitCommand.TimestampFactory;
+
+        try
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = () => new FakeRunSubmitGitRunner();
+            RunSubmitCommand.PublisherFactory = () => new FakeRunSubmitPublisher();
+            RunSubmitCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T10:15:00Z");
+
+            var exitCode = CommandRouter.Execute(["run", "submit", "G14"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run submitted for G14", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunSubmitCommand.PublisherFactory = originalPublisherFactory;
+            RunSubmitCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -452,6 +492,42 @@ public sealed class CommandRouterTests
         };
     }
 
+    private static QueueState CreateRunSubmitQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G14",
+                    Title = "[G14] Run Start Command",
+                    State = QueueItemState.Active,
+                    Dependencies = [],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G14/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G14/review-context.md",
+                        Yaml = ".intent-cli/issues/G14/packet.yaml"
+                    },
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 56,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/issues/56"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
     private static QueueState CreateQueueDispatchQueueState()
     {
         return new QueueState
@@ -659,6 +735,56 @@ public sealed class CommandRouterTests
             - "workflow render writes workflow artifact"
           deterministic_review_checks:
             - "definition shape stays canonical"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
+    private static string CreateRunSubmitPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "G15 Run Submit Command"
+          issue_kind: "feature"
+          source_execution_unit: "G15"
+          goal: "Submit active worktree for review."
+          in_scope:
+            - "run submit command"
+          out_of_scope:
+            - "review execution"
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli run submit command"
+          dependencies:
+            - "G14"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "run submit stays thin"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/08-config-and-run-model.md"
+          acceptance_criteria:
+            - "draft pr created"
+          verification_evidence:
+            - "tests-passing"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+        
+        review_context_packet:
+          source_execution_unit: "G15"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/08-config-and-run-model.md"
+          acceptance_criteria:
+            - "draft pr created"
+          deterministic_review_checks:
+            - "run submit remains thin"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
         """;
     }
@@ -987,6 +1113,47 @@ public sealed class CommandRouterTests
                 StdOut = string.Empty,
                 StdErr = string.Empty
             };
+        }
+    }
+
+    private sealed class FakeRunSubmitGitRunner : IGitCommandRunner
+    {
+        public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            if (arguments.SequenceEqual(["rev-parse", "--abbrev-ref", "HEAD"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "issue-56-g14" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["remote", "get-url", "origin"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "git@github.com:J-Tech-Japan/intent-system.git" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            return new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = string.Empty,
+                StdErr = string.Empty
+            };
+        }
+    }
+
+    private sealed class FakeRunSubmitPublisher : IRunSubmitPublisher
+    {
+        public string CreateDraftPullRequest(string targetRepo, string headBranch, string title, string body)
+        {
+            return "https://github.com/J-Tech-Japan/intent-system/pull/58";
         }
     }
 
