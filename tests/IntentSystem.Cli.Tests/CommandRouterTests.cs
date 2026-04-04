@@ -116,16 +116,19 @@ public sealed class CommandRouterTests
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
             "# Goal");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             string.Empty);
         using var writer = new StringWriter();
         var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalGitFactory = QueueDispatchCommand.GitCommandRunnerFactory;
         var originalTimestampFactory = QueueDispatchCommand.TimestampFactory;
 
         try
         {
             QueueDispatchCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            QueueDispatchCommand.GitCommandRunnerFactory = () => new FakeQueueDispatchGitRunner();
             QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T06:00:00Z");
 
             var exitCode = CommandRouter.Execute(["queue", "dispatch", "G13"], CreateContext(repoRoot), writer);
@@ -136,6 +139,7 @@ public sealed class CommandRouterTests
         finally
         {
             QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.GitCommandRunnerFactory = originalGitFactory;
             QueueDispatchCommand.TimestampFactory = originalTimestampFactory;
         }
     }
@@ -544,7 +548,7 @@ public sealed class CommandRouterTests
             - "cli workflow render command"
           out_of_scope:
             - "workflow execution"
-          target_repo: "J-Tech-Japan/intent-system"
+          target_repo: "submodules/intent-system"
           target_path: "."
           target_part: "cli workflow render command"
           dependencies:
@@ -599,7 +603,7 @@ public sealed class CommandRouterTests
             - "queue dispatch command"
           out_of_scope:
             - "branch creation"
-          target_repo: "J-Tech-Japan/intent-system"
+          target_repo: "submodules/intent-system"
           target_path: "."
           target_part: "cli queue dispatch command"
           dependencies:
@@ -834,6 +838,19 @@ public sealed class CommandRouterTests
                 Repo = targetRepo,
                 Number = 53,
                 Url = "https://github.com/J-Tech-Japan/intent-system/issues/53"
+            };
+        }
+    }
+
+    private sealed class FakeQueueDispatchGitRunner : IGitRemoteCommandRunner
+    {
+        public GitRemoteCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            return new GitRemoteCommandResult
+            {
+                ExitCode = 0,
+                StdOut = "git@github.com:J-Tech-Japan/intent-system.git" + Environment.NewLine,
+                StdErr = string.Empty
             };
         }
     }

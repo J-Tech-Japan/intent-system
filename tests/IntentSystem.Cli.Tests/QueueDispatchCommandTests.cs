@@ -21,16 +21,19 @@ public sealed class QueueDispatchCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
             "# Goal");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             string.Empty);
         using var writer = new StringWriter();
         var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalGitCommandRunnerFactory = QueueDispatchCommand.GitCommandRunnerFactory;
         var originalTimestampFactory = QueueDispatchCommand.TimestampFactory;
 
         try
         {
             QueueDispatchCommand.PublisherFactory = () => new FakePublisher();
+            QueueDispatchCommand.GitCommandRunnerFactory = () => new FakeGitCommandRunner();
             QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T06:00:00Z");
 
             var exitCode = QueueDispatchCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
@@ -58,6 +61,7 @@ public sealed class QueueDispatchCommandTests
         finally
         {
             QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
             QueueDispatchCommand.TimestampFactory = originalTimestampFactory;
         }
     }
@@ -73,6 +77,7 @@ public sealed class QueueDispatchCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
             "# Goal");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
         using var writer = new StringWriter();
 
         var exitCode = QueueDispatchCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
@@ -117,6 +122,7 @@ public sealed class QueueDispatchCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
             "# Goal");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
         using var writer = new StringWriter();
 
         var originalQueueState = File.ReadAllText(queueStatePath);
@@ -166,6 +172,59 @@ public sealed class QueueDispatchCommandTests
         Assert.Equal(
             Path.GetFullPath("/tmp/repo/.intent-cli/issues/G13/github-body.md"),
             bodyPath);
+    }
+
+    [Fact]
+    public void Execute_GivenCanonicalPacketTargetRepo_ResolvesGitHubTargetFromChildOriginRemote()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
+            CreatePacketYaml(targetRepo: "submodules/intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
+            "# Goal");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var publisher = new CapturingPublisher();
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalGitCommandRunnerFactory = QueueDispatchCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = QueueDispatchCommand.TimestampFactory;
+
+        try
+        {
+            QueueDispatchCommand.PublisherFactory = () => publisher;
+            QueueDispatchCommand.GitCommandRunnerFactory = () => new FakeGitCommandRunner();
+            QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T06:00:00Z");
+
+            var exitCode = QueueDispatchCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal("J-Tech-Japan/intent-system", publisher.TargetRepo);
+        }
+        finally
+        {
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+            QueueDispatchCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Theory]
+    [InlineData("https://github.com/J-Tech-Japan/intent-system.git", "J-Tech-Japan/intent-system")]
+    [InlineData("git@github.com:J-Tech-Japan/intent-system.git", "J-Tech-Japan/intent-system")]
+    public void ParseRemoteUrl_GivenGitHubRemote_ShapesOwnerRepo(string remoteUrl, string expected)
+    {
+        var actual = GitHubRepositoryTargetResolver.ParseRemoteUrl(remoteUrl);
+
+        Assert.Equal(expected, actual);
     }
 
     private static CliContext CreateContext(string repoRoot)
@@ -222,7 +281,7 @@ public sealed class QueueDispatchCommandTests
     }
 
     private static string CreatePacketYaml(
-        string targetRepo = "J-Tech-Japan/intent-system",
+        string targetRepo = "submodules/intent-system",
         string issueTitle = "[G13] Queue Dispatch Command")
     {
         return $"""
@@ -282,6 +341,36 @@ public sealed class QueueDispatchCommandTests
                 Repo = targetRepo,
                 Number = 53,
                 Url = "https://github.com/J-Tech-Japan/intent-system/issues/53"
+            };
+        }
+    }
+
+    private sealed class CapturingPublisher : IQueueDispatchPublisher
+    {
+        public string TargetRepo { get; private set; } = string.Empty;
+
+        public LinkedIssue CreateIssue(string targetRepo, string title, string body)
+        {
+            TargetRepo = targetRepo;
+
+            return new LinkedIssue
+            {
+                Repo = targetRepo,
+                Number = 53,
+                Url = "https://github.com/J-Tech-Japan/intent-system/issues/53"
+            };
+        }
+    }
+
+    private sealed class FakeGitCommandRunner : IGitRemoteCommandRunner
+    {
+        public GitRemoteCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            return new GitRemoteCommandResult
+            {
+                ExitCode = 0,
+                StdOut = "git@github.com:J-Tech-Japan/intent-system.git" + Environment.NewLine,
+                StdErr = string.Empty
             };
         }
     }

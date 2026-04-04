@@ -10,6 +10,8 @@ internal static class QueueDispatchCommand
 
     public static Func<IQueueDispatchPublisher> PublisherFactory { get; set; } = () => new GhQueueDispatchPublisher();
 
+    public static Func<IGitRemoteCommandRunner> GitCommandRunnerFactory { get; set; } = () => new GitRemoteCommandRunner();
+
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -57,8 +59,8 @@ internal static class QueueDispatchCommand
         try
         {
             var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
-            var targetRepo = packet.ImplementationIssuePacket.TargetRepo;
-            if (string.IsNullOrWhiteSpace(targetRepo))
+            var packetTargetRepo = packet.ImplementationIssuePacket.TargetRepo;
+            if (string.IsNullOrWhiteSpace(packetTargetRepo))
             {
                 throw new InvalidOperationException("Projection packet must contain a target repo.");
             }
@@ -70,7 +72,11 @@ internal static class QueueDispatchCommand
             }
 
             var body = File.ReadAllText(githubBodyPath);
-            var linkedIssue = PublisherFactory().CreateIssue(targetRepo, issueTitle, body);
+            var githubTargetRepo = GitHubRepositoryTargetResolver.Resolve(
+                context.RepoRoot,
+                packetTargetRepo,
+                GitCommandRunnerFactory());
+            var linkedIssue = PublisherFactory().CreateIssue(githubTargetRepo, issueTitle, body);
             var result = QueueManager.LinkIssue(
                 queueState,
                 executionUnit,
