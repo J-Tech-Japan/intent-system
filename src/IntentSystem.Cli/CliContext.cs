@@ -38,4 +38,15 @@ internal sealed record CliContext
 
         return Path.GetFullPath(Path.Combine(RepoRoot, artifactRoot));
     }
+
+    public string ResolveWorktreeRootPath()
+    {
+        var worktreeRoot = Config.Project.WorktreeRoot;
+        if (Path.IsPathRooted(worktreeRoot))
+        {
+            return worktreeRoot;
+        }
+
+        return Path.GetFullPath(Path.Combine(RepoRoot, worktreeRoot));
+    }
 }

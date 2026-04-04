@@ -49,7 +49,10 @@ internal static class CliConfigLoader
             return false;
         }
 
-        config = CreateConfig(domain, workflowEngine, artifactRoot);
+        var worktreeRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.WorktreeRootKey)
+            ?? CliRuntimeContracts.DefaultWorktreeRoot;
+
+        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot);
         return true;
     }
 
@@ -72,11 +75,18 @@ internal static class CliConfigLoader
                 $"'{CliRuntimeContracts.WorkflowEngineKey}', and '{CliRuntimeContracts.ArtifactRootKey}'.");
         }
 
-        config = CreateConfig(domain, workflowEngine, artifactRoot);
+        var worktreeRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.WorktreeRootKey)
+            ?? CliRuntimeContracts.DefaultWorktreeRoot;
+
+        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot);
         return true;
     }
 
-    private static CliConfig CreateConfig(string domain, string workflowEngine, string artifactRoot)
+    private static CliConfig CreateConfig(
+        string domain,
+        string workflowEngine,
+        string artifactRoot,
+        string worktreeRoot)
     {
         return new CliConfig
         {
@@ -84,7 +94,8 @@ internal static class CliConfigLoader
             {
                 Domain = domain,
                 WorkflowEngine = workflowEngine,
-                ArtifactRoot = artifactRoot
+                ArtifactRoot = artifactRoot,
+                WorktreeRoot = worktreeRoot
             }
         };
     }
@@ -106,5 +117,24 @@ internal static class CliConfigLoader
 
         value = textValue;
         return true;
+    }
+
+    private static string? TryGetOptionalString(TomlTable table, string key)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        if (!table.TryGetValue(key, out var rawValue))
+        {
+            return null;
+        }
+
+        if (rawValue is not string textValue || string.IsNullOrWhiteSpace(textValue))
+        {
+            throw new InvalidOperationException(
+                $"CLI config value '{key}' must be a non-empty string.");
+        }
+
+        return textValue;
     }
 }
