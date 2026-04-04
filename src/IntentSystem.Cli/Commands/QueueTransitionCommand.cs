@@ -14,7 +14,7 @@ internal static class QueueTransitionCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (args.Length != 2
+        if (args.Length < 2
             || string.IsNullOrWhiteSpace(args[0])
             || string.IsNullOrWhiteSpace(args[1]))
         {
@@ -31,18 +31,44 @@ internal static class QueueTransitionCommand
         if (!TryParseTargetState(args[1], out var targetState))
         {
             writer.WriteLine(
-                "Unsupported queue transition target state. Supported states: queued, active, review, fixing, completed.");
+                "Unsupported queue transition target state. Supported states: queued, active, review, fixing, completed, blocked, clarify-blocked.");
+            return 1;
+        }
+
+        if (!TryParseReason(args[2..], out var reason, out var reasonError))
+        {
+            writer.WriteLine(reasonError);
+            return 1;
+        }
+
+        if (IsBlockingTargetState(targetState) && string.IsNullOrWhiteSpace(reason))
+        {
+            writer.WriteLine("Blocking queue transitions require --reason <text>.");
+            return 1;
+        }
+
+        if (!IsBlockingTargetState(targetState) && reason is not null)
+        {
+            writer.WriteLine("Reason is only supported for blocked and clarify-blocked transitions.");
             return 1;
         }
 
         try
         {
-            var result = QueueManager.TransitionNonBlocking(
-                queueState,
-                args[0],
-                targetState,
-                TransitionActor,
-                DateTimeOffset.UtcNow);
+            var result = IsBlockingTargetState(targetState)
+                ? QueueManager.TransitionBlocking(
+                    queueState,
+                    args[0],
+                    targetState,
+                    reason!,
+                    TransitionActor,
+                    DateTimeOffset.UtcNow)
+                : QueueManager.TransitionNonBlocking(
+                    queueState,
+                    args[0],
+                    targetState,
+                    TransitionActor,
+                    DateTimeOffset.UtcNow);
 
             PersistTransition(context, result);
 
@@ -75,10 +101,50 @@ internal static class QueueTransitionCommand
             case "completed":
                 state = QueueItemState.Completed;
                 return true;
+            case "blocked":
+                state = QueueItemState.Blocked;
+                return true;
+            case "clarify-blocked":
+                state = QueueItemState.ClarifyBlocked;
+                return true;
             default:
                 state = default;
                 return false;
         }
+    }
+
+    private static bool TryParseReason(string[] args, out string? reason, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+
+        if (args.Length == 0)
+        {
+            reason = null;
+            error = null;
+            return true;
+        }
+
+        if (args.Length < 2 || !string.Equals(args[0], "--reason", StringComparison.Ordinal))
+        {
+            reason = null;
+            error = "Queue transition command only supports optional '--reason <text>'.";
+            return false;
+        }
+
+        reason = string.Join(' ', args[1..]).Trim();
+        if (reason.Length == 0)
+        {
+            error = "Queue transition reason must not be empty.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static bool IsBlockingTargetState(QueueItemState state)
+    {
+        return state is QueueItemState.Blocked or QueueItemState.ClarifyBlocked;
     }
 
     private static void PersistTransition(CliContext context, QueueTransitionResult result)
@@ -97,6 +163,10 @@ internal static class QueueTransitionCommand
 
     private static string FormatState(QueueItemState state)
     {
-        return state.ToString().ToLowerInvariant();
+        return state switch
+        {
+            QueueItemState.ClarifyBlocked => "clarify-blocked",
+            _ => state.ToString().ToLowerInvariant()
+        };
     }
 }

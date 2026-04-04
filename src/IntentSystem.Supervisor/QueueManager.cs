@@ -32,6 +32,37 @@ public static class QueueManager
         });
     }
 
+    public static QueueTransitionResult TransitionBlocking(
+        QueueState state,
+        string executionUnit,
+        QueueItemState targetState,
+        string reason,
+        string by,
+        DateTimeOffset ts)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        ValidateBlockingTargetState(targetState);
+        FindItem(state, executionUnit);
+
+        return ApplyTransition(
+            state,
+            executionUnit,
+            targetState,
+            [reason],
+            new RunEvent
+            {
+                Ts = ts,
+                ExecutionUnit = executionUnit,
+                Event = MapBlockingEventName(targetState),
+                By = by,
+                Reason = reason
+            });
+    }
+
     /// <summary>
     /// Transition a queued item to active.
     /// </summary>
@@ -264,6 +295,15 @@ public static class QueueManager
         }
     }
 
+    private static void ValidateBlockingTargetState(QueueItemState targetState)
+    {
+        if (targetState is not (QueueItemState.Blocked or QueueItemState.ClarifyBlocked))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported blocking queue transition target state '{FormatState(targetState)}'.");
+        }
+    }
+
     private static string MapNonBlockingEventName(QueueItemState targetState)
     {
         return targetState switch
@@ -275,6 +315,17 @@ public static class QueueManager
             QueueItemState.Completed => "completed",
             _ => throw new InvalidOperationException(
                 $"Unsupported queue transition target state '{FormatState(targetState)}'.")
+        };
+    }
+
+    private static string MapBlockingEventName(QueueItemState targetState)
+    {
+        return targetState switch
+        {
+            QueueItemState.Blocked => "blocked",
+            QueueItemState.ClarifyBlocked => "clarify-requested",
+            _ => throw new InvalidOperationException(
+                $"Unsupported blocking queue transition target state '{FormatState(targetState)}'.")
         };
     }
 
@@ -314,6 +365,16 @@ public static class QueueManager
     private static QueueTransitionResult ApplyTransition(
         QueueState state, string executionUnit, QueueItemState newState, RunEvent runEvent)
     {
+        return ApplyTransition(state, executionUnit, newState, blockedBy: null, runEvent);
+    }
+
+    private static QueueTransitionResult ApplyTransition(
+        QueueState state,
+        string executionUnit,
+        QueueItemState newState,
+        IReadOnlyList<string>? blockedBy,
+        RunEvent runEvent)
+    {
         var updatedItems = new QueueItem[state.Items.Count];
 
         for (var i = 0; i < state.Items.Count; i++)
@@ -321,7 +382,9 @@ public static class QueueManager
             var item = state.Items[i];
             if (string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal))
             {
-                updatedItems[i] = item with { State = newState };
+                updatedItems[i] = blockedBy is null
+                    ? item with { State = newState }
+                    : item with { State = newState, BlockedBy = blockedBy };
             }
             else
             {
