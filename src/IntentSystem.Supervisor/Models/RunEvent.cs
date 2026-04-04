@@ -14,5 +14,7 @@ public sealed record RunEvent
 
     public string? LinkedPr { get; init; }
 
+    public string? CommentRef { get; init; }
+
     public string? Reason { get; init; }
 }

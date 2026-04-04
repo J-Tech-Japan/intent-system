@@ -20,6 +20,7 @@ public sealed class RunLogSerializerTests
         Assert.Equal("supervisor", runEvent.By);
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/7", runEvent.LinkedIssue);
         Assert.Null(runEvent.LinkedPr);
+        Assert.Null(runEvent.CommentRef);
         Assert.Null(runEvent.Reason);
     }
 
@@ -59,6 +60,19 @@ public sealed class RunLogSerializerTests
     }
 
     [Fact]
+    public void DeserializeLine_GivenCommentRef_ReadsCommentRef()
+    {
+        var line =
+            """{"ts":"2026-04-02T10:00:13Z","execution_unit":"B1","event":"fix-requested","by":"reviewer","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-1"}""";
+
+        var runEvent = RunLogSerializer.DeserializeLine(line);
+
+        Assert.Equal(
+            "https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-1",
+            runEvent.CommentRef);
+    }
+
+    [Fact]
     public void SerializeLine_GivenNullOptionalFields_OmitsThemFromCompactJson()
     {
         var runEvent = new RunEvent
@@ -78,6 +92,7 @@ public sealed class RunLogSerializerTests
         Assert.True(document.RootElement.TryGetProperty("by", out _));
         Assert.False(document.RootElement.TryGetProperty("linked_issue", out _));
         Assert.False(document.RootElement.TryGetProperty("linked_pr", out _));
+        Assert.False(document.RootElement.TryGetProperty("comment_ref", out _));
         Assert.False(document.RootElement.TryGetProperty("reason", out _));
         Assert.DoesNotContain("\n", serialized, StringComparison.Ordinal);
     }

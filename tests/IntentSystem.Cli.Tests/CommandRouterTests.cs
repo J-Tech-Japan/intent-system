@@ -1,6 +1,7 @@
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Review;
 using IntentSystem.Review.Serialization;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
@@ -200,6 +201,45 @@ public sealed class CommandRouterTests
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/45", artifact.LinkedPr);
     }
 
+    [Fact]
+    public void Execute_GivenReviewCommentCommand_DispatchesToReviewCommentRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateReviewCommentQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G10.request.json"),
+            CreateReviewCommentRequestJson());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "prepared-comment.md"),
+            "repair in place");
+        using var writer = new StringWriter();
+        var originalFactory = ReviewCommentCommand.PublisherFactory;
+        var originalTimestampFactory = ReviewCommentCommand.TimestampFactory;
+
+        try
+        {
+            ReviewCommentCommand.PublisherFactory = () => new FakeReviewCommentPublisher();
+            ReviewCommentCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-04T04:40:00Z");
+
+            var exitCode = CommandRouter.Execute(
+                ["review", "comment", "G10", "--from-file", "prepared-comment.md"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Review comment posted for G10", writer.ToString(), StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "reviews", "G10.comment.json")));
+        }
+        finally
+        {
+            ReviewCommentCommand.PublisherFactory = originalFactory;
+            ReviewCommentCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -316,6 +356,36 @@ public sealed class CommandRouterTests
                         Implementation = ".intent-cli/issues/G9/implementation.md",
                         ReviewContext = ".intent-cli/issues/G9/review-context.md",
                         Yaml = ".intent-cli/issues/G9/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
+    private static QueueState CreateReviewCommentQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G10",
+                    Title = "Review comment command",
+                    State = QueueItemState.Review,
+                    Dependencies = ["G9"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G10/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G10/review-context.md",
+                        Yaml = ".intent-cli/issues/G10/packet.yaml"
                     },
                     WorkerRole = "coder",
                     ReviewRole = "reviewer",
@@ -482,6 +552,32 @@ public sealed class CommandRouterTests
         {"ts":"2026-04-03T10:00:00Z","execution_unit":"G9","event":"review-started","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/44"}
         {"ts":"2026-04-03T10:20:00Z","execution_unit":"G9","event":"review-started","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/45"}
         """ + Environment.NewLine;
+    }
+
+    private static string CreateReviewCommentRequestJson()
+    {
+        return """
+        {
+          "execution_unit": "G10",
+          "review_context_ref": ".intent-cli/issues/G10/review-context.md",
+          "linked_pr": "https://github.com/J-Tech-Japan/intent-system/pull/46",
+          "deterministic_review_checks": [
+            "review comment command が deterministic diff review の実行, merge, closeout の責務へ広がっていない"
+          ],
+          "acceptance_criteria": [],
+          "expected_evidence": [
+            "dotnet test IntentSystem.sln"
+          ]
+        }
+        """;
+    }
+
+    private sealed class FakeReviewCommentPublisher : IReviewCommentPublisher
+    {
+        public string PostComment(string linkedPr, string body)
+        {
+            return "https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-1";
+        }
     }
 
     private sealed class TemporaryDirectory : IDisposable
