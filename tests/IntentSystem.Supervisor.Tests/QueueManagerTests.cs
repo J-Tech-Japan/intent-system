@@ -259,6 +259,83 @@ public sealed class QueueManagerTests
         Assert.Contains("Unsupported queue transition target state 'blocked'", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void TransitionBlocking_GivenBlockedTarget_UpdatesSelectedItemOnlyAndStoresReason()
+    {
+        var selectedItem = CreateItem("A1", QueueItemState.Active);
+        var otherItem = CreateItem("B1", QueueItemState.Blocked) with
+        {
+            Dependencies = ["A1"],
+            BlockedBy = ["A1"]
+        };
+        var state = CreateState([selectedItem, otherItem]);
+
+        var result = QueueManager.TransitionBlocking(
+            state,
+            "A1",
+            QueueItemState.Blocked,
+            "waiting on infra approval",
+            "intent-cli",
+            BaseTime);
+
+        Assert.Equal(QueueItemState.Blocked, FindItem(result.UpdatedState, "A1").State);
+        Assert.Equal(["waiting on infra approval"], FindItem(result.UpdatedState, "A1").BlockedBy);
+        Assert.Equal(QueueItemState.Blocked, FindItem(result.UpdatedState, "B1").State);
+        Assert.Equal(["A1"], FindItem(result.UpdatedState, "B1").BlockedBy);
+        Assert.Equal("blocked", result.Event.Event);
+        Assert.Equal("waiting on infra approval", result.Event.Reason);
+    }
+
+    [Fact]
+    public void TransitionBlocking_GivenClarifyBlockedTarget_UsesClarifyRequestedEvent()
+    {
+        var state = CreateState(QueueItemState.Review);
+
+        var result = QueueManager.TransitionBlocking(
+            state,
+            "A1",
+            QueueItemState.ClarifyBlocked,
+            "need product clarification",
+            "intent-cli",
+            BaseTime);
+
+        Assert.Equal(QueueItemState.ClarifyBlocked, FindItem(result.UpdatedState, "A1").State);
+        Assert.Equal(["need product clarification"], FindItem(result.UpdatedState, "A1").BlockedBy);
+        Assert.Equal("clarify-requested", result.Event.Event);
+    }
+
+    [Fact]
+    public void TransitionBlocking_GivenNonBlockingTarget_ThrowsInvalidOperationException()
+    {
+        var state = CreateState(QueueItemState.Active);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => QueueManager.TransitionBlocking(
+                state,
+                "A1",
+                QueueItemState.Completed,
+                "reason",
+                "intent-cli",
+                BaseTime));
+
+        Assert.Contains("Unsupported blocking queue transition target state 'completed'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TransitionBlocking_GivenEmptyReason_ThrowsArgumentException()
+    {
+        var state = CreateState(QueueItemState.Active);
+
+        Assert.Throws<ArgumentException>(
+            () => QueueManager.TransitionBlocking(
+                state,
+                "A1",
+                QueueItemState.Blocked,
+                "",
+                "intent-cli",
+                BaseTime));
+    }
+
     private static QueueState CreateState(QueueItemState itemState)
     {
         return CreateState([CreateItem("A1", itemState)]);
