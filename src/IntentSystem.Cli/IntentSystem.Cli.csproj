@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\IntentSystem.Projection\IntentSystem.Projection.csproj" />
+    <ProjectReference Include="..\IntentSystem.Review\IntentSystem.Review.csproj" />
     <ProjectReference Include="..\IntentSystem.Supervisor\IntentSystem.Supervisor.csproj" />
     <ProjectReference Include="..\IntentSystem.WorkerAdapter\IntentSystem.WorkerAdapter.csproj" />
     <ProjectReference Include="..\IntentSystem.Workflow\IntentSystem.Workflow.csproj" />

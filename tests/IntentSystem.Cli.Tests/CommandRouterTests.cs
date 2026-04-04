@@ -1,6 +1,7 @@
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Review.Serialization;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 using IntentSystem.WorkerAdapter.Serialization;
@@ -173,6 +174,32 @@ public sealed class CommandRouterTests
         Assert.Contains("Transitioned A2 to completed", writer.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_GivenReviewRunCommand_DispatchesToReviewRunRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateReviewQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateReviewRunLog());
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["review", "run", "G9"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Review request artifact generated for G9", writer.ToString(), StringComparison.Ordinal);
+
+        var artifact = ReviewRequestSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.request.json")));
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/45", artifact.LinkedPr);
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -259,6 +286,36 @@ public sealed class CommandRouterTests
                         Implementation = ".intent-cli/issues/C2/implementation.md",
                         ReviewContext = ".intent-cli/issues/C2/review-context.md",
                         Yaml = ".intent-cli/issues/C2/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
+    private static QueueState CreateReviewQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G9",
+                    Title = "Review run command",
+                    State = QueueItemState.Review,
+                    Dependencies = ["G7"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G9/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G9/review-context.md",
+                        Yaml = ".intent-cli/issues/G9/packet.yaml"
                     },
                     WorkerRole = "coder",
                     ReviewRole = "reviewer",
@@ -388,6 +445,43 @@ public sealed class CommandRouterTests
                 ResultSummary = "Workflow run artifact initialized for C2.",
                 RunLogRefs = [".intent-cli/workflows/C2.run.json"]
             });
+    }
+
+    private static string CreateReviewContextMarkdown()
+    {
+        return """
+        # Execution Unit
+
+        `G9`
+
+        # Goal
+
+        `intent-cli review run <execution-unit>` を working command として実装し、
+        review context packet と latest linked PR をもとに
+        deterministic review request artifact を `.intent-cli/reviews/<execution-unit>.request.json` へ生成できるようにする。
+
+        # Parent References
+
+        - [Intent CLI Surface](/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/05-intent-cli-surface.md)
+        - [Config And Run Model](/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/08-config-and-run-model.md)
+
+        # Deterministic Review Checks
+
+        - review run command が PR comment 投稿や closeout の責務へ広がっていない
+
+        # Expected Evidence
+
+        - dotnet test IntentSystem.sln
+        - review run command tests
+        """;
+    }
+
+    private static string CreateReviewRunLog()
+    {
+        return """
+        {"ts":"2026-04-03T10:00:00Z","execution_unit":"G9","event":"review-started","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/44"}
+        {"ts":"2026-04-03T10:20:00Z","execution_unit":"G9","event":"review-started","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/45"}
+        """ + Environment.NewLine;
     }
 
     private sealed class TemporaryDirectory : IDisposable
