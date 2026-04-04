@@ -10,11 +10,11 @@ public sealed class ReviewContextMarkdownParserTests
         var parsed = ReviewContextMarkdownParser.Parse(CreateMarkdown(includeExpectedEvidence: true));
 
         Assert.Equal("G9", parsed.SourceExecutionUnit);
-        Assert.Equal(["review request artifact is generated"], parsed.AcceptanceCriteria);
+        Assert.Empty(parsed.AcceptanceCriteria);
         Assert.Equal(
-            ["input path stays under .intent-cli/issues/<execution-unit>/"],
+            ["review run command が PR comment 投稿や closeout の責務へ広がっていない"],
             parsed.DeterministicReviewChecks);
-        Assert.Equal(["dotnet test IntentSystem.sln"], parsed.ExpectedEvidence);
+        Assert.Equal(["dotnet test IntentSystem.sln", "review run command tests"], parsed.ExpectedEvidence);
     }
 
     [Fact]
@@ -29,13 +29,13 @@ public sealed class ReviewContextMarkdownParserTests
     public void Parse_GivenMissingRequiredSection_ThrowsInvalidOperationException()
     {
         var markdown = """
-        # Review Context
+        # Execution Unit
 
-        - **execution-unit**: `G9`
+        `G9`
 
-        ## Acceptance Criteria
+        # Goal
 
-        - review request artifact is generated
+        `intent-cli review run <execution-unit>` を working command にする。
         """;
 
         var exception = Assert.Throws<InvalidOperationException>(() => ReviewContextMarkdownParser.Parse(markdown));
@@ -47,34 +47,43 @@ public sealed class ReviewContextMarkdownParserTests
     {
         return includeExpectedEvidence
             ? """
-            # Review Context
+            # Execution Unit
 
-            - **execution-unit**: `G9`
+            `G9`
 
-            ## Acceptance Criteria
+            # Goal
 
-            - review request artifact is generated
+            `intent-cli review run <execution-unit>` を working command にする。
 
-            ## Deterministic Review Checks
+            # Parent References
 
-            - input path stays under .intent-cli/issues/<execution-unit>/
+            - [Intent CLI Surface](/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/05-intent-cli-surface.md)
 
-            ## Expected Evidence
+            # Deterministic Review Checks
+
+            - review run command が PR comment 投稿や closeout の責務へ広がっていない
+
+            # Expected Evidence
 
             - dotnet test IntentSystem.sln
+            - review run command tests
             """
             : """
-            # Review Context
+            # Execution Unit
 
-            - **execution-unit**: `G9`
+            `G9`
 
-            ## Acceptance Criteria
+            # Goal
 
-            - review request artifact is generated
+            `intent-cli review run <execution-unit>` を working command にする。
 
-            ## Deterministic Review Checks
+            # Parent References
 
-            - input path stays under .intent-cli/issues/<execution-unit>/
+            - [Intent CLI Surface](/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/05-intent-cli-surface.md)
+
+            # Deterministic Review Checks
+
+            - review run command が PR comment 投稿や closeout の責務へ広がっていない
             """;
     }
 }

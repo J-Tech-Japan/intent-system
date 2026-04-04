@@ -36,9 +36,13 @@ public sealed class ReviewRunCommandTests
         Assert.Equal("G9", request.ExecutionUnit);
         Assert.Equal(".intent-cli/issues/G9/review-context.md", request.ReviewContextRef);
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/45", request.LinkedPr);
-        Assert.Equal(["input paths stay canonical"], request.DeterministicReviewChecks);
-        Assert.Equal(["review request artifact is generated"], request.AcceptanceCriteria);
-        Assert.Equal(["dotnet test IntentSystem.sln"], request.ExpectedEvidence);
+        Assert.Equal(
+            ["review run command が PR comment 投稿や closeout の責務へ広がっていない"],
+            request.DeterministicReviewChecks);
+        Assert.Empty(request.AcceptanceCriteria);
+        Assert.Equal(
+            ["dotnet test IntentSystem.sln", "review run command tests"],
+            request.ExpectedEvidence);
     }
 
     [Fact]
@@ -184,21 +188,29 @@ public sealed class ReviewRunCommandTests
     private static string CreateReviewContextMarkdown(string executionUnit = "G9")
     {
         return $$"""
-        # Review Context
+        # Execution Unit
 
-        - **execution-unit**: `{{executionUnit}}`
+        `{{executionUnit}}`
 
-        ## Acceptance Criteria
+        # Goal
 
-        - review request artifact is generated
+        `intent-cli review run <execution-unit>` を working command として実装し、
+        review context packet と latest linked PR をもとに
+        deterministic review request artifact を `.intent-cli/reviews/<execution-unit>.request.json` へ生成できるようにする。
 
-        ## Deterministic Review Checks
+        # Parent References
 
-        - input paths stay canonical
+        - [Intent CLI Surface](/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/05-intent-cli-surface.md)
+        - [Config And Run Model](/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/08-config-and-run-model.md)
 
-        ## Expected Evidence
+        # Deterministic Review Checks
+
+        - review run command が PR comment 投稿や closeout の責務へ広がっていない
+
+        # Expected Evidence
 
         - dotnet test IntentSystem.sln
+        - review run command tests
         """;
     }
 

@@ -14,7 +14,7 @@ public static class ReviewContextMarkdownParser
         return new ReviewContextSnapshot
         {
             SourceExecutionUnit = executionUnit,
-            AcceptanceCriteria = GetRequiredListSection(sections, "Acceptance Criteria"),
+            AcceptanceCriteria = GetOptionalListSection(sections, "Acceptance Criteria"),
             DeterministicReviewChecks = GetRequiredListSection(sections, "Deterministic Review Checks"),
             ExpectedEvidence = GetOptionalListSection(sections, "Expected Evidence")
         };
@@ -22,20 +22,34 @@ public static class ReviewContextMarkdownParser
 
     private static string ParseExecutionUnit(string markdown)
     {
-        const string prefix = "- **execution-unit**: `";
         using var reader = new StringReader(markdown);
         string? line;
+        var inExecutionUnitSection = false;
+
         while ((line = reader.ReadLine()) is not null)
         {
-            if (!line.StartsWith(prefix, StringComparison.Ordinal) || !line.EndsWith('`'))
+            if (line.StartsWith("# ", StringComparison.Ordinal))
+            {
+                inExecutionUnitSection = string.Equals(
+                    line[2..],
+                    "Execution Unit",
+                    StringComparison.Ordinal);
+                continue;
+            }
+
+            if (!inExecutionUnitSection || string.IsNullOrWhiteSpace(line))
             {
                 continue;
             }
 
-            return line[prefix.Length..^1];
+            var trimmed = line.Trim();
+            if (trimmed.Length >= 2 && trimmed[0] == '`' && trimmed[^1] == '`')
+            {
+                return trimmed[1..^1];
+            }
         }
 
-        throw new InvalidOperationException("Review context markdown must contain an execution-unit header line.");
+        throw new InvalidOperationException("Review context markdown must contain an Execution Unit section.");
     }
 
     private static Dictionary<string, List<string>> ParseSections(string markdown)
@@ -47,9 +61,9 @@ public static class ReviewContextMarkdownParser
         string? line;
         while ((line = reader.ReadLine()) is not null)
         {
-            if (line.StartsWith("## ", StringComparison.Ordinal))
+            if (line.StartsWith("# ", StringComparison.Ordinal))
             {
-                var heading = line[3..];
+                var heading = line.TrimStart('#', ' ');
                 currentItems = [];
                 sections[heading] = currentItems;
                 continue;

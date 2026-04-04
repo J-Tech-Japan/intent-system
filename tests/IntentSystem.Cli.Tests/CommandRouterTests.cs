@@ -450,21 +450,29 @@ public sealed class CommandRouterTests
     private static string CreateReviewContextMarkdown()
     {
         return """
-        # Review Context
+        # Execution Unit
 
-        - **execution-unit**: `G9`
+        `G9`
 
-        ## Acceptance Criteria
+        # Goal
 
-        - review request artifact is generated
+        `intent-cli review run <execution-unit>` を working command として実装し、
+        review context packet と latest linked PR をもとに
+        deterministic review request artifact を `.intent-cli/reviews/<execution-unit>.request.json` へ生成できるようにする。
 
-        ## Deterministic Review Checks
+        # Parent References
 
-        - input paths stay canonical
+        - [Intent CLI Surface](/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/05-intent-cli-surface.md)
+        - [Config And Run Model](/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/08-config-and-run-model.md)
 
-        ## Expected Evidence
+        # Deterministic Review Checks
+
+        - review run command が PR comment 投稿や closeout の責務へ広がっていない
+
+        # Expected Evidence
 
         - dotnet test IntentSystem.sln
+        - review run command tests
         """;
     }
 
