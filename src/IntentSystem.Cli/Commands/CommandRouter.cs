@@ -32,7 +32,8 @@ internal static class CommandRouter
             ["workflow"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["render"] = WorkflowRenderCommand.Execute,
-                ["run"] = WorkflowRunCommand.Execute
+                ["run"] = WorkflowRunCommand.Execute,
+                ["status"] = WorkflowStatusCommand.Execute
             },
             ["queue"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
