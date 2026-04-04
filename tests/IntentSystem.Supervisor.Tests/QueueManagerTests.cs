@@ -160,6 +160,28 @@ public sealed class QueueManagerTests
     }
 
     [Fact]
+    public void LinkIssue_GivenQueuedItem_UpdatesOnlySelectedItemAndEmitsIssueCreatedEvent()
+    {
+        var selectedItem = CreateItem("A1", QueueItemState.Queued);
+        var otherItem = CreateItem("B1", QueueItemState.Blocked);
+        var state = CreateState([selectedItem, otherItem]);
+        var linkedIssue = new LinkedIssue
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            Number = 53,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/53"
+        };
+
+        var result = QueueManager.LinkIssue(state, "A1", linkedIssue, "intent-cli", BaseTime);
+
+        Assert.Equal(linkedIssue, FindItem(result.UpdatedState, "A1").LinkedIssue);
+        Assert.Null(FindItem(result.UpdatedState, "B1").LinkedIssue);
+        Assert.Equal(QueueItemState.Queued, FindItem(result.UpdatedState, "A1").State);
+        Assert.Equal("issue-created", result.Event.Event);
+        Assert.Equal(linkedIssue.Url, result.Event.LinkedIssue);
+    }
+
+    [Fact]
     public void RefreshDependencies_GivenAllDepsCompleted_UnblocksItem()
     {
         var a1 = CreateItem("A1", QueueItemState.Completed);
