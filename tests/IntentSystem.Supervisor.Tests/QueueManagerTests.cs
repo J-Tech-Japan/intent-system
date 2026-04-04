@@ -147,6 +147,19 @@ public sealed class QueueManagerTests
     }
 
     [Fact]
+    public void AcceptReview_GivenReviewItem_TransitionsToCompletedWithoutUnblockingDependents()
+    {
+        var state = CreateStateWithDependency();
+
+        var result = QueueManager.AcceptReview(state, "A1", "reviewer", BaseTime);
+
+        Assert.Equal(QueueItemState.Completed, FindItem(result.UpdatedState, "A1").State);
+        Assert.Equal(QueueItemState.Blocked, FindItem(result.UpdatedState, "B1").State);
+        Assert.Equal(["A1"], FindItem(result.UpdatedState, "B1").BlockedBy);
+        Assert.Equal("completed", result.Event.Event);
+    }
+
+    [Fact]
     public void RefreshDependencies_GivenAllDepsCompleted_UnblocksItem()
     {
         var a1 = CreateItem("A1", QueueItemState.Completed);

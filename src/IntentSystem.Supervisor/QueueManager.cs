@@ -230,6 +230,28 @@ public static class QueueManager
     }
 
     /// <summary>
+    /// Accept a reviewed item as completed without mutating dependent items.
+    /// </summary>
+    public static QueueTransitionResult AcceptReview(
+        QueueState state, string executionUnit, string by, DateTimeOffset ts)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+        AssertState(item, QueueItemState.Review, "accept-review");
+
+        return ApplyTransition(state, executionUnit, QueueItemState.Completed, new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "completed",
+            By = by
+        });
+    }
+
+    /// <summary>
     /// Recalculates blocked/queued states for all items based on current dependency resolution.
     /// Items whose dependencies are all completed move from blocked to queued.
     /// </summary>

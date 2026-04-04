@@ -240,6 +240,45 @@ public sealed class CommandRouterTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenReviewAcceptCommand_DispatchesToReviewAcceptRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "child-repo"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateReviewAcceptQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G12", "packet.yaml"),
+            CreateReviewAcceptPacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateReviewAcceptRunLog());
+        using var writer = new StringWriter();
+        var originalClientFactory = ReviewAcceptCommand.AcceptClientFactory;
+        var originalGitFactory = ReviewAcceptCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = ReviewAcceptCommand.TimestampFactory;
+
+        try
+        {
+            ReviewAcceptCommand.AcceptClientFactory = () => new FakeReviewAcceptClient();
+            ReviewAcceptCommand.GitCommandRunnerFactory = () => new FakeReviewAcceptGitRunner();
+            ReviewAcceptCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T01:02:03Z");
+
+            var exitCode = CommandRouter.Execute(["review", "accept", "G12"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Review accepted for G12", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            ReviewAcceptCommand.AcceptClientFactory = originalClientFactory;
+            ReviewAcceptCommand.GitCommandRunnerFactory = originalGitFactory;
+            ReviewAcceptCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -386,6 +425,36 @@ public sealed class CommandRouterTests
                         Implementation = ".intent-cli/issues/G10/implementation.md",
                         ReviewContext = ".intent-cli/issues/G10/review-context.md",
                         Yaml = ".intent-cli/issues/G10/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
+    private static QueueState CreateReviewAcceptQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G12",
+                    Title = "Review accept command",
+                    State = QueueItemState.Review,
+                    Dependencies = ["G10"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G12/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G12/review-context.md",
+                        Yaml = ".intent-cli/issues/G12/packet.yaml"
                     },
                     WorkerRole = "coder",
                     ReviewRole = "reviewer",
@@ -572,11 +641,96 @@ public sealed class CommandRouterTests
         """;
     }
 
+    private static string CreateReviewAcceptPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "[G12] Review Accept Command"
+          issue_kind: "feature"
+          source_execution_unit: "G12"
+          goal: "Close out accepted review."
+          in_scope:
+            - "review accept command"
+          out_of_scope:
+            - "review comment"
+          target_repo: "submodules/child-repo"
+          target_path: "."
+          target_part: "cli review accept command"
+          dependencies:
+            - "G10"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "closeout stays thin"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/rules/issue-lifecycle-and-landing.md"
+          acceptance_criteria:
+            - "review accept merges and closes"
+          verification_evidence:
+            - "tests-passing"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+        
+        review_context_packet:
+          source_execution_unit: "G12"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/rules/issue-lifecycle-and-landing.md"
+          acceptance_criteria:
+            - "review accept merges and closes"
+          deterministic_review_checks:
+            - "selected item only"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
+    private static string CreateReviewAcceptRunLog()
+    {
+        return """
+        {"ts":"2026-04-03T10:00:00Z","execution_unit":"G12","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/51"}
+        {"ts":"2026-04-03T10:10:00Z","execution_unit":"G12","event":"review-started","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/52"}
+        """ + Environment.NewLine;
+    }
+
     private sealed class FakeReviewCommentPublisher : IReviewCommentPublisher
     {
         public string PostComment(string linkedPr, string body)
         {
             return "https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-1";
+        }
+    }
+
+    private sealed class FakeReviewAcceptClient : IReviewAcceptClient
+    {
+        public string MergePullRequest(string linkedPr)
+        {
+            return "abc123";
+        }
+
+        public void CloseIssue(string linkedIssue)
+        {
+        }
+    }
+
+    private sealed class FakeReviewAcceptGitRunner : IGitCommandRunner
+    {
+        public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            return new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = arguments.SequenceEqual(["rev-parse", "HEAD"])
+                    ? "abc123" + Environment.NewLine
+                    : string.Empty,
+                StdErr = string.Empty
+            };
         }
     }
 
