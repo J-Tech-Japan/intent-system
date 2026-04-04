@@ -251,6 +251,49 @@ public static class QueueManager
         });
     }
 
+    public static QueueTransitionResult LinkIssue(
+        QueueState state,
+        string executionUnit,
+        LinkedIssue linkedIssue,
+        string by,
+        DateTimeOffset ts)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(linkedIssue);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+        AssertState(item, QueueItemState.Queued, "link-issue");
+
+        var updatedItems = new QueueItem[state.Items.Count];
+
+        for (var i = 0; i < state.Items.Count; i++)
+        {
+            var currentItem = state.Items[i];
+            updatedItems[i] = string.Equals(currentItem.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                ? currentItem with { LinkedIssue = linkedIssue }
+                : currentItem;
+        }
+
+        return new QueueTransitionResult
+        {
+            UpdatedState = state with
+            {
+                Items = updatedItems,
+                UpdatedAt = ts
+            },
+            Event = new RunEvent
+            {
+                Ts = ts,
+                ExecutionUnit = executionUnit,
+                Event = "issue-created",
+                By = by,
+                LinkedIssue = linkedIssue.Url
+            }
+        };
+    }
+
     /// <summary>
     /// Recalculates blocked/queued states for all items based on current dependency resolution.
     /// Items whose dependencies are all completed move from blocked to queued.

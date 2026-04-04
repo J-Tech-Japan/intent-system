@@ -103,6 +103,44 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenQueueDispatchCommand_DispatchesToQueueDispatchRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueDispatchQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
+            CreateQueueDispatchPacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
+            "# Goal");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalTimestampFactory = QueueDispatchCommand.TimestampFactory;
+
+        try
+        {
+            QueueDispatchCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T06:00:00Z");
+
+            var exitCode = CommandRouter.Execute(["queue", "dispatch", "G13"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Queue item G13 dispatched", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -374,6 +412,36 @@ public sealed class CommandRouterTests
         };
     }
 
+    private static QueueState CreateQueueDispatchQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G13",
+                    Title = "Queue dispatch command",
+                    State = QueueItemState.Queued,
+                    Dependencies = [],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G13/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G13/review-context.md",
+                        Yaml = ".intent-cli/issues/G13/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
     private static QueueState CreateReviewQueueState()
     {
         return new QueueState
@@ -515,6 +583,56 @@ public sealed class CommandRouterTests
             - "workflow render writes workflow artifact"
           deterministic_review_checks:
             - "definition shape stays canonical"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
+    private static string CreateQueueDispatchPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "[G13] Queue Dispatch Command"
+          issue_kind: "feature"
+          source_execution_unit: "G13"
+          goal: "Dispatch queue item into GitHub issue."
+          in_scope:
+            - "queue dispatch command"
+          out_of_scope:
+            - "branch creation"
+          target_repo: "J-Tech-Japan/intent-system"
+          target_path: "."
+          target_part: "cli queue dispatch command"
+          dependencies:
+            - "G3"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "dispatch stays thin"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/rules/issue-lifecycle-and-landing.md"
+          acceptance_criteria:
+            - "issue created"
+          verification_evidence:
+            - "tests-passing"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+        
+        review_context_packet:
+          source_execution_unit: "G13"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/rules/issue-lifecycle-and-landing.md"
+          acceptance_criteria:
+            - "issue created"
+          deterministic_review_checks:
+            - "dispatch remains thin"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
         """;
     }
@@ -704,6 +822,19 @@ public sealed class CommandRouterTests
         public string PostComment(string linkedPr, string body)
         {
             return "https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-1";
+        }
+    }
+
+    private sealed class FakeQueueDispatchPublisher : IQueueDispatchPublisher
+    {
+        public LinkedIssue CreateIssue(string targetRepo, string title, string body)
+        {
+            return new LinkedIssue
+            {
+                Repo = targetRepo,
+                Number = 53,
+                Url = "https://github.com/J-Tech-Japan/intent-system/issues/53"
+            };
         }
     }
 

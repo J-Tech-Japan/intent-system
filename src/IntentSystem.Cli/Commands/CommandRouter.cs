@@ -46,6 +46,7 @@ internal static class CommandRouter
                 ["list"] = QueueListCommand.Execute,
                 ["show"] = QueueShowCommand.Execute,
                 ["next"] = QueueNextCommand.Execute,
+                ["dispatch"] = QueueDispatchCommand.Execute,
                 ["transition"] = QueueTransitionCommand.Execute
             }
         };
