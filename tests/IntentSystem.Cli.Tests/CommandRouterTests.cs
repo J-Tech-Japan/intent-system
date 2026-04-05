@@ -1,6 +1,7 @@
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.ConceptIntake.Models;
 using IntentSystem.Clarify.Models;
 using IntentSystem.Clarify.Serialization;
 using IntentSystem.Review;
@@ -145,6 +146,26 @@ public sealed class CommandRouterTests
             QueueDispatchCommand.GitCommandRunnerFactory = originalGitFactory;
             QueueDispatchCommand.TimestampFactory = originalTimestampFactory;
         }
+    }
+
+    [Fact]
+    public void Execute_GivenInterviewStartCommand_DispatchesToInterviewStartRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
+            CreateInterviewStartItemYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.md"),
+            "# Interview Question");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["interview", "start", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Next interview question:", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Question: Which auth flow should be canonical?", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1761,6 +1782,26 @@ public sealed class CommandRouterTests
             CreatedAt = DateTimeOffset.Parse("2026-04-12T06:50:00Z"),
             Answer = null
         };
+    }
+
+    private static string CreateInterviewStartItemYaml()
+    {
+        return """
+artifact_kind: interview
+domain_slug: auth
+source_concept_ref: "intents/intent-cli/concepts/auth-oauth2.md"
+question_id: iq-1
+question_text: "Which auth flow should be canonical?"
+reason: "Auth direction is still underspecified."
+affects:
+  - "auth-oauth2"
+blocking_or_nonblocking: blocking
+status: open
+return_to_intent_paths:
+  - "intents/intent-cli/intent-tree/means/auth-oauth2.md"
+created_at: "2026-04-13T08:00:00.0000000+00:00"
+answer: null
+""";
     }
 
     private static string CreateRunImplementRunLog()
