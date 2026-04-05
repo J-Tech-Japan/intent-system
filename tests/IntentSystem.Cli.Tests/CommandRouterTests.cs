@@ -202,6 +202,26 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenInterviewResumeCommand_DispatchesToInterviewResumeRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
+            CreateInterviewStartItemYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.md"),
+            "# Interview Question");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["interview", "resume", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Next interview question:", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Question: Which auth flow should be canonical?", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenClarifyAnswerCommand_DispatchesToClarifyAnswerRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
