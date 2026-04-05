@@ -28,10 +28,11 @@ public sealed class ClarificationSerializerTests
         Assert.Equal(["A2", "B1"], affectedExecutionUnits.EnumerateArray().Select(element => element.GetString()!).ToArray());
         Assert.Equal("blocking", root.GetProperty("blocking_or_nonblocking").GetString());
         Assert.Equal("intents/rules/issue-template-and-review-context.md", root.GetProperty("clarification_return_path").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("answer").ValueKind);
     }
 
     [Fact]
-    public void Serialize_GivenOpenClarification_UsesSnakeCaseAndOmitsNullFields()
+    public void Serialize_GivenOpenClarification_UsesSnakeCaseAndKeepsCanonicalAnswerField()
     {
         var item = CreateOpenItem();
 
@@ -41,7 +42,7 @@ public sealed class ClarificationSerializerTests
         Assert.DoesNotContain("\"questionId\"", serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("\"executionUnit\"", serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("\"questionText\"", serialized, StringComparison.Ordinal);
-        Assert.DoesNotContain("\"answer\"", serialized, StringComparison.Ordinal);
+        Assert.Contains("\"answer\": null", serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("\"answered_at\"", serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("\"state\"", serialized, StringComparison.Ordinal);
     }
@@ -155,6 +156,32 @@ public sealed class ClarificationSerializerTests
     }
 
     [Fact]
+    public void Deserialize_GivenMissingAnswer_ThrowsInvalidOperationException()
+    {
+        var json = """
+        {
+          "artifact_kind": "clarification",
+          "clarification_source": "review",
+          "question_id": "clar-1",
+          "execution_unit": "A2",
+          "question_text": "Missing answer field",
+          "reason": "test",
+          "affected_intents": [],
+          "affected_execution_units": ["A2"],
+          "blocking_or_nonblocking": "blocking",
+          "clarification_return_path": "path.md",
+          "status": "open",
+          "created_at": "2026-04-02T10:00:00Z"
+        }
+        """;
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => ClarificationSerializer.Deserialize(json));
+
+        Assert.Contains("answer", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Serialize_GivenAppliedClarification_UsesKebabCaseStatusValue()
     {
         var item = CreateOpenItem() with
@@ -203,6 +230,7 @@ public sealed class ClarificationSerializerTests
           "clarification_return_path": "intents/rules/issue-template-and-review-context.md",
           "status": "answered",
           "created_at": "2026-04-02T10:00:00Z",
+          "answer": null,
           "answered_at": "2026-04-02T10:05:00Z"
         }
         """;

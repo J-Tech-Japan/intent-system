@@ -569,6 +569,42 @@ public sealed class CommandRouterTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenClarifyOpenCommand_DispatchesToClarifyOpenRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateClarifyOpenQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G22", "packet.yaml"),
+            CreateClarifyOpenPacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G22", "review-context.md"),
+            CreateClarifyOpenReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ClarifyOpenCommand.TimestampFactory;
+
+        try
+        {
+            ClarifyOpenCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-11T06:10:00Z");
+
+            var exitCode = CommandRouter.Execute(["clarify", "open", "G22"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Clarification opened for G22", writer.ToString(), StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "clarifications", "G22", "request.json")));
+        }
+        finally
+        {
+            ClarifyOpenCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -895,6 +931,36 @@ public sealed class CommandRouterTests
                         Repo = "J-Tech-Japan/intent-system",
                         Number = 68,
                         Url = "https://github.com/J-Tech-Japan/intent-system/issues/68"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
+    private static QueueState CreateClarifyOpenQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-11T06:05:00Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G22",
+                    Title = "Clarify open command",
+                    State = QueueItemState.Review,
+                    Dependencies = ["G21"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G22/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G22/review-context.md",
+                        Yaml = ".intent-cli/issues/G22/packet.yaml"
                     },
                     WorkerRole = "coder",
                     ReviewRole = "reviewer",
@@ -1402,6 +1468,56 @@ public sealed class CommandRouterTests
         """;
     }
 
+    private static string CreateClarifyOpenPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "[G22] Clarify Open Command"
+          issue_kind: "feature"
+          source_execution_unit: "G22"
+          goal: "Open a clarification request for the current queue loop."
+          in_scope:
+            - "clarify open command"
+          out_of_scope:
+            - "clarify answer"
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli clarify open command"
+          dependencies:
+            - "G8"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "clarify open stays entry-only"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/06-interview-and-clarification-artifact-contract.md"
+          acceptance_criteria:
+            - "clarification artifact generated"
+          verification_evidence:
+            - "dotnet test IntentSystem.sln"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+
+        review_context_packet:
+          source_execution_unit: "G22"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/06-interview-and-clarification-artifact-contract.md"
+          acceptance_criteria:
+            - "clarification artifact generated"
+          deterministic_review_checks:
+            - "clarify open command remains entry-only"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
     private static string CreateRunResubmitPacketYaml()
     {
         return """
@@ -1501,6 +1617,23 @@ public sealed class CommandRouterTests
         # Expected Evidence
 
         - dotnet test IntentSystem.sln
+        """;
+    }
+
+    private static string CreateClarifyOpenReviewContextMarkdown()
+    {
+        return """
+        # Execution Unit
+
+        `G22`
+
+        # Acceptance Criteria
+
+        - clarification artifact generated
+
+        # Deterministic Review Checks
+
+        - clarify open command remains entry-only
         """;
     }
 

@@ -96,7 +96,8 @@ public static class ClarificationSerializer
         "affected_execution_units",
         "blocking_or_nonblocking",
         "clarification_return_path",
-        "status"
+        "status",
+        "answer"
     ];
 
     private static void ValidateRequiredContractFields(JsonElement element)
