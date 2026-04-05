@@ -222,6 +222,35 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRunRereviewCommand_DispatchesToRunRereviewRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateRunRereviewQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunRereviewRunLog());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunRereviewCommand.TimestampFactory;
+
+        try
+        {
+            RunRereviewCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T08:30:00Z");
+
+            var exitCode = CommandRouter.Execute(["run", "rereview", "G16"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run rereviewed for G16", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunRereviewCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -559,6 +588,36 @@ public sealed class CommandRouterTests
         };
     }
 
+    private static QueueState CreateRunRereviewQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-05T09:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G16",
+                    Title = "Run rereview command",
+                    State = QueueItemState.Fixing,
+                    Dependencies = ["G15"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G16/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G16/review-context.md",
+                        Yaml = ".intent-cli/issues/G16/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
     private static QueueState CreateReviewQueueState()
     {
         return new QueueState
@@ -838,6 +897,15 @@ public sealed class CommandRouterTests
             - "dispatch remains thin"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
         """;
+    }
+
+    private static string CreateRunRereviewRunLog()
+    {
+        return """
+        {"ts":"2026-04-05T09:00:00Z","execution_unit":"G16","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/60"}
+        {"ts":"2026-04-05T09:10:00Z","execution_unit":"G16","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/60#issuecomment-1"}
+        {"ts":"2026-04-05T09:30:00Z","execution_unit":"G16","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/61"}
+        """ + Environment.NewLine;
     }
 
     private static string CreateWorkflowDefinitionJson()
