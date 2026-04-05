@@ -169,6 +169,39 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenInterviewAnswerCommand_DispatchesToInterviewAnswerRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
+            CreateInterviewAnswerItemYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.md"),
+            "# Interview Question");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = InterviewAnswerCommand.TimestampFactory;
+        var originalInputReaderFactory = InterviewAnswerCommand.InputReaderFactory;
+
+        try
+        {
+            InterviewAnswerCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-13T10:00:00Z");
+            InterviewAnswerCommand.InputReaderFactory = () => new StringReader("Use OAuth2 with PKCE." + Environment.NewLine);
+
+            var exitCode = CommandRouter.Execute(["interview", "answer", "auth"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Interview answered for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Status: Answered", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            InterviewAnswerCommand.TimestampFactory = originalTimestampFactory;
+            InterviewAnswerCommand.InputReaderFactory = originalInputReaderFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenClarifyAnswerCommand_DispatchesToClarifyAnswerRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -1801,6 +1834,28 @@ return_to_intent_paths:
   - "intents/intent-cli/intent-tree/means/auth-oauth2.md"
 created_at: "2026-04-13T08:00:00.0000000+00:00"
 answer: null
+""";
+    }
+
+    private static string CreateInterviewAnswerItemYaml()
+    {
+        return """
+artifact_kind: interview
+domain_slug: auth
+source_concept_ref: "intents/intent-cli/concepts/auth-oauth2.md"
+question_id: iq-1
+question_text: "Which auth flow should be canonical?"
+reason: "Auth direction is still underspecified."
+affects:
+  - "auth-oauth2"
+blocking_or_nonblocking: blocking
+status: open
+return_to_intent_paths:
+  - "intents/intent-cli/intent-tree/means/auth-oauth2.md"
+created_at: "2026-04-13T08:00:00.0000000+00:00"
+answer: null
+recommended_updates:
+  - "Update auth strategy"
 """;
     }
 
