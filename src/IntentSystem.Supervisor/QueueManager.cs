@@ -151,7 +151,7 @@ public static class QueueManager
         {
             Ts = ts,
             ExecutionUnit = executionUnit,
-            Event = "review-started",
+            Event = "review",
             By = by,
             LinkedPr = linkedPr
         });
