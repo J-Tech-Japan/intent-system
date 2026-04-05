@@ -6,6 +6,7 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(RunSubmitCommandCollection.Name)]
 public sealed class RunSubmitCommandTests
 {
     [Fact]
@@ -62,7 +63,7 @@ public sealed class RunSubmitCommandTests
             var runEvents = RunLogSerializer.DeserializeAll(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
             var reviewEvent = Assert.Single(runEvents);
-            Assert.Equal("review-started", reviewEvent.Event);
+            Assert.Equal("review", reviewEvent.Event);
             Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", reviewEvent.LinkedPr);
         }
         finally

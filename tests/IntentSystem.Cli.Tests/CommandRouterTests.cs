@@ -9,6 +9,7 @@ using IntentSystem.WorkerAdapter.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(RunSubmitCommandCollection.Name)]
 public sealed class CommandRouterTests
 {
     [Fact]
