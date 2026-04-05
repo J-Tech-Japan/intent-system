@@ -148,6 +148,42 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenClarifyAnswerCommand_DispatchesToClarifyAnswerRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateClarifyAnswerQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "clarifications", "G24", "request.json"),
+            ClarificationSerializer.Serialize(CreateClarifyAnswerItem()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ClarifyAnswerCommand.TimestampFactory;
+        var originalInputReaderFactory = ClarifyAnswerCommand.InputReaderFactory;
+
+        try
+        {
+            ClarifyAnswerCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-12T07:10:00Z");
+            ClarifyAnswerCommand.InputReaderFactory = () => new StringReader("Use the current queue snapshot." + Environment.NewLine);
+
+            var exitCode = CommandRouter.Execute(["clarify", "answer", "G24"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Clarification answered for G24.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Queue state: review", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            ClarifyAnswerCommand.TimestampFactory = originalTimestampFactory;
+            ClarifyAnswerCommand.InputReaderFactory = originalInputReaderFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenRunStartCommand_DispatchesToRunStartRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -1674,6 +1710,55 @@ public sealed class CommandRouterTests
             ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
             Status = ClarificationStatus.Open,
             CreatedAt = DateTimeOffset.Parse("2026-04-11T06:10:00Z"),
+            Answer = null
+        };
+    }
+
+    private static QueueState CreateClarifyAnswerQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-12T07:00:00Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G24",
+                    Title = "[G24] Clarify Answer Command",
+                    State = QueueItemState.ClarifyBlocked,
+                    Dependencies = [],
+                    BlockedBy = ["need clarification"],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G24/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G24/review-context.md",
+                        Yaml = ".intent-cli/issues/G24/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
+    private static ClarificationItem CreateClarifyAnswerItem()
+    {
+        return new ClarificationItem
+        {
+            ClarificationSource = "execution",
+            QuestionId = "request",
+            ExecutionUnit = "G24",
+            QuestionText = "Which field should remain canonical?",
+            Reason = "Clarification requested for [G24] Clarify Answer Command: Resolve the queue blocker.",
+            AffectedIntents = ["ICL.P.PRODUCT_GOAL"],
+            AffectedExecutionUnits = ["G24"],
+            BlockingOrNonblocking = "blocking",
+            ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+            Status = ClarificationStatus.Open,
+            CreatedAt = DateTimeOffset.Parse("2026-04-12T06:50:00Z"),
             Answer = null
         };
     }
