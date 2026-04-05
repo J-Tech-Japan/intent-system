@@ -324,6 +324,37 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRunFixCommand_DispatchesToRunFixRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateRunFixQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunFixRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreateRunFixPacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateRunFixReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateRunFixReviewCommentArtifactJson());
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["run", "fix", "G20"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Repair handoff artifact generated for G20", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Latest comment ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -799,6 +830,42 @@ public sealed class CommandRouterTests
         };
     }
 
+    private static QueueState CreateRunFixQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-09T09:42:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G20",
+                    Title = "Run fix command",
+                    State = QueueItemState.Fixing,
+                    Dependencies = ["G19"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G20/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G20/review-context.md",
+                        Yaml = ".intent-cli/issues/G20/packet.yaml"
+                    },
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 68,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/issues/68"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
     private static QueueState CreateReviewQueueState()
     {
         return new QueueState
@@ -1209,6 +1276,58 @@ public sealed class CommandRouterTests
         """;
     }
 
+    private static string CreateRunFixPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "[G20] Run Fix Command"
+          issue_kind: "feature"
+          source_execution_unit: "G20"
+          goal: "Generate a repair worker handoff artifact."
+          in_scope:
+            - "run fix command"
+            - "repair handoff artifact generation"
+          out_of_scope:
+            - "queue mutation"
+            - "worker start"
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli run fix command"
+          dependencies:
+            - "G19"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "run fix stays handoff-only"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/rules/review-recovery-and-retry.md"
+          acceptance_criteria:
+            - "repair handoff artifact generated"
+          verification_evidence:
+            - "tests-passing"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+
+        review_context_packet:
+          source_execution_unit: "G20"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/rules/review-recovery-and-retry.md"
+          acceptance_criteria:
+            - "repair handoff artifact generated"
+          deterministic_review_checks:
+            - "run fix command remains handoff-only"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
     private static string CreateRunImplementReviewContextMarkdown()
     {
         return """
@@ -1234,11 +1353,57 @@ public sealed class CommandRouterTests
         """;
     }
 
+    private static string CreateRunFixReviewContextMarkdown()
+    {
+        return """
+        # Execution Unit
+
+        `G20`
+
+        # Goal
+
+        `intent-cli run fix <execution-unit>` を working command にする。
+
+        # Acceptance Criteria
+
+        - repair handoff artifact generated
+
+        # Deterministic Review Checks
+
+        - run fix command remains handoff-only
+
+        # Expected Evidence
+
+        - dotnet test IntentSystem.sln
+        """;
+    }
+
     private static string CreateRunImplementRunLog()
     {
         return """
         {"ts":"2026-04-08T08:00:00Z","execution_unit":"G19","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/66"}
         {"ts":"2026-04-08T08:30:00Z","execution_unit":"G19","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/67"}
+        """ + Environment.NewLine;
+    }
+
+    private static string CreateRunFixReviewCommentArtifactJson()
+    {
+        return """
+        {
+          "execution_unit": "G20",
+          "review_request_ref": ".intent-cli/reviews/G20.request.json",
+          "linked_pr": "https://github.com/J-Tech-Japan/intent-system/pull/69",
+          "comment_ref": "https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2",
+          "body_path": "/repo/prepared-comment.md"
+        }
+        """;
+    }
+
+    private static string CreateRunFixRunLog()
+    {
+        return """
+        {"ts":"2026-04-09T09:00:00Z","execution_unit":"G20","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/69"}
+        {"ts":"2026-04-09T09:20:00Z","execution_unit":"G20","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2"}
         """ + Environment.NewLine;
     }
 
