@@ -222,6 +222,44 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRunResubmitCommand_DispatchesToRunResubmitRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G21"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateRunResubmitQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G21", "packet.yaml"),
+            CreateRunResubmitPacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunResubmitRunLog());
+        using var writer = new StringWriter();
+        var originalGitFactory = RunResubmitCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = RunResubmitCommand.TimestampFactory;
+
+        try
+        {
+            RunResubmitCommand.GitCommandRunnerFactory = () => new FakeRunResubmitGitRunner();
+            RunResubmitCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-10T07:15:00Z");
+
+            var exitCode = CommandRouter.Execute(["run", "resubmit", "G21"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run resubmitted for G21", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Latest linked PR: https://github.com/J-Tech-Japan/intent-system/pull/71", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunResubmitCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunResubmitCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenRunRereviewCommand_DispatchesToRunRereviewRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -866,6 +904,42 @@ public sealed class CommandRouterTests
         };
     }
 
+    private static QueueState CreateRunResubmitQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-10T07:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G21",
+                    Title = "Run resubmit command",
+                    State = QueueItemState.Fixing,
+                    Dependencies = ["G20"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G21/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G21/review-context.md",
+                        Yaml = ".intent-cli/issues/G21/packet.yaml"
+                    },
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 70,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/issues/70"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
     private static QueueState CreateReviewQueueState()
     {
         return new QueueState
@@ -1328,6 +1402,58 @@ public sealed class CommandRouterTests
         """;
     }
 
+    private static string CreateRunResubmitPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "[G21] Run Resubmit Command"
+          issue_kind: "feature"
+          source_execution_unit: "G21"
+          goal: "Push the repair branch and append a resubmitted event."
+          in_scope:
+            - "run resubmit command"
+            - "repair branch push"
+          out_of_scope:
+            - "queue state mutation"
+            - "PR creation"
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli run resubmit command"
+          dependencies:
+            - "G20"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "run resubmit stays push-only"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/05-intent-cli-surface.md"
+          acceptance_criteria:
+            - "resubmitted event appended"
+          verification_evidence:
+            - "dotnet test IntentSystem.sln"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+
+        review_context_packet:
+          source_execution_unit: "G21"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/05-intent-cli-surface.md"
+          acceptance_criteria:
+            - "resubmitted event appended"
+          deterministic_review_checks:
+            - "run resubmit remains push-only"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
     private static string CreateRunImplementReviewContextMarkdown()
     {
         return """
@@ -1404,6 +1530,14 @@ public sealed class CommandRouterTests
         return """
         {"ts":"2026-04-09T09:00:00Z","execution_unit":"G20","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/69"}
         {"ts":"2026-04-09T09:20:00Z","execution_unit":"G20","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2"}
+        """ + Environment.NewLine;
+    }
+
+    private static string CreateRunResubmitRunLog()
+    {
+        return """
+        {"ts":"2026-04-10T07:00:00Z","execution_unit":"G21","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/71"}
+        {"ts":"2026-04-10T07:10:00Z","execution_unit":"G21","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/71#issuecomment-3"}
         """ + Environment.NewLine;
     }
 
@@ -1704,6 +1838,29 @@ public sealed class CommandRouterTests
                 {
                     ExitCode = 0,
                     StdOut = "git@github.com:J-Tech-Japan/intent-system.git" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            return new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = string.Empty,
+                StdErr = string.Empty
+            };
+        }
+    }
+
+    private sealed class FakeRunResubmitGitRunner : IGitCommandRunner
+    {
+        public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            if (arguments.SequenceEqual(["rev-parse", "--abbrev-ref", "HEAD"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "issue-70-g21" + Environment.NewLine,
                     StdErr = string.Empty
                 };
             }
