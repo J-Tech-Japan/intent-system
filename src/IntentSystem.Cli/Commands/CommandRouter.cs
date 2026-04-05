@@ -33,6 +33,7 @@ internal static class CommandRouter
             {
                 ["start"] = RunStartCommand.Execute,
                 ["submit"] = RunSubmitCommand.Execute,
+                ["resubmit"] = RunResubmitCommand.Execute,
                 ["rereview"] = RunRereviewCommand.Execute,
                 ["resume"] = RunResumeCommand.Execute,
                 ["log"] = RunLogCommand.Execute,
