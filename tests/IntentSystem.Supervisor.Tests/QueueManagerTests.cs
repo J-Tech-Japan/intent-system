@@ -39,7 +39,7 @@ public sealed class QueueManagerTests
         var result = QueueManager.SubmitForReview(state, "A1", "worker", BaseTime, linkedPr: "https://github.com/org/repo/pull/1");
 
         Assert.Equal(QueueItemState.Review, FindItem(result.UpdatedState, "A1").State);
-        Assert.Equal("review-started", result.Event.Event);
+        Assert.Equal("review", result.Event.Event);
         Assert.Equal("https://github.com/org/repo/pull/1", result.Event.LinkedPr);
     }
 
