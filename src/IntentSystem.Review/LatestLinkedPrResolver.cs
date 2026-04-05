@@ -6,6 +6,13 @@ public static class LatestLinkedPrResolver
 {
     public static string Resolve(IReadOnlyList<RunEvent> runEvents, string executionUnit)
     {
+        return TryResolve(runEvents, executionUnit)
+            ?? throw new InvalidOperationException(
+                $"No linked PR found for execution unit '{executionUnit}' in run log.");
+    }
+
+    public static string? TryResolve(IReadOnlyList<RunEvent> runEvents, string executionUnit)
+    {
         ArgumentNullException.ThrowIfNull(runEvents);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
@@ -24,8 +31,6 @@ public static class LatestLinkedPrResolver
             }
         }
 
-        return latestLinkedPr
-            ?? throw new InvalidOperationException(
-                $"No linked PR found for execution unit '{executionUnit}' in run log.");
+        return latestLinkedPr;
     }
 }
