@@ -8,7 +8,7 @@ namespace IntentSystem.Cli.Tests;
 public sealed class InterviewAnswerCommandTests
 {
     [Fact]
-    public void Execute_GivenInteractiveAnswer_PersistsAnsweredArtifactAndRendersSummary()
+    public void Execute_GivenInteractiveAnswer_PersistsMultilineAnsweredArtifactAndRendersSummary()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -25,7 +25,9 @@ public sealed class InterviewAnswerCommandTests
         try
         {
             InterviewAnswerCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-13T09:15:00Z");
-            InterviewAnswerCommand.InputReaderFactory = () => new StringReader("Use OAuth2 with PKCE." + Environment.NewLine);
+            InterviewAnswerCommand.InputReaderFactory = () => new StringReader(
+                "Use OAuth2 with PKCE." + Environment.NewLine +
+                "Prefer GitHub first." + Environment.NewLine);
 
             var exitCode = InterviewAnswerCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
 
@@ -39,7 +41,9 @@ public sealed class InterviewAnswerCommandTests
 
             var updatedItem = InterviewArtifactYaml.Deserialize(File.ReadAllText(artifactPath));
             Assert.Equal(InterviewQueueItemStatus.Answered, updatedItem.Status);
-            Assert.Equal("Use OAuth2 with PKCE.", updatedItem.Answer);
+            Assert.Equal(
+                "Use OAuth2 with PKCE." + Environment.NewLine + "Prefer GitHub first.",
+                updatedItem.Answer);
             Assert.Equal(DateTimeOffset.Parse("2026-04-13T09:15:00Z"), updatedItem.AnsweredAt);
             Assert.Null(updatedItem.RecommendedUpdates);
         }

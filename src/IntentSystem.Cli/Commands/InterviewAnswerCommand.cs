@@ -115,13 +115,13 @@ internal static class InterviewAnswerCommand
         }
 
         writer.Write("Interview answer: ");
-        var answer = InputReaderFactory().ReadLine();
+        var answer = InputReaderFactory().ReadToEnd();
         if (string.IsNullOrWhiteSpace(answer))
         {
             throw new InvalidOperationException("Interview answer must not be empty.");
         }
 
-        return answer;
+        return answer.TrimEnd('\r', '\n');
     }
 
     private static string ResolvePath(string repoRoot, string path)
