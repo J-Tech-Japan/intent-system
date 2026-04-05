@@ -51,8 +51,9 @@ internal static class CliConfigLoader
 
         var worktreeRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.WorktreeRootKey)
             ?? CliRuntimeContracts.DefaultWorktreeRoot;
+        var roles = ReadRoles(rootTable);
 
-        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot);
+        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot, roles);
         return true;
     }
 
@@ -77,8 +78,9 @@ internal static class CliConfigLoader
 
         var worktreeRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.WorktreeRootKey)
             ?? CliRuntimeContracts.DefaultWorktreeRoot;
+        var roles = ReadRoles(rootTable);
 
-        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot);
+        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot, roles);
         return true;
     }
 
@@ -86,7 +88,8 @@ internal static class CliConfigLoader
         string domain,
         string workflowEngine,
         string artifactRoot,
-        string worktreeRoot)
+        string worktreeRoot,
+        RoleMappings roles)
     {
         return new CliConfig
         {
@@ -96,7 +99,31 @@ internal static class CliConfigLoader
                 WorkflowEngine = workflowEngine,
                 ArtifactRoot = artifactRoot,
                 WorktreeRoot = worktreeRoot
-            }
+            },
+            Roles = roles
+        };
+    }
+
+    private static RoleMappings ReadRoles(TomlTable rootTable)
+    {
+        ArgumentNullException.ThrowIfNull(rootTable);
+
+        if (!rootTable.TryGetValue(CliRuntimeContracts.RolesSectionName, out var section)
+            || section is not TomlTable rolesTable)
+        {
+            return new RoleMappings();
+        }
+
+        return new RoleMappings
+        {
+            Implement = TryGetOptionalString(rolesTable, CliRuntimeContracts.ImplementRoleKey)
+                ?? CliRuntimeContracts.DefaultImplementRole,
+            Review = TryGetOptionalString(rolesTable, CliRuntimeContracts.ReviewRoleKey)
+                ?? CliRuntimeContracts.DefaultReviewRole,
+            Interview = TryGetOptionalString(rolesTable, CliRuntimeContracts.InterviewRoleKey)
+                ?? CliRuntimeContracts.DefaultInterviewRole,
+            Clarify = TryGetOptionalString(rolesTable, CliRuntimeContracts.ClarifyRoleKey)
+                ?? CliRuntimeContracts.DefaultClarifyRole
         };
     }
 

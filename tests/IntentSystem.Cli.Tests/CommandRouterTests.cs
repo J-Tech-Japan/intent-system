@@ -296,6 +296,34 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRunImplementCommand_DispatchesToRunImplementRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G19"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateRunImplementQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunImplementRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "packet.yaml"),
+            CreateRunImplementPacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "review-context.md"),
+            CreateRunImplementReviewContextMarkdown());
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["run", "implement", "G19"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Implementation handoff artifact generated for G19", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Implement role: Claude", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -735,6 +763,42 @@ public sealed class CommandRouterTests
         };
     }
 
+    private static QueueState CreateRunImplementQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-08T08:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G19",
+                    Title = "Run implement command",
+                    State = QueueItemState.Active,
+                    Dependencies = ["G18"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G19/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G19/review-context.md",
+                        Yaml = ".intent-cli/issues/G19/packet.yaml"
+                    },
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 66,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/issues/66"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
     private static QueueState CreateReviewQueueState()
     {
         return new QueueState
@@ -1090,6 +1154,91 @@ public sealed class CommandRouterTests
         {"ts":"2026-04-07T08:00:00Z","execution_unit":"G18","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/64"}
         {"ts":"2026-04-07T08:10:00Z","execution_unit":"G18","event":"activated","by":"intent-cli"}
         {"ts":"2026-04-07T08:20:00Z","execution_unit":"G18","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/65"}
+        """ + Environment.NewLine;
+    }
+
+    private static string CreateRunImplementPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "[G19] Run Implement Command"
+          issue_kind: "feature"
+          source_execution_unit: "G19"
+          goal: "Generate an execution worker handoff artifact."
+          in_scope:
+            - "run implement command"
+            - "handoff artifact generation"
+          out_of_scope:
+            - "queue mutation"
+            - "worker start"
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli run implement command"
+          dependencies:
+            - "G18"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "run implement stays handoff-only"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/08-config-and-run-model.md"
+          acceptance_criteria:
+            - "handoff artifact generated"
+          verification_evidence:
+            - "tests-passing"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+
+        review_context_packet:
+          source_execution_unit: "G19"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/08-config-and-run-model.md"
+          acceptance_criteria:
+            - "handoff artifact generated"
+          deterministic_review_checks:
+            - "run implement command remains handoff-only"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
+    private static string CreateRunImplementReviewContextMarkdown()
+    {
+        return """
+        # Execution Unit
+
+        `G19`
+
+        # Goal
+
+        `intent-cli run implement <execution-unit>` を working command にする。
+
+        # Acceptance Criteria
+
+        - handoff artifact generated
+
+        # Deterministic Review Checks
+
+        - run implement command remains handoff-only
+
+        # Expected Evidence
+
+        - dotnet test IntentSystem.sln
+        """;
+    }
+
+    private static string CreateRunImplementRunLog()
+    {
+        return """
+        {"ts":"2026-04-08T08:00:00Z","execution_unit":"G19","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/66"}
+        {"ts":"2026-04-08T08:30:00Z","execution_unit":"G19","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/67"}
         """ + Environment.NewLine;
     }
 

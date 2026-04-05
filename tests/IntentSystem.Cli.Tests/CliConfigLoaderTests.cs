@@ -20,6 +20,8 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
+        Assert.Equal("Claude", config.Roles.Implement);
+        Assert.Equal("Codex", config.Roles.Review);
     }
 
     [Fact]
@@ -41,6 +43,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
+        Assert.Equal("Claude", config.Roles.Implement);
     }
 
     [Fact]
@@ -60,6 +63,30 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
+        Assert.Equal("Claude", config.Roles.Implement);
+    }
+
+    [Fact]
+    public void Load_GivenRolesSection_RestoresRoleMappings()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        workflow_engine = "takt"
+        artifact_root = ".intent-cli"
+
+        [roles]
+        implement = "Codex"
+        review = "Claude"
+        interview = "Codex"
+        clarify = "Claude"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal("Codex", config.Roles.Implement);
+        Assert.Equal("Claude", config.Roles.Review);
+        Assert.Equal("Codex", config.Roles.Interview);
+        Assert.Equal("Claude", config.Roles.Clarify);
     }
 
     [Fact]
