@@ -1,6 +1,8 @@
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.ConceptIntake.Models;
+using IntentSystem.ConceptIntake.Serialization;
 using IntentSystem.Clarify.Models;
 using IntentSystem.Clarify.Serialization;
 using IntentSystem.Review;
@@ -145,6 +147,23 @@ public sealed class CommandRouterTests
             QueueDispatchCommand.GitCommandRunnerFactory = originalGitFactory;
             QueueDispatchCommand.TimestampFactory = originalTimestampFactory;
         }
+    }
+
+    [Fact]
+    public void Execute_GivenInterviewStartCommand_DispatchesToInterviewStartRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.json"),
+            InterviewQueueSerializer.Serialize(CreateInterviewStartItem()));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["interview", "start", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Next interview question:", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Question: Which auth flow should be canonical?", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1759,6 +1778,24 @@ public sealed class CommandRouterTests
             ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
             Status = ClarificationStatus.Open,
             CreatedAt = DateTimeOffset.Parse("2026-04-12T06:50:00Z"),
+            Answer = null
+        };
+    }
+
+    private static InterviewQueueItem CreateInterviewStartItem()
+    {
+        return new InterviewQueueItem
+        {
+            DomainSlug = "auth",
+            SourceConceptRef = "intents/intent-cli/concepts/auth-oauth2.md",
+            QuestionId = "iq-1",
+            QuestionText = "Which auth flow should be canonical?",
+            Reason = "Auth direction is still underspecified.",
+            Affects = ["auth-oauth2"],
+            BlockingOrNonblocking = "blocking",
+            Status = InterviewQueueItemStatus.Open,
+            ReturnToIntentPaths = ["intents/intent-cli/intent-tree/means/auth-oauth2.md"],
+            CreatedAt = DateTimeOffset.Parse("2026-04-13T08:00:00Z"),
             Answer = null
         };
     }

@@ -52,6 +52,10 @@ internal static class CommandRouter
                 ["comment"] = ReviewCommentCommand.Execute,
                 ["accept"] = ReviewAcceptCommand.Execute
             },
+            ["interview"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["start"] = InterviewStartCommand.Execute
+            },
             ["clarify"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["open"] = ClarifyOpenCommand.Execute,

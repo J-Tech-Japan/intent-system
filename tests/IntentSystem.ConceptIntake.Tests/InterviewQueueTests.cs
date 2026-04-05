@@ -131,6 +131,66 @@ public sealed class InterviewQueueTests
         Assert.All(authItems, i => Assert.Equal("auth", i.DomainSlug));
     }
 
+    [Fact]
+    public void GetNextPendingForDomain_GivenBlockingAndNonblockingOpen_SelectsBlockingFirst()
+    {
+        IReadOnlyList<InterviewQueueItem> items =
+        [
+            CreateItem("iq-2", "nonblocking", InterviewQueueItemStatus.Open, domainSlug: "auth") with
+            {
+                CreatedAt = BaseTime.AddHours(-2)
+            },
+            CreateItem("iq-1", "blocking", InterviewQueueItemStatus.Open, domainSlug: "auth") with
+            {
+                CreatedAt = BaseTime.AddHours(-1)
+            }
+        ];
+
+        var next = InterviewQueue.GetNextPendingForDomain(items, "auth");
+
+        Assert.NotNull(next);
+        Assert.Equal("iq-1", next!.QuestionId);
+    }
+
+    [Fact]
+    public void GetNextPendingForDomain_GivenOnlyNonblockingQuestions_SelectsOldestThenQuestionId()
+    {
+        IReadOnlyList<InterviewQueueItem> items =
+        [
+            CreateItem("iq-2", "nonblocking", InterviewQueueItemStatus.Open, domainSlug: "auth") with
+            {
+                CreatedAt = BaseTime.AddHours(-2)
+            },
+            CreateItem("iq-1", "nonblocking", InterviewQueueItemStatus.Open, domainSlug: "auth") with
+            {
+                CreatedAt = BaseTime.AddHours(-2)
+            },
+            CreateItem("iq-3", "blocking", InterviewQueueItemStatus.Applied, domainSlug: "auth")
+        ];
+
+        var next = InterviewQueue.GetNextPendingForDomain(items, "auth");
+
+        Assert.NotNull(next);
+        Assert.Equal("iq-1", next!.QuestionId);
+    }
+
+    [Fact]
+    public void GetNextPendingForDomain_GivenNoOpenQuestions_ReturnsNull()
+    {
+        IReadOnlyList<InterviewQueueItem> items =
+        [
+            CreateItem("iq-1", "blocking", InterviewQueueItemStatus.Applied, domainSlug: "auth") with
+            {
+                Answer = "Already answered.",
+                AnsweredAt = BaseTime
+            }
+        ];
+
+        var next = InterviewQueue.GetNextPendingForDomain(items, "auth");
+
+        Assert.Null(next);
+    }
+
     private static InterviewQueueItem CreateItem(
         string questionId, string blockingOrNonblocking, InterviewQueueItemStatus status,
         string domainSlug = "auth")

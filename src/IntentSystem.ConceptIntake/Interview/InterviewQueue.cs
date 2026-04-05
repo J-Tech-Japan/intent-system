@@ -92,6 +92,26 @@ public static class InterviewQueue
         return items.Where(i => string.Equals(i.DomainSlug, domainSlug, StringComparison.Ordinal)).ToArray();
     }
 
+    /// <summary>
+    /// Selects the next open interview question for a domain using the current
+    /// E2 baseline: blocking questions take precedence, then oldest created_at,
+    /// then question_id for deterministic tie-breaking.
+    /// </summary>
+    public static InterviewQueueItem? GetNextPendingForDomain(
+        IReadOnlyList<InterviewQueueItem> items,
+        string domainSlug)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentException.ThrowIfNullOrWhiteSpace(domainSlug);
+
+        return GetForDomain(items, domainSlug)
+            .Where(item => item.Status == InterviewQueueItemStatus.Open)
+            .OrderBy(item => IsBlocking(item) ? 0 : 1)
+            .ThenBy(item => item.CreatedAt)
+            .ThenBy(item => item.QuestionId, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
     private static bool IsBlocking(InterviewQueueItem item)
     {
         return string.Equals(item.BlockingOrNonblocking, BlockingValue, StringComparison.Ordinal);
