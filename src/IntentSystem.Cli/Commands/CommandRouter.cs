@@ -71,6 +71,10 @@ internal static class CommandRouter
                 ["next"] = QueueNextCommand.Execute,
                 ["dispatch"] = QueueDispatchCommand.Execute,
                 ["transition"] = QueueTransitionCommand.Execute
+            },
+            ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["compile"] = IntakeCompileCommand.Execute
             }
         };
 

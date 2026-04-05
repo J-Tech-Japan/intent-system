@@ -222,6 +222,25 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeCompileCommand_DispatchesToIntakeCompileRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
+            CreateInterviewAnswerItemYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.md"),
+            "# Interview Question");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["intake", "compile", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake compile is not ready", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenClarifyAnswerCommand_DispatchesToClarifyAnswerRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
