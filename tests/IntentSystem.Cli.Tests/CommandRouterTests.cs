@@ -1,6 +1,8 @@
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Clarify.Models;
+using IntentSystem.Clarify.Serialization;
 using IntentSystem.Review;
 using IntentSystem.Review.Serialization;
 using IntentSystem.Supervisor.Models;
@@ -603,6 +605,26 @@ public sealed class CommandRouterTests
         {
             ClarifyOpenCommand.TimestampFactory = originalTimestampFactory;
         }
+    }
+
+    [Fact]
+    public void Execute_GivenClarifyListCommand_DispatchesToClarifyListRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateClarifyOpenQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "clarifications", "G22", "request.json"),
+            ClarificationSerializer.Serialize(CreateClarifyListItem()));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["clarify", "list"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Open clarifications:", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Execution unit: G22", writer.ToString(), StringComparison.Ordinal);
     }
 
     private static CliContext CreateContext(string repoRoot)
@@ -1635,6 +1657,25 @@ public sealed class CommandRouterTests
 
         - clarify open command remains entry-only
         """;
+    }
+
+    private static ClarificationItem CreateClarifyListItem()
+    {
+        return new ClarificationItem
+        {
+            ClarificationSource = "execution",
+            QuestionId = "request",
+            ExecutionUnit = "G22",
+            QuestionText = "Clarify blocker for cli clarify open command: clarify open command remains entry-only",
+            Reason = "Clarification requested for [G22] Clarify Open Command: Open a clarification request for the current queue loop.",
+            AffectedIntents = ["ICL.P.PRODUCT_GOAL"],
+            AffectedExecutionUnits = ["G22"],
+            BlockingOrNonblocking = "blocking",
+            ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+            Status = ClarificationStatus.Open,
+            CreatedAt = DateTimeOffset.Parse("2026-04-11T06:10:00Z"),
+            Answer = null
+        };
     }
 
     private static string CreateRunImplementRunLog()
