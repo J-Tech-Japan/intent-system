@@ -2,7 +2,6 @@ using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
 using IntentSystem.ConceptIntake.Models;
-using IntentSystem.ConceptIntake.Serialization;
 using IntentSystem.Clarify.Models;
 using IntentSystem.Clarify.Serialization;
 using IntentSystem.Review;
@@ -155,8 +154,11 @@ public sealed class CommandRouterTests
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.json"),
-            InterviewQueueSerializer.Serialize(CreateInterviewStartItem()));
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
+            CreateInterviewStartItemYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.md"),
+            "# Interview Question");
         using var writer = new StringWriter();
 
         var exitCode = CommandRouter.Execute(["interview", "start", "auth"], CreateContext(repoRoot), writer);
@@ -1782,22 +1784,24 @@ public sealed class CommandRouterTests
         };
     }
 
-    private static InterviewQueueItem CreateInterviewStartItem()
+    private static string CreateInterviewStartItemYaml()
     {
-        return new InterviewQueueItem
-        {
-            DomainSlug = "auth",
-            SourceConceptRef = "intents/intent-cli/concepts/auth-oauth2.md",
-            QuestionId = "iq-1",
-            QuestionText = "Which auth flow should be canonical?",
-            Reason = "Auth direction is still underspecified.",
-            Affects = ["auth-oauth2"],
-            BlockingOrNonblocking = "blocking",
-            Status = InterviewQueueItemStatus.Open,
-            ReturnToIntentPaths = ["intents/intent-cli/intent-tree/means/auth-oauth2.md"],
-            CreatedAt = DateTimeOffset.Parse("2026-04-13T08:00:00Z"),
-            Answer = null
-        };
+        return """
+artifact_kind: interview
+domain_slug: auth
+source_concept_ref: "intents/intent-cli/concepts/auth-oauth2.md"
+question_id: iq-1
+question_text: "Which auth flow should be canonical?"
+reason: "Auth direction is still underspecified."
+affects:
+  - "auth-oauth2"
+blocking_or_nonblocking: blocking
+status: open
+return_to_intent_paths:
+  - "intents/intent-cli/intent-tree/means/auth-oauth2.md"
+created_at: "2026-04-13T08:00:00.0000000+00:00"
+answer: null
+""";
     }
 
     private static string CreateRunImplementRunLog()
