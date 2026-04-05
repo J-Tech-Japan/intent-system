@@ -12,7 +12,16 @@ internal static class CliRuntimeContracts
     public const string WorkflowEngineKey = "workflow_engine";
     public const string ArtifactRootKey = "artifact_root";
     public const string WorktreeRootKey = "worktree_root";
+    public const string RolesSectionName = "roles";
+    public const string ImplementRoleKey = "implement";
+    public const string ReviewRoleKey = "review";
+    public const string InterviewRoleKey = "interview";
+    public const string ClarifyRoleKey = "clarify";
     public const string DefaultWorktreeRoot = ".intent-cli/worktrees";
+    public const string DefaultImplementRole = "Claude";
+    public const string DefaultReviewRole = "Codex";
+    public const string DefaultInterviewRole = "Claude";
+    public const string DefaultClarifyRole = "Codex";
 
     public static string GetIntentCliDirectoryPath(string repoRoot)
     {

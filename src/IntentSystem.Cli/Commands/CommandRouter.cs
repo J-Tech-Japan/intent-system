@@ -35,7 +35,8 @@ internal static class CommandRouter
                 ["submit"] = RunSubmitCommand.Execute,
                 ["rereview"] = RunRereviewCommand.Execute,
                 ["resume"] = RunResumeCommand.Execute,
-                ["log"] = RunLogCommand.Execute
+                ["log"] = RunLogCommand.Execute,
+                ["implement"] = RunImplementCommand.Execute
             },
             ["workflow"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
