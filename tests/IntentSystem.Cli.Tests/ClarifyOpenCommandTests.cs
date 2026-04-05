@@ -50,6 +50,8 @@ public sealed class ClarifyOpenCommandTests
 
             var artifactPath = Path.Combine(repoRoot, ".intent-cli", "clarifications", "G22", "request.json");
             Assert.True(File.Exists(artifactPath));
+            var serializedArtifact = File.ReadAllText(artifactPath);
+            Assert.Contains("\"answer\": null", serializedArtifact, StringComparison.Ordinal);
             var artifact = ClarificationSerializer.Deserialize(File.ReadAllText(artifactPath));
             Assert.Equal("execution", artifact.ClarificationSource);
             Assert.Equal("request", artifact.QuestionId);

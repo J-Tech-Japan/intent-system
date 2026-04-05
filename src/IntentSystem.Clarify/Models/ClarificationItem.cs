@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace IntentSystem.Clarify.Models;
 
 /// <summary>
@@ -30,6 +32,7 @@ public sealed record ClarificationItem
 
     public required DateTimeOffset CreatedAt { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public string? Answer { get; init; }
 
     public DateTimeOffset? AnsweredAt { get; init; }
