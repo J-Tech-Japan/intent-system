@@ -75,16 +75,16 @@ public sealed class InterviewQueueTests
     }
 
     [Fact]
-    public void ApplyAnswer_GivenOpenItem_ReturnsAppliedResultWithRecommendedUpdatesAndReturnPaths()
+    public void ApplyAnswer_GivenOpenItem_ReturnsAnsweredResultWithRecommendedUpdatesAndReturnPaths()
     {
         var item = CreateItem("iq-1", "blocking", InterviewQueueItemStatus.Open);
         var updates = new[] { "Update auth strategy document" };
 
         var result = InterviewQueue.ApplyAnswer(item, "Use OAuth2 with PKCE.", updates, BaseTime);
 
-        Assert.Equal(InterviewQueueItemStatus.Applied, result.AppliedItem.Status);
-        Assert.Equal("Use OAuth2 with PKCE.", result.AppliedItem.Answer);
-        Assert.Equal(BaseTime, result.AppliedItem.AnsweredAt);
+        Assert.Equal(InterviewQueueItemStatus.Answered, result.AnsweredItem.Status);
+        Assert.Equal("Use OAuth2 with PKCE.", result.AnsweredItem.Answer);
+        Assert.Equal(BaseTime, result.AnsweredItem.AnsweredAt);
         Assert.Equal(updates, result.RecommendedUpdates);
         Assert.Equal(item.ReturnToIntentPaths, result.ReturnToIntentPaths);
     }

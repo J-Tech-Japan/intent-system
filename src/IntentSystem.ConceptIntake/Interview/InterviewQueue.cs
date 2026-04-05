@@ -64,17 +64,17 @@ public static class InterviewQueue
                 $"but found '{item.Status}'.");
         }
 
-        var appliedItem = item with
+        var answeredItem = item with
         {
-            Status = InterviewQueueItemStatus.Applied,
+            Status = InterviewQueueItemStatus.Answered,
             Answer = answer,
             AnsweredAt = answeredAt,
-            RecommendedUpdates = recommendedUpdates
+            RecommendedUpdates = recommendedUpdates.Count == 0 ? null : recommendedUpdates
         };
 
         return new InterviewAnswerResult
         {
-            AppliedItem = appliedItem,
+            AnsweredItem = answeredItem,
             RecommendedUpdates = recommendedUpdates,
             ReturnToIntentPaths = item.ReturnToIntentPaths
         };
