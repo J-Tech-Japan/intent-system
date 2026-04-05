@@ -57,4 +57,22 @@ public sealed class LatestLinkedPrResolverTests
 
         Assert.Contains("No linked PR found", exception.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void TryResolve_GivenNoLinkedPrForExecutionUnit_ReturnsNull()
+    {
+        var linkedPr = LatestLinkedPrResolver.TryResolve(
+            [
+                new RunEvent
+                {
+                    Ts = DateTimeOffset.Parse("2026-04-03T10:00:00Z"),
+                    ExecutionUnit = "G9",
+                    Event = "queued",
+                    By = "intent-cli"
+                }
+            ],
+            "G9");
+
+        Assert.Null(linkedPr);
+    }
 }
