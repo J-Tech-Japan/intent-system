@@ -276,6 +276,26 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRunLogCommand_DispatchesToRunLogRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateRunLogQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLogCommandRunLog());
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["run", "log", "G18"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Execution unit: G18", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("event=review", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -679,6 +699,42 @@ public sealed class CommandRouterTests
         };
     }
 
+    private static QueueState CreateRunLogQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-07T08:12:34Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G18",
+                    Title = "Run log command",
+                    State = QueueItemState.Fixing,
+                    Dependencies = ["G17"],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G18/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G18/review-context.md",
+                        Yaml = ".intent-cli/issues/G18/packet.yaml"
+                    },
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 64,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/issues/64"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
     private static QueueState CreateReviewQueueState()
     {
         return new QueueState
@@ -1025,6 +1081,15 @@ public sealed class CommandRouterTests
         {"ts":"2026-04-06T08:00:00Z","execution_unit":"G17","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/62"}
         {"ts":"2026-04-06T08:20:00Z","execution_unit":"G17","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/62#issuecomment-1"}
         {"ts":"2026-04-06T08:30:00Z","execution_unit":"G17","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/63"}
+        """ + Environment.NewLine;
+    }
+
+    private static string CreateRunLogCommandRunLog()
+    {
+        return """
+        {"ts":"2026-04-07T08:00:00Z","execution_unit":"G18","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/64"}
+        {"ts":"2026-04-07T08:10:00Z","execution_unit":"G18","event":"activated","by":"intent-cli"}
+        {"ts":"2026-04-07T08:20:00Z","execution_unit":"G18","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/65"}
         """ + Environment.NewLine;
     }
 
