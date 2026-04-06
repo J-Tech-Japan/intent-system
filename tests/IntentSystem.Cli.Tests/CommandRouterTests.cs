@@ -829,6 +829,73 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeAdvanceCommand_DispatchesToIntakeAdvanceRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
+            """
+            domain_slug: auth
+            concept_source: interactive
+            concept_text: "Add OAuth2 provider support."
+            upstream_paths:
+              - "intents/intent-cli/intent-tree/means/04-worker-interface-strategy.md"
+            initial_goal: "Add OAuth2 provider support."
+            constraints:
+              - "Must not break existing session flow"
+            known_unknowns:
+              - "Which OAuth providers to support?"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
+            """
+            artifact_kind: interview
+            domain_slug: auth
+            source_concept_ref: "intents/intent-cli/concepts/auth-oauth2.md"
+            question_id: iq-1
+            question_text: "What should be updated?"
+            reason: "Clarify auth direction."
+            affects:
+              - "auth-oauth2"
+            blocking_or_nonblocking: blocking
+            status: answered
+            return_to_intent_paths:
+              - "intents/intent-cli/intent-tree/means/auth-oauth2.md"
+            created_at: "2026-04-13T07:00:00.0000000+00:00"
+            answer: "Align login UX wording."
+            answered_at: "2026-04-13T10:00:00.0000000+00:00"
+            recommended_updates:
+              - "Align login UX wording"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.md"),
+            "# Interview Question");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "auth-oauth2.md"),
+            "# Auth Concept" + Environment.NewLine + Environment.NewLine + "- Existing note" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
+            "# Auth Means" + Environment.NewLine + Environment.NewLine + "- Existing rule" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            """
+            # Post-MVP Sub-Slices
+
+            ## G36 の current baseline
+
+            - `intake execution apply <domain>` を最初の execution source-of-truth apply command にする
+            - successful output は execution draft で指定された source files だけを deterministic に更新することを baseline にする
+            """);
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["intake", "advance", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake advance processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenClarifyAnswerCommand_DispatchesToClarifyAnswerRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();

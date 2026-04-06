@@ -17,27 +17,10 @@ internal static class IntakeExecutionApplyCommand
         }
 
         var domain = args[0];
-        var executionDraftPath = Path.Combine(
-            context.RepoRoot,
-            IntakeExecutionArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
-
-        if (!File.Exists(executionDraftPath))
-        {
-            writer.WriteLine($"Intake execution artifact was not found at {executionDraftPath}");
-            return 1;
-        }
 
         try
         {
-            var request = IntakeExecutionArtifactMarkdown.Deserialize(File.ReadAllText(executionDraftPath));
-            if (!string.Equals(request.Domain, domain, StringComparison.Ordinal))
-            {
-                writer.WriteLine(
-                    $"Intake execution artifact domain '{request.Domain}' does not match requested domain '{domain}'.");
-                return 1;
-            }
-
-            var result = ApplyDraft(context.RepoRoot, request);
+            var result = ExecuteCore(context.RepoRoot, domain);
             IntakeExecutionApplyRenderer.WriteSummary(writer, result);
             return 0;
         }
@@ -46,6 +29,27 @@ internal static class IntakeExecutionApplyCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static IntakeExecutionApplyResult ExecuteCore(string repoRoot, string domain)
+    {
+        var executionDraftPath = Path.Combine(
+            repoRoot,
+            IntakeExecutionArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
+
+        if (!File.Exists(executionDraftPath))
+        {
+            throw new InvalidOperationException($"Intake execution artifact was not found at {executionDraftPath}");
+        }
+
+        var request = IntakeExecutionArtifactMarkdown.Deserialize(File.ReadAllText(executionDraftPath));
+        if (!string.Equals(request.Domain, domain, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Intake execution artifact domain '{request.Domain}' does not match requested domain '{domain}'.");
+        }
+
+        return ApplyDraft(repoRoot, request);
     }
 
     private static IntakeExecutionApplyResult ApplyDraft(string repoRoot, IntakeExecutionRequest request)

@@ -15,27 +15,10 @@ internal static class IntakeApplyCommand
         }
 
         var domain = args[0];
-        var patchPath = Path.Combine(
-            context.RepoRoot,
-            IntakePatchArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
-
-        if (!File.Exists(patchPath))
-        {
-            writer.WriteLine($"Intake patch artifact was not found at {patchPath}");
-            return 1;
-        }
 
         try
         {
-            var request = IntakePatchArtifactMarkdown.Deserialize(File.ReadAllText(patchPath));
-            if (!string.Equals(request.Domain, domain, StringComparison.Ordinal))
-            {
-                writer.WriteLine(
-                    $"Intake patch artifact domain '{request.Domain}' does not match requested domain '{domain}'.");
-                return 1;
-            }
-
-            var result = ApplyDraft(context.RepoRoot, request);
+            var result = ExecuteCore(context.RepoRoot, domain);
             IntakeApplyRenderer.WriteSummary(writer, result);
             return 0;
         }
@@ -44,6 +27,27 @@ internal static class IntakeApplyCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static IntakeApplyResult ExecuteCore(string repoRoot, string domain)
+    {
+        var patchPath = Path.Combine(
+            repoRoot,
+            IntakePatchArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
+
+        if (!File.Exists(patchPath))
+        {
+            throw new InvalidOperationException($"Intake patch artifact was not found at {patchPath}");
+        }
+
+        var request = IntakePatchArtifactMarkdown.Deserialize(File.ReadAllText(patchPath));
+        if (!string.Equals(request.Domain, domain, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Intake patch artifact domain '{request.Domain}' does not match requested domain '{domain}'.");
+        }
+
+        return ApplyDraft(repoRoot, request);
     }
 
     private static IntakeApplyResult ApplyDraft(string repoRoot, IntakePatchRequest request)

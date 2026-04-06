@@ -20,35 +20,10 @@ internal static class IntakeExecutionCommand
         }
 
         var domain = args[0];
-        var patchPath = Path.Combine(
-            context.RepoRoot,
-            IntakePatchArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
-
-        if (!File.Exists(patchPath))
-        {
-            writer.WriteLine($"Intake patch artifact was not found at {patchPath}");
-            return 1;
-        }
 
         try
         {
-            var patchRequest = IntakePatchArtifactMarkdown.Deserialize(File.ReadAllText(patchPath));
-            if (!string.Equals(patchRequest.Domain, domain, StringComparison.Ordinal))
-            {
-                writer.WriteLine(
-                    $"Intake patch artifact domain '{patchRequest.Domain}' does not match requested domain '{domain}'.");
-                return 1;
-            }
-
-            var request = CreateRequest(context.RepoRoot, patchRequest);
-            if (request.ProposedExecutionUnits.Count == 0)
-            {
-                writer.WriteLine($"No updated parent source files were found for domain '{domain}'.");
-                return 1;
-            }
-
-            var markdown = IntakeExecutionRenderer.RenderMarkdown(request);
-            var artifactPath = IntakeExecutionArtifactWriter.Write(markdown, domain, context.RepoRoot);
+            var (request, artifactPath) = ExecuteCore(context.RepoRoot, domain);
             IntakeExecutionRenderer.WriteSummary(writer, request, artifactPath);
             return 0;
         }
@@ -57,6 +32,35 @@ internal static class IntakeExecutionCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static (IntakeExecutionRequest Request, string ArtifactPath) ExecuteCore(string repoRoot, string domain)
+    {
+        var patchPath = Path.Combine(
+            repoRoot,
+            IntakePatchArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
+
+        if (!File.Exists(patchPath))
+        {
+            throw new InvalidOperationException($"Intake patch artifact was not found at {patchPath}");
+        }
+
+        var patchRequest = IntakePatchArtifactMarkdown.Deserialize(File.ReadAllText(patchPath));
+        if (!string.Equals(patchRequest.Domain, domain, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Intake patch artifact domain '{patchRequest.Domain}' does not match requested domain '{domain}'.");
+        }
+
+        var request = CreateRequest(repoRoot, patchRequest);
+        if (request.ProposedExecutionUnits.Count == 0)
+        {
+            throw new InvalidOperationException($"No updated parent source files were found for domain '{domain}'.");
+        }
+
+        var markdown = IntakeExecutionRenderer.RenderMarkdown(request);
+        var artifactPath = IntakeExecutionArtifactWriter.Write(markdown, domain, repoRoot);
+        return (request, artifactPath);
     }
 
     private static IntakeExecutionRequest CreateRequest(string repoRoot, IntakePatchRequest patchRequest)
