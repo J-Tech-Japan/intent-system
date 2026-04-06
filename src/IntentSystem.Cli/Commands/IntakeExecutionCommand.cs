@@ -8,6 +8,11 @@ internal static class IntakeExecutionCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
+        if (args.Length > 0 && string.Equals(args[0], "apply", StringComparison.Ordinal))
+        {
+            return IntakeExecutionApplyCommand.Execute(context, args[1..], writer);
+        }
+
         if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
         {
             writer.WriteLine("Intake execution command requires a domain.");
