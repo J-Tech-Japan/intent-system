@@ -2,6 +2,8 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class IntakeExecutionApplyCommand
 {
+    private const string CommandMarker = "`intake execution apply <domain>`";
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -48,38 +50,32 @@ internal static class IntakeExecutionApplyCommand
 
     private static IntakeExecutionApplyResult ApplyDraft(string repoRoot, IntakeExecutionRequest request)
     {
+        var targetFilePaths = ResolveExecutionTargetPaths(repoRoot);
+        if (targetFilePaths.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Execution apply target could not be derived from the current execution baseline.");
+        }
+
         var changedFilePaths = new List<string>();
         var appliedUnitCount = 0;
 
-        foreach (var candidateGroup in request.ProposedExecutionUnits
-                     .GroupBy(candidate => candidate.SourceFilePath, StringComparer.Ordinal)
-                     .OrderBy(group => group.Key, StringComparer.Ordinal))
+        foreach (var targetFilePath in targetFilePaths)
         {
-            var absolutePath = Path.Combine(repoRoot, candidateGroup.Key.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(absolutePath))
-            {
-                throw new InvalidOperationException($"Execution source file was not found at {absolutePath}");
-            }
-
+            var absolutePath = Path.Combine(repoRoot, targetFilePath.Replace('/', Path.DirectorySeparatorChar));
             var existingContent = File.ReadAllText(absolutePath);
-            var updatedContent = existingContent;
-            var fileChanged = false;
+            var applyResult = ApplyToExecutionBaseline(existingContent, request);
 
-            foreach (var candidate in candidateGroup.OrderBy(item => item.ExecutionUnitId, StringComparer.Ordinal))
+            if (applyResult.AppliedUnitCount == 0)
             {
-                var candidateResult = ApplyExecutionUnit(updatedContent, candidate);
-                updatedContent = candidateResult.UpdatedContent;
-                if (candidateResult.Applied)
-                {
-                    fileChanged = true;
-                    appliedUnitCount++;
-                }
+                continue;
             }
 
-            if (fileChanged && !string.Equals(existingContent, updatedContent, StringComparison.Ordinal))
+            if (!string.Equals(existingContent, applyResult.UpdatedContent, StringComparison.Ordinal))
             {
-                File.WriteAllText(absolutePath, updatedContent);
-                changedFilePaths.Add(candidateGroup.Key);
+                File.WriteAllText(absolutePath, applyResult.UpdatedContent);
+                changedFilePaths.Add(targetFilePath);
+                appliedUnitCount += applyResult.AppliedUnitCount;
             }
         }
 
@@ -96,27 +92,99 @@ internal static class IntakeExecutionApplyCommand
         };
     }
 
-    private static ApplyCandidateResult ApplyExecutionUnit(string existingContent, IntakeExecutionUnitCandidate candidate)
+    private static IReadOnlyList<string> ResolveExecutionTargetPaths(string repoRoot)
     {
-        var normalizedExisting = existingContent.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd();
-        var linesToAppend = BuildCandidateLines(candidate)
-            .Where(line => !ContainsAppliedLine(normalizedExisting, line))
-            .ToArray();
-
-        if (linesToAppend.Length == 0)
+        var intentsRoot = Path.Combine(repoRoot, "intents");
+        if (!Directory.Exists(intentsRoot))
         {
-            var unchangedContent = string.IsNullOrWhiteSpace(normalizedExisting)
-                ? string.Empty
-                : normalizedExisting + Environment.NewLine;
-            return new ApplyCandidateResult(unchangedContent, false);
+            return [];
         }
 
-        var appendedBlock = string.Join(Environment.NewLine, linesToAppend.Select(line => $"- {line}"));
-        var updatedContent = string.IsNullOrWhiteSpace(normalizedExisting)
-            ? appendedBlock + Environment.NewLine
-            : normalizedExisting + Environment.NewLine + Environment.NewLine + appendedBlock + Environment.NewLine;
+        return Directory.GetFiles(intentsRoot, "*.md", SearchOption.AllDirectories)
+            .Where(path => path.Contains($"{Path.DirectorySeparatorChar}execution{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => Path.GetRelativePath(repoRoot, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .Where(relativePath => File.ReadAllText(Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)))
+                .Contains(CommandMarker, StringComparison.Ordinal))
+            .ToArray();
+    }
 
-        return new ApplyCandidateResult(updatedContent, true);
+    private static ApplyBaselineResult ApplyToExecutionBaseline(string existingContent, IntakeExecutionRequest request)
+    {
+        var normalized = existingContent.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var lines = normalized.Split('\n', StringSplitOptions.None).ToList();
+
+        var sectionStart = FindTargetSectionStart(lines);
+        if (sectionStart < 0)
+        {
+            throw new InvalidOperationException(
+                "Execution apply target could not be derived from the current execution baseline.");
+        }
+
+        var sectionEnd = FindSectionEnd(lines, sectionStart);
+        var sectionLines = lines.Skip(sectionStart).Take(sectionEnd - sectionStart).ToList();
+        var existingSectionContent = string.Join("\n", sectionLines);
+
+        var appliedUnitCount = 0;
+        foreach (var candidate in request.ProposedExecutionUnits.OrderBy(item => item.ExecutionUnitId, StringComparer.Ordinal))
+        {
+            var candidateLines = BuildCandidateLines(candidate);
+            if (candidateLines.All(line => ContainsAppliedLine(existingSectionContent, line)))
+            {
+                continue;
+            }
+
+            if (sectionLines.Count > 0 && !string.IsNullOrWhiteSpace(sectionLines[^1]))
+            {
+                sectionLines.Add(string.Empty);
+            }
+
+            sectionLines.AddRange(candidateLines.Select(line => $"- {line}"));
+            existingSectionContent = string.Join("\n", sectionLines);
+            appliedUnitCount++;
+        }
+
+        if (appliedUnitCount == 0)
+        {
+            return new ApplyBaselineResult(normalized.TrimEnd() + Environment.NewLine, 0);
+        }
+
+        lines.RemoveRange(sectionStart, sectionEnd - sectionStart);
+        lines.InsertRange(sectionStart, sectionLines);
+        return new ApplyBaselineResult(string.Join(Environment.NewLine, lines).TrimEnd() + Environment.NewLine, appliedUnitCount);
+    }
+
+    private static int FindTargetSectionStart(IReadOnlyList<string> lines)
+    {
+        for (var index = 0; index < lines.Count; index++)
+        {
+            if (!lines[index].StartsWith("## ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var sectionEnd = FindSectionEnd(lines, index);
+            var sectionContent = string.Join("\n", lines.Skip(index).Take(sectionEnd - index));
+            if (sectionContent.Contains(CommandMarker, StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindSectionEnd(IReadOnlyList<string> lines, int startIndex)
+    {
+        for (var index = startIndex + 1; index < lines.Count; index++)
+        {
+            if (lines[index].StartsWith("## ", StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        return lines.Count;
     }
 
     private static IReadOnlyList<string> BuildCandidateLines(IntakeExecutionUnitCandidate candidate)
@@ -124,6 +192,7 @@ internal static class IntakeExecutionApplyCommand
         var lines = new List<string>
         {
             $"execution_unit: {candidate.ExecutionUnitId}",
+            $"source_file_path: {candidate.SourceFilePath}",
             $"target_part: {candidate.TargetPart}"
         };
 
@@ -147,5 +216,5 @@ internal static class IntakeExecutionApplyCommand
                 || string.Equals(existingLine, $"- {line}", StringComparison.Ordinal));
     }
 
-    private readonly record struct ApplyCandidateResult(string UpdatedContent, bool Applied);
+    private readonly record struct ApplyBaselineResult(string UpdatedContent, int AppliedUnitCount);
 }

@@ -430,8 +430,14 @@ public sealed class CommandRouterTests
             - dotnet test IntentSystem.sln
             """);
         tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
-            "# Auth Concept");
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            """
+            # Post-MVP Sub-Slices
+
+            ## G36 の current baseline
+
+            - `intake execution apply <domain>` を最初の execution source-of-truth apply command にする
+            """);
         using var writer = new StringWriter();
 
         var exitCode = CommandRouter.Execute(["intake", "execution", "apply", "auth"], CreateContext(repoRoot), writer);
