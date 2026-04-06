@@ -315,6 +315,56 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeApplyCommand_DispatchesToIntakeApplyRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.patch.md"),
+            """
+            # Intake Patch Draft
+
+            ## Domain
+
+            `auth`
+
+            target_file_paths:
+            - intents/intent-cli/intent-tree/means/auth-oauth2.md
+
+            source_concept_refs:
+            - intents/intent-cli/concepts/auth-oauth2.md
+
+            ## File-By-File Patch Candidates
+
+            ### `intents/intent-cli/intent-tree/means/auth-oauth2.md`
+
+            current_file_state: present
+            foldin_anchors:
+            - answered_question_ids:iq-1
+            source_concept_refs:
+            - intents/intent-cli/concepts/auth-oauth2.md
+            proposed_edits:
+            - Apply update candidate: Add device-code note
+            rationale:
+            - This path is listed in return_to_intent_paths.
+            current_file_excerpt:
+            ```text
+            # Auth Means
+            Existing line
+            ```
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
+            "# Auth Means");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["intake", "apply", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake apply completed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenIntakeConceptCommand_DispatchesToIntakeConceptRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
