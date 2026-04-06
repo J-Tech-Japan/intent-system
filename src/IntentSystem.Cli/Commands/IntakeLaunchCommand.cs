@@ -19,22 +19,10 @@ internal static class IntakeLaunchCommand
         }
 
         var domain = args[0].Trim();
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
-        {
-            return 1;
-        }
 
         try
         {
-            var executionUnits = IntakeEnqueueCommand.LoadExecutionUnits(context.RepoRoot, domain);
-            if (executionUnits.Count == 0)
-            {
-                writer.WriteLine($"No generated issue-ready execution units were found for domain '{domain}'.");
-                return 1;
-            }
-
-            var result = LaunchUnits(context, domain, executionUnits);
+            var result = ExecuteCore(context, domain, writer);
             IntakeLaunchRenderer.WriteSummary(writer, result);
             return 0;
         }
@@ -43,6 +31,24 @@ internal static class IntakeLaunchCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static IntakeLaunchResult ExecuteCore(CliContext context, string domain, TextWriter writer)
+    {
+        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException("Queue state could not be loaded.");
+        }
+
+        var executionUnits = IntakeEnqueueCommand.LoadExecutionUnits(context.RepoRoot, domain);
+        if (executionUnits.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"No generated issue-ready execution units were found for domain '{domain}'.");
+        }
+
+        return LaunchUnits(context, domain, executionUnits);
     }
 
     private static void ValidatePacketArtifact(CliContext context, string executionUnit)

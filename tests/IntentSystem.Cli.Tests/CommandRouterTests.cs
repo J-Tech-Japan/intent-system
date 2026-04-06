@@ -746,6 +746,89 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeStartCommand_DispatchesToIntakeStartRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            """
+            # Post-MVP Sub-Slices
+
+            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
+            |---|---|---|---|---|---|---|---|
+            | G37 | G | `intake issue <domain>` を CLI shell から使えるようにし、updated intake-origin `execution/` source-of-truth から issue-ready execution unit の issue artifact 群を deterministic に生成できるようにする | G2, G35, G36 | submodules/intent-system | . | cli intake issue command | yes |
+
+            ## G37 の current baseline
+
+            - `intake issue <domain>` を最初の intake issue-artifact generation command にする
+            - canonical source は current `execution/` source files と current `G2` / `G29` / `G30` / `G32` / `G33` / `G34` / `G35` / `G36` intake baseline である
+            - successful output は selected domain の intake-origin issue-ready execution unit に対応する `.intent-cli/issues/<execution-unit>/implementation.md`, `review-context.md`, `packet.yaml`, and `github-body.md` の deterministic generation を baseline にする
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            """
+            # Intake Execution Draft
+
+            ## Domain
+            `auth`
+
+            ## Proposed Execution Units
+
+            ### `AUTH-01`
+            source_file_path: intents/intent-cli/concepts/oauth2.md
+            target_part: concepts
+            dependencies:
+            - none
+            readiness_notes:
+            - Current heading: # Auth Concept
+            verification_hints:
+            - dotnet test IntentSystem.sln
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueEnqueueQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalEnqueueTimestampFactory = QueueEnqueueCommand.TimestampFactory;
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalRemoteGitFactory = QueueDispatchCommand.GitCommandRunnerFactory;
+        var originalDispatchTimestampFactory = QueueDispatchCommand.TimestampFactory;
+        var originalStartGitFactory = RunStartCommand.GitCommandRunnerFactory;
+        var originalStartTimestampFactory = RunStartCommand.TimestampFactory;
+
+        try
+        {
+            QueueEnqueueCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:00:00Z");
+            QueueDispatchCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            QueueDispatchCommand.GitCommandRunnerFactory = () => new FakeQueueDispatchGitRunner();
+            QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:05:00Z");
+            RunStartCommand.GitCommandRunnerFactory = () => new FakeRunStartGitRunner();
+            RunStartCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:10:00Z");
+
+            var exitCode = CommandRouter.Execute(["intake", "start", "auth"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Intake start processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            QueueEnqueueCommand.TimestampFactory = originalEnqueueTimestampFactory;
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.GitCommandRunnerFactory = originalRemoteGitFactory;
+            QueueDispatchCommand.TimestampFactory = originalDispatchTimestampFactory;
+            RunStartCommand.GitCommandRunnerFactory = originalStartGitFactory;
+            RunStartCommand.TimestampFactory = originalStartTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenClarifyAnswerCommand_DispatchesToClarifyAnswerRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
