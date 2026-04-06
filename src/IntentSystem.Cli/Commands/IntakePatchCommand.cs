@@ -15,29 +15,10 @@ internal static class IntakePatchCommand
         }
 
         var domain = args[0];
-        var foldinPath = Path.Combine(
-            context.RepoRoot,
-            IntakeFoldinArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
-
-        if (!File.Exists(foldinPath))
-        {
-            writer.WriteLine($"Intake fold-in artifact was not found at {foldinPath}");
-            return 1;
-        }
 
         try
         {
-            var foldinDraft = IntakeFoldinArtifactMarkdown.Deserialize(File.ReadAllText(foldinPath));
-            if (!string.Equals(foldinDraft.Domain, domain, StringComparison.Ordinal))
-            {
-                writer.WriteLine(
-                    $"Intake fold-in artifact domain '{foldinDraft.Domain}' does not match requested domain '{domain}'.");
-                return 1;
-            }
-
-            var request = CreateRequest(context.RepoRoot, foldinDraft);
-            var markdown = IntakePatchRenderer.RenderMarkdown(request);
-            var artifactPath = IntakePatchArtifactWriter.Write(markdown, domain, context.RepoRoot);
+            var (request, artifactPath) = ExecuteCore(context.RepoRoot, domain);
             IntakePatchRenderer.WriteSummary(writer, request, artifactPath);
             return 0;
         }
@@ -46,6 +27,30 @@ internal static class IntakePatchCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static (IntakePatchRequest Request, string ArtifactPath) ExecuteCore(string repoRoot, string domain)
+    {
+        var foldinPath = Path.Combine(
+            repoRoot,
+            IntakeFoldinArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
+
+        if (!File.Exists(foldinPath))
+        {
+            throw new InvalidOperationException($"Intake fold-in artifact was not found at {foldinPath}");
+        }
+
+        var foldinDraft = IntakeFoldinArtifactMarkdown.Deserialize(File.ReadAllText(foldinPath));
+        if (!string.Equals(foldinDraft.Domain, domain, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Intake fold-in artifact domain '{foldinDraft.Domain}' does not match requested domain '{domain}'.");
+        }
+
+        var request = CreateRequest(repoRoot, foldinDraft);
+        var markdown = IntakePatchRenderer.RenderMarkdown(request);
+        var artifactPath = IntakePatchArtifactWriter.Write(markdown, domain, repoRoot);
+        return (request, artifactPath);
     }
 
     private static IntakePatchRequest CreateRequest(string repoRoot, IntakePatchFoldinDraft foldinDraft)

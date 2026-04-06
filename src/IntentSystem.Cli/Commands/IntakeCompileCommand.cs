@@ -21,25 +21,22 @@ internal static class IntakeCompileCommand
 
         try
         {
-            var artifacts = InterviewArtifactYaml.Discover(context.RepoRoot, domain);
-            if (artifacts.Count == 0)
+            var result = ExecuteCore(context.RepoRoot, domain);
+            if (!result.IsReady)
             {
-                IntakeCompileRenderer.WriteNoArtifactsNotReady(writer, domain);
+                if (result.NextQuestion is null)
+                {
+                    IntakeCompileRenderer.WriteNoArtifactsNotReady(writer, domain);
+                }
+                else
+                {
+                    IntakeCompileRenderer.WriteNotReady(writer, domain, result.NextQuestion);
+                }
+
                 return 0;
             }
 
-            var items = artifacts.Select(artifact => artifact.Item).ToArray();
-            var nextQuestion = InterviewQueue.GetNextPendingForDomain(items, domain);
-            if (nextQuestion is not null)
-            {
-                IntakeCompileRenderer.WriteNotReady(writer, domain, nextQuestion);
-                return 0;
-            }
-
-            var request = CreateRequest(domain, items);
-            var markdown = IntakeCompileRenderer.RenderMarkdown(request);
-            var artifactPath = IntakeCompileArtifactWriter.Write(markdown, domain, context.RepoRoot);
-            IntakeCompileRenderer.WriteSummary(writer, request, artifactPath);
+            IntakeCompileRenderer.WriteSummary(writer, result.Request!, result.ArtifactPath!);
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -47,6 +44,48 @@ internal static class IntakeCompileCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static IntakeCompileCoreResult ExecuteCore(string repoRoot, string domain)
+    {
+        var artifacts = InterviewArtifactYaml.Discover(repoRoot, domain);
+        if (artifacts.Count == 0)
+        {
+            return new IntakeCompileCoreResult
+            {
+                Domain = domain,
+                IsReady = false,
+                Request = null,
+                ArtifactPath = null,
+                NextQuestion = null
+            };
+        }
+
+        var items = artifacts.Select(artifact => artifact.Item).ToArray();
+        var nextQuestion = InterviewQueue.GetNextPendingForDomain(items, domain);
+        if (nextQuestion is not null)
+        {
+            return new IntakeCompileCoreResult
+            {
+                Domain = domain,
+                IsReady = false,
+                Request = null,
+                ArtifactPath = null,
+                NextQuestion = nextQuestion
+            };
+        }
+
+        var request = CreateRequest(domain, items);
+        var markdown = IntakeCompileRenderer.RenderMarkdown(request);
+        var artifactPath = IntakeCompileArtifactWriter.Write(markdown, domain, repoRoot);
+        return new IntakeCompileCoreResult
+        {
+            Domain = domain,
+            IsReady = true,
+            Request = request,
+            ArtifactPath = artifactPath,
+            NextQuestion = null
+        };
     }
 
     private static IntakeCompileRequest CreateRequest(string domain, IReadOnlyList<InterviewQueueItem> items)

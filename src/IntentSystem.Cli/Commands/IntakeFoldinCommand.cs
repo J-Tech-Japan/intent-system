@@ -15,28 +15,10 @@ internal static class IntakeFoldinCommand
         }
 
         var domain = args[0];
-        var compilePath = Path.Combine(
-            context.RepoRoot,
-            IntakeCompileArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
-
-        if (!File.Exists(compilePath))
-        {
-            writer.WriteLine($"Intake compile artifact was not found at {compilePath}");
-            return 1;
-        }
 
         try
         {
-            var request = IntakeCompileArtifactMarkdown.Deserialize(File.ReadAllText(compilePath));
-            if (!string.Equals(request.Domain, domain, StringComparison.Ordinal))
-            {
-                writer.WriteLine(
-                    $"Intake compile artifact domain '{request.Domain}' does not match requested domain '{domain}'.");
-                return 1;
-            }
-
-            var markdown = IntakeFoldinRenderer.RenderMarkdown(request);
-            var artifactPath = IntakeFoldinArtifactWriter.Write(markdown, domain, context.RepoRoot);
+            var (request, artifactPath) = ExecuteCore(context.RepoRoot, domain);
             IntakeFoldinRenderer.WriteSummary(writer, request, artifactPath);
             return 0;
         }
@@ -45,5 +27,36 @@ internal static class IntakeFoldinCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static (IntakeFoldinRequest Request, string ArtifactPath) ExecuteCore(string repoRoot, string domain)
+    {
+        var compilePath = Path.Combine(
+            repoRoot,
+            IntakeCompileArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
+
+        if (!File.Exists(compilePath))
+        {
+            throw new InvalidOperationException($"Intake compile artifact was not found at {compilePath}");
+        }
+
+        var compileRequest = IntakeCompileArtifactMarkdown.Deserialize(File.ReadAllText(compilePath));
+        if (!string.Equals(compileRequest.Domain, domain, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Intake compile artifact domain '{compileRequest.Domain}' does not match requested domain '{domain}'.");
+        }
+
+        var request = new IntakeFoldinRequest
+        {
+            Domain = compileRequest.Domain,
+            AnsweredQuestionIds = compileRequest.AnsweredQuestionIds,
+            RecommendedUpdates = compileRequest.RecommendedUpdates,
+            ReturnToIntentPaths = compileRequest.ReturnToIntentPaths,
+            SourceConceptRefs = compileRequest.SourceConceptRefs
+        };
+        var markdown = IntakeFoldinRenderer.RenderMarkdown(request);
+        var artifactPath = IntakeFoldinArtifactWriter.Write(markdown, domain, repoRoot);
+        return (request, artifactPath);
     }
 }
