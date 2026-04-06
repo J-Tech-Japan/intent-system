@@ -99,7 +99,7 @@ public sealed class IntakeCompileCommandTests
     }
 
     [Fact]
-    public void Execute_GivenNoInterviewArtifacts_WritesDeterministicEmptyCompileArtifact()
+    public void Execute_GivenNoInterviewArtifacts_RendersDeterministicNotReadyResult()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -108,11 +108,11 @@ public sealed class IntakeCompileCommandTests
         var exitCode = IntakeCompileCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("Intake compile artifact generated for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        var output = writer.ToString();
+        Assert.Contains("Intake compile is not ready for domain 'auth'.", output, StringComparison.Ordinal);
+        Assert.Contains("No interview artifacts found for domain 'auth'.", output, StringComparison.Ordinal);
         var artifactPath = Path.Combine(repoRoot, ".intent-cli", "intake", "auth.compile.md");
-        Assert.True(File.Exists(artifactPath));
-        var markdown = File.ReadAllText(artifactPath);
-        Assert.Equal(4, CountOccurrences(markdown, "- none"));
+        Assert.False(File.Exists(artifactPath));
     }
 
     [Fact]

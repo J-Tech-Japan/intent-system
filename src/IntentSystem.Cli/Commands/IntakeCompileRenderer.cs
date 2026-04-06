@@ -4,6 +4,15 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class IntakeCompileRenderer
 {
+    public static void WriteNoArtifactsNotReady(TextWriter writer, string domain)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentException.ThrowIfNullOrWhiteSpace(domain);
+
+        writer.WriteLine($"Intake compile is not ready for domain '{domain}'.");
+        writer.WriteLine($"No interview artifacts found for domain '{domain}'.");
+    }
+
     public static string RenderMarkdown(IntakeCompileRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);

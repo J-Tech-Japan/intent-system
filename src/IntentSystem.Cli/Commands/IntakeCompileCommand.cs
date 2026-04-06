@@ -22,6 +22,12 @@ internal static class IntakeCompileCommand
         try
         {
             var artifacts = InterviewArtifactYaml.Discover(context.RepoRoot, domain);
+            if (artifacts.Count == 0)
+            {
+                IntakeCompileRenderer.WriteNoArtifactsNotReady(writer, domain);
+                return 0;
+            }
+
             var items = artifacts.Select(artifact => artifact.Item).ToArray();
             var nextQuestion = InterviewQueue.GetNextPendingForDomain(items, domain);
             if (nextQuestion is not null)

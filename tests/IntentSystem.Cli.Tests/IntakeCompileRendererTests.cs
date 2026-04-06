@@ -75,6 +75,18 @@ public sealed class IntakeCompileRendererTests
         Assert.Contains("Question id: iq-1", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void WriteNoArtifactsNotReady_RendersDeterministicMessage()
+    {
+        using var writer = new StringWriter();
+
+        IntakeCompileRenderer.WriteNoArtifactsNotReady(writer, "auth");
+
+        var output = writer.ToString();
+        Assert.Contains("Intake compile is not ready for domain 'auth'.", output, StringComparison.Ordinal);
+        Assert.Contains("No interview artifacts found for domain 'auth'.", output, StringComparison.Ordinal);
+    }
+
     private static int CountOccurrences(string text, string needle)
     {
         var count = 0;
