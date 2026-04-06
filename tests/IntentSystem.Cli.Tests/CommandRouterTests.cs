@@ -355,7 +355,7 @@ public sealed class CommandRouterTests
             """);
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
-            "# Auth Means");
+            "# Auth Means" + Environment.NewLine + "Existing line");
         using var writer = new StringWriter();
 
         var exitCode = CommandRouter.Execute(["intake", "apply", "auth"], CreateContext(repoRoot), writer);

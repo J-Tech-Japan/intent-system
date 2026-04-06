@@ -70,12 +70,14 @@ internal static class IntakeApplyCommand
                 ? File.ReadAllText(absolutePath)
                 : string.Empty;
 
-            var updatedContent = UpsertManagedBlock(previousContent, request.Domain, fileDraft);
+            EnsureExcerptMatchesCurrentContent(previousContent, fileDraft);
+
+            var updatedContent = ApplyProposedEdits(previousContent, fileDraft);
             if (!string.Equals(previousContent, updatedContent, StringComparison.Ordinal))
             {
                 File.WriteAllText(absolutePath, updatedContent);
                 changedFilePaths.Add(fileDraft.TargetFilePath);
-                appliedEditCount += fileDraft.ProposedEdits.Count;
+                appliedEditCount += CountAppliedEdits(previousContent, fileDraft);
             }
         }
 
@@ -91,69 +93,78 @@ internal static class IntakeApplyCommand
         };
     }
 
-    private static string UpsertManagedBlock(string existingContent, string domain, IntakePatchFileDraft fileDraft)
+    private static void EnsureExcerptMatchesCurrentContent(string existingContent, IntakePatchFileDraft fileDraft)
     {
         var normalizedExisting = existingContent.Replace("\r\n", "\n", StringComparison.Ordinal);
-        var block = BuildManagedBlock(domain, fileDraft);
-        var startMarker = $"<!-- intake-apply:start domain:{domain} path:{fileDraft.TargetFilePath} -->";
-        var endMarker = $"<!-- intake-apply:end domain:{domain} path:{fileDraft.TargetFilePath} -->";
-        var startIndex = normalizedExisting.IndexOf(startMarker, StringComparison.Ordinal);
-
-        string updated;
-        if (startIndex >= 0)
+        var excerpt = fileDraft.CurrentFileExcerpt.Replace("\r\n", "\n", StringComparison.Ordinal);
+        if (string.IsNullOrWhiteSpace(excerpt)
+            || string.Equals(excerpt, "[missing]", StringComparison.Ordinal)
+            || string.Equals(excerpt, "[empty]", StringComparison.Ordinal))
         {
-            var endIndex = normalizedExisting.IndexOf(endMarker, startIndex, StringComparison.Ordinal);
-            if (endIndex < 0)
-            {
-                throw new InvalidOperationException(
-                    $"Existing intake apply block for '{fileDraft.TargetFilePath}' is missing its closing marker.");
-            }
-
-            endIndex += endMarker.Length;
-            updated = normalizedExisting[..startIndex] + block + normalizedExisting[endIndex..];
-        }
-        else if (string.IsNullOrWhiteSpace(normalizedExisting))
-        {
-            updated = block;
-        }
-        else
-        {
-            updated = normalizedExisting.TrimEnd() + Environment.NewLine + Environment.NewLine + block;
-        }
-
-        return updated.TrimEnd() + Environment.NewLine;
-    }
-
-    private static string BuildManagedBlock(string domain, IntakePatchFileDraft fileDraft)
-    {
-        var lines = new List<string>
-        {
-            $"<!-- intake-apply:start domain:{domain} path:{fileDraft.TargetFilePath} -->",
-            $"## Intake Apply Update ({domain})",
-            string.Empty,
-            "foldin_anchors:"
-        };
-
-        AppendList(lines, fileDraft.FoldinAnchors);
-        lines.Add("source_concept_refs:");
-        AppendList(lines, fileDraft.SourceConceptRefs);
-        lines.Add("proposed_edits:");
-        AppendList(lines, fileDraft.ProposedEdits);
-        lines.Add("rationale:");
-        AppendList(lines, fileDraft.Rationale);
-        lines.Add($"<!-- intake-apply:end domain:{domain} path:{fileDraft.TargetFilePath} -->");
-
-        return string.Join(Environment.NewLine, lines);
-    }
-
-    private static void AppendList(List<string> lines, IReadOnlyList<string> values)
-    {
-        if (values.Count == 0)
-        {
-            lines.Add("- none");
             return;
         }
 
-        lines.AddRange(values.Select(value => $"- {value}"));
+        if (!string.IsNullOrWhiteSpace(normalizedExisting)
+            && !normalizedExisting.Contains(excerpt, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Current file content for '{fileDraft.TargetFilePath}' no longer matches the patch draft excerpt.");
+        }
+    }
+
+    private static string ApplyProposedEdits(string existingContent, IntakePatchFileDraft fileDraft)
+    {
+        var normalizedExisting = existingContent.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd();
+        var linesToAppend = fileDraft.ProposedEdits
+            .Select(NormalizeAppliedLine)
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Distinct(StringComparer.Ordinal)
+            .Where(line => !ContainsAppliedLine(normalizedExisting, line))
+            .ToArray();
+
+        if (linesToAppend.Length == 0)
+        {
+            return string.IsNullOrWhiteSpace(normalizedExisting)
+                ? string.Empty
+                : normalizedExisting + Environment.NewLine;
+        }
+
+        var appendedBlock = string.Join(Environment.NewLine, linesToAppend.Select(line => $"- {line}"));
+        if (string.IsNullOrWhiteSpace(normalizedExisting))
+        {
+            return appendedBlock + Environment.NewLine;
+        }
+
+        return normalizedExisting + Environment.NewLine + Environment.NewLine + appendedBlock + Environment.NewLine;
+    }
+
+    private static int CountAppliedEdits(string existingContent, IntakePatchFileDraft fileDraft)
+    {
+        var normalizedExisting = existingContent.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return fileDraft.ProposedEdits
+            .Select(NormalizeAppliedLine)
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Distinct(StringComparer.Ordinal)
+            .Count(line => !ContainsAppliedLine(normalizedExisting, line));
+    }
+
+    private static string NormalizeAppliedLine(string proposedEdit)
+    {
+        const string updatePrefix = "Apply update candidate: ";
+        if (proposedEdit.StartsWith(updatePrefix, StringComparison.Ordinal))
+        {
+            return proposedEdit[updatePrefix.Length..].Trim();
+        }
+
+        return proposedEdit.Trim();
+    }
+
+    private static bool ContainsAppliedLine(string content, string line)
+    {
+        return content.Split('\n', StringSplitOptions.None)
+            .Select(existingLine => existingLine.Trim())
+            .Any(existingLine =>
+                string.Equals(existingLine, line, StringComparison.Ordinal)
+                || string.Equals(existingLine, $"- {line}", StringComparison.Ordinal));
     }
 }

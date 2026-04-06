@@ -34,10 +34,14 @@ public sealed class IntakeApplyCommandTests
         Assert.Contains("- intents/intent-cli/intent-tree/means/auth-oauth2.md", output, StringComparison.Ordinal);
 
         var meansFile = File.ReadAllText(Path.Combine(repoRoot, "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"));
-        Assert.Contains("<!-- intake-apply:start domain:auth path:intents/intent-cli/intent-tree/means/auth-oauth2.md -->", meansFile, StringComparison.Ordinal);
-        Assert.Contains("Apply update candidate: Add device-code note", meansFile, StringComparison.Ordinal);
+        Assert.DoesNotContain("intake-apply:start", meansFile, StringComparison.Ordinal);
+        Assert.Contains("# Auth Means", meansFile, StringComparison.Ordinal);
+        Assert.Contains("Existing line", meansFile, StringComparison.Ordinal);
+        Assert.Contains("- Add device-code note", meansFile, StringComparison.Ordinal);
+        Assert.Contains("- Document OAuth2 fallback", meansFile, StringComparison.Ordinal);
 
         var conceptFile = File.ReadAllText(Path.Combine(repoRoot, "intents", "intent-cli", "concepts", "auth-oauth2.md"));
+        Assert.DoesNotContain("intake-apply:start", conceptFile, StringComparison.Ordinal);
         Assert.Contains("Reconcile this source concept file with the current fold-in draft.", conceptFile, StringComparison.Ordinal);
 
         var untouchedFile = File.ReadAllText(Path.Combine(repoRoot, "README.md"));
@@ -54,10 +58,10 @@ public sealed class IntakeApplyCommandTests
             CreatePatchArtifactMarkdown());
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
-            "# Auth Means");
+            "# Auth Means" + Environment.NewLine + "Existing line");
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "concepts", "auth-oauth2.md"),
-            "# Auth Concept");
+            "# Auth Concept" + Environment.NewLine + "Known flow");
         using var firstWriter = new StringWriter();
         using var secondWriter = new StringWriter();
 
@@ -67,6 +71,7 @@ public sealed class IntakeApplyCommandTests
         Assert.Equal(0, firstExitCode);
         Assert.Equal(0, secondExitCode);
         Assert.Contains("Applied edit count: 0", secondWriter.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Changed file paths:", secondWriter.ToString(), StringComparison.Ordinal);
         Assert.Contains("- none", secondWriter.ToString(), StringComparison.Ordinal);
     }
 
@@ -127,6 +132,28 @@ public sealed class IntakeApplyCommandTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("Intake patch artifact was not found", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenCurrentContentThatDoesNotMatchExcerpt_ReturnsExitCodeOne()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.patch.md"),
+            CreatePatchArtifactMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
+            "# Auth Means" + Environment.NewLine + "Drifted line");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "auth-oauth2.md"),
+            "# Auth Concept" + Environment.NewLine + "Known flow");
+        using var writer = new StringWriter();
+
+        var exitCode = IntakeApplyCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("no longer matches the patch draft excerpt", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
