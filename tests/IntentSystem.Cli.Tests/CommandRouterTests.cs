@@ -365,6 +365,43 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeExecutionCommand_DispatchesToIntakeExecutionRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.patch.md"),
+            """
+            # Intake Patch Draft
+
+            ## Domain
+
+            `auth`
+
+            target_file_paths:
+            - intents/intent-cli/concepts/oauth2.md
+            - intents/intent-cli/intent-tree/means/device-code.md
+
+            source_concept_refs:
+            - intents/intent-cli/concepts/oauth2.md
+
+            ## File-By-File Patch Candidates
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept" + Environment.NewLine + "- Reconcile this source concept file with the current fold-in draft.");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "device-code.md"),
+            "# Auth Means" + Environment.NewLine + "- Add device-code note");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["intake", "execution", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake execution draft generated for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenIntakeConceptCommand_DispatchesToIntakeConceptRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
