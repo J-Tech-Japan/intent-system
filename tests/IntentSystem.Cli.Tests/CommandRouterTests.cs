@@ -641,6 +641,111 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeLaunchCommand_DispatchesToIntakeLaunchRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueEnqueueQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            """
+            # Intake Execution Draft
+
+            ## Domain
+            `auth`
+
+            ## Proposed Execution Units
+
+            ### `AUTH-01`
+            source_file_path: intents/intent-cli/concepts/oauth2.md
+            target_part: concepts
+            dependencies:
+            - none
+            readiness_notes:
+            - Current heading: # Auth Concept
+            verification_hints:
+            - dotnet test IntentSystem.sln
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "AUTH-01", "packet.yaml"),
+            """
+            execution_unit: AUTH-01
+            implementation_issue:
+              issue_title: "AUTH-01 Intake Launch"
+              goal: "Launch generated issue-ready execution unit into queue and autostart flow."
+              in_scope:
+                - "queue insertion"
+                - "issue creation"
+                - "run start"
+              out_of_scope:
+                - "review execution"
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "cli intake launch command"
+              dependencies:
+                - "G3"
+              technical_baseline:
+                - "C# / .NET"
+              project_local_guidance:
+                - "AGENTS.md"
+              intent_baseline:
+                - "intake launch stays thin"
+              acceptance_criteria:
+                - "issue-ready unit launches deterministically"
+              verification:
+                - "tests-passing"
+
+            review:
+              summarize_first: true
+              require_explicit_diff_check: true
+              require_explicit_scope_check: true
+              require_explicit_contract_check: true
+              required_checks:
+                - "intake launch remains thin"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "AUTH-01", "github-body.md"),
+            "# AUTH-01");
+        using var writer = new StringWriter();
+        var originalEnqueueTimestampFactory = QueueEnqueueCommand.TimestampFactory;
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalRemoteGitFactory = QueueDispatchCommand.GitCommandRunnerFactory;
+        var originalDispatchTimestampFactory = QueueDispatchCommand.TimestampFactory;
+        var originalStartGitFactory = RunStartCommand.GitCommandRunnerFactory;
+        var originalStartTimestampFactory = RunStartCommand.TimestampFactory;
+
+        try
+        {
+            QueueEnqueueCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:00:00Z");
+            QueueDispatchCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            QueueDispatchCommand.GitCommandRunnerFactory = () => new FakeQueueDispatchGitRunner();
+            QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:05:00Z");
+            RunStartCommand.GitCommandRunnerFactory = () => new FakeRunStartGitRunner();
+            RunStartCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:10:00Z");
+
+            var exitCode = CommandRouter.Execute(["intake", "launch", "auth"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Intake launch processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            QueueEnqueueCommand.TimestampFactory = originalEnqueueTimestampFactory;
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.GitCommandRunnerFactory = originalRemoteGitFactory;
+            QueueDispatchCommand.TimestampFactory = originalDispatchTimestampFactory;
+            RunStartCommand.GitCommandRunnerFactory = originalStartGitFactory;
+            RunStartCommand.TimestampFactory = originalStartTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenClarifyAnswerCommand_DispatchesToClarifyAnswerRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
