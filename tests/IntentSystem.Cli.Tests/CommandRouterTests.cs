@@ -149,6 +149,35 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenQueueEnqueueCommand_DispatchesToQueueEnqueueRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueEnqueueQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G38", "packet.yaml"),
+            CreateQueueEnqueuePacketYaml());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = QueueEnqueueCommand.TimestampFactory;
+
+        try
+        {
+            QueueEnqueueCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T10:30:00Z");
+
+            var exitCode = CommandRouter.Execute(["queue", "enqueue", "G38"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Queue enqueue processed for execution unit 'G38'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            QueueEnqueueCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenInterviewStartCommand_DispatchesToInterviewStartRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -1239,6 +1268,36 @@ public sealed class CommandRouterTests
         };
     }
 
+    private static QueueState CreateQueueEnqueueQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-06T10:00:00Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G3",
+                    Title = "Queue read commands",
+                    State = QueueItemState.Completed,
+                    Dependencies = [],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G3/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G3/review-context.md",
+                        Yaml = ".intent-cli/issues/G3/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+    }
+
     private static QueueState CreateRunRereviewQueueState()
     {
         return new QueueState
@@ -1756,6 +1815,56 @@ public sealed class CommandRouterTests
             - "issue created"
           deterministic_review_checks:
             - "dispatch remains thin"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
+    private static string CreateQueueEnqueuePacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "G38 Queue Enqueue Command"
+          issue_kind: "feature"
+          source_execution_unit: "G38"
+          goal: "Enqueue queue item from packet artifact."
+          in_scope:
+            - "queue enqueue command"
+          out_of_scope:
+            - "child issue creation"
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli queue enqueue command"
+          dependencies:
+            - "G3"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guide:
+            - "AGENTS.md"
+          intent_baseline:
+            - "enqueue stays thin"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/03-queue-json-and-jsonl-schema.md"
+          acceptance_criteria:
+            - "queue item inserted"
+          verification_evidence:
+            - "tests-passing"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+
+        review_context_packet:
+          source_execution_unit: "G38"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+            - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+            - "intents/intent-cli/specs/03-queue-json-and-jsonl-schema.md"
+          acceptance_criteria:
+            - "queue item inserted"
+          deterministic_review_checks:
+            - "enqueue remains thin"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
         """;
     }
