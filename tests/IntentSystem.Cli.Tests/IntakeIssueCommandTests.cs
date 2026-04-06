@@ -7,47 +7,22 @@ namespace IntentSystem.Cli.Tests;
 public sealed class IntakeIssueCommandTests
 {
     [Fact]
-    public void Execute_GivenIntakeOriginExecutionUnits_GeneratesIssueArtifacts()
+    public void Execute_GivenCanonicalExecutionArtifact_GeneratesIssueArtifacts()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
-            """
-            # Post-MVP Sub-Slices
-
-            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
-            |---|---|---|---|---|---|---|---|
-            | G37 | G | `intake issue <domain>` を CLI shell から使えるようにし、updated intake-origin `execution/` source-of-truth から issue-ready execution unit の issue artifact 群を deterministic に生成できるようにする | G2, G35, G36 | submodules/intent-system | . | cli intake issue command | yes |
-
-            ## G36 の current baseline
-
-            - `intake execution apply <domain>` を最初の execution source-of-truth apply command にする
-            - execution_unit: AUTH-01
-            - source_file_path: intents/intent-cli/concepts/oauth2.md
-            - target_part: concepts
-            - readiness_notes: Current heading: # Auth Concept
-            - verification_hints: dotnet test IntentSystem.sln
-
-            - execution_unit: AUTH-02
-            - source_file_path: intents/intent-cli/intent-tree/means/device-code.md
-            - target_part: intent-tree/means
-            - dependencies: AUTH-01
-            - readiness_notes: Current heading: # Device Code
-            - verification_hints: dotnet test IntentSystem.sln
-
-            - execution_unit: BILLING-01
-            - source_file_path: intents/intent-cli/concepts/billing.md
-            - target_part: concepts
-            - readiness_notes: Current heading: # Billing
-            - verification_hints: dotnet test IntentSystem.sln
-
-            ## G37 の current baseline
-
-            - `intake issue <domain>` を最初の intake issue-artifact generation command にする
-            - canonical source は current `execution/` source files と current `G2` / `G29` / `G30` / `G32` / `G33` / `G34` / `G35` / `G36` intake baseline である
-            - successful output は selected domain の intake-origin issue-ready execution unit に対応する `.intent-cli/issues/<execution-unit>/implementation.md`, `review-context.md`, `packet.yaml`, and `github-body.md` の deterministic generation を baseline にする
-            """);
+            CreateExecutionBaselineMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            CreateExecutionArtifactMarkdown("auth"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "device-code.md"),
+            "# Device Code");
         using var writer = new StringWriter();
 
         var exitCode = IntakeIssueCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
@@ -57,7 +32,6 @@ public sealed class IntakeIssueCommandTests
         Assert.Contains("Intake issue artifacts generated for domain 'auth'.", output, StringComparison.Ordinal);
         Assert.Contains("- AUTH-01", output, StringComparison.Ordinal);
         Assert.Contains("- AUTH-02", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("BILLING-01", output, StringComparison.Ordinal);
         Assert.Contains(".intent-cli/issues/AUTH-01/github-body.md", output, StringComparison.Ordinal);
 
         Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "AUTH-01", "implementation.md")));
@@ -81,7 +55,6 @@ public sealed class IntakeIssueCommandTests
 
         var githubBody = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "AUTH-01", "github-body.md"));
         Assert.Equal(implementationMarkdown, githubBody);
-        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "BILLING-01", "implementation.md")));
     }
 
     [Fact]
@@ -91,32 +64,16 @@ public sealed class IntakeIssueCommandTests
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
-            """
-            # Post-MVP Sub-Slices
-
-            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
-            |---|---|---|---|---|---|---|---|
-            | G37 | G | `intake issue <domain>` を CLI shell から使えるようにし、updated intake-origin `execution/` source-of-truth から issue-ready execution unit の issue artifact 群を deterministic に生成できるようにする | G2, G35, G36 | submodules/intent-system | . | cli intake issue command | yes |
-
-            ## G36 の current baseline
-
-            - `intake execution apply <domain>` を最初の execution source-of-truth apply command にする
-            - execution_unit: AUTH-01
-            - source_file_path: intents/intent-cli/concepts/oauth2.md
-            - target_part: concepts
-            - readiness_notes: Current heading: # Auth Concept
-            - verification_hints: dotnet test IntentSystem.sln
-
-            - execution_unit: AUTH-02
-            - source_file_path: intents/intent-cli/intent-tree/means/device-code.md
-            - target_part: intent-tree/means
-            - readiness_notes: Current heading: # Device Code
-            - verification_hints: dotnet test IntentSystem.sln
-
-            ## G37 の current baseline
-
-            - `intake issue <domain>` を最初の intake issue-artifact generation command にする
-            """);
+            CreateExecutionBaselineMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            CreateExecutionArtifactMarkdown("auth"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "device-code.md"),
+            "# Device Code");
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "AUTH-02", "implementation.md"),
             "existing implementation");
@@ -135,31 +92,22 @@ public sealed class IntakeIssueCommandTests
     }
 
     [Fact]
-    public void Execute_GivenNoMatchingExecutionUnits_ReturnsExitCodeOne()
+    public void Execute_GivenExecutionArtifactWithNoUnits_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            CreateExecutionBaselineMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
             """
-            # Post-MVP Sub-Slices
+            # Intake Execution Draft
 
-            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
-            |---|---|---|---|---|---|---|---|
-            | G37 | G | `intake issue <domain>` を CLI shell から使えるようにし、updated intake-origin `execution/` source-of-truth から issue-ready execution unit の issue artifact 群を deterministic に生成できるようにする | G2, G35, G36 | submodules/intent-system | . | cli intake issue command | yes |
+            ## Domain
+            `auth`
 
-            ## G36 の current baseline
-
-            - `intake execution apply <domain>` を最初の execution source-of-truth apply command にする
-            - execution_unit: BILLING-01
-            - source_file_path: intents/intent-cli/concepts/billing.md
-            - target_part: concepts
-            - readiness_notes: Current heading: # Billing
-            - verification_hints: dotnet test IntentSystem.sln
-
-            ## G37 の current baseline
-
-            - `intake issue <domain>` を最初の intake issue-artifact generation command にする
+            ## Proposed Execution Units
             """);
         using var writer = new StringWriter();
 
@@ -167,6 +115,22 @@ public sealed class IntakeIssueCommandTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("No intake-origin issue-ready execution units were found for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenMissingExecutionArtifact_ReturnsExitCodeOne()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            CreateExecutionBaselineMarkdown());
+        using var writer = new StringWriter();
+
+        var exitCode = IntakeIssueCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Intake execution artifact was not found", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -178,6 +142,56 @@ public sealed class IntakeIssueCommandTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("requires a domain", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string CreateExecutionBaselineMarkdown()
+    {
+        return """
+            # Post-MVP Sub-Slices
+
+            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
+            |---|---|---|---|---|---|---|---|
+            | G37 | G | `intake issue <domain>` を CLI shell から使えるようにし、updated intake-origin `execution/` source-of-truth から issue-ready execution unit の issue artifact 群を deterministic に生成できるようにする | G2, G35, G36 | submodules/intent-system | . | cli intake issue command | yes |
+
+            ## G37 の current baseline
+
+            - `intake issue <domain>` を最初の intake issue-artifact generation command にする
+            - canonical source は current `execution/` source files と current `G2` / `G29` / `G30` / `G32` / `G33` / `G34` / `G35` / `G36` intake baseline である
+            - successful output は selected domain の intake-origin issue-ready execution unit に対応する `.intent-cli/issues/<execution-unit>/implementation.md`, `review-context.md`, `packet.yaml`, and `github-body.md` の deterministic generation を baseline にする
+            """;
+    }
+
+    private static string CreateExecutionArtifactMarkdown(string domain)
+    {
+        return $$"""
+            # Intake Execution Draft
+
+            ## Domain
+            `{{domain}}`
+
+            ## Proposed Execution Units
+
+            ### `AUTH-01`
+            source_file_path: intents/intent-cli/concepts/oauth2.md
+            target_part: concepts
+            dependencies:
+            - none
+            readiness_notes:
+            - Current heading: # Auth Concept
+            verification_hints:
+            - dotnet test IntentSystem.sln
+
+            ### `AUTH-02`
+            source_file_path: intents/intent-cli/intent-tree/means/device-code.md
+            target_part: intent-tree/means
+            dependencies:
+            - AUTH-01
+            readiness_notes:
+            - Current heading: # Device Code
+            verification_hints:
+            - dotnet test IntentSystem.sln
+
+            """;
     }
 
     private static CliContext CreateContext(string repoRoot)

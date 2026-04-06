@@ -6,7 +6,6 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class IntakeIssueCommand
 {
-    private const string IntakeExecutionApplyMarker = "`intake execution apply <domain>`";
     private const string IntakeIssueMarker = "`intake issue <domain>`";
     private const string IssueBaselineExecutionUnit = "G37";
     private const string ParentIntentRoot = "intents/intent-cli/intent-tree/00-map.md";
@@ -70,7 +69,7 @@ internal static class IntakeIssueCommand
         try
         {
             var baseline = LoadIssueBaseline(context.RepoRoot);
-            var units = DiscoverExecutionUnits(context.RepoRoot, domain);
+            var units = LoadExecutionUnits(context.RepoRoot, domain);
             if (units.Count == 0)
             {
                 writer.WriteLine($"No intake-origin issue-ready execution units were found for domain '{domain}'.");
@@ -86,6 +85,56 @@ internal static class IntakeIssueCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    private static IReadOnlyList<IntakeOriginExecutionUnit> LoadExecutionUnits(string repoRoot, string domain)
+    {
+        var executionArtifactPath = Path.Combine(
+            repoRoot,
+            IntakeExecutionArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
+
+        if (!File.Exists(executionArtifactPath))
+        {
+            throw new InvalidOperationException($"Intake execution artifact was not found at {executionArtifactPath}");
+        }
+
+        var request = IntakeExecutionArtifactMarkdown.Deserialize(File.ReadAllText(executionArtifactPath));
+        if (!string.Equals(request.Domain, domain, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Intake execution artifact domain '{request.Domain}' does not match requested domain '{domain}'.");
+        }
+
+        var units = new Dictionary<string, IntakeOriginExecutionUnit>(StringComparer.Ordinal);
+        foreach (var candidate in request.ProposedExecutionUnits)
+        {
+            var sourceAbsolutePath = Path.Combine(repoRoot, candidate.SourceFilePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(sourceAbsolutePath))
+            {
+                throw new InvalidOperationException(
+                    $"Intake execution unit '{candidate.ExecutionUnitId}' source file was not found at {sourceAbsolutePath}");
+            }
+
+            var unit = new IntakeOriginExecutionUnit
+            {
+                ExecutionUnitId = candidate.ExecutionUnitId,
+                SourceFilePath = candidate.SourceFilePath,
+                TargetPart = candidate.TargetPart,
+                Dependencies = candidate.Dependencies,
+                ReadinessNotes = candidate.ReadinessNotes,
+                VerificationHints = candidate.VerificationHints
+            };
+
+            if (!units.TryAdd(unit.ExecutionUnitId, unit))
+            {
+                throw new InvalidOperationException(
+                    $"Execution unit '{unit.ExecutionUnitId}' was defined multiple times in the intake execution artifact.");
+            }
+        }
+
+        return units.Values
+            .OrderBy(unit => unit.ExecutionUnitId, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static IntakeIssueResult GenerateArtifacts(
@@ -168,47 +217,6 @@ internal static class IntakeIssueCommand
             "Intake issue baseline could not be derived from the current execution source-of-truth.");
     }
 
-    private static IReadOnlyList<IntakeOriginExecutionUnit> DiscoverExecutionUnits(string repoRoot, string domain)
-    {
-        var executionUnits = new Dictionary<string, IntakeOriginExecutionUnit>(StringComparer.Ordinal);
-        var prefix = domain.Trim().ToUpperInvariant() + "-";
-
-        foreach (var relativePath in EnumerateExecutionFiles(repoRoot))
-        {
-            var absolutePath = Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
-            var content = File.ReadAllText(absolutePath);
-            if (!content.Contains(IntakeExecutionApplyMarker, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            foreach (var unit in ParseExecutionUnits(content))
-            {
-                if (!unit.ExecutionUnitId.StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (executionUnits.TryGetValue(unit.ExecutionUnitId, out var existing))
-                {
-                    if (!existing.Equals(unit))
-                    {
-                        throw new InvalidOperationException(
-                            $"Execution unit '{unit.ExecutionUnitId}' was defined multiple times in execution source files.");
-                    }
-
-                    continue;
-                }
-
-                executionUnits[unit.ExecutionUnitId] = unit;
-            }
-        }
-
-        return executionUnits.Values
-            .OrderBy(unit => unit.ExecutionUnitId, StringComparer.Ordinal)
-            .ToArray();
-    }
-
     private static IReadOnlyList<string> EnumerateExecutionFiles(string repoRoot)
     {
         var intentsRoot = Path.Combine(repoRoot, "intents");
@@ -222,85 +230,6 @@ internal static class IntakeIssueCommand
             .OrderBy(path => path, StringComparer.Ordinal)
             .Select(path => Path.GetRelativePath(repoRoot, path).Replace(Path.DirectorySeparatorChar, '/'))
             .ToArray();
-    }
-
-    private static IReadOnlyList<IntakeOriginExecutionUnit> ParseExecutionUnits(string markdown)
-    {
-        var lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n', StringSplitOptions.None);
-        var sectionStart = FindSectionStart(lines, IntakeExecutionApplyMarker);
-        if (sectionStart < 0)
-        {
-            return [];
-        }
-
-        var sectionEnd = FindSectionEnd(lines, sectionStart);
-        var builder = default(ExecutionUnitBuilder);
-        var units = new List<IntakeOriginExecutionUnit>();
-
-        for (var index = sectionStart + 1; index < sectionEnd; index++)
-        {
-            var trimmed = lines[index].Trim();
-            if (!trimmed.StartsWith("- ", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var bullet = trimmed[2..];
-            var separatorIndex = bullet.IndexOf(": ", StringComparison.Ordinal);
-            if (separatorIndex < 0)
-            {
-                continue;
-            }
-
-            var key = bullet[..separatorIndex];
-            var value = bullet[(separatorIndex + 2)..];
-
-            switch (key)
-            {
-                case "execution_unit":
-                    if (builder.ExecutionUnitId is not null)
-                    {
-                        units.Add(builder.Build());
-                    }
-
-                    builder = new ExecutionUnitBuilder(value);
-                    break;
-                case "source_file_path":
-                    builder.SourceFilePath = value;
-                    break;
-                case "target_part":
-                    builder.TargetPart = value;
-                    break;
-                case "dependencies":
-                    if (!string.Equals(value, "none", StringComparison.Ordinal))
-                    {
-                        builder.Dependencies.Add(value);
-                    }
-
-                    break;
-                case "readiness_notes":
-                    if (!string.Equals(value, "none", StringComparison.Ordinal))
-                    {
-                        builder.ReadinessNotes.Add(value);
-                    }
-
-                    break;
-                case "verification_hints":
-                    if (!string.Equals(value, "none", StringComparison.Ordinal))
-                    {
-                        builder.VerificationHints.Add(value);
-                    }
-
-                    break;
-            }
-        }
-
-        if (builder.ExecutionUnitId is not null)
-        {
-            units.Add(builder.Build());
-        }
-
-        return units;
     }
 
     private static IReadOnlyList<string> ExtractSectionBulletLines(string markdown, string marker)
@@ -515,51 +444,5 @@ internal static class IntakeIssueCommand
         public required IReadOnlyList<string> ReadinessNotes { get; init; }
 
         public required IReadOnlyList<string> VerificationHints { get; init; }
-    }
-
-    private struct ExecutionUnitBuilder
-    {
-        public ExecutionUnitBuilder(string executionUnitId)
-        {
-            ExecutionUnitId = executionUnitId;
-            SourceFilePath = null;
-            TargetPart = null;
-            Dependencies = [];
-            ReadinessNotes = [];
-            VerificationHints = [];
-        }
-
-        public string? ExecutionUnitId { get; }
-
-        public string? SourceFilePath { get; set; }
-
-        public string? TargetPart { get; set; }
-
-        public List<string> Dependencies { get; }
-
-        public List<string> ReadinessNotes { get; }
-
-        public List<string> VerificationHints { get; }
-
-        public IntakeOriginExecutionUnit Build()
-        {
-            if (string.IsNullOrWhiteSpace(ExecutionUnitId)
-                || string.IsNullOrWhiteSpace(SourceFilePath)
-                || string.IsNullOrWhiteSpace(TargetPart))
-            {
-                throw new InvalidOperationException(
-                    "Execution source-of-truth contained an incomplete intake-origin execution unit.");
-            }
-
-            return new IntakeOriginExecutionUnit
-            {
-                ExecutionUnitId = ExecutionUnitId,
-                SourceFilePath = SourceFilePath,
-                TargetPart = TargetPart,
-                Dependencies = Dependencies.ToArray(),
-                ReadinessNotes = ReadinessNotes.ToArray(),
-                VerificationHints = VerificationHints.ToArray()
-            };
-        }
     }
 }

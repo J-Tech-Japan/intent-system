@@ -460,19 +460,33 @@ public sealed class CommandRouterTests
             |---|---|---|---|---|---|---|---|
             | G37 | G | `intake issue <domain>` を CLI shell から使えるようにし、updated intake-origin `execution/` source-of-truth から issue-ready execution unit の issue artifact 群を deterministic に生成できるようにする | G2, G35, G36 | submodules/intent-system | . | cli intake issue command | yes |
 
-            ## G36 の current baseline
-
-            - `intake execution apply <domain>` を最初の execution source-of-truth apply command にする
-            - execution_unit: AUTH-01
-            - source_file_path: intents/intent-cli/concepts/oauth2.md
-            - target_part: concepts
-            - readiness_notes: Current heading: # Auth Concept
-            - verification_hints: dotnet test IntentSystem.sln
-
             ## G37 の current baseline
 
             - `intake issue <domain>` を最初の intake issue-artifact generation command にする
             """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            """
+            # Intake Execution Draft
+
+            ## Domain
+            `auth`
+
+            ## Proposed Execution Units
+
+            ### `AUTH-01`
+            source_file_path: intents/intent-cli/concepts/oauth2.md
+            target_part: concepts
+            dependencies:
+            - none
+            readiness_notes:
+            - Current heading: # Auth Concept
+            verification_hints:
+            - dotnet test IntentSystem.sln
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
         using var writer = new StringWriter();
 
         var exitCode = CommandRouter.Execute(["intake", "issue", "auth"], CreateContext(repoRoot), writer);
