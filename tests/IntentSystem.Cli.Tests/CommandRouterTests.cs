@@ -447,6 +447,55 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeIssueCommand_DispatchesToIntakeIssueRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            """
+            # Post-MVP Sub-Slices
+
+            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
+            |---|---|---|---|---|---|---|---|
+            | G37 | G | `intake issue <domain>` を CLI shell から使えるようにし、updated intake-origin `execution/` source-of-truth から issue-ready execution unit の issue artifact 群を deterministic に生成できるようにする | G2, G35, G36 | submodules/intent-system | . | cli intake issue command | yes |
+
+            ## G37 の current baseline
+
+            - `intake issue <domain>` を最初の intake issue-artifact generation command にする
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            """
+            # Intake Execution Draft
+
+            ## Domain
+            `auth`
+
+            ## Proposed Execution Units
+
+            ### `AUTH-01`
+            source_file_path: intents/intent-cli/concepts/oauth2.md
+            target_part: concepts
+            dependencies:
+            - none
+            readiness_notes:
+            - Current heading: # Auth Concept
+            verification_hints:
+            - dotnet test IntentSystem.sln
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["intake", "issue", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake issue artifacts generated for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenIntakeConceptCommand_DispatchesToIntakeConceptRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
