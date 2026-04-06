@@ -187,10 +187,9 @@ public sealed class QueueEnqueueCommandTests
     private static string CreatePacketYaml(string packetExecutionUnit = "G38")
     {
         return $"""
-        implementation_issue_packet:
+        execution_unit: {packetExecutionUnit}
+        implementation_issue:
           issue_title: "G38 Queue Enqueue Command"
-          issue_kind: "feature"
-          source_execution_unit: "{packetExecutionUnit}"
           goal: "Enqueue issue packet into queue artifacts."
           in_scope:
             - "queue enqueue command"
@@ -216,22 +215,14 @@ public sealed class QueueEnqueueCommandTests
             - "queue item inserted"
           verification_evidence:
             - "tests-passing"
-          review_mode: "deterministic-review"
-          completion_action: "wait-for-deterministic-review"
-          landing_policy: "merge-after-review"
 
-        review_context_packet:
-          source_execution_unit: "{packetExecutionUnit}"
-          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
-          intent_references:
-            - "ICL.P.PRODUCT_GOAL"
-          rules_and_specs:
-            - "intents/intent-cli/specs/03-queue-json-and-jsonl-schema.md"
-          acceptance_criteria:
-            - "queue item inserted"
-          deterministic_review_checks:
+        review:
+          summarize_first: true
+          require_explicit_diff_check: true
+          require_explicit_scope_check: true
+          require_explicit_contract_check: true
+          required_checks:
             - "queue insertion remains thin"
-          clarification_return_path: "intents/intent-cli/clarifications/open.md"
         """;
     }
 

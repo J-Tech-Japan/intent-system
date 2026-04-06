@@ -4,10 +4,14 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class ProjectionPacketRuntimeReader
 {
+    private const string DefaultClarificationReturnPath = "intents/intent-cli/clarifications/open.md";
+
     internal sealed record RuntimePacket(
         string ExecutionUnit,
         string IssueTitle,
-        string TargetRepo);
+        string TargetRepo,
+        IReadOnlyList<string> Dependencies,
+        string ClarificationReturnPath);
 
     public static RuntimePacket Read(string yaml)
     {
@@ -19,7 +23,9 @@ internal static class ProjectionPacketRuntimeReader
             return new RuntimePacket(
                 packet.ImplementationIssuePacket.SourceExecutionUnit,
                 packet.ImplementationIssuePacket.IssueTitle,
-                packet.ImplementationIssuePacket.TargetRepo);
+                packet.ImplementationIssuePacket.TargetRepo,
+                packet.ImplementationIssuePacket.Dependencies,
+                packet.ReviewContextPacket.ClarificationReturnPath);
         }
         catch (InvalidOperationException)
         {
@@ -145,7 +151,30 @@ internal static class ProjectionPacketRuntimeReader
             throw new InvalidOperationException("Implementation issue must contain required field 'target_repo'.");
         }
 
-        return new RuntimePacket(executionUnit, issueTitle, targetRepo);
+        return new RuntimePacket(
+            executionUnit,
+            issueTitle,
+            targetRepo,
+            GetOptionalList(implementationIssue, "dependencies"),
+            DefaultClarificationReturnPath);
+    }
+
+    private static IReadOnlyList<string> GetOptionalList(
+        IReadOnlyDictionary<string, object> values,
+        string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            return [];
+        }
+
+        return value switch
+        {
+            string[] arrayValue => arrayValue,
+            List<string> listValue => listValue,
+            _ => throw new InvalidOperationException(
+                $"Projection packet YAML field '{key}' must be a list.")
+        };
     }
 
     private static string ParseScalar(string value)

@@ -1,4 +1,3 @@
-using IntentSystem.Projection.Serialization;
 using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
@@ -90,33 +89,33 @@ internal static class QueueEnqueueCommand
 
     private static ResolvedQueuePacket ReadPacket(string yaml, string expectedExecutionUnit)
     {
-        var packet = ProjectionPacketSerializer.Deserialize(yaml);
+        var packet = ProjectionPacketRuntimeReader.Read(yaml);
 
         if (!string.Equals(
-                packet.ImplementationIssuePacket.SourceExecutionUnit,
+                packet.ExecutionUnit,
                 expectedExecutionUnit,
                 StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Projection packet execution unit '{packet.ImplementationIssuePacket.SourceExecutionUnit}' does not match requested execution unit '{expectedExecutionUnit}'.");
+                $"Projection packet execution unit '{packet.ExecutionUnit}' does not match requested execution unit '{expectedExecutionUnit}'.");
         }
 
-        if (string.IsNullOrWhiteSpace(packet.ImplementationIssuePacket.IssueTitle))
+        if (string.IsNullOrWhiteSpace(packet.IssueTitle))
         {
             throw new InvalidOperationException("Projection packet must contain a non-empty issue title.");
         }
 
-        if (string.IsNullOrWhiteSpace(packet.ReviewContextPacket.ClarificationReturnPath))
+        if (string.IsNullOrWhiteSpace(packet.ClarificationReturnPath))
         {
             throw new InvalidOperationException("Projection packet must contain a clarification return path.");
         }
 
         return new ResolvedQueuePacket
         {
-            ExecutionUnit = packet.ImplementationIssuePacket.SourceExecutionUnit,
-            IssueTitle = packet.ImplementationIssuePacket.IssueTitle,
-            Dependencies = packet.ImplementationIssuePacket.Dependencies,
-            ClarificationReturnPath = packet.ReviewContextPacket.ClarificationReturnPath
+            ExecutionUnit = packet.ExecutionUnit,
+            IssueTitle = packet.IssueTitle,
+            Dependencies = packet.Dependencies,
+            ClarificationReturnPath = packet.ClarificationReturnPath
         };
     }
 
