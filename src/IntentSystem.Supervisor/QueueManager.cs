@@ -9,6 +9,67 @@ namespace IntentSystem.Supervisor;
 /// </summary>
 public static class QueueManager
 {
+    public static QueueEnqueueResult Enqueue(
+        QueueState state,
+        QueueItem queueItem,
+        string by,
+        DateTimeOffset ts)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(queueItem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var existingItem = state.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal));
+        if (existingItem is not null)
+        {
+            return new QueueEnqueueResult
+            {
+                UpdatedState = state,
+                QueueItem = existingItem,
+                WasEnqueued = false,
+                Event = null
+            };
+        }
+
+        var completedUnits = state.Items
+            .Where(item => item.State == QueueItemState.Completed)
+            .Select(item => item.ExecutionUnit)
+            .ToHashSet(StringComparer.Ordinal);
+        var blockedBy = queueItem.Dependencies
+            .Where(dependency => !completedUnits.Contains(dependency))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(dependency => dependency, StringComparer.Ordinal)
+            .ToArray();
+        var normalizedItem = queueItem with
+        {
+            State = QueueItemState.Queued,
+            Dependencies = queueItem.Dependencies
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(dependency => dependency, StringComparer.Ordinal)
+                .ToArray(),
+            BlockedBy = blockedBy
+        };
+
+        return new QueueEnqueueResult
+        {
+            UpdatedState = state with
+            {
+                Items = state.Items.Concat([normalizedItem]).ToArray(),
+                UpdatedAt = ts
+            },
+            QueueItem = normalizedItem,
+            WasEnqueued = true,
+            Event = new RunEvent
+            {
+                Ts = ts,
+                ExecutionUnit = normalizedItem.ExecutionUnit,
+                Event = "queued",
+                By = by
+            }
+        };
+    }
+
     public static QueueTransitionResult TransitionNonBlocking(
         QueueState state,
         string executionUnit,

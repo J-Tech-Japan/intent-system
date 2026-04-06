@@ -188,6 +188,50 @@ public sealed class QueueManagerTests
     }
 
     [Fact]
+    public void Enqueue_GivenNewItem_AppendsQueuedEventAndPopulatesBlockedBy()
+    {
+        var completedDependency = CreateItem("A1", QueueItemState.Completed);
+        var queuedDependency = CreateItem("A2", QueueItemState.Queued);
+        var state = CreateState([completedDependency, queuedDependency]);
+        var candidate = CreateItem("B1", QueueItemState.Active) with
+        {
+            Dependencies = ["A2", "A1", "A2"],
+            BlockedBy = ["stale-value"]
+        };
+
+        var result = QueueManager.Enqueue(state, candidate, "intent-cli", BaseTime);
+
+        Assert.True(result.WasEnqueued);
+        Assert.NotNull(result.Event);
+        Assert.Equal("queued", result.Event!.Event);
+        Assert.Equal("B1", result.Event.ExecutionUnit);
+        Assert.Equal("intent-cli", result.Event.By);
+
+        var insertedItem = FindItem(result.UpdatedState, "B1");
+        Assert.Equal(QueueItemState.Queued, insertedItem.State);
+        Assert.Equal(["A1", "A2"], insertedItem.Dependencies);
+        Assert.Equal(["A2"], insertedItem.BlockedBy);
+    }
+
+    [Fact]
+    public void Enqueue_GivenExistingExecutionUnit_SkipsWithoutMutation()
+    {
+        var existingItem = CreateItem("A1", QueueItemState.Queued);
+        var state = CreateState([existingItem]);
+        var candidate = CreateItem("A1", QueueItemState.Active) with
+        {
+            Title = "[A1] Replacement"
+        };
+
+        var result = QueueManager.Enqueue(state, candidate, "intent-cli", BaseTime);
+
+        Assert.False(result.WasEnqueued);
+        Assert.Null(result.Event);
+        Assert.Same(state, result.UpdatedState);
+        Assert.Equal(existingItem, result.QueueItem);
+    }
+
+    [Fact]
     public void RefreshDependencies_GivenAllDepsCompleted_UnblocksItem()
     {
         var a1 = CreateItem("A1", QueueItemState.Completed);
