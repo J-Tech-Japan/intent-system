@@ -1,4 +1,3 @@
-using IntentSystem.Projection.Serialization;
 using IntentSystem.Review;
 using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
@@ -59,8 +58,8 @@ internal static class RunStartCommand
 
         try
         {
-            var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
-            var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
+            var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
+            var childRepoRef = packet.TargetRepo;
             if (string.IsNullOrWhiteSpace(childRepoRef))
             {
                 throw new InvalidOperationException("Projection packet must contain a target repo.");

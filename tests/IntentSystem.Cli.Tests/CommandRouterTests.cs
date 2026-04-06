@@ -260,6 +260,54 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeAutostartCommand_DispatchesToIntakeAutostartRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueDispatchQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
+            CreateQueueDispatchPacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
+            "# Goal");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalRemoteGitFactory = QueueDispatchCommand.GitCommandRunnerFactory;
+        var originalDispatchTimestampFactory = QueueDispatchCommand.TimestampFactory;
+        var originalStartGitFactory = RunStartCommand.GitCommandRunnerFactory;
+        var originalStartTimestampFactory = RunStartCommand.TimestampFactory;
+
+        try
+        {
+            QueueDispatchCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            QueueDispatchCommand.GitCommandRunnerFactory = () => new FakeQueueDispatchGitRunner();
+            QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T06:00:00Z");
+            RunStartCommand.GitCommandRunnerFactory = () => new FakeRunStartGitRunner();
+            RunStartCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T09:30:00Z");
+
+            var exitCode = CommandRouter.Execute(["intake", "autostart", "G13"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Intake autostart completed for G13.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.GitCommandRunnerFactory = originalRemoteGitFactory;
+            QueueDispatchCommand.TimestampFactory = originalDispatchTimestampFactory;
+            RunStartCommand.GitCommandRunnerFactory = originalStartGitFactory;
+            RunStartCommand.TimestampFactory = originalStartTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenClarifyAnswerCommand_DispatchesToClarifyAnswerRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
