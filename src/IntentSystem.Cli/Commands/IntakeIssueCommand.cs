@@ -68,15 +68,7 @@ internal static class IntakeIssueCommand
 
         try
         {
-            var baseline = LoadIssueBaseline(context.RepoRoot);
-            var units = LoadExecutionUnits(context.RepoRoot, domain);
-            if (units.Count == 0)
-            {
-                writer.WriteLine($"No intake-origin issue-ready execution units were found for domain '{domain}'.");
-                return 1;
-            }
-
-            var result = GenerateArtifacts(context.RepoRoot, domain, units, baseline);
+            var result = ExecuteCore(context.RepoRoot, domain);
             IntakeIssueRenderer.WriteSummary(writer, result);
             return 0;
         }
@@ -85,6 +77,19 @@ internal static class IntakeIssueCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static IntakeIssueResult ExecuteCore(string repoRoot, string domain)
+    {
+        var baseline = LoadIssueBaseline(repoRoot);
+        var units = LoadExecutionUnits(repoRoot, domain);
+        if (units.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"No intake-origin issue-ready execution units were found for domain '{domain}'.");
+        }
+
+        return GenerateArtifacts(repoRoot, domain, units, baseline);
     }
 
     private static IReadOnlyList<IntakeOriginExecutionUnit> LoadExecutionUnits(string repoRoot, string domain)

@@ -84,7 +84,8 @@ internal static class CommandRouter
                 ["issue"] = IntakeIssueCommand.Execute,
                 ["enqueue"] = IntakeEnqueueCommand.Execute,
                 ["autostart"] = IntakeAutostartCommand.Execute,
-                ["launch"] = IntakeLaunchCommand.Execute
+                ["launch"] = IntakeLaunchCommand.Execute,
+                ["start"] = IntakeStartCommand.Execute
             }
         };
 
