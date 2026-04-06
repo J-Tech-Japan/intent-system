@@ -835,7 +835,18 @@ public sealed class CommandRouterTests
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
-            "domain_slug: auth" + Environment.NewLine);
+            """
+            domain_slug: auth
+            concept_source: interactive
+            concept_text: "Add OAuth2 provider support."
+            upstream_paths:
+              - "intents/intent-cli/intent-tree/means/04-worker-interface-strategy.md"
+            initial_goal: "Add OAuth2 provider support."
+            constraints:
+              - "Must not break existing session flow"
+            known_unknowns:
+              - "Which OAuth providers to support?"
+            """);
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
             """

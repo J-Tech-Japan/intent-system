@@ -12,7 +12,7 @@ public sealed class IntakeAdvanceCommandTests
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
-            "domain_slug: auth" + Environment.NewLine);
+            CreateConceptArtifactYaml("auth"));
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
             CreateInterviewArtifactYaml(CreateAnsweredItem()));
@@ -86,7 +86,7 @@ public sealed class IntakeAdvanceCommandTests
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
-            "domain_slug: auth" + Environment.NewLine);
+            CreateConceptArtifactYaml("auth"));
         using var writer = new StringWriter();
 
         var exitCode = IntakeAdvanceCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
@@ -150,6 +150,22 @@ public sealed class IntakeAdvanceCommandTests
             AnsweredAt = DateTimeOffset.Parse("2026-04-13T10:00:00Z"),
             RecommendedUpdates = ["Align login UX wording"]
         };
+    }
+
+    private static string CreateConceptArtifactYaml(string domain)
+    {
+        return $$"""
+            domain_slug: {{domain}}
+            concept_source: interactive
+            concept_text: "Add OAuth2 provider support."
+            upstream_paths:
+              - "intents/intent-cli/intent-tree/means/04-worker-interface-strategy.md"
+            initial_goal: "Add OAuth2 provider support."
+            constraints:
+              - "Must not break existing session flow"
+            known_unknowns:
+              - "Which OAuth providers to support?"
+            """;
     }
 
     private static string CreateInterviewArtifactYaml(IntentSystem.ConceptIntake.Models.InterviewQueueItem item)

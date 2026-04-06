@@ -88,6 +88,13 @@ internal static class IntakeAdvanceCommand
         {
             throw new InvalidOperationException($"Intake concept artifact was not found at {conceptPath}");
         }
+
+        var packet = IntakeConceptArtifactYaml.Deserialize(File.ReadAllText(conceptPath));
+        if (!string.Equals(packet.DomainSlug, domain, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Intake concept artifact domain '{packet.DomainSlug}' does not match requested domain '{domain}'.");
+        }
     }
 
     private static string ToRelativePath(string repoRoot, string absolutePath)
