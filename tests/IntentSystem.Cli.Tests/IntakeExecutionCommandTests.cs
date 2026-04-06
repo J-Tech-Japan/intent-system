@@ -11,10 +11,63 @@ public sealed class IntakeExecutionCommandTests
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "concepts", "auth-oauth2.md"),
+            Path.Combine("repo", ".intent-cli", "intake", "auth.patch.md"),
+            """
+            # Intake Patch Draft
+
+            ## Domain
+
+            `auth`
+
+            target_file_paths:
+            - intents/intent-cli/concepts/oauth2.md
+            - intents/intent-cli/intent-tree/means/device-code.md
+
+            source_concept_refs:
+            - intents/intent-cli/concepts/oauth2.md
+
+            ## File-By-File Patch Candidates
+
+            ### `intents/intent-cli/concepts/oauth2.md`
+
+            current_file_state: present
+            foldin_anchors:
+            - answered_question_ids:iq-1
+            source_concept_refs:
+            - intents/intent-cli/concepts/oauth2.md
+            proposed_edits:
+            - Reconcile this source concept file with the current fold-in draft.
+            rationale:
+            - This path is listed in source_concept_refs.
+            current_file_excerpt:
+            ```text
+            # Auth Concept
+            - Reconcile this source concept file with the current fold-in draft.
+            ```
+
+            ### `intents/intent-cli/intent-tree/means/device-code.md`
+
+            current_file_state: present
+            foldin_anchors:
+            - answered_question_ids:iq-1
+            - recommended_updates:Add device-code note
+            source_concept_refs:
+            - intents/intent-cli/concepts/oauth2.md
+            proposed_edits:
+            - Apply update candidate: Add device-code note
+            rationale:
+            - This path is listed in return_to_intent_paths.
+            current_file_excerpt:
+            ```text
+            # Auth Means
+            - Add device-code note
+            ```
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
             "# Auth Concept" + Environment.NewLine + "- Reconcile this source concept file with the current fold-in draft.");
         tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "device-code.md"),
             "# Auth Means" + Environment.NewLine + "- Add device-code note");
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "payments.md"),
@@ -31,8 +84,8 @@ public sealed class IntakeExecutionCommandTests
         var markdown = File.ReadAllText(artifactPath);
         Assert.Contains("### `AUTH-01`", markdown, StringComparison.Ordinal);
         Assert.Contains("### `AUTH-02`", markdown, StringComparison.Ordinal);
-        Assert.Contains("source_file_path: intents/intent-cli/concepts/auth-oauth2.md", markdown, StringComparison.Ordinal);
-        Assert.Contains("source_file_path: intents/intent-cli/intent-tree/means/auth-oauth2.md", markdown, StringComparison.Ordinal);
+        Assert.Contains("source_file_path: intents/intent-cli/concepts/oauth2.md", markdown, StringComparison.Ordinal);
+        Assert.Contains("source_file_path: intents/intent-cli/intent-tree/means/device-code.md", markdown, StringComparison.Ordinal);
         Assert.Contains("target_part: concepts", markdown, StringComparison.Ordinal);
         Assert.Contains("target_part: intent-tree/means", markdown, StringComparison.Ordinal);
         Assert.Contains("- AUTH-01", markdown, StringComparison.Ordinal);
@@ -45,8 +98,22 @@ public sealed class IntakeExecutionCommandTests
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "concepts", "payments.md"),
-            "# Payments");
+            Path.Combine("repo", ".intent-cli", "intake", "auth.patch.md"),
+            """
+            # Intake Patch Draft
+
+            ## Domain
+
+            `auth`
+
+            target_file_paths:
+            - intents/intent-cli/concepts/oauth2.md
+
+            source_concept_refs:
+            - intents/intent-cli/concepts/oauth2.md
+
+            ## File-By-File Patch Candidates
+            """);
         using var writer = new StringWriter();
 
         var exitCode = IntakeExecutionCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
@@ -54,6 +121,19 @@ public sealed class IntakeExecutionCommandTests
         Assert.Equal(1, exitCode);
         Assert.Contains("No updated parent source files were found for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "intake", "auth.execution.md")));
+    }
+
+    [Fact]
+    public void Execute_GivenMissingPatchArtifact_ReturnsExitCodeOne()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        using var writer = new StringWriter();
+
+        var exitCode = IntakeExecutionCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Intake patch artifact was not found", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

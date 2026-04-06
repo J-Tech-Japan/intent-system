@@ -2,8 +2,6 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class IntakeExecutionCommand
 {
-    private const string IntentCliDirectory = "intents/intent-cli";
-
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -17,10 +15,27 @@ internal static class IntakeExecutionCommand
         }
 
         var domain = args[0];
+        var patchPath = Path.Combine(
+            context.RepoRoot,
+            IntakePatchArtifactPathResolver.Resolve(domain).Replace('/', Path.DirectorySeparatorChar));
+
+        if (!File.Exists(patchPath))
+        {
+            writer.WriteLine($"Intake patch artifact was not found at {patchPath}");
+            return 1;
+        }
 
         try
         {
-            var request = CreateRequest(context.RepoRoot, domain);
+            var patchRequest = IntakePatchArtifactMarkdown.Deserialize(File.ReadAllText(patchPath));
+            if (!string.Equals(patchRequest.Domain, domain, StringComparison.Ordinal))
+            {
+                writer.WriteLine(
+                    $"Intake patch artifact domain '{patchRequest.Domain}' does not match requested domain '{domain}'.");
+                return 1;
+            }
+
+            var request = CreateRequest(context.RepoRoot, patchRequest);
             if (request.ProposedExecutionUnits.Count == 0)
             {
                 writer.WriteLine($"No updated parent source files were found for domain '{domain}'.");
@@ -39,26 +54,16 @@ internal static class IntakeExecutionCommand
         }
     }
 
-    private static IntakeExecutionRequest CreateRequest(string repoRoot, string domain)
+    private static IntakeExecutionRequest CreateRequest(string repoRoot, IntakePatchRequest patchRequest)
     {
-        var intentCliRoot = Path.Combine(repoRoot, IntentCliDirectory.Replace('/', Path.DirectorySeparatorChar));
-        if (!Directory.Exists(intentCliRoot))
-        {
-            return new IntakeExecutionRequest
-            {
-                Domain = domain,
-                ProposedExecutionUnits = []
-            };
-        }
-
-        var matchingFiles = Directory.EnumerateFiles(intentCliRoot, "*.md", SearchOption.AllDirectories)
-            .Select(path => Path.GetRelativePath(repoRoot, path).Replace(Path.DirectorySeparatorChar, '/'))
-            .Where(relativePath => relativePath.Contains(domain, StringComparison.OrdinalIgnoreCase))
+        var updatedSourceFiles = patchRequest.TargetFilePaths
+            .Distinct(StringComparer.Ordinal)
             .OrderBy(relativePath => relativePath, StringComparer.Ordinal)
+            .Where(relativePath => File.Exists(Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar))))
             .ToArray();
 
-        var candidates = matchingFiles
-            .Select((relativePath, index) => CreateCandidate(repoRoot, domain, relativePath, index + 1))
+        var candidates = updatedSourceFiles
+            .Select((relativePath, index) => CreateCandidate(repoRoot, patchRequest.Domain, relativePath, index + 1))
             .ToArray();
 
         var conceptIds = candidates
@@ -78,7 +83,7 @@ internal static class IntakeExecutionCommand
 
         return new IntakeExecutionRequest
         {
-            Domain = domain,
+            Domain = patchRequest.Domain,
             ProposedExecutionUnits = resolvedCandidates
         };
     }
