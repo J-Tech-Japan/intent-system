@@ -44,7 +44,7 @@ internal static class IntakeEnqueueCommand
         }
     }
 
-    private static IReadOnlyList<string> LoadExecutionUnits(string repoRoot, string domain)
+    internal static IReadOnlyList<string> LoadExecutionUnits(string repoRoot, string domain)
     {
         var executionArtifactPath = Path.Combine(
             repoRoot,
