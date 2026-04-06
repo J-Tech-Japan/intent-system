@@ -430,18 +430,8 @@ public sealed class CommandRouterTests
             - dotnet test IntentSystem.sln
             """);
         tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
-            """
-            # Post-MVP Sub-Slices
-
-            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
-            |---|---|---|---|---|---|---|---|
-            """);
-        tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "execution", "03-readiness-and-verification.md"),
-            """
-            # Readiness And Verification
-            """);
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
         using var writer = new StringWriter();
 
         var exitCode = CommandRouter.Execute(["intake", "execution", "apply", "auth"], CreateContext(repoRoot), writer);

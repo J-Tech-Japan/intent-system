@@ -50,23 +50,14 @@ public sealed class IntakeExecutionApplyCommandTests
             - dotnet test IntentSystem.sln
             """);
         tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
-            """
-            # Post-MVP Sub-Slices
-
-            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
-            |---|---|---|---|---|---|---|---|
-            | G1 | G | existing row | - | submodules/intent-system | . | cli shell | yes |
-            """);
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept" + Environment.NewLine + "- Existing concept line");
         tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "execution", "03-readiness-and-verification.md"),
-            """
-            # Readiness And Verification
-
-            ## Existing Section
-
-            - Existing baseline note
-            """);
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "device-code.md"),
+            "# Device Code" + Environment.NewLine + "- Existing means line");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "payments.md"),
+            "# Payments" + Environment.NewLine + "- Untouched");
         using var writer = new StringWriter();
 
         var exitCode = IntakeExecutionApplyCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
@@ -75,20 +66,24 @@ public sealed class IntakeExecutionApplyCommandTests
         var output = writer.ToString();
         Assert.Contains("Intake execution apply completed for domain 'auth'.", output, StringComparison.Ordinal);
         Assert.Contains("Applied unit count: 2", output, StringComparison.Ordinal);
-        Assert.Contains("intents/intent-cli/execution/05-post-mvp-sub-slices.md", output, StringComparison.Ordinal);
-        Assert.Contains("intents/intent-cli/execution/03-readiness-and-verification.md", output, StringComparison.Ordinal);
+        Assert.Contains("intents/intent-cli/concepts/oauth2.md", output, StringComparison.Ordinal);
+        Assert.Contains("intents/intent-cli/intent-tree/means/device-code.md", output, StringComparison.Ordinal);
         Assert.Contains("- AUTH-01", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("payments.md", output, StringComparison.Ordinal);
 
-        var subSlices = File.ReadAllText(Path.Combine(repoRoot, "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"));
-        Assert.Contains("| AUTH-01 | G | reflect updated source 'Auth Concept' into issue-ready execution unit | - | submodules/intent-system | . | concepts | candidate |", subSlices, StringComparison.Ordinal);
-        Assert.Contains("| AUTH-02 | G | reflect updated source 'Device Code' into issue-ready execution unit | AUTH-01 | submodules/intent-system | . | intent-tree/means | candidate |", subSlices, StringComparison.Ordinal);
-        Assert.Contains("| G1 | G | existing row | - | submodules/intent-system | . | cli shell | yes |", subSlices, StringComparison.Ordinal);
+        var conceptSource = File.ReadAllText(Path.Combine(repoRoot, "intents", "intent-cli", "concepts", "oauth2.md"));
+        Assert.Contains("- execution_unit: AUTH-01", conceptSource, StringComparison.Ordinal);
+        Assert.Contains("- target_part: concepts", conceptSource, StringComparison.Ordinal);
+        Assert.Contains("- readiness_notes: Current heading: # Auth Concept", conceptSource, StringComparison.Ordinal);
+        Assert.Contains("- verification_hints: dotnet test IntentSystem.sln", conceptSource, StringComparison.Ordinal);
 
-        var readiness = File.ReadAllText(Path.Combine(repoRoot, "intents", "intent-cli", "execution", "03-readiness-and-verification.md"));
-        Assert.Contains("## Intake Execution Candidates: auth", readiness, StringComparison.Ordinal);
-        Assert.Contains("### `AUTH-01`", readiness, StringComparison.Ordinal);
-        Assert.Contains("### `AUTH-02`", readiness, StringComparison.Ordinal);
-        Assert.Contains("- AUTH-01", readiness, StringComparison.Ordinal);
+        var meansSource = File.ReadAllText(Path.Combine(repoRoot, "intents", "intent-cli", "intent-tree", "means", "device-code.md"));
+        Assert.Contains("- execution_unit: AUTH-02", meansSource, StringComparison.Ordinal);
+        Assert.Contains("- target_part: intent-tree/means", meansSource, StringComparison.Ordinal);
+        Assert.Contains("- dependencies: AUTH-01", meansSource, StringComparison.Ordinal);
+
+        var untouchedSource = File.ReadAllText(Path.Combine(repoRoot, "intents", "intent-cli", "intent-tree", "means", "payments.md"));
+        Assert.DoesNotContain("execution_unit:", untouchedSource, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -120,18 +115,8 @@ public sealed class IntakeExecutionApplyCommandTests
             - dotnet test IntentSystem.sln
             """);
         tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
-            """
-            # Post-MVP Sub-Slices
-
-            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
-            |---|---|---|---|---|---|---|---|
-            """);
-        tempDirectory.CreateFile(
-            Path.Combine("repo", "intents", "intent-cli", "execution", "03-readiness-and-verification.md"),
-            """
-            # Readiness And Verification
-            """);
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
         using var writer = new StringWriter();
 
         var firstExitCode = IntakeExecutionApplyCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
