@@ -76,6 +76,7 @@ internal static class CommandRouter
             {
                 ["concept"] = IntakeConceptCommand.Execute,
                 ["compile"] = IntakeCompileCommand.Execute,
+                ["foldin"] = IntakeFoldinCommand.Execute,
                 ["autostart"] = IntakeAutostartCommand.Execute
             }
         };
