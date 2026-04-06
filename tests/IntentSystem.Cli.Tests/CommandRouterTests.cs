@@ -241,6 +241,25 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeConceptCommand_DispatchesToIntakeConceptRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "concepts", "auth.txt"),
+            "Add OAuth2 provider support.");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["intake", "concept", "auth", "--from-file", "concepts/auth.txt"],
+            CreateContext(repoRoot),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake concept artifact generated for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenClarifyAnswerCommand_DispatchesToClarifyAnswerRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
