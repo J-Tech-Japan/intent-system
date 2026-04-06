@@ -75,7 +75,7 @@ internal static class QueueEnqueueCommand
         }
     }
 
-    private static string ResolvePacketPath(CliContext context, string executionUnit)
+    internal static string ResolvePacketPath(CliContext context, string executionUnit)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
@@ -87,7 +87,7 @@ internal static class QueueEnqueueCommand
             "packet.yaml");
     }
 
-    private static ResolvedQueuePacket ReadPacket(string yaml, string expectedExecutionUnit)
+    internal static ResolvedQueuePacket ReadPacket(string yaml, string expectedExecutionUnit)
     {
         var packet = ProjectionPacketRuntimeReader.Read(yaml);
 
@@ -119,7 +119,7 @@ internal static class QueueEnqueueCommand
         };
     }
 
-    private static PacketPaths ResolvePacketPaths(string repoRoot, string executionUnit)
+    internal static PacketPaths ResolvePacketPaths(string repoRoot, string executionUnit)
     {
         var issueDirectory = Path.Combine(
             repoRoot,
@@ -138,7 +138,7 @@ internal static class QueueEnqueueCommand
         };
     }
 
-    private static QueueItem CreateQueueItem(
+    internal static QueueItem CreateQueueItem(
         CliContext context,
         ResolvedQueuePacket packet,
         PacketPaths packetPaths)
@@ -159,7 +159,7 @@ internal static class QueueEnqueueCommand
         };
     }
 
-    private static void PersistEnqueue(CliContext context, QueueEnqueueResult result)
+    internal static void PersistEnqueue(CliContext context, QueueEnqueueResult result)
     {
         var queueStatePath = context.GetQueueStatePath();
         File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(result.UpdatedState));
@@ -178,7 +178,7 @@ internal static class QueueEnqueueCommand
             RunLogSerializer.SerializeLine(result.Event) + Environment.NewLine);
     }
 
-    private sealed record ResolvedQueuePacket
+    internal sealed record ResolvedQueuePacket
     {
         public required string ExecutionUnit { get; init; }
 

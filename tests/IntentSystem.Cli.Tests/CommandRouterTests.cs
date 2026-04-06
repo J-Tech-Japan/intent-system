@@ -525,6 +525,55 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeEnqueueCommand_DispatchesToIntakeEnqueueRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueEnqueueQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            """
+            # Intake Execution Draft
+
+            ## Domain
+            `auth`
+
+            ## Proposed Execution Units
+
+            ### `AUTH-01`
+            source_file_path: intents/intent-cli/concepts/oauth2.md
+            target_part: concepts
+            dependencies:
+            - none
+            readiness_notes:
+            - Current heading: # Auth Concept
+            verification_hints:
+            - dotnet test IntentSystem.sln
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "AUTH-01", "packet.yaml"),
+            CreateIntakeEnqueuePacketYaml("AUTH-01"));
+        using var writer = new StringWriter();
+        var originalTimestampFactory = QueueEnqueueCommand.TimestampFactory;
+
+        try
+        {
+            QueueEnqueueCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:00:00Z");
+
+            var exitCode = CommandRouter.Execute(["intake", "enqueue", "auth"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Intake enqueue processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            QueueEnqueueCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenIntakeConceptCommand_DispatchesToIntakeConceptRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -1296,6 +1345,43 @@ public sealed class CommandRouterTests
                 }
             ]
         };
+    }
+
+    private static string CreateIntakeEnqueuePacketYaml(string executionUnit)
+    {
+        return $"""
+        execution_unit: {executionUnit}
+        implementation_issue:
+          issue_title: "{executionUnit} Queue Item"
+          goal: "Enqueue generated issue artifact into queue artifacts."
+          in_scope:
+            - "queue insertion"
+          out_of_scope:
+            - "workflow execution"
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli intake enqueue command"
+          dependencies:
+            - "G3"
+          technical_baseline:
+            - "C# / .NET"
+          project_local_guidance:
+            - "AGENTS.md"
+          intent_baseline:
+            - "intake enqueue stays thin"
+          acceptance_criteria:
+            - "queue item inserted"
+          verification:
+            - "tests-passing"
+
+        review:
+          summarize_first: true
+          require_explicit_diff_check: true
+          require_explicit_scope_check: true
+          require_explicit_contract_check: true
+          required_checks:
+            - "intake enqueue remains thin"
+        """;
     }
 
     private static QueueState CreateRunRereviewQueueState()
