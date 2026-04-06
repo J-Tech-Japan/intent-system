@@ -241,6 +241,40 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeFoldinCommand_DispatchesToIntakeFoldinRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.compile.md"),
+            """
+            # Intake Compile
+
+            ## Domain
+
+            `auth`
+
+            answered_question_ids:
+            - iq-1
+
+            recommended_updates:
+            - Add device-code note
+
+            return_to_intent_paths:
+            - intents/intent-cli/intent-tree/means/auth-oauth2.md
+
+            source_concept_refs:
+            - intents/intent-cli/concepts/auth-oauth2.md
+            """);
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["intake", "foldin", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake fold-in draft generated for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenIntakeConceptCommand_DispatchesToIntakeConceptRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
