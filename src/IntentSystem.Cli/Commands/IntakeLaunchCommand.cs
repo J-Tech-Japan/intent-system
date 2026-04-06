@@ -1,4 +1,6 @@
 using IntentSystem.Supervisor.Serialization;
+using QueueItem = IntentSystem.Supervisor.Models.QueueItem;
+using QueueItemState = IntentSystem.Supervisor.Models.QueueItemState;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -32,19 +34,7 @@ internal static class IntakeLaunchCommand
                 return 1;
             }
 
-            var existingUnits = queueState.Items
-                .Select(item => item.ExecutionUnit)
-                .ToHashSet(StringComparer.Ordinal);
-            var skippedUnits = executionUnits
-                .Where(existingUnits.Contains)
-                .ToArray();
-            var launchUnits = executionUnits
-                .Where(unit => !existingUnits.Contains(unit))
-                .ToArray();
-
-            ValidateArtifacts(context, launchUnits);
-
-            var result = LaunchUnits(context, domain, launchUnits, skippedUnits);
+            var result = LaunchUnits(context, domain, executionUnits);
             IntakeLaunchRenderer.WriteSummary(writer, result);
             return 0;
         }
@@ -55,62 +45,98 @@ internal static class IntakeLaunchCommand
         }
     }
 
-    private static void ValidateArtifacts(CliContext context, IReadOnlyList<string> executionUnits)
+    private static void ValidatePacketArtifact(CliContext context, string executionUnit)
     {
-        foreach (var executionUnit in executionUnits)
+        var packetPath = QueueEnqueueCommand.ResolvePacketPath(context, executionUnit);
+        if (!File.Exists(packetPath))
         {
-            var packetPath = QueueEnqueueCommand.ResolvePacketPath(context, executionUnit);
-            if (!File.Exists(packetPath))
-            {
-                throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
-            }
+            throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
+        }
+    }
 
-            var packetRef = QueueEnqueueCommand.ResolvePacketPaths(context.RepoRoot, executionUnit).Yaml;
-            var githubBodyPath = QueueDispatchCommand.ResolveGitHubBodyPath(context.RepoRoot, packetRef);
-            if (!File.Exists(githubBodyPath))
-            {
-                throw new InvalidOperationException($"GitHub issue body artifact was not found at {githubBodyPath}");
-            }
+    private static void ValidateGitHubBodyArtifact(CliContext context, string executionUnit)
+    {
+        var packetRef = QueueEnqueueCommand.ResolvePacketPaths(context.RepoRoot, executionUnit).Yaml;
+        var githubBodyPath = QueueDispatchCommand.ResolveGitHubBodyPath(context.RepoRoot, packetRef);
+        if (!File.Exists(githubBodyPath))
+        {
+            throw new InvalidOperationException($"GitHub issue body artifact was not found at {githubBodyPath}");
         }
     }
 
     private static IntakeLaunchResult LaunchUnits(
         CliContext context,
         string domain,
-        IReadOnlyList<string> launchUnits,
-        IReadOnlyList<string> skippedUnits)
+        IReadOnlyList<string> executionUnits)
     {
-        var launchedExecutionUnits = new List<string>(launchUnits.Count);
-        var createdIssueRefs = new List<string>(launchUnits.Count);
-        var worktreePaths = new List<string>(launchUnits.Count);
+        var launchedExecutionUnits = new List<string>(executionUnits.Count);
+        var createdIssueRefs = new List<string>(executionUnits.Count);
+        var worktreePaths = new List<string>(executionUnits.Count);
+        var skippedUnits = new List<string>();
 
-        foreach (var executionUnit in launchUnits)
+        foreach (var executionUnit in executionUnits)
         {
-            ExecuteStep(
-                (ctx, stepWriter) => QueueEnqueueCommand.Execute(ctx, [executionUnit], stepWriter),
-                context,
-                executionUnit,
-                "queue enqueue");
-            ExecuteStep(
-                (ctx, stepWriter) => QueueDispatchCommand.Execute(ctx, [executionUnit], stepWriter),
-                context,
-                executionUnit,
-                "queue dispatch");
+            var queueItem = TryLoadQueueItem(context, executionUnit);
+            var shouldEnqueue = queueItem is null;
+            var requiresDispatch = shouldEnqueue || queueItem?.LinkedIssue is null;
+
+            if (queueItem is not null && IsAlreadyLaunched(queueItem.State))
+            {
+                skippedUnits.Add(executionUnit);
+                continue;
+            }
+
+            ValidatePacketArtifact(context, executionUnit);
+            if (requiresDispatch)
+            {
+                ValidateGitHubBodyArtifact(context, executionUnit);
+            }
+
+            if (shouldEnqueue)
+            {
+                ExecuteStep(
+                    (ctx, stepWriter) => QueueEnqueueCommand.Execute(ctx, [executionUnit], stepWriter),
+                    context,
+                    executionUnit,
+                    "queue enqueue");
+                queueItem = LoadQueueItem(context, executionUnit);
+            }
+
+            queueItem ??= LoadQueueItem(context, executionUnit);
+            if (queueItem.State != QueueItemState.Queued)
+            {
+                throw new InvalidOperationException(
+                    $"Execution unit '{executionUnit}' is in state '{FormatState(queueItem.State)}' and cannot be intake-launched.");
+            }
+
+            if (queueItem.LinkedIssue is null)
+            {
+                ExecuteStep(
+                    (ctx, stepWriter) => QueueDispatchCommand.Execute(ctx, [executionUnit], stepWriter),
+                    context,
+                    executionUnit,
+                    "queue dispatch");
+            }
+
             ExecuteStep(
                 (ctx, stepWriter) => RunStartCommand.Execute(ctx, [executionUnit], stepWriter),
                 context,
                 executionUnit,
                 "run start");
 
-            var queueItem = LoadQueueItem(context, executionUnit);
-            if (queueItem.LinkedIssue is null)
+            var launchedQueueItem = LoadQueueItem(context, executionUnit);
+            if (launchedQueueItem.LinkedIssue is null)
             {
                 throw new InvalidOperationException(
                     $"Execution unit '{executionUnit}' must have a linked issue after intake launch.");
             }
 
             launchedExecutionUnits.Add(executionUnit);
-            createdIssueRefs.Add(queueItem.LinkedIssue.Url);
+            if (queueItem.LinkedIssue is null)
+            {
+                createdIssueRefs.Add(launchedQueueItem.LinkedIssue.Url);
+            }
+
             worktreePaths.Add(RunStartCommand.ResolveWorktreePath(context, executionUnit));
         }
 
@@ -143,12 +169,35 @@ internal static class IntakeLaunchCommand
         }
     }
 
-    private static IntentSystem.Supervisor.Models.QueueItem LoadQueueItem(CliContext context, string executionUnit)
+    private static QueueItem? TryLoadQueueItem(CliContext context, string executionUnit)
     {
         var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(context.GetQueueStatePath()));
         return queueState.Items.FirstOrDefault(item =>
-                   string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+    }
+
+    private static QueueItem LoadQueueItem(CliContext context, string executionUnit)
+    {
+        return TryLoadQueueItem(context, executionUnit)
                ?? throw new InvalidOperationException(
                    $"Execution unit '{executionUnit}' was not found in queue state after intake launch.");
+    }
+
+    private static bool IsAlreadyLaunched(QueueItemState state)
+    {
+        return state is QueueItemState.Active
+            or QueueItemState.Review
+            or QueueItemState.Fixing
+            or QueueItemState.ClarifyBlocked
+            or QueueItemState.Completed;
+    }
+
+    private static string FormatState(QueueItemState state)
+    {
+        return state switch
+        {
+            QueueItemState.ClarifyBlocked => "clarify-blocked",
+            _ => state.ToString().ToLowerInvariant()
+        };
     }
 }

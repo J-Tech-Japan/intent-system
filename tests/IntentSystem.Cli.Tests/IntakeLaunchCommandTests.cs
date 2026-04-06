@@ -103,14 +103,96 @@ public sealed class IntakeLaunchCommandTests
     }
 
     [Fact]
-    public void Execute_GivenExistingQueueItem_SkipsExistingUnitAndLaunchesRemainingUnits()
+    public void Execute_GivenExistingQueuedItem_ContinuesLaunchWithoutDuplicateEnqueue()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "queue-state.json"),
-            QueueStateSerializer.Serialize(CreateQueueState(includeExisting: true)));
+            QueueStateSerializer.Serialize(CreateQueueState(includeExistingQueued: true)));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            CreateExecutionArtifact("auth", ["AUTH-01", "AUTH-02"]));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "AUTH-01", "packet.yaml"),
+            CreatePacketYaml("AUTH-01"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "AUTH-01", "github-body.md"),
+            "# AUTH-01");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "AUTH-02", "packet.yaml"),
+            CreatePacketYaml("AUTH-02"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "AUTH-02", "github-body.md"),
+            "# AUTH-02");
+        using var writer = new StringWriter();
+        var originalEnqueueTimestampFactory = QueueEnqueueCommand.TimestampFactory;
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalRemoteGitFactory = QueueDispatchCommand.GitCommandRunnerFactory;
+        var originalDispatchTimestampFactory = QueueDispatchCommand.TimestampFactory;
+        var originalStartGitFactory = RunStartCommand.GitCommandRunnerFactory;
+        var originalStartTimestampFactory = RunStartCommand.TimestampFactory;
+        var startGitRunner = new FakeStartGitRunner();
+        var publisher = new FakePublisher();
+
+        try
+        {
+            QueueEnqueueCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:00:00Z");
+            QueueDispatchCommand.PublisherFactory = () => publisher;
+            QueueDispatchCommand.GitCommandRunnerFactory = () => new FakeRemoteGitRunner();
+            QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:05:00Z");
+            RunStartCommand.GitCommandRunnerFactory = () => startGitRunner;
+            RunStartCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:10:00Z");
+
+            var exitCode = IntakeLaunchCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+            Assert.Equal(0, exitCode);
+            var output = writer.ToString();
+            Assert.Contains("Launched execution units:", output, StringComparison.Ordinal);
+            Assert.Contains("- AUTH-01", output, StringComparison.Ordinal);
+            Assert.Contains("- AUTH-02", output, StringComparison.Ordinal);
+            Assert.Contains("Skipped units:", output, StringComparison.Ordinal);
+            Assert.Contains("- none", output, StringComparison.Ordinal);
+            Assert.Contains("- https://github.com/J-Tech-Japan/intent-system/issues/401", output, StringComparison.Ordinal);
+            Assert.Contains("- AUTH-02", output, StringComparison.Ordinal);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Active, queueState.Items.Single(item => item.ExecutionUnit == "AUTH-01").State);
+            Assert.Equal(QueueItemState.Active, queueState.Items.Single(item => item.ExecutionUnit == "AUTH-02").State);
+            var runEvents = RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+            Assert.Equal(
+                ["issue-created", "activated", "queued", "issue-created", "activated"],
+                runEvents.Select(runEvent => runEvent.Event).ToArray());
+            Assert.Equal(
+                ["AUTH-01", "AUTH-01", "AUTH-02", "AUTH-02", "AUTH-02"],
+                runEvents.Select(runEvent => runEvent.ExecutionUnit).ToArray());
+        }
+        finally
+        {
+            QueueEnqueueCommand.TimestampFactory = originalEnqueueTimestampFactory;
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.GitCommandRunnerFactory = originalRemoteGitFactory;
+            QueueDispatchCommand.TimestampFactory = originalDispatchTimestampFactory;
+            RunStartCommand.GitCommandRunnerFactory = originalStartGitFactory;
+            RunStartCommand.TimestampFactory = originalStartTimestampFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenAlreadyActiveUnit_SkipsOnlyLaunchedUnitAndContinuesOtherUnits()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(includeAlreadyActive: true)));
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             string.Empty);
@@ -154,8 +236,9 @@ public sealed class IntakeLaunchCommandTests
             var output = writer.ToString();
             Assert.Contains("Skipped units:", output, StringComparison.Ordinal);
             Assert.Contains("- AUTH-01", output, StringComparison.Ordinal);
-            Assert.Contains("- AUTH-02", output, StringComparison.Ordinal);
-            Assert.DoesNotContain("issue-401-auth-01", string.Join(Environment.NewLine, startGitRunner.Calls), StringComparison.Ordinal);
+            var launchedSectionIndex = output.IndexOf("Launched execution units:", StringComparison.Ordinal);
+            Assert.NotEqual(-1, launchedSectionIndex);
+            Assert.Contains("- AUTH-02", output[launchedSectionIndex..], StringComparison.Ordinal);
 
             var runEvents = RunLogSerializer.DeserializeAll(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
@@ -223,16 +306,31 @@ public sealed class IntakeLaunchCommandTests
         };
     }
 
-    private static QueueState CreateQueueState(bool includeExisting = false)
+    private static QueueState CreateQueueState(
+        bool includeExistingQueued = false,
+        bool includeAlreadyActive = false)
     {
         var items = new List<QueueItem>
         {
             CreateItem("G3", QueueItemState.Completed)
         };
 
-        if (includeExisting)
+        if (includeExistingQueued)
         {
             items.Add(CreateItem("AUTH-01", QueueItemState.Queued));
+        }
+
+        if (includeAlreadyActive)
+        {
+            items.Add(CreateItem(
+                "AUTH-01",
+                QueueItemState.Active,
+                linkedIssue: new LinkedIssue
+                {
+                    Repo = "J-Tech-Japan/intent-system",
+                    Number = 299,
+                    Url = "https://github.com/J-Tech-Japan/intent-system/issues/299"
+                }));
         }
 
         return new QueueState
@@ -243,7 +341,10 @@ public sealed class IntakeLaunchCommandTests
         };
     }
 
-    private static QueueItem CreateItem(string executionUnit, QueueItemState state)
+    private static QueueItem CreateItem(
+        string executionUnit,
+        QueueItemState state,
+        LinkedIssue? linkedIssue = null)
     {
         return new QueueItem
         {
@@ -259,7 +360,7 @@ public sealed class IntakeLaunchCommandTests
                 ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
                 Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml"
             },
-            LinkedIssue = null,
+            LinkedIssue = linkedIssue,
             WorkerRole = "Claude",
             ReviewRole = "Codex",
             Priority = "high"
