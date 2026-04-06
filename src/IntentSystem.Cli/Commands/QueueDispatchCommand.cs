@@ -1,4 +1,3 @@
-using IntentSystem.Projection.Serialization;
 using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Serialization;
 
@@ -58,14 +57,14 @@ internal static class QueueDispatchCommand
 
         try
         {
-            var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
-            var packetTargetRepo = packet.ImplementationIssuePacket.TargetRepo;
+            var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
+            var packetTargetRepo = packet.TargetRepo;
             if (string.IsNullOrWhiteSpace(packetTargetRepo))
             {
                 throw new InvalidOperationException("Projection packet must contain a target repo.");
             }
 
-            var issueTitle = packet.ImplementationIssuePacket.IssueTitle;
+            var issueTitle = packet.IssueTitle;
             if (string.IsNullOrWhiteSpace(issueTitle))
             {
                 throw new InvalidOperationException("Projection packet must contain a non-empty issue title.");

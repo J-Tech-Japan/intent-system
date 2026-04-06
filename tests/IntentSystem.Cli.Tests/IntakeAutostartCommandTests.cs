@@ -192,10 +192,9 @@ public sealed class IntakeAutostartCommandTests
     private static string CreatePacketYaml()
     {
         return """
-        implementation_issue_packet:
-          issue_title: "[G31] Intake Autostart Command"
-          issue_kind: "feature"
-          source_execution_unit: "G31"
+        execution_unit: G31
+        implementation_issue:
+          issue_title: "G31 Intake Autostart Command"
           goal: "Bridge intake queue item into dispatch and run start."
           in_scope:
             - "intake autostart command"
@@ -208,34 +207,21 @@ public sealed class IntakeAutostartCommandTests
             - "G30"
           technical_baseline:
             - "C# / .NET"
-          project_local_guide:
+          project_local_guidance:
             - "AGENTS.md"
           intent_baseline:
             - "autostart stays thin"
-          intent_references:
-            - "ICL.P.PRODUCT_GOAL"
-          rules_and_specs:
-            - "intents/intent-cli/specs/08-config-and-run-model.md"
           acceptance_criteria:
             - "queued item autostarts"
-          verification_evidence:
+          verification:
             - "tests-passing"
-          review_mode: "deterministic-review"
-          completion_action: "wait-for-deterministic-review"
-          landing_policy: "merge-after-review"
-
-        review_context_packet:
-          source_execution_unit: "G31"
-          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
-          intent_references:
-            - "ICL.P.PRODUCT_GOAL"
-          rules_and_specs:
-            - "intents/intent-cli/specs/08-config-and-run-model.md"
-          acceptance_criteria:
-            - "queued item autostarts"
-          deterministic_review_checks:
+        review:
+          summarize_first: true
+          require_explicit_diff_check: true
+          require_explicit_scope_check: true
+          require_explicit_contract_check: true
+          required_checks:
             - "autostart remains thin"
-          clarification_return_path: "intents/intent-cli/clarifications/open.md"
         """;
     }
 
