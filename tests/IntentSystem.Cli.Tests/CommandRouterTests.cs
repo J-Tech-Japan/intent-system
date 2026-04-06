@@ -829,6 +829,33 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeActivateCommand_DispatchesToIntakeActivateRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
+            """
+            domain_slug: auth
+            concept_source: interactive
+            concept_text: "Add OAuth2 provider support."
+            upstream_paths:
+              - "intents/intent-cli/intent-tree/means/04-worker-interface-strategy.md"
+            initial_goal: "Add OAuth2 provider support."
+            constraints:
+              - "Must not break existing session flow"
+            known_unknowns:
+              - "Which OAuth providers to support?"
+            """);
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["intake", "activate", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake activate processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenIntakeAdvanceCommand_DispatchesToIntakeAdvanceRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
