@@ -224,6 +224,34 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentReviewCommand_DispatchesToReviewRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(Path.Combine("repo", "README.md"), "# Intent System");
+        tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
+        using var writer = new StringWriter();
+        var originalFactory = GenerateFromCurrentCommand.GitHubCommandRunnerFactory;
+
+        try
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = () => new FakeGenerateFromCurrentGitHubRunner();
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "review", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "execution"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current review processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = originalFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentImplementCommand_DispatchesToImplementRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();

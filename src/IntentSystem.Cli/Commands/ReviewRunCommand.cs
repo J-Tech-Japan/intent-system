@@ -17,20 +17,37 @@ internal static class ReviewRunCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
+        try
         {
+            var result = ExecuteCore(context, args[0]);
+            writer.WriteLine($"Review request artifact generated for {result.ExecutionUnit}.");
+            return 0;
+        }
+        catch (InvalidOperationException exception)
+        {
+            writer.WriteLine(exception.Message);
             return 1;
         }
+    }
 
-        var executionUnit = args[0];
+    internal static ReviewRunResult ExecuteCore(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
         var queueItem = queueState.Items.FirstOrDefault(item =>
             string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
 
         if (queueItem is null)
         {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
         }
 
         var reviewContextRef = queueItem.PacketPaths.ReviewContext;
@@ -39,38 +56,32 @@ internal static class ReviewRunCommand
             reviewContextRef.Replace('/', Path.DirectorySeparatorChar));
         if (!File.Exists(reviewContextPath))
         {
-            writer.WriteLine($"Review context artifact was not found at {reviewContextPath}");
-            return 1;
+            throw new InvalidOperationException($"Review context artifact was not found at {reviewContextPath}");
         }
 
         var runLogPath = context.GetRunLogPath();
         if (!File.Exists(runLogPath))
         {
-            writer.WriteLine($"Run log was not found at {runLogPath}");
-            return 1;
+            throw new InvalidOperationException($"Run log was not found at {runLogPath}");
         }
 
-        try
+        var reviewContext = ReviewContextMarkdownParser.Parse(File.ReadAllText(reviewContextPath));
+        if (!string.Equals(reviewContext.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
         {
-            var reviewContext = ReviewContextMarkdownParser.Parse(File.ReadAllText(reviewContextPath));
-            if (!string.Equals(reviewContext.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Review context execution unit '{reviewContext.SourceExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
-            }
-
-            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
-            var linkedPr = LatestLinkedPrResolver.Resolve(runEvents, executionUnit);
-            var request = ReviewRequestFactory.Create(executionUnit, reviewContextRef, linkedPr, reviewContext);
-            ReviewArtifactWriter.Write(request, executionUnit, context.RepoRoot, overwrite: true);
-
-            writer.WriteLine($"Review request artifact generated for {executionUnit}.");
-            return 0;
+            throw new InvalidOperationException(
+                $"Review context execution unit '{reviewContext.SourceExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
         }
-        catch (InvalidOperationException exception)
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        var linkedPr = LatestLinkedPrResolver.Resolve(runEvents, executionUnit);
+        var request = ReviewRequestFactory.Create(executionUnit, reviewContextRef, linkedPr, reviewContext);
+        ReviewArtifactWriter.Write(request, executionUnit, context.RepoRoot, overwrite: true);
+        var artifactPath = Review.ReviewArtifactPathResolver.Resolve(executionUnit);
+
+        return new ReviewRunResult
         {
-            writer.WriteLine(exception.Message);
-            return 1;
-        }
+            ExecutionUnit = executionUnit,
+            ArtifactPath = artifactPath
+        };
     }
 }

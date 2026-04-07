@@ -52,6 +52,12 @@ internal static class GenerateFromCurrentCommand
         }
 
         if (args.Length > 0
+            && string.Equals(args[0], "review", StringComparison.Ordinal))
+        {
+            return GenerateFromCurrentReviewCommand.Execute(context, args[1..], writer);
+        }
+
+        if (args.Length > 0
             && string.Equals(args[0], "implement", StringComparison.Ordinal))
         {
             return GenerateFromCurrentImplementCommand.Execute(context, args[1..], writer);
