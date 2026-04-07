@@ -20,114 +20,10 @@ internal static class RunFixCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
-        {
-            return 1;
-        }
-
-        var executionUnit = args[0];
-        var queueItem = queueState.Items.FirstOrDefault(item =>
-            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
-
-        if (queueItem is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
-        }
-
-        if (queueItem.State is not QueueItemState.Fixing)
-        {
-            writer.WriteLine(
-                $"Execution unit '{executionUnit}' must be fixing before run fix.");
-            return 1;
-        }
-
-        if (queueItem.LinkedIssue is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' must have a linked issue before run fix.");
-            return 1;
-        }
-
-        var packetPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.Yaml);
-        if (!File.Exists(packetPath))
-        {
-            writer.WriteLine($"Projection packet artifact was not found at {packetPath}");
-            return 1;
-        }
-
-        var reviewContextPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.ReviewContext);
-        if (!File.Exists(reviewContextPath))
-        {
-            writer.WriteLine($"Review context artifact was not found at {reviewContextPath}");
-            return 1;
-        }
-
-        var reviewCommentArtifactRef = ReviewCommentArtifactPathResolver.Resolve(executionUnit);
-        var reviewCommentArtifactPath = ResolveArtifactPath(context.RepoRoot, reviewCommentArtifactRef);
-        if (!File.Exists(reviewCommentArtifactPath))
-        {
-            writer.WriteLine($"Review comment artifact was not found at {reviewCommentArtifactPath}");
-            return 1;
-        }
-
         try
         {
-            var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
-            var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
-            if (string.IsNullOrWhiteSpace(childRepoRef))
-            {
-                throw new InvalidOperationException("Projection packet must contain a target repo.");
-            }
-
-            var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
-            if (!Directory.Exists(childRepoPath))
-            {
-                throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
-            }
-
-            var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
-            if (!Directory.Exists(worktreePath))
-            {
-                throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
-            }
-
-            var reviewContext = ReviewContextMarkdownParser.Parse(File.ReadAllText(reviewContextPath));
-            if (!string.Equals(reviewContext.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Review context execution unit '{reviewContext.SourceExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
-            }
-
-            var reviewCommentArtifact = ReviewCommentArtifactSerializer.Deserialize(
-                File.ReadAllText(reviewCommentArtifactPath));
-            if (!string.Equals(reviewCommentArtifact.ExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Review comment artifact execution unit '{reviewCommentArtifact.ExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
-            }
-
-            var latestLinkedPr = ResolveLatestLinkedPr(context, executionUnit);
-            if (!string.Equals(reviewCommentArtifact.LinkedPr, latestLinkedPr, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Review comment artifact linked PR '{reviewCommentArtifact.LinkedPr}' must match latest linked PR '{latestLinkedPr}'.");
-            }
-
-            var request = BuildRequest(
-                context,
-                queueItem,
-                packet,
-                reviewContext,
-                reviewCommentArtifactRef,
-                reviewCommentArtifact,
-                worktreePath,
-                childRepoPath,
-                latestLinkedPr);
-            var markdown = RunFixRenderer.RenderMarkdown(request);
-            var artifactPath = RunFixArtifactWriter.Write(markdown, executionUnit, context.RepoRoot, overwrite: true);
-            RunFixRenderer.WriteSummary(writer, request, artifactPath);
-
+            var result = ExecuteCore(context, args[0]);
+            RunFixRenderer.WriteSummary(writer, result.Request, result.ArtifactPath);
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -135,6 +31,118 @@ internal static class RunFixCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static RunFixResult ExecuteCore(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
+        var queueItem = queueState.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+        if (queueItem is null)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
+        }
+
+        if (queueItem.State is not QueueItemState.Fixing)
+        {
+            throw new InvalidOperationException(
+                $"Execution unit '{executionUnit}' must be fixing before run fix.");
+        }
+
+        if (queueItem.LinkedIssue is null)
+        {
+            throw new InvalidOperationException(
+                $"Execution unit '{executionUnit}' must have a linked issue before run fix.");
+        }
+
+        var packetPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.Yaml);
+        if (!File.Exists(packetPath))
+        {
+            throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
+        }
+
+        var reviewContextPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.ReviewContext);
+        if (!File.Exists(reviewContextPath))
+        {
+            throw new InvalidOperationException($"Review context artifact was not found at {reviewContextPath}");
+        }
+
+        var reviewCommentArtifactRef = ReviewCommentArtifactPathResolver.Resolve(executionUnit);
+        var reviewCommentArtifactPath = ResolveArtifactPath(context.RepoRoot, reviewCommentArtifactRef);
+        if (!File.Exists(reviewCommentArtifactPath))
+        {
+            throw new InvalidOperationException($"Review comment artifact was not found at {reviewCommentArtifactPath}");
+        }
+
+        var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
+        var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
+        if (string.IsNullOrWhiteSpace(childRepoRef))
+        {
+            throw new InvalidOperationException("Projection packet must contain a target repo.");
+        }
+
+        var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
+        if (!Directory.Exists(childRepoPath))
+        {
+            throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
+        }
+
+        var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
+        if (!Directory.Exists(worktreePath))
+        {
+            throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
+        }
+
+        var reviewContext = ReviewContextMarkdownParser.Parse(File.ReadAllText(reviewContextPath));
+        if (!string.Equals(reviewContext.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Review context execution unit '{reviewContext.SourceExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
+        }
+
+        var reviewCommentArtifact = ReviewCommentArtifactSerializer.Deserialize(
+            File.ReadAllText(reviewCommentArtifactPath));
+        if (!string.Equals(reviewCommentArtifact.ExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Review comment artifact execution unit '{reviewCommentArtifact.ExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
+        }
+
+        var latestLinkedPr = ResolveLatestLinkedPr(context, executionUnit);
+        if (!string.Equals(reviewCommentArtifact.LinkedPr, latestLinkedPr, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Review comment artifact linked PR '{reviewCommentArtifact.LinkedPr}' must match latest linked PR '{latestLinkedPr}'.");
+        }
+
+        var request = BuildRequest(
+            context,
+            queueItem,
+            packet,
+            reviewContext,
+            reviewCommentArtifactRef,
+            reviewCommentArtifact,
+            worktreePath,
+            childRepoPath,
+            latestLinkedPr);
+        var markdown = RunFixRenderer.RenderMarkdown(request);
+        var artifactPath = RunFixArtifactWriter.Write(markdown, executionUnit, context.RepoRoot, overwrite: true);
+
+        return new RunFixResult
+        {
+            Request = request,
+            ArtifactPath = ToRelativePath(context.RepoRoot, artifactPath)
+        };
     }
 
     private static RunFixRequest BuildRequest(
@@ -210,5 +218,10 @@ internal static class RunFixCommand
             QueueItemState.ClarifyBlocked => "clarify-blocked",
             _ => state.ToString().ToLowerInvariant()
         };
+    }
+
+    private static string ToRelativePath(string repoRoot, string absolutePath)
+    {
+        return Path.GetRelativePath(repoRoot, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
     }
 }
