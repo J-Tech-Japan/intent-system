@@ -39,6 +39,12 @@ internal static class GenerateFromCurrentCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
+        if (args.Length > 0
+            && string.Equals(args[0], "bridge", StringComparison.Ordinal))
+        {
+            return GenerateFromCurrentBridgeCommand.Execute(context, args[1..], writer);
+        }
+
         if (!args.Contains("--from-path", StringComparer.Ordinal))
         {
             return GenerateFromCurrentReconstructionCommand.Execute(context, args, writer);
