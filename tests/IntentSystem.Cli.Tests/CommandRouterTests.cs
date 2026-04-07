@@ -88,6 +88,35 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentReconstructionCommand_DispatchesToReconstructionRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(Path.Combine("repo", "README.md"), "# Intent System");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.current-sources.yaml"),
+            CurrentSourcesArtifactYaml.Serialize(
+                new CurrentSourcesArtifact
+                {
+                    DomainSlug = "auth",
+                    SourceRoot = "src/feature",
+                    SelectedAltitudes = ["execution"],
+                    SelectedIssueScope = "none",
+                    SelectedPrScope = "none",
+                    SelectedPaths = ["src/feature/FeatureA.cs"],
+                    SourceRefs = ["code:src/feature/FeatureA.cs"],
+                    SamplingNotes = ["code:src/feature/FeatureA.cs summary=namespace FeatureA;"],
+                    Gaps = []
+                }));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["generate-from-current", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Generate-from-current reconstruction processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenQueueListCommand_DispatchesToQueueRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();

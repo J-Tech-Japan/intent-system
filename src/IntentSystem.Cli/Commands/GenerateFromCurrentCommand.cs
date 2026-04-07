@@ -39,9 +39,14 @@ internal static class GenerateFromCurrentCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
+        if (!args.Contains("--from-path", StringComparer.Ordinal))
+        {
+            return GenerateFromCurrentReconstructionCommand.Execute(context, args, writer);
+        }
+
         try
         {
-            var result = ExecuteCore(context, args);
+            var result = ExecuteSourceBundleCore(context, args);
             GenerateFromCurrentRenderer.WriteSummary(writer, result);
             return 0;
         }
@@ -52,7 +57,7 @@ internal static class GenerateFromCurrentCommand
         }
     }
 
-    internal static GenerateFromCurrentResult ExecuteCore(CliContext context, string[] args)
+    internal static GenerateFromCurrentResult ExecuteSourceBundleCore(CliContext context, string[] args)
     {
         var options = ParseOptions(args);
         var sourceRootRelativePath = ResolvePathWithinRepo(context.RepoRoot, options.FromPath);
