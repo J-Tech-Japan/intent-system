@@ -27,49 +27,8 @@ internal static class IntakeAdvanceCommand
 
         try
         {
-            EnsureConceptArtifactExists(context.RepoRoot, domain);
-
-            var compileResult = IntakeCompileCommand.ExecuteCore(context.RepoRoot, domain);
-            if (!compileResult.IsReady)
-            {
-                IntakeAdvanceRenderer.WriteSummary(writer, new IntakeAdvanceResult
-                {
-                    Domain = domain,
-                    ReadinessStatus = "not-ready",
-                    UpdatedSourceFilePaths = [],
-                    UpdatedExecutionFilePaths = [],
-                    RegeneratedArtifactPaths = [],
-                    SkippedStages = DeferredStages
-                });
-                return 0;
-            }
-
-            var (_, foldinPath) = IntakeFoldinCommand.ExecuteCore(context.RepoRoot, domain);
-            var (_, patchPath) = IntakePatchCommand.ExecuteCore(context.RepoRoot, domain);
-            var applyResult = IntakeApplyCommand.ExecuteCore(context.RepoRoot, domain);
-            var (_, executionPath) = IntakeExecutionCommand.ExecuteCore(context.RepoRoot, domain);
-            var executionApplyResult = IntakeExecutionApplyCommand.ExecuteCore(context.RepoRoot, domain);
-
-            var regeneratedArtifactPaths = new[]
-            {
-                compileResult.ArtifactPath,
-                foldinPath,
-                patchPath,
-                executionPath
-            }
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => ToRelativePath(context.RepoRoot, path!))
-            .ToArray();
-
-            IntakeAdvanceRenderer.WriteSummary(writer, new IntakeAdvanceResult
-            {
-                Domain = domain,
-                ReadinessStatus = "ready",
-                UpdatedSourceFilePaths = applyResult.ChangedFilePaths,
-                UpdatedExecutionFilePaths = executionApplyResult.ChangedFilePaths,
-                RegeneratedArtifactPaths = regeneratedArtifactPaths,
-                SkippedStages = []
-            });
+            var result = ExecuteCore(context, domain);
+            IntakeAdvanceRenderer.WriteSummary(writer, result);
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -77,6 +36,52 @@ internal static class IntakeAdvanceCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static IntakeAdvanceResult ExecuteCore(CliContext context, string domain)
+    {
+        EnsureConceptArtifactExists(context.RepoRoot, domain);
+
+        var compileResult = IntakeCompileCommand.ExecuteCore(context.RepoRoot, domain);
+        if (!compileResult.IsReady)
+        {
+            return new IntakeAdvanceResult
+            {
+                Domain = domain,
+                ReadinessStatus = "not-ready",
+                UpdatedSourceFilePaths = [],
+                UpdatedExecutionFilePaths = [],
+                RegeneratedArtifactPaths = [],
+                SkippedStages = DeferredStages
+            };
+        }
+
+        var (_, foldinPath) = IntakeFoldinCommand.ExecuteCore(context.RepoRoot, domain);
+        var (_, patchPath) = IntakePatchCommand.ExecuteCore(context.RepoRoot, domain);
+        var applyResult = IntakeApplyCommand.ExecuteCore(context.RepoRoot, domain);
+        var (_, executionPath) = IntakeExecutionCommand.ExecuteCore(context.RepoRoot, domain);
+        var executionApplyResult = IntakeExecutionApplyCommand.ExecuteCore(context.RepoRoot, domain);
+
+        var regeneratedArtifactPaths = new[]
+        {
+            compileResult.ArtifactPath,
+            foldinPath,
+            patchPath,
+            executionPath
+        }
+        .Where(path => !string.IsNullOrWhiteSpace(path))
+        .Select(path => ToRelativePath(context.RepoRoot, path!))
+        .ToArray();
+
+        return new IntakeAdvanceResult
+        {
+            Domain = domain,
+            ReadinessStatus = "ready",
+            UpdatedSourceFilePaths = applyResult.ChangedFilePaths,
+            UpdatedExecutionFilePaths = executionApplyResult.ChangedFilePaths,
+            RegeneratedArtifactPaths = regeneratedArtifactPaths,
+            SkippedStages = []
+        };
     }
 
     private static void EnsureConceptArtifactExists(string repoRoot, string domain)

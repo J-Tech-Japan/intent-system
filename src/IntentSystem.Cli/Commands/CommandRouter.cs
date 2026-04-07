@@ -82,6 +82,7 @@ internal static class CommandRouter
                 ["apply"] = IntakeApplyCommand.Execute,
                 ["execution"] = IntakeExecutionCommand.Execute,
                 ["advance"] = IntakeAdvanceCommand.Execute,
+                ["activate"] = IntakeActivateCommand.Execute,
                 ["issue"] = IntakeIssueCommand.Execute,
                 ["enqueue"] = IntakeEnqueueCommand.Execute,
                 ["autostart"] = IntakeAutostartCommand.Execute,

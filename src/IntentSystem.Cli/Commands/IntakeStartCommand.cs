@@ -18,18 +18,7 @@ internal static class IntakeStartCommand
 
         try
         {
-            var issueResult = IntakeIssueCommand.ExecuteCore(context.RepoRoot, domain);
-            var launchResult = IntakeLaunchCommand.ExecuteCore(context, domain, writer);
-            var result = new IntakeStartResult
-            {
-                Domain = domain,
-                StartedExecutionUnits = launchResult.LaunchedExecutionUnits,
-                GeneratedArtifactPaths = issueResult.ArtifactPaths,
-                CreatedIssueRefs = launchResult.CreatedIssueRefs,
-                WorktreePaths = launchResult.WorktreePaths,
-                SkippedUnits = launchResult.SkippedUnits
-            };
-
+            var result = ExecuteCore(context, domain, writer);
             IntakeStartRenderer.WriteSummary(writer, result);
             return 0;
         }
@@ -38,5 +27,21 @@ internal static class IntakeStartCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static IntakeStartResult ExecuteCore(CliContext context, string domain, TextWriter writer)
+    {
+        var issueResult = IntakeIssueCommand.ExecuteCore(context.RepoRoot, domain);
+        var launchResult = IntakeLaunchCommand.ExecuteCore(context, domain, writer);
+
+        return new IntakeStartResult
+        {
+            Domain = domain,
+            StartedExecutionUnits = launchResult.LaunchedExecutionUnits,
+            GeneratedArtifactPaths = issueResult.ArtifactPaths,
+            CreatedIssueRefs = launchResult.CreatedIssueRefs,
+            WorktreePaths = launchResult.WorktreePaths,
+            SkippedUnits = launchResult.SkippedUnits
+        };
     }
 }
