@@ -453,6 +453,45 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentBestPracticeCommand_DispatchesToBestPracticeRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "model-registry"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "best-practices"));
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "model-registry", "auth-model.md"), "# auth model");
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "best-practices", "security.md"), "# security");
+        tempDirectory.CreateFile(Path.Combine("repo", "README.md"), "# Intent System");
+        tempDirectory.CreateFile(Path.Combine("repo", "AGENTS.md"), "# Agent Guide");
+        tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
+        using var writer = new StringWriter();
+        var originalFactory = GenerateFromCurrentCommand.GitHubCommandRunnerFactory;
+        var originalParentRefProvider = GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider;
+
+        try
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = () => new FakeGenerateFromCurrentGitHubRunner();
+            GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider = () =>
+            [
+                "intents/intent-cli/specs/11-reconstruction-review-and-confirmation.md"
+            ];
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "best-practice", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current best-practice processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = originalFactory;
+            GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider = originalParentRefProvider;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentImplementCommand_DispatchesToImplementRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
