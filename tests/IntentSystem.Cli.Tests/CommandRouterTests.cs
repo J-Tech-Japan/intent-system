@@ -117,6 +117,57 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentBridgeCommand_DispatchesToBridgeRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.reconstructed-concept.yaml"),
+            ReconstructedConceptArtifactYaml.Serialize(
+                new ReconstructedConceptArtifact
+                {
+                    DomainSlug = "auth",
+                    InitialGoal = "Reconstruct auth domain intent.",
+                    CandidateIntentNodes = [],
+                    CandidateUserContext = [],
+                    CandidateMeans = [],
+                    CandidateRules = [],
+                    CandidateSpecs = [],
+                    CandidateExecutionUnits = [],
+                    ConfidenceByAltitude = [],
+                    SourceConceptRefs = []
+                }));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.reconstructed-interview.md"),
+            GenerateFromCurrentReconstructionRenderer.RenderInterviewMarkdown(
+                "auth",
+                [],
+                [],
+                [],
+                [],
+                [],
+                ["Which missing intent detail should be clarified first for domain 'auth'?"],
+                [
+                    new ReconstructedBridgeQuestion
+                    {
+                        QuestionId = "iq-1",
+                        QuestionText = "Which missing intent detail should be clarified first for domain 'auth'?",
+                        Reason = "Clarify root-near intent before standard intake resumes.",
+                        Affects = ["auth"],
+                        BlockingOrNonblocking = "blocking"
+                    }
+                ],
+                [],
+                []));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["generate-from-current", "bridge", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Generate-from-current bridge processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenQueueListCommand_DispatchesToQueueRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
