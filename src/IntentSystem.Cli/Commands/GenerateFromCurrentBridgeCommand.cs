@@ -184,7 +184,7 @@ internal static class GenerateFromCurrentBridgeCommand
             Directory.Delete(interviewsRoot, recursive: true);
         }
 
-        if (reconstructedInterview.RecommendedFollowUpQuestions.Count == 0)
+        if (reconstructedInterview.BridgeQuestions.Count == 0)
         {
             return [];
         }
@@ -192,20 +192,19 @@ internal static class GenerateFromCurrentBridgeCommand
         Directory.CreateDirectory(interviewsRoot);
         var artifactPaths = new List<string>();
 
-        for (var index = 0; index < reconstructedInterview.RecommendedFollowUpQuestions.Count; index++)
+        for (var index = 0; index < reconstructedInterview.BridgeQuestions.Count; index++)
         {
-            var questionId = $"iq-{index + 1}";
-            var questionText = reconstructedInterview.RecommendedFollowUpQuestions[index];
+            var bridgeQuestion = reconstructedInterview.BridgeQuestions[index];
             var item = new InterviewQueueItem
             {
                 DomainSlug = domain,
                 SourceConceptRef = reconstructedConcept.SourceConceptRefs.FirstOrDefault()
                     ?? $"generate-from-current:{domain}",
-                QuestionId = questionId,
-                QuestionText = questionText,
-                Reason = ResolveReason(questionText),
-                Affects = [domain],
-                BlockingOrNonblocking = ResolveBlockingOrNonblocking(questionText),
+                QuestionId = bridgeQuestion.QuestionId,
+                QuestionText = bridgeQuestion.QuestionText,
+                Reason = bridgeQuestion.Reason,
+                Affects = bridgeQuestion.Affects,
+                BlockingOrNonblocking = bridgeQuestion.BlockingOrNonblocking,
                 Status = InterviewQueueItemStatus.Open,
                 ReturnToIntentPaths = reconstructedInterview.ReturnToIntentPaths,
                 CreatedAt = CreatedAtBase.AddMinutes(index),
@@ -213,8 +212,8 @@ internal static class GenerateFromCurrentBridgeCommand
                 RecommendedUpdates = recommendedUpdates
             };
 
-            var yamlPath = Path.Combine(interviewsRoot, $"{questionId}.yaml");
-            var markdownPath = Path.Combine(interviewsRoot, $"{questionId}.md");
+            var yamlPath = Path.Combine(interviewsRoot, $"{bridgeQuestion.QuestionId}.yaml");
+            var markdownPath = Path.Combine(interviewsRoot, $"{bridgeQuestion.QuestionId}.md");
             File.WriteAllText(yamlPath, InterviewArtifactYaml.Serialize(item));
             File.WriteAllText(
                 markdownPath,
@@ -283,25 +282,6 @@ internal static class GenerateFromCurrentBridgeCommand
         }
 
         lines.AddRange(values.Select(value => $"- {value}"));
-    }
-
-    private static string ResolveReason(string questionText)
-    {
-        if (questionText.StartsWith("What user-facing outcome", StringComparison.Ordinal)
-            || questionText.StartsWith("Which current rules or specs", StringComparison.Ordinal)
-            || questionText.StartsWith("Which missing intent detail", StringComparison.Ordinal))
-        {
-            return "Clarify root-near intent before standard intake resumes.";
-        }
-
-        return "Clarify execution-near detail before standard intake resumes.";
-    }
-
-    private static string ResolveBlockingOrNonblocking(string questionText)
-    {
-        return questionText.StartsWith("Which execution-ready change slice", StringComparison.Ordinal)
-            ? "nonblocking"
-            : "blocking";
     }
 
     private static string ToRelativePath(string repoRoot, string absolutePath)

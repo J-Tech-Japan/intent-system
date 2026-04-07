@@ -147,6 +147,16 @@ public sealed class CommandRouterTests
                 [],
                 [],
                 ["Which missing intent detail should be clarified first for domain 'auth'?"],
+                [
+                    new ReconstructedBridgeQuestion
+                    {
+                        QuestionId = "iq-1",
+                        QuestionText = "Which missing intent detail should be clarified first for domain 'auth'?",
+                        Reason = "Clarify root-near intent before standard intake resumes.",
+                        Affects = ["auth"],
+                        BlockingOrNonblocking = "blocking"
+                    }
+                ],
                 [],
                 []));
         using var writer = new StringWriter();

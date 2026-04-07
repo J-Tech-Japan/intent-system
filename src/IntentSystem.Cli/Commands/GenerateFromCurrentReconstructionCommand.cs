@@ -34,7 +34,8 @@ internal static class GenerateFromCurrentReconstructionCommand
         var executionUnits = BuildExecutionUnits(currentSources);
         var confidenceByAltitude = BuildConfidenceByAltitude(currentSources);
         var sourceConceptRefs = BuildSourceConceptRefs(currentSources);
-        var interviewQuestions = BuildInterviewQuestions(currentSources);
+        var bridgeQuestions = BuildBridgeQuestions(currentSources);
+        var interviewQuestions = bridgeQuestions.Select(question => question.QuestionText).ToArray();
         var returnToIntentPaths = BuildReturnToIntentPaths(context.RepoRoot, currentSources);
 
         var conceptArtifact = new ReconstructedConceptArtifact
@@ -65,6 +66,7 @@ internal static class GenerateFromCurrentReconstructionCommand
             confidenceByAltitude,
             sourceConceptRefs,
             interviewQuestions,
+            bridgeQuestions,
             returnToIntentPaths,
             currentSources.Gaps);
         var interviewArtifactPath = ReconstructedInterviewArtifactWriter.Write(context.RepoRoot, domain, interviewMarkdown);
@@ -252,33 +254,71 @@ internal static class GenerateFromCurrentReconstructionCommand
             .ToArray();
     }
 
-    private static IReadOnlyList<string> BuildInterviewQuestions(CurrentSourcesArtifact artifact)
+    private static IReadOnlyList<ReconstructedBridgeQuestion> BuildBridgeQuestions(CurrentSourcesArtifact artifact)
     {
-        var questions = new List<string>();
+        var questions = new List<ReconstructedBridgeQuestion>();
+        var nextQuestionNumber = 1;
 
         if (artifact.SelectedAltitudes.Contains("purpose", StringComparer.Ordinal)
             || artifact.SelectedAltitudes.Contains("user-context", StringComparer.Ordinal))
         {
-            questions.Add($"What user-facing outcome should '{artifact.DomainSlug}' prioritize based on the selected current signals?");
+            questions.Add(CreateBridgeQuestion(
+                artifact.DomainSlug,
+                nextQuestionNumber++,
+                $"What user-facing outcome should '{artifact.DomainSlug}' prioritize based on the selected current signals?",
+                "Clarify root-near intent before standard intake resumes.",
+                "blocking"));
         }
 
         if (artifact.SelectedAltitudes.Contains("rules", StringComparer.Ordinal)
             || artifact.SelectedAltitudes.Contains("specs", StringComparer.Ordinal))
         {
-            questions.Add("Which current rules or specs are mandatory versus historical context only?");
+            questions.Add(CreateBridgeQuestion(
+                artifact.DomainSlug,
+                nextQuestionNumber++,
+                "Which current rules or specs are mandatory versus historical context only?",
+                "Clarify root-near rule and spec expectations before standard intake resumes.",
+                "blocking"));
         }
 
         if (artifact.SelectedAltitudes.Contains("execution", StringComparer.Ordinal))
         {
-            questions.Add("Which execution-ready change slice should be cut first from the selected current paths?");
+            questions.Add(CreateBridgeQuestion(
+                artifact.DomainSlug,
+                nextQuestionNumber++,
+                "Which execution-ready change slice should be cut first from the selected current paths?",
+                "Clarify execution-near detail before standard intake resumes.",
+                "nonblocking"));
         }
 
         if (questions.Count == 0)
         {
-            questions.Add($"Which missing intent detail should be clarified first for domain '{artifact.DomainSlug}'?");
+            questions.Add(CreateBridgeQuestion(
+                artifact.DomainSlug,
+                nextQuestionNumber,
+                $"Which missing intent detail should be clarified first for domain '{artifact.DomainSlug}'?",
+                "Clarify root-near intent before standard intake resumes.",
+                "blocking"));
         }
 
         return questions;
+    }
+
+    private static ReconstructedBridgeQuestion CreateBridgeQuestion(
+        string domain,
+        int questionNumber,
+        string questionText,
+        string reason,
+        string blockingOrNonblocking)
+    {
+        return new ReconstructedBridgeQuestion
+        {
+            QuestionId = $"iq-{questionNumber}",
+            QuestionText = questionText,
+            Reason = reason,
+            Affects = [domain],
+            BlockingOrNonblocking = blockingOrNonblocking
+        };
     }
 
     private static IReadOnlyList<string> BuildReturnToIntentPaths(string repoRoot, CurrentSourcesArtifact artifact)

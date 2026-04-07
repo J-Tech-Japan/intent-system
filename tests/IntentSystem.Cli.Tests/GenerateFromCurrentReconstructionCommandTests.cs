@@ -90,6 +90,9 @@ public sealed class GenerateFromCurrentReconstructionCommandTests
         var interviewMarkdown = File.ReadAllText(interviewArtifactPath);
         Assert.Contains("# Reconstructed Interview", interviewMarkdown, StringComparison.Ordinal);
         Assert.Contains("recommended_follow_up_questions:", interviewMarkdown, StringComparison.Ordinal);
+        Assert.Contains("bridge_questions:", interviewMarkdown, StringComparison.Ordinal);
+        Assert.Contains("\"question_id\":\"iq-1\"", interviewMarkdown, StringComparison.Ordinal);
+        Assert.Contains("\"blocking_or_nonblocking\":\"blocking\"", interviewMarkdown, StringComparison.Ordinal);
         Assert.Contains("What user-facing outcome should 'auth' prioritize based on the selected current signals?", interviewMarkdown, StringComparison.Ordinal);
         Assert.Contains("Which execution-ready change slice should be cut first from the selected current paths?", interviewMarkdown, StringComparison.Ordinal);
         Assert.Contains("return_to_intent_paths:", interviewMarkdown, StringComparison.Ordinal);

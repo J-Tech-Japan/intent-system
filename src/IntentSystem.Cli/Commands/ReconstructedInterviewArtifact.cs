@@ -16,6 +16,8 @@ internal sealed record ReconstructedInterviewArtifact
 
     public required IReadOnlyList<string> RecommendedFollowUpQuestions { get; init; }
 
+    public required IReadOnlyList<ReconstructedBridgeQuestion> BridgeQuestions { get; init; }
+
     public required IReadOnlyList<string> ReturnToIntentPaths { get; init; }
 
     public required IReadOnlyList<string> Gaps { get; init; }

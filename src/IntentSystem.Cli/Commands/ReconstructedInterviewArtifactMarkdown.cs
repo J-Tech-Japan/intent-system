@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace IntentSystem.Cli.Commands;
 
 internal static class ReconstructedInterviewArtifactMarkdown
@@ -10,6 +12,7 @@ internal static class ReconstructedInterviewArtifactMarkdown
         "confidence_by_altitude",
         "source_concept_refs",
         "recommended_follow_up_questions",
+        "bridge_questions",
         "return_to_intent_paths",
         "gaps"
     ];
@@ -108,8 +111,39 @@ internal static class ReconstructedInterviewArtifactMarkdown
             ConfidenceByAltitude = sections["confidence_by_altitude"].ToArray(),
             SourceConceptRefs = sections["source_concept_refs"].ToArray(),
             RecommendedFollowUpQuestions = sections["recommended_follow_up_questions"].ToArray(),
+            BridgeQuestions = sections["bridge_questions"].Select(ParseBridgeQuestion).ToArray(),
             ReturnToIntentPaths = sections["return_to_intent_paths"].ToArray(),
             Gaps = sections["gaps"].ToArray()
         };
+    }
+
+    private static ReconstructedBridgeQuestion ParseBridgeQuestion(string value)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            var root = document.RootElement;
+            var affectsElement = root.GetProperty("affects");
+
+            return new ReconstructedBridgeQuestion
+            {
+                QuestionId = root.GetProperty("question_id").GetString()
+                    ?? throw new InvalidOperationException("Bridge question must contain question_id."),
+                QuestionText = root.GetProperty("question_text").GetString()
+                    ?? throw new InvalidOperationException("Bridge question must contain question_text."),
+                Reason = root.GetProperty("reason").GetString()
+                    ?? throw new InvalidOperationException("Bridge question must contain reason."),
+                Affects = affectsElement.EnumerateArray()
+                    .Select(element => element.GetString()
+                        ?? throw new InvalidOperationException("Bridge question affects entries must be strings."))
+                    .ToArray(),
+                BlockingOrNonblocking = root.GetProperty("blocking_or_nonblocking").GetString()
+                    ?? throw new InvalidOperationException("Bridge question must contain blocking_or_nonblocking.")
+            };
+        }
+        catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            throw new InvalidOperationException("Reconstructed interview artifact bridge_questions entries must be valid JSON objects.", exception);
+        }
     }
 }

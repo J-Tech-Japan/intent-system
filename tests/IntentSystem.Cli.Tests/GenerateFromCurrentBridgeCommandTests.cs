@@ -33,19 +33,45 @@ public sealed class GenerateFromCurrentBridgeCommandTests
                 }));
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "intake", "auth.reconstructed-interview.md"),
-            GenerateFromCurrentReconstructionRenderer.RenderInterviewMarkdown(
-                "auth",
-                ["purpose", "execution"],
-                ["Clarify the auth domain mission."],
-                ["Inspect OAuth entry points."],
-                ["purpose: medium", "execution: high"],
-                ["issue:114 https://github.com/J-Tech-Japan/intent-system/issues/114 [G44] Generate From Current"],
-                [
-                    "What user-facing outcome should 'auth' prioritize based on the selected current signals?",
-                    "Which execution-ready change slice should be cut first from the selected current paths?"
-                ],
-                ["README.md", "AGENTS.md"],
-                ["Need stronger auth purpose signal."]));
+            """
+            # Reconstructed Interview
+
+            ## Domain
+
+            `auth`
+
+            selected_altitudes:
+            - purpose
+            - execution
+
+            root_near_intent_candidates:
+            - Clarify the auth domain mission.
+
+            execution_near_update_candidates:
+            - Inspect OAuth entry points.
+
+            confidence_by_altitude:
+            - purpose: medium
+            - execution: high
+
+            source_concept_refs:
+            - issue:114 https://github.com/J-Tech-Japan/intent-system/issues/114 [G44] Generate From Current
+
+            recommended_follow_up_questions:
+            - Arbitrary text for the first bridge question.
+            - Arbitrary text for the second bridge question.
+
+            bridge_questions:
+            - {"question_id":"iq-root","question_text":"Arbitrary text for the first bridge question.","reason":"Clarify root-near intent before standard intake resumes.","affects":["auth"],"blocking_or_nonblocking":"blocking"}
+            - {"question_id":"iq-exec","question_text":"Arbitrary text for the second bridge question.","reason":"Clarify execution-near detail before standard intake resumes.","affects":["oauth"],"blocking_or_nonblocking":"nonblocking"}
+
+            return_to_intent_paths:
+            - README.md
+            - AGENTS.md
+
+            gaps:
+            - Need stronger auth purpose signal.
+            """);
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "interviews", "auth", "stale.yaml"),
             "stale");
@@ -60,8 +86,8 @@ public sealed class GenerateFromCurrentBridgeCommandTests
         var output = writer.ToString();
         Assert.Contains("Generate-from-current bridge processed for domain 'auth'.", output, StringComparison.Ordinal);
         Assert.Contains("Generated concept artifact: .intent-cli/intake/auth.concept.yaml", output, StringComparison.Ordinal);
-        Assert.Contains(".intent-cli/interviews/auth/iq-1.yaml", output, StringComparison.Ordinal);
-        Assert.Contains(".intent-cli/interviews/auth/iq-2.md", output, StringComparison.Ordinal);
+        Assert.Contains(".intent-cli/interviews/auth/iq-root.yaml", output, StringComparison.Ordinal);
+        Assert.Contains(".intent-cli/interviews/auth/iq-exec.md", output, StringComparison.Ordinal);
         Assert.Contains("Recommended updates:", output, StringComparison.Ordinal);
         Assert.Contains("- Clarify the auth domain mission.", output, StringComparison.Ordinal);
         Assert.Contains("- Inspect OAuth entry points.", output, StringComparison.Ordinal);
@@ -85,24 +111,27 @@ public sealed class GenerateFromCurrentBridgeCommandTests
         Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "interviews", "billing", "iq-1.yaml")));
 
         var firstInterview = InterviewArtifactYaml.Deserialize(File.ReadAllText(
-            Path.Combine(repoRoot, ".intent-cli", "interviews", "auth", "iq-1.yaml")));
-        Assert.Equal("iq-1", firstInterview.QuestionId);
+            Path.Combine(repoRoot, ".intent-cli", "interviews", "auth", "iq-root.yaml")));
+        Assert.Equal("iq-root", firstInterview.QuestionId);
         Assert.Equal("blocking", firstInterview.BlockingOrNonblocking);
         Assert.Equal("Clarify root-near intent before standard intake resumes.", firstInterview.Reason);
         Assert.Equal(DateTimeOffset.Parse("2026-01-01T00:00:00Z"), firstInterview.CreatedAt);
         Assert.Equal(["auth"], firstInterview.Affects);
+        Assert.Equal("Arbitrary text for the first bridge question.", firstInterview.QuestionText);
         Assert.Equal(
             ["Clarify the auth domain mission.", "Inspect OAuth entry points."],
             firstInterview.RecommendedUpdates);
 
         var secondInterview = InterviewArtifactYaml.Deserialize(File.ReadAllText(
-            Path.Combine(repoRoot, ".intent-cli", "interviews", "auth", "iq-2.yaml")));
-        Assert.Equal("iq-2", secondInterview.QuestionId);
+            Path.Combine(repoRoot, ".intent-cli", "interviews", "auth", "iq-exec.yaml")));
+        Assert.Equal("iq-exec", secondInterview.QuestionId);
         Assert.Equal("nonblocking", secondInterview.BlockingOrNonblocking);
         Assert.Equal("Clarify execution-near detail before standard intake resumes.", secondInterview.Reason);
         Assert.Equal(DateTimeOffset.Parse("2026-01-01T00:01:00Z"), secondInterview.CreatedAt);
+        Assert.Equal(["oauth"], secondInterview.Affects);
+        Assert.Equal("Arbitrary text for the second bridge question.", secondInterview.QuestionText);
 
-        var interviewMarkdown = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "interviews", "auth", "iq-1.md"));
+        var interviewMarkdown = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "interviews", "auth", "iq-root.md"));
         Assert.Contains("# Interview Question", interviewMarkdown, StringComparison.Ordinal);
         Assert.Contains("recommended_updates:", interviewMarkdown, StringComparison.Ordinal);
         Assert.Contains("gaps:", interviewMarkdown, StringComparison.Ordinal);
@@ -133,6 +162,7 @@ public sealed class GenerateFromCurrentBridgeCommandTests
             Path.Combine("repo", ".intent-cli", "intake", "auth.reconstructed-interview.md"),
             GenerateFromCurrentReconstructionRenderer.RenderInterviewMarkdown(
                 "auth",
+                [],
                 [],
                 [],
                 [],

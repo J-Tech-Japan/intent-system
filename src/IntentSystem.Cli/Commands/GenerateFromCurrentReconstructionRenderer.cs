@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace IntentSystem.Cli.Commands;
 
 internal static class GenerateFromCurrentReconstructionRenderer
@@ -10,6 +12,7 @@ internal static class GenerateFromCurrentReconstructionRenderer
         IReadOnlyList<string> confidenceByAltitude,
         IReadOnlyList<string> sourceConceptRefs,
         IReadOnlyList<string> recommendedFollowUpQuestions,
+        IReadOnlyList<ReconstructedBridgeQuestion> bridgeQuestions,
         IReadOnlyList<string> returnToIntentPaths,
         IReadOnlyList<string> gaps)
     {
@@ -29,6 +32,7 @@ internal static class GenerateFromCurrentReconstructionRenderer
         AppendSection(lines, "confidence_by_altitude", confidenceByAltitude);
         AppendSection(lines, "source_concept_refs", sourceConceptRefs);
         AppendSection(lines, "recommended_follow_up_questions", recommendedFollowUpQuestions);
+        AppendJsonSection(lines, "bridge_questions", bridgeQuestions.Select(SerializeBridgeQuestion).ToArray());
         AppendSection(lines, "return_to_intent_paths", returnToIntentPaths);
         AppendSection(lines, "gaps", gaps);
 
@@ -76,6 +80,21 @@ internal static class GenerateFromCurrentReconstructionRenderer
         lines.Add(string.Empty);
     }
 
+    private static void AppendJsonSection(List<string> lines, string title, IReadOnlyList<string> values)
+    {
+        lines.Add($"{title}:");
+        if (values.Count == 0)
+        {
+            lines.Add("- none");
+        }
+        else
+        {
+            lines.AddRange(values.Select(value => $"- {value}"));
+        }
+
+        lines.Add(string.Empty);
+    }
+
     private static void WriteList(TextWriter writer, IReadOnlyList<string> values)
     {
         if (values.Count == 0)
@@ -88,5 +107,18 @@ internal static class GenerateFromCurrentReconstructionRenderer
         {
             writer.WriteLine($"- {value}");
         }
+    }
+
+    private static string SerializeBridgeQuestion(ReconstructedBridgeQuestion question)
+    {
+        return JsonSerializer.Serialize(
+            new
+            {
+                question_id = question.QuestionId,
+                question_text = question.QuestionText,
+                reason = question.Reason,
+                affects = question.Affects,
+                blocking_or_nonblocking = question.BlockingOrNonblocking
+            });
     }
 }

@@ -15,6 +15,16 @@ public sealed class ReconstructedInterviewArtifactMarkdownTests
             ["purpose: medium"],
             ["issue:114 https://github.com/J-Tech-Japan/intent-system/issues/114 [G44] Generate From Current"],
             ["Which execution-ready change slice should be cut first from the selected current paths?"],
+            [
+                new ReconstructedBridgeQuestion
+                {
+                    QuestionId = "iq-1",
+                    QuestionText = "Which execution-ready change slice should be cut first from the selected current paths?",
+                    Reason = "Clarify execution-near detail before standard intake resumes.",
+                    Affects = ["auth"],
+                    BlockingOrNonblocking = "nonblocking"
+                }
+            ],
             ["README.md"],
             ["Need stronger auth purpose signal."]);
 
@@ -27,6 +37,10 @@ public sealed class ReconstructedInterviewArtifactMarkdownTests
         Assert.Equal(
             ["Which execution-ready change slice should be cut first from the selected current paths?"],
             artifact.RecommendedFollowUpQuestions);
+        Assert.Single(artifact.BridgeQuestions);
+        Assert.Equal("iq-1", artifact.BridgeQuestions[0].QuestionId);
+        Assert.Equal("Clarify execution-near detail before standard intake resumes.", artifact.BridgeQuestions[0].Reason);
+        Assert.Equal("nonblocking", artifact.BridgeQuestions[0].BlockingOrNonblocking);
         Assert.Equal(["README.md"], artifact.ReturnToIntentPaths);
         Assert.Equal(["Need stronger auth purpose signal."], artifact.Gaps);
     }
