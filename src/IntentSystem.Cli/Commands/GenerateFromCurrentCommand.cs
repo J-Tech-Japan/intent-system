@@ -100,6 +100,12 @@ internal static class GenerateFromCurrentCommand
         }
 
         if (args.Length > 0
+            && string.Equals(args[0], "confirm", StringComparison.Ordinal))
+        {
+            return GenerateFromCurrentConfirmCommand.Execute(context, args[1..], writer);
+        }
+
+        if (args.Length > 0
             && string.Equals(args[0], "best-practice", StringComparison.Ordinal))
         {
             return GenerateFromCurrentBestPracticeCommand.Execute(context, args[1..], writer);
