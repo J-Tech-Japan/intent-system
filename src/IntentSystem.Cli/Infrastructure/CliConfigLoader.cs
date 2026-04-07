@@ -51,9 +51,11 @@ internal static class CliConfigLoader
 
         var worktreeRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.WorktreeRootKey)
             ?? CliRuntimeContracts.DefaultWorktreeRoot;
+        var parentIntentRepoRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.ParentIntentRepoRootKey)
+            ?? string.Empty;
         var roles = ReadRoles(rootTable);
 
-        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot, roles);
+        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot, parentIntentRepoRoot, roles);
         return true;
     }
 
@@ -78,9 +80,11 @@ internal static class CliConfigLoader
 
         var worktreeRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.WorktreeRootKey)
             ?? CliRuntimeContracts.DefaultWorktreeRoot;
+        var parentIntentRepoRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.ParentIntentRepoRootKey)
+            ?? string.Empty;
         var roles = ReadRoles(rootTable);
 
-        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot, roles);
+        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot, parentIntentRepoRoot, roles);
         return true;
     }
 
@@ -89,6 +93,7 @@ internal static class CliConfigLoader
         string workflowEngine,
         string artifactRoot,
         string worktreeRoot,
+        string parentIntentRepoRoot,
         RoleMappings roles)
     {
         return new CliConfig
@@ -98,7 +103,8 @@ internal static class CliConfigLoader
                 Domain = domain,
                 WorkflowEngine = workflowEngine,
                 ArtifactRoot = artifactRoot,
-                WorktreeRoot = worktreeRoot
+                WorktreeRoot = worktreeRoot,
+                ParentIntentRepoRoot = parentIntentRepoRoot
             },
             Roles = roles
         };

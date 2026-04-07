@@ -16,6 +16,8 @@ internal sealed record ProjectConfig
     public required string ArtifactRoot { get; init; }
 
     public string WorktreeRoot { get; init; } = ".intent-cli/worktrees";
+
+    public string ParentIntentRepoRoot { get; init; } = string.Empty;
 }
 
 internal sealed record RoleMappings

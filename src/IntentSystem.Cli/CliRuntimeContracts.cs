@@ -12,6 +12,7 @@ internal static class CliRuntimeContracts
     public const string WorkflowEngineKey = "workflow_engine";
     public const string ArtifactRootKey = "artifact_root";
     public const string WorktreeRootKey = "worktree_root";
+    public const string ParentIntentRepoRootKey = "parent_intent_repo_root";
     public const string RolesSectionName = "roles";
     public const string ImplementRoleKey = "implement";
     public const string ReviewRoleKey = "review";
