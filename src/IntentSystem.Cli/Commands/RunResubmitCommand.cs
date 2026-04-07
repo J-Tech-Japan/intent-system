@@ -25,94 +25,13 @@ internal static class RunResubmitCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
-        {
-            return 1;
-        }
-
-        var executionUnit = args[0];
-        var queueItem = queueState.Items.FirstOrDefault(item =>
-            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
-
-        if (queueItem is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
-        }
-
-        if (queueItem.State is not QueueItemState.Fixing)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' must be fixing before run resubmit.");
-            return 1;
-        }
-
-        if (queueItem.LinkedIssue is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' must have a linked issue before run resubmit.");
-            return 1;
-        }
-
-        var packetPath = Path.Combine(
-            context.RepoRoot,
-            queueItem.PacketPaths.Yaml.Replace('/', Path.DirectorySeparatorChar));
-        if (!File.Exists(packetPath))
-        {
-            writer.WriteLine($"Projection packet artifact was not found at {packetPath}");
-            return 1;
-        }
-
-        var runLogPath = context.GetRunLogPath();
-        if (!File.Exists(runLogPath))
-        {
-            writer.WriteLine($"Run log was not found at {runLogPath}");
-            return 1;
-        }
-
         try
         {
-            var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
-            var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
-            if (string.IsNullOrWhiteSpace(childRepoRef))
-            {
-                throw new InvalidOperationException("Projection packet must contain a target repo.");
-            }
-
-            var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
-            if (!Directory.Exists(childRepoPath))
-            {
-                throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
-            }
-
-            var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
-            if (!Directory.Exists(worktreePath))
-            {
-                throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
-            }
-
-            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
-            var linkedPr = LatestLinkedPrResolver.Resolve(runEvents, executionUnit);
-
-            var branchName = RunStartCommand.ResolveBranchName(executionUnit, queueItem.LinkedIssue);
-            var gitRunner = GitCommandRunnerFactory();
-            EnsureBranchMatches(worktreePath, branchName, gitRunner);
-            PushBranch(worktreePath, branchName, gitRunner);
-
-            PersistRunEvent(
-                runLogPath,
-                new RunEvent
-                {
-                    Ts = TimestampFactory(),
-                    ExecutionUnit = executionUnit,
-                    Event = "resubmitted",
-                    By = EventActor,
-                    LinkedPr = linkedPr
-                });
-
-            writer.WriteLine($"Run resubmitted for {executionUnit}.");
-            writer.WriteLine($"Branch: {branchName}");
-            writer.WriteLine($"Worktree path: {worktreePath}");
-            writer.WriteLine($"Latest linked PR: {linkedPr}");
+            var result = ExecuteCore(context, args[0]);
+            writer.WriteLine($"Run resubmitted for {result.ExecutionUnit}.");
+            writer.WriteLine($"Branch: {result.Branch}");
+            writer.WriteLine($"Worktree path: {result.WorktreePath}");
+            writer.WriteLine($"Latest linked PR: {result.LinkedPr}");
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -120,6 +39,97 @@ internal static class RunResubmitCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static RunResubmitResult ExecuteCore(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
+        var queueItem = queueState.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+        if (queueItem is null)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
+        }
+
+        if (queueItem.State is not QueueItemState.Fixing)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' must be fixing before run resubmit.");
+        }
+
+        if (queueItem.LinkedIssue is null)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' must have a linked issue before run resubmit.");
+        }
+
+        var packetPath = Path.Combine(
+            context.RepoRoot,
+            queueItem.PacketPaths.Yaml.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(packetPath))
+        {
+            throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
+        }
+
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            throw new InvalidOperationException($"Run log was not found at {runLogPath}");
+        }
+
+        var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
+        var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
+        if (string.IsNullOrWhiteSpace(childRepoRef))
+        {
+            throw new InvalidOperationException("Projection packet must contain a target repo.");
+        }
+
+        var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
+        if (!Directory.Exists(childRepoPath))
+        {
+            throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
+        }
+
+        var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
+        if (!Directory.Exists(worktreePath))
+        {
+            throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
+        }
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        var linkedPr = LatestLinkedPrResolver.Resolve(runEvents, executionUnit);
+
+        var branchName = RunStartCommand.ResolveBranchName(executionUnit, queueItem.LinkedIssue);
+        var gitRunner = GitCommandRunnerFactory();
+        EnsureBranchMatches(worktreePath, branchName, gitRunner);
+        PushBranch(worktreePath, branchName, gitRunner);
+
+        PersistRunEvent(
+            runLogPath,
+            new RunEvent
+            {
+                Ts = TimestampFactory(),
+                ExecutionUnit = executionUnit,
+                Event = "resubmitted",
+                By = EventActor,
+                LinkedPr = linkedPr
+            });
+
+        return new RunResubmitResult
+        {
+            ExecutionUnit = executionUnit,
+            Branch = branchName,
+            WorktreePath = worktreePath,
+            LinkedPr = linkedPr
+        };
     }
 
     private static string ResolveChildRepoPath(string repoRoot, string childRepoRef)
