@@ -63,4 +63,47 @@ public sealed class ReconstructedInterviewArtifactMarkdownTests
 
         Assert.Contains("root_near_intent_candidates", exception.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Deserialize_GivenMismatchedQuestionSets_Throws()
+    {
+        const string markdown = """
+            # Reconstructed Interview
+
+            ## Domain
+
+            `auth`
+
+            selected_altitudes:
+            - purpose
+
+            root_near_intent_candidates:
+            - Clarify the auth domain mission.
+
+            execution_near_update_candidates:
+            - none
+
+            confidence_by_altitude:
+            - purpose: medium
+
+            source_concept_refs:
+            - issue:114 https://github.com/J-Tech-Japan/intent-system/issues/114 [G44] Generate From Current
+
+            recommended_follow_up_questions:
+            - Human-facing question text.
+
+            bridge_questions:
+            - {"question_id":"iq-1","question_text":"Different bridge question text.","reason":"Clarify root-near intent before standard intake resumes.","affects":["auth"],"blocking_or_nonblocking":"blocking"}
+
+            return_to_intent_paths:
+            - README.md
+
+            gaps:
+            - none
+            """;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => ReconstructedInterviewArtifactMarkdown.Deserialize(markdown));
+
+        Assert.Contains("aligned one-to-one", exception.Message, StringComparison.Ordinal);
+    }
 }

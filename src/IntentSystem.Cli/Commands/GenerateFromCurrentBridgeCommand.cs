@@ -137,6 +137,7 @@ internal static class GenerateFromCurrentBridgeCommand
                 .OrderBy(value => value, StringComparer.Ordinal)
                 .ToArray(),
             KnownUnknowns = reconstructedInterview.RecommendedFollowUpQuestions
+                .Concat(reconstructedInterview.BridgeQuestions.Select(question => question.QuestionText))
                 .Concat(reconstructedInterview.Gaps)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(value => value, StringComparer.Ordinal)
@@ -161,7 +162,10 @@ internal static class GenerateFromCurrentBridgeCommand
         AppendSection(lines, "candidate_execution_units", reconstructedConcept.CandidateExecutionUnits);
         AppendSection(lines, "confidence_by_altitude", reconstructedConcept.ConfidenceByAltitude);
         AppendSection(lines, "source_concept_refs", reconstructedConcept.SourceConceptRefs);
-        AppendSection(lines, "recommended_follow_up_questions", reconstructedInterview.RecommendedFollowUpQuestions);
+        AppendSection(
+            lines,
+            "recommended_follow_up_questions",
+            reconstructedInterview.BridgeQuestions.Select(question => question.QuestionText).ToArray());
 
         return string.Join(Environment.NewLine, lines);
     }

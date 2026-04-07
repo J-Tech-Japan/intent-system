@@ -212,6 +212,71 @@ public sealed class GenerateFromCurrentBridgeCommandTests
         Assert.Contains("Reconstructed interview artifact was not found", writer.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_GivenConflictingReconstructedInterviewQuestions_ReturnsExitCodeOne()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.reconstructed-concept.yaml"),
+            ReconstructedConceptArtifactYaml.Serialize(
+                new ReconstructedConceptArtifact
+                {
+                    DomainSlug = "auth",
+                    InitialGoal = "Reconstruct auth domain intent.",
+                    CandidateIntentNodes = [],
+                    CandidateUserContext = [],
+                    CandidateMeans = [],
+                    CandidateRules = [],
+                    CandidateSpecs = [],
+                    CandidateExecutionUnits = [],
+                    ConfidenceByAltitude = [],
+                    SourceConceptRefs = []
+                }));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.reconstructed-interview.md"),
+            """
+            # Reconstructed Interview
+
+            ## Domain
+
+            `auth`
+
+            selected_altitudes:
+            - purpose
+
+            root_near_intent_candidates:
+            - Clarify the auth domain mission.
+
+            execution_near_update_candidates:
+            - none
+
+            confidence_by_altitude:
+            - purpose: medium
+
+            source_concept_refs:
+            - issue:114 https://github.com/J-Tech-Japan/intent-system/issues/114 [G44] Generate From Current
+
+            recommended_follow_up_questions:
+            - Human-facing question text.
+
+            bridge_questions:
+            - {"question_id":"iq-1","question_text":"Different bridge question text.","reason":"Clarify root-near intent before standard intake resumes.","affects":["auth"],"blocking_or_nonblocking":"blocking"}
+
+            return_to_intent_paths:
+            - README.md
+
+            gaps:
+            - none
+            """);
+        using var writer = new StringWriter();
+
+        var exitCode = GenerateFromCurrentCommand.Execute(CreateContext(repoRoot), ["bridge", "auth"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("aligned one-to-one", writer.ToString(), StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext

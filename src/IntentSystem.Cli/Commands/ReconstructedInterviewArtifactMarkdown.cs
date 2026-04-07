@@ -114,7 +114,9 @@ internal static class ReconstructedInterviewArtifactMarkdown
             BridgeQuestions = sections["bridge_questions"].Select(ParseBridgeQuestion).ToArray(),
             ReturnToIntentPaths = sections["return_to_intent_paths"].ToArray(),
             Gaps = sections["gaps"].ToArray()
-        };
+        } is var artifact
+            ? ValidateQuestionConsistency(artifact)
+            : throw new InvalidOperationException("Unreachable reconstructed interview artifact state.");
     }
 
     private static ReconstructedBridgeQuestion ParseBridgeQuestion(string value)
@@ -145,5 +147,28 @@ internal static class ReconstructedInterviewArtifactMarkdown
         {
             throw new InvalidOperationException("Reconstructed interview artifact bridge_questions entries must be valid JSON objects.", exception);
         }
+    }
+
+    private static ReconstructedInterviewArtifact ValidateQuestionConsistency(ReconstructedInterviewArtifact artifact)
+    {
+        if (artifact.RecommendedFollowUpQuestions.Count != artifact.BridgeQuestions.Count)
+        {
+            throw new InvalidOperationException(
+                "Reconstructed interview artifact must keep recommended_follow_up_questions and bridge_questions aligned one-to-one.");
+        }
+
+        for (var index = 0; index < artifact.RecommendedFollowUpQuestions.Count; index++)
+        {
+            if (!string.Equals(
+                artifact.RecommendedFollowUpQuestions[index],
+                artifact.BridgeQuestions[index].QuestionText,
+                StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Reconstructed interview artifact must keep recommended_follow_up_questions and bridge_questions question_text values aligned one-to-one.");
+            }
+        }
+
+        return artifact;
     }
 }
