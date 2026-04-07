@@ -407,6 +407,7 @@ internal static class GenerateFromCurrentCommand
             sourceRefs.Add($"issue:{issueNumber} {url} {title}");
             samplingNotes.Add(
                 $"issue:{issueNumber} state={root.GetProperty("state").GetString()} body={SummarizeText(body)} comments={comments}");
+            AppendIssueCommentSignals(issueNumber, root, sourceRefs, samplingNotes);
             if (string.IsNullOrWhiteSpace(body) && comments == 0)
             {
                 gaps.Add($"Issue {issueNumber} has sparse signal.");
@@ -455,6 +456,8 @@ internal static class GenerateFromCurrentCommand
             sourceRefs.Add($"pr:{pullNumber} {url} {title}");
             samplingNotes.Add(
                 $"pr:{pullNumber} state={root.GetProperty("state").GetString()} merge_state={root.GetProperty("mergeStateStatus").GetString()} body={SummarizeText(body)} comments={comments} reviews={reviews}");
+            AppendPullRequestCommentSignals(pullNumber, root, sourceRefs, samplingNotes);
+            AppendPullRequestReviewSignals(pullNumber, root, sourceRefs, samplingNotes);
             if (string.IsNullOrWhiteSpace(body) && comments == 0 && reviews == 0)
             {
                 gaps.Add($"PR {pullNumber} has sparse signal.");
@@ -508,6 +511,103 @@ internal static class GenerateFromCurrentCommand
         }
 
         return result;
+    }
+
+    private static void AppendIssueCommentSignals(
+        int issueNumber,
+        JsonElement issue,
+        List<string> sourceRefs,
+        List<string> samplingNotes)
+    {
+        if (!issue.TryGetProperty("comments", out var commentsElement)
+            || commentsElement.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var commentIndex = 0;
+        foreach (var comment in commentsElement.EnumerateArray())
+        {
+            var body = GetOptionalText(comment, "body");
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                continue;
+            }
+
+            commentIndex++;
+            var summary = SummarizeText(body);
+            sourceRefs.Add($"issue-comment:{issueNumber}#{commentIndex} {summary}");
+            samplingNotes.Add($"issue-comment:{issueNumber}#{commentIndex} body={summary}");
+        }
+    }
+
+    private static void AppendPullRequestCommentSignals(
+        int pullNumber,
+        JsonElement pullRequest,
+        List<string> sourceRefs,
+        List<string> samplingNotes)
+    {
+        if (!pullRequest.TryGetProperty("comments", out var commentsElement)
+            || commentsElement.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var commentIndex = 0;
+        foreach (var comment in commentsElement.EnumerateArray())
+        {
+            var body = GetOptionalText(comment, "body");
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                continue;
+            }
+
+            commentIndex++;
+            var summary = SummarizeText(body);
+            sourceRefs.Add($"pr-comment:{pullNumber}#{commentIndex} {summary}");
+            samplingNotes.Add($"pr-comment:{pullNumber}#{commentIndex} body={summary}");
+        }
+    }
+
+    private static void AppendPullRequestReviewSignals(
+        int pullNumber,
+        JsonElement pullRequest,
+        List<string> sourceRefs,
+        List<string> samplingNotes)
+    {
+        if (!pullRequest.TryGetProperty("reviews", out var reviewsElement)
+            || reviewsElement.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var reviewIndex = 0;
+        foreach (var review in reviewsElement.EnumerateArray())
+        {
+            var body = GetOptionalText(review, "body");
+            var state = GetOptionalText(review, "state");
+            if (string.IsNullOrWhiteSpace(body) && string.IsNullOrWhiteSpace(state))
+            {
+                continue;
+            }
+
+            reviewIndex++;
+            var summary = string.IsNullOrWhiteSpace(body) ? "none" : SummarizeText(body);
+            var normalizedState = string.IsNullOrWhiteSpace(state) ? "unknown" : state;
+            sourceRefs.Add($"pr-review:{pullNumber}#{reviewIndex} state={normalizedState} {summary}");
+            samplingNotes.Add($"pr-review:{pullNumber}#{reviewIndex} state={normalizedState} body={summary}");
+        }
+    }
+
+    private static string? GetOptionalText(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property)
+            || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return property.GetString();
     }
 
     private static IEnumerable<string> EnumerateEligibleFiles(string absolutePath, string repoRoot)

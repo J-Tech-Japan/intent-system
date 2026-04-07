@@ -44,8 +44,14 @@ public sealed class GenerateFromCurrentCommandTests
             Assert.Contains("- src/feature/FeatureB.cs", output, StringComparison.Ordinal);
             Assert.DoesNotContain("FeatureC.cs", output, StringComparison.Ordinal);
             Assert.Contains("- issue:114 https://github.com/J-Tech-Japan/intent-system/issues/114 [G44] Generate From Current", output, StringComparison.Ordinal);
+            Assert.Contains("- issue-comment:114#1 Need deterministic output.", output, StringComparison.Ordinal);
             Assert.Contains("- pr:113 https://github.com/J-Tech-Japan/intent-system/pull/113 [codex] Add intake activate command", output, StringComparison.Ordinal);
+            Assert.Contains("- pr-comment:113#1 Looks good.", output, StringComparison.Ordinal);
+            Assert.Contains("- pr-review:113#1 state=COMMENTED Scope stayed thin.", output, StringComparison.Ordinal);
             Assert.Contains("code scope truncated to first 2 files out of 3 eligible files", output, StringComparison.Ordinal);
+            Assert.Contains("issue-comment:114#1 body=Need deterministic output.", output, StringComparison.Ordinal);
+            Assert.Contains("pr-comment:113#1 body=Looks good.", output, StringComparison.Ordinal);
+            Assert.Contains("pr-review:113#1 state=COMMENTED body=Scope stayed thin.", output, StringComparison.Ordinal);
 
             var artifactPath = Path.Combine(repoRoot, ".intent-cli", "intake", "auth.current-sources.yaml");
             Assert.True(File.Exists(artifactPath));
@@ -66,7 +72,13 @@ public sealed class GenerateFromCurrentCommandTests
                 ],
                 artifact.SelectedPaths);
             Assert.Contains("issue:114 https://github.com/J-Tech-Japan/intent-system/issues/114 [G44] Generate From Current", artifact.SourceRefs, StringComparer.Ordinal);
+            Assert.Contains("issue-comment:114#1 Need deterministic output.", artifact.SourceRefs, StringComparer.Ordinal);
             Assert.Contains("pr:113 https://github.com/J-Tech-Japan/intent-system/pull/113 [codex] Add intake activate command", artifact.SourceRefs, StringComparer.Ordinal);
+            Assert.Contains("pr-comment:113#1 Looks good.", artifact.SourceRefs, StringComparer.Ordinal);
+            Assert.Contains("pr-review:113#1 state=COMMENTED Scope stayed thin.", artifact.SourceRefs, StringComparer.Ordinal);
+            Assert.Contains("issue-comment:114#1 body=Need deterministic output.", artifact.SamplingNotes, StringComparer.Ordinal);
+            Assert.Contains("pr-comment:113#1 body=Looks good.", artifact.SamplingNotes, StringComparer.Ordinal);
+            Assert.Contains("pr-review:113#1 state=COMMENTED body=Scope stayed thin.", artifact.SamplingNotes, StringComparer.Ordinal);
             Assert.DoesNotContain(artifact.Gaps, gap => gap.Contains("sparse signal", StringComparison.Ordinal));
         }
         finally
@@ -115,7 +127,7 @@ public sealed class GenerateFromCurrentCommandTests
 
             if (arguments.SequenceEqual(["pr", "view", "113", "--comments", "--json", "number,title,body,url,state,isDraft,mergeStateStatus,comments,reviews"]))
             {
-                return Success("""{"number":113,"title":"[codex] Add intake activate command","body":"Adds intake activate.","url":"https://github.com/J-Tech-Japan/intent-system/pull/113","state":"OPEN","isDraft":true,"mergeStateStatus":"CLEAN","comments":[{"body":"Looks good."}],"reviews":[{"state":"COMMENTED"}]}""");
+                return Success("""{"number":113,"title":"[codex] Add intake activate command","body":"Adds intake activate.","url":"https://github.com/J-Tech-Japan/intent-system/pull/113","state":"OPEN","isDraft":true,"mergeStateStatus":"CLEAN","comments":[{"body":"Looks good."}],"reviews":[{"state":"COMMENTED","body":"Scope stayed thin."}]}""");
             }
 
             throw new InvalidOperationException($"Unexpected gh arguments: {string.Join(' ', arguments)}");
