@@ -88,14 +88,14 @@ public sealed class GenerateFromCurrentCommandTests
     }
 
     [Fact]
-    public void Execute_GivenMissingFromPath_ReturnsExitCodeOne()
+    public void Execute_GivenSourceBundleModeWithoutFromPathValue_ReturnsExitCodeOne()
     {
         using var writer = new StringWriter();
 
-        var exitCode = GenerateFromCurrentCommand.Execute(CreateContext("/tmp/intent-system"), ["auth"], writer);
+        var exitCode = GenerateFromCurrentCommand.Execute(CreateContext("/tmp/intent-system"), ["auth", "--from-path"], writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("--from-path", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--from-path requires a value", writer.ToString(), StringComparison.Ordinal);
     }
 
     private static CliContext CreateContext(string repoRoot)
