@@ -28,66 +28,10 @@ internal static class ReviewAcceptCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
-        {
-            return 1;
-        }
-
-        var executionUnit = args[0];
-        var queueItem = queueState.Items.FirstOrDefault(item =>
-            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
-
-        if (queueItem is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
-        }
-
-        var runLogPath = context.GetRunLogPath();
-        if (!File.Exists(runLogPath))
-        {
-            writer.WriteLine($"Run log was not found at {runLogPath}");
-            return 1;
-        }
-
-        var packetPath = Path.Combine(
-            context.RepoRoot,
-            queueItem.PacketPaths.Yaml.Replace('/', Path.DirectorySeparatorChar));
-        if (!File.Exists(packetPath))
-        {
-            writer.WriteLine($"Projection packet artifact was not found at {packetPath}");
-            return 1;
-        }
-
         try
         {
-            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
-            var linkedPr = LatestLinkedPrResolver.Resolve(runEvents, executionUnit);
-            var linkedIssue = LatestLinkedIssueResolver.Resolve(runEvents, executionUnit);
-            var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
-            var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
-            if (string.IsNullOrWhiteSpace(childRepoRef))
-            {
-                throw new InvalidOperationException("Projection packet must contain a target repo.");
-            }
-
-            var acceptClient = AcceptClientFactory();
-            var mergedCommitSha = acceptClient.MergePullRequest(linkedPr);
-            acceptClient.CloseIssue(linkedIssue);
-
-            var gitRunner = GitCommandRunnerFactory();
-            ChildRepoMainSynchronizer.Sync(context.RepoRoot, childRepoRef, mergedCommitSha, gitRunner);
-            ParentSubmodulePointerUpdater.Stage(context.RepoRoot, childRepoRef, gitRunner);
-
-            var timestamp = TimestampFactory();
-            var transition = QueueManager.AcceptReview(queueState, executionUnit, TransitionActor, timestamp);
-            PersistCloseout(
-                context,
-                transition.UpdatedState,
-                CreateCloseoutEvents(executionUnit, linkedPr, linkedIssue, timestamp));
-
-            writer.WriteLine($"Review accepted for {executionUnit}.");
+            var result = ExecuteCore(context, args[0]);
+            writer.WriteLine($"Review accepted for {result.ExecutionUnit}.");
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -95,6 +39,73 @@ internal static class ReviewAcceptCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static ReviewAcceptResult ExecuteCore(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
+        var queueItem = queueState.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+        if (queueItem is null)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
+        }
+
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            throw new InvalidOperationException($"Run log was not found at {runLogPath}");
+        }
+
+        var packetPath = Path.Combine(
+            context.RepoRoot,
+            queueItem.PacketPaths.Yaml.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(packetPath))
+        {
+            throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
+        }
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        var linkedPr = LatestLinkedPrResolver.Resolve(runEvents, executionUnit);
+        var linkedIssue = LatestLinkedIssueResolver.Resolve(runEvents, executionUnit);
+        var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
+        var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
+        if (string.IsNullOrWhiteSpace(childRepoRef))
+        {
+            throw new InvalidOperationException("Projection packet must contain a target repo.");
+        }
+
+        var acceptClient = AcceptClientFactory();
+        var mergedCommitSha = acceptClient.MergePullRequest(linkedPr);
+        acceptClient.CloseIssue(linkedIssue);
+
+        var gitRunner = GitCommandRunnerFactory();
+        ChildRepoMainSynchronizer.Sync(context.RepoRoot, childRepoRef, mergedCommitSha, gitRunner);
+        ParentSubmodulePointerUpdater.Stage(context.RepoRoot, childRepoRef, gitRunner);
+
+        var timestamp = TimestampFactory();
+        var transition = QueueManager.AcceptReview(queueState, executionUnit, TransitionActor, timestamp);
+        PersistCloseout(
+            context,
+            transition.UpdatedState,
+            CreateCloseoutEvents(executionUnit, linkedPr, linkedIssue, timestamp));
+
+        return new ReviewAcceptResult
+        {
+            ExecutionUnit = executionUnit,
+            MergedPrRef = linkedPr,
+            ClosedIssueRef = linkedIssue
+        };
     }
 
     private static IReadOnlyList<RunEvent> CreateCloseoutEvents(
