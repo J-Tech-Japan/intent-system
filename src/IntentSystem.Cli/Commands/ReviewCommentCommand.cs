@@ -29,20 +29,38 @@ internal static class ReviewCommentCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
+        try
         {
+            var result = ExecuteCore(context, args[0], args[2]);
+            writer.WriteLine($"Review comment posted for {result.ExecutionUnit}.");
+            return 0;
+        }
+        catch (InvalidOperationException exception)
+        {
+            writer.WriteLine(exception.Message);
             return 1;
         }
+    }
 
-        var executionUnit = args[0];
+    internal static ReviewCommentResult ExecuteCore(CliContext context, string executionUnit, string bodyPathArg)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(bodyPathArg);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
         var queueItem = queueState.Items.FirstOrDefault(item =>
             string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
 
         if (queueItem is null)
         {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
         }
 
         var reviewRequestRef = ReviewArtifactPathResolver.Resolve(executionUnit);
@@ -51,75 +69,68 @@ internal static class ReviewCommentCommand
             reviewRequestRef.Replace('/', Path.DirectorySeparatorChar));
         if (!File.Exists(reviewRequestPath))
         {
-            writer.WriteLine($"Review request artifact was not found at {reviewRequestPath}");
-            return 1;
+            throw new InvalidOperationException($"Review request artifact was not found at {reviewRequestPath}");
         }
 
-        var bodyPath = ResolveBodyPath(context.RepoRoot, args[2]);
+        var bodyPath = ResolveBodyPath(context.RepoRoot, bodyPathArg);
         if (!File.Exists(bodyPath))
         {
-            writer.WriteLine($"Review comment body file was not found at {bodyPath}");
-            return 1;
+            throw new InvalidOperationException($"Review comment body file was not found at {bodyPath}");
         }
 
         var body = File.ReadAllText(bodyPath);
         if (string.IsNullOrWhiteSpace(body))
         {
-            writer.WriteLine("Review comment body file must not be empty.");
-            return 1;
+            throw new InvalidOperationException("Review comment body file must not be empty.");
         }
 
-        try
+        var request = ReviewRequestSerializer.Deserialize(File.ReadAllText(reviewRequestPath));
+        if (!string.Equals(request.ExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
         {
-            var request = ReviewRequestSerializer.Deserialize(File.ReadAllText(reviewRequestPath));
-            if (!string.Equals(request.ExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Review request execution unit '{request.ExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.LinkedPr))
+        {
+            throw new InvalidOperationException("Review request must contain a linked PR.");
+        }
+
+        var commentRef = PublisherFactory().PostComment(request.LinkedPr, body);
+        var artifact = new ReviewCommentArtifact
+        {
+            ExecutionUnit = executionUnit,
+            ReviewRequestRef = reviewRequestRef,
+            LinkedPr = request.LinkedPr,
+            CommentRef = commentRef,
+            BodyPath = bodyPath
+        };
+
+        ReviewCommentArtifactWriter.Write(artifact, executionUnit, context.RepoRoot, overwrite: true);
+
+        var transition = QueueManager.RequestFix(
+            queueState,
+            executionUnit,
+            TransitionActor,
+            TimestampFactory());
+
+        PersistTransition(
+            context,
+            transition with
             {
-                throw new InvalidOperationException(
-                    $"Review request execution unit '{request.ExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
-            }
-
-            if (string.IsNullOrWhiteSpace(request.LinkedPr))
-            {
-                throw new InvalidOperationException("Review request must contain a linked PR.");
-            }
-
-            var commentRef = PublisherFactory().PostComment(request.LinkedPr, body);
-            var artifact = new ReviewCommentArtifact
-            {
-                ExecutionUnit = executionUnit,
-                ReviewRequestRef = reviewRequestRef,
-                LinkedPr = request.LinkedPr,
-                CommentRef = commentRef,
-                BodyPath = bodyPath
-            };
-
-            ReviewCommentArtifactWriter.Write(artifact, executionUnit, context.RepoRoot, overwrite: true);
-
-            var transition = QueueManager.RequestFix(
-                queueState,
-                executionUnit,
-                TransitionActor,
-                TimestampFactory());
-
-            PersistTransition(
-                context,
-                transition with
+                Event = transition.Event with
                 {
-                    Event = transition.Event with
-                    {
-                        LinkedPr = request.LinkedPr,
-                        CommentRef = commentRef
-                    }
-                });
+                    LinkedPr = request.LinkedPr,
+                    CommentRef = commentRef
+                }
+            });
 
-            writer.WriteLine($"Review comment posted for {executionUnit}.");
-            return 0;
-        }
-        catch (InvalidOperationException exception)
+        return new ReviewCommentResult
         {
-            writer.WriteLine(exception.Message);
-            return 1;
-        }
+            ExecutionUnit = executionUnit,
+            ArtifactPath = Review.ReviewCommentArtifactPathResolver.Resolve(executionUnit),
+            CommentRef = commentRef
+        };
     }
 
     private static string ResolveBodyPath(string repoRoot, string rawPath)
