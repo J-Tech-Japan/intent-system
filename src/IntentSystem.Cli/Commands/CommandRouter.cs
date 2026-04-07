@@ -3,6 +3,7 @@ namespace IntentSystem.Cli.Commands;
 internal static class CommandRouter
 {
     private delegate int CommandHandler(CliContext context, string[] args, TextWriter writer);
+    private const string GenerateFromCurrentCommandName = "generate-from-current";
 
     private static readonly string[] CommandGroups =
     [
@@ -103,6 +104,11 @@ internal static class CommandRouter
             return 0;
         }
 
+        if (string.Equals(args[0], GenerateFromCurrentCommandName, StringComparison.Ordinal))
+        {
+            return GenerateFromCurrentCommand.Execute(context, args[1..], writer);
+        }
+
         if (args.Length < 2)
         {
             writer.WriteLine("A command group and subcommand are required.");
@@ -137,5 +143,8 @@ internal static class CommandRouter
         {
             writer.WriteLine($"- {group}");
         }
+
+        writer.WriteLine("Additional top-level commands:");
+        writer.WriteLine($"- {GenerateFromCurrentCommandName}");
     }
 }
