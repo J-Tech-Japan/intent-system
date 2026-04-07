@@ -19,90 +19,10 @@ internal static class RunImplementCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
-        {
-            return 1;
-        }
-
-        var executionUnit = args[0];
-        var queueItem = queueState.Items.FirstOrDefault(item =>
-            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
-
-        if (queueItem is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
-        }
-
-        if (queueItem.State is not (QueueItemState.Active or QueueItemState.Fixing))
-        {
-            writer.WriteLine(
-                $"Execution unit '{executionUnit}' must be active or fixing before run implement.");
-            return 1;
-        }
-
-        if (queueItem.LinkedIssue is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' must have a linked issue before run implement.");
-            return 1;
-        }
-
-        var packetPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.Yaml);
-        if (!File.Exists(packetPath))
-        {
-            writer.WriteLine($"Projection packet artifact was not found at {packetPath}");
-            return 1;
-        }
-
-        var reviewContextPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.ReviewContext);
-        if (!File.Exists(reviewContextPath))
-        {
-            writer.WriteLine($"Review context artifact was not found at {reviewContextPath}");
-            return 1;
-        }
-
         try
         {
-            var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
-            var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
-            if (string.IsNullOrWhiteSpace(childRepoRef))
-            {
-                throw new InvalidOperationException("Projection packet must contain a target repo.");
-            }
-
-            var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
-            if (!Directory.Exists(childRepoPath))
-            {
-                throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
-            }
-
-            var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
-            if (!Directory.Exists(worktreePath))
-            {
-                throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
-            }
-
-            var reviewContext = ReviewContextMarkdownParser.Parse(File.ReadAllText(reviewContextPath));
-            if (!string.Equals(reviewContext.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Review context execution unit '{reviewContext.SourceExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
-            }
-
-            var latestLinkedPr = ResolveLatestLinkedPr(context, executionUnit);
-            var request = BuildRequest(
-                context,
-                queueItem,
-                packet,
-                reviewContext,
-                worktreePath,
-                childRepoPath,
-                latestLinkedPr);
-            var markdown = RunImplementRenderer.RenderMarkdown(request);
-            var artifactPath = RunImplementArtifactWriter.Write(markdown, executionUnit, context.RepoRoot, overwrite: true);
-            RunImplementRenderer.WriteSummary(writer, request, artifactPath);
-
+            var result = ExecuteCore(context, args[0]);
+            RunImplementRenderer.WriteSummary(writer, result.Request, result.ArtifactPath);
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -110,6 +30,95 @@ internal static class RunImplementCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static RunImplementResult ExecuteCore(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
+        var queueItem = queueState.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+        if (queueItem is null)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
+        }
+
+        if (queueItem.State is not (QueueItemState.Active or QueueItemState.Fixing))
+        {
+            throw new InvalidOperationException(
+                $"Execution unit '{executionUnit}' must be active or fixing before run implement.");
+        }
+
+        if (queueItem.LinkedIssue is null)
+        {
+            throw new InvalidOperationException(
+                $"Execution unit '{executionUnit}' must have a linked issue before run implement.");
+        }
+
+        var packetPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.Yaml);
+        if (!File.Exists(packetPath))
+        {
+            throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
+        }
+
+        var reviewContextPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.ReviewContext);
+        if (!File.Exists(reviewContextPath))
+        {
+            throw new InvalidOperationException($"Review context artifact was not found at {reviewContextPath}");
+        }
+
+        var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
+        var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
+        if (string.IsNullOrWhiteSpace(childRepoRef))
+        {
+            throw new InvalidOperationException("Projection packet must contain a target repo.");
+        }
+
+        var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
+        if (!Directory.Exists(childRepoPath))
+        {
+            throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
+        }
+
+        var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
+        if (!Directory.Exists(worktreePath))
+        {
+            throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
+        }
+
+        var reviewContext = ReviewContextMarkdownParser.Parse(File.ReadAllText(reviewContextPath));
+        if (!string.Equals(reviewContext.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Review context execution unit '{reviewContext.SourceExecutionUnit}' must match queue item execution unit '{queueItem.ExecutionUnit}'.");
+        }
+
+        var latestLinkedPr = ResolveLatestLinkedPr(context, executionUnit);
+        var request = BuildRequest(
+            context,
+            queueItem,
+            packet,
+            reviewContext,
+            worktreePath,
+            childRepoPath,
+            latestLinkedPr);
+        var markdown = RunImplementRenderer.RenderMarkdown(request);
+        var artifactPath = RunImplementArtifactWriter.Write(markdown, executionUnit, context.RepoRoot, overwrite: true);
+
+        return new RunImplementResult
+        {
+            Request = request,
+            ArtifactPath = ToRelativePath(context.RepoRoot, artifactPath)
+        };
     }
 
     private static RunImplementRequest BuildRequest(
@@ -179,5 +188,10 @@ internal static class RunImplementCommand
             QueueItemState.ClarifyBlocked => "clarify-blocked",
             _ => state.ToString().ToLowerInvariant()
         };
+    }
+
+    private static string ToRelativePath(string repoRoot, string absolutePath)
+    {
+        return Path.GetRelativePath(repoRoot, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
     }
 }
