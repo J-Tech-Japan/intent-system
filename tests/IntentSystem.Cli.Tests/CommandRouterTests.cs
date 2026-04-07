@@ -488,6 +488,57 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentConfirmCommand_DispatchesToConfirmRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var parentRepoRoot = tempDirectory.CreateDirectory("parent");
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "model-registry"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "best-practices"));
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "model-registry", "auth-model.md"), "# auth model");
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "best-practices", "security.md"), "# security");
+        tempDirectory.CreateFile(Path.Combine("repo", "README.md"), "# Intent System");
+        tempDirectory.CreateFile(Path.Combine("repo", "AGENTS.md"), "# Agent Guide");
+        tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
+        tempDirectory.CreateFile(Path.Combine("parent", "intents", "intent-cli", "specs", "11-reconstruction-review-and-confirmation.md"), "# review");
+        tempDirectory.CreateFile(Path.Combine("repo", "prepared", "auth.decisions.md"), """
+            # Developer Confirmation Decisions
+
+            ## Confirm
+            - confirm: validate the best-practice review suggestions for 'auth' against parent rules/specs before any canonical mutation.
+            - confirm: choose which of the 2 suggested intent additions should return to the parent intent tree.
+
+            ## Reject
+            - reject: explicitly reject any suggested intent addition that conflicts with project rules or specs.
+
+            ## Clarify
+            - none
+
+            ## Defer
+            - none
+            """);
+        using var writer = new StringWriter();
+        var originalFactory = GenerateFromCurrentCommand.GitHubCommandRunnerFactory;
+
+        try
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = () => new FakeGenerateFromCurrentGitHubRunner();
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "confirm", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution", "--from-file", "prepared/auth.decisions.md"],
+                CreateContext(repoRoot, parentRepoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current confirm processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = originalFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentImplementCommand_DispatchesToImplementRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
