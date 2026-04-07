@@ -33,6 +33,7 @@ public sealed class CommandRouterTests
         Assert.Contains("clarify", output, StringComparison.Ordinal);
         Assert.Contains("workflow", output, StringComparison.Ordinal);
         Assert.Contains("intake", output, StringComparison.Ordinal);
+        Assert.Contains("generate-from-current", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -56,6 +57,34 @@ public sealed class CommandRouterTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("intent-cli", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenGenerateFromCurrentCommand_DispatchesToTopLevelRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(Path.Combine("repo", "README.md"), "# Intent System");
+        tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
+        using var writer = new StringWriter();
+        var originalFactory = GenerateFromCurrentCommand.GitHubCommandRunnerFactory;
+
+        try
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = () => new FakeGenerateFromCurrentGitHubRunner();
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = originalFactory;
+        }
     }
 
     [Fact]
@@ -3090,6 +3119,34 @@ recommended_updates:
                     : string.Empty,
                 StdErr = string.Empty
             };
+        }
+    }
+
+    private sealed class FakeGenerateFromCurrentGitHubRunner : IGitHubCommandRunner
+    {
+        public GitHubCommandResult Run(IReadOnlyList<string> arguments)
+        {
+            if (arguments.SequenceEqual(["issue", "view", "114", "--comments", "--json", "number,title,body,url,state,comments"]))
+            {
+                return new GitHubCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = """{"number":114,"title":"[G44] Generate From Current","body":"Reverse intake entry point.","url":"https://github.com/J-Tech-Japan/intent-system/issues/114","state":"OPEN","comments":[{"body":"keep it deterministic"}]}""",
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["pr", "view", "113", "--comments", "--json", "number,title,body,url,state,isDraft,mergeStateStatus,comments,reviews"]))
+            {
+                return new GitHubCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = """{"number":113,"title":"[codex] Add intake activate command","body":"Adds intake activate.","url":"https://github.com/J-Tech-Japan/intent-system/pull/113","state":"OPEN","isDraft":true,"mergeStateStatus":"CLEAN","comments":[{"body":"ok"}],"reviews":[{"state":"COMMENTED"}]}""",
+                    StdErr = string.Empty
+                };
+            }
+
+            throw new InvalidOperationException($"Unexpected gh arguments: {string.Join(' ', arguments)}");
         }
     }
 
