@@ -26,7 +26,7 @@ public sealed class GenerateFromCurrentClarifyRendererTests
                 ClarifyItems = ["clarify: resolve auth boundary before issue-cut-ready treatment."],
                 AffectedParentRefs = ["README.md"],
                 Reasons = ["Clarify the authn/authz model and trust boundary for 'auth'."],
-                Blockingness = ["clarify: resolve auth boundary before issue-cut-ready treatment. => blocking"],
+                Blockingness = ["blocking"],
                 ReturnToIntentPaths = ["README.md"],
                 DownstreamReadiness = "not-ready"
             });
@@ -35,6 +35,7 @@ public sealed class GenerateFromCurrentClarifyRendererTests
         Assert.Contains("Generate-from-current clarify processed for domain 'auth'.", output, StringComparison.Ordinal);
         Assert.Contains("Clarification-return artifact path: .intent-cli/intake/auth.clarification-return.yaml", output, StringComparison.Ordinal);
         Assert.Contains("Affected parent refs:", output, StringComparison.Ordinal);
+        Assert.Contains("- blocking", output, StringComparison.Ordinal);
         Assert.Contains("Downstream readiness: not-ready", output, StringComparison.Ordinal);
     }
 

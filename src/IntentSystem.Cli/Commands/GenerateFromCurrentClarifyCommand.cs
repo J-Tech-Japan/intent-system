@@ -35,17 +35,25 @@ internal static class GenerateFromCurrentClarifyCommand
         var bestPracticeResult = BestPracticeExecutor(context, args);
         var confirmationArtifactRef = $".intent-cli/intake/{domain}.developer-confirmation.yaml";
         var confirmationArtifactPath = ResolvePath(context.RepoRoot, confirmationArtifactRef);
+        var reviewArtifactPath = ResolvePath(context.RepoRoot, bestPracticeResult.ReviewArtifactPath);
         if (!File.Exists(confirmationArtifactPath))
         {
             throw new InvalidOperationException($"Developer confirmation artifact was not found at {confirmationArtifactPath}");
         }
 
+        if (!File.Exists(reviewArtifactPath))
+        {
+            throw new InvalidOperationException($"Best-practice review artifact was not found at {reviewArtifactPath}");
+        }
+
         var confirmationArtifact = DeveloperConfirmationArtifactYaml.Deserialize(File.ReadAllText(confirmationArtifactPath));
+        var reviewArtifact = BestPracticeReviewArtifactMarkdown.Deserialize(File.ReadAllText(reviewArtifactPath));
         ValidateDeveloperConfirmationArtifact(domain, bestPracticeResult, confirmationArtifact, confirmationArtifactRef);
+        ValidateBestPracticeReviewArtifact(domain, reviewArtifact);
 
         var clarifyItems = confirmationArtifact.ClarifyItems;
-        var affectedParentRefs = confirmationArtifact.ReturnToIntentPaths;
-        var reasons = BuildReasons(bestPracticeResult, clarifyItems);
+        var affectedParentRefs = reviewArtifact.ParentRuleSpecRefs;
+        var reasons = BuildReasons(reviewArtifact, clarifyItems);
         var blockingness = BuildBlockingness(clarifyItems, confirmationArtifact);
 
         var clarificationReturnArtifact = new ClarificationReturnArtifact
@@ -59,7 +67,7 @@ internal static class GenerateFromCurrentClarifyCommand
             AffectedParentRefs = affectedParentRefs,
             Reasons = reasons,
             Blockingness = blockingness,
-            ReturnToIntentPaths = confirmationArtifact.ReturnToIntentPaths,
+            ReturnToIntentPaths = reviewArtifact.ReturnToIntentPaths,
             DownstreamReadiness = confirmationArtifact.DownstreamReadiness
         };
 
@@ -77,7 +85,7 @@ internal static class GenerateFromCurrentClarifyCommand
             AffectedParentRefs = affectedParentRefs,
             Reasons = reasons,
             Blockingness = blockingness,
-            ReturnToIntentPaths = confirmationArtifact.ReturnToIntentPaths,
+            ReturnToIntentPaths = reviewArtifact.ReturnToIntentPaths,
             DownstreamReadiness = confirmationArtifact.DownstreamReadiness
         };
     }
@@ -119,19 +127,34 @@ internal static class GenerateFromCurrentClarifyCommand
         }
     }
 
+    private static void ValidateBestPracticeReviewArtifact(string domain, BestPracticeReviewArtifact artifact)
+    {
+        if (!string.Equals(artifact.Domain, domain, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Best-practice review artifact domain '{artifact.Domain}' does not match requested domain '{domain}'.");
+        }
+    }
+
     private static IReadOnlyList<string> BuildReasons(
-        GenerateFromCurrentBestPracticeResult bestPracticeResult,
+        BestPracticeReviewArtifact reviewArtifact,
         IReadOnlyList<string> clarifyItems)
     {
-        if (bestPracticeResult.RecommendedClarifications.Count > 0)
+        if (reviewArtifact.RecommendedClarifications.Count == 0)
         {
-            return bestPracticeResult.RecommendedClarifications;
+            return clarifyItems
+                .Select(item => item.StartsWith("clarify:", StringComparison.Ordinal)
+                    ? item["clarify:".Length..].TrimStart()
+                    : item)
+                .ToArray();
         }
 
         return clarifyItems
-            .Select(item => item.StartsWith("clarify:", StringComparison.Ordinal)
-                ? item["clarify:".Length..].TrimStart()
-                : item)
+            .Select((item, index) => index < reviewArtifact.RecommendedClarifications.Count
+                ? reviewArtifact.RecommendedClarifications[index]
+                : item.StartsWith("clarify:", StringComparison.Ordinal)
+                    ? item["clarify:".Length..].TrimStart()
+                    : item)
             .ToArray();
     }
 
@@ -142,8 +165,8 @@ internal static class GenerateFromCurrentClarifyCommand
         var isBlocking = !string.Equals(artifact.DownstreamReadiness, "ready", StringComparison.Ordinal);
         return clarifyItems
             .Select(item => artifact.BlockedItems.Contains(item, StringComparer.Ordinal) || isBlocking
-                ? $"{item} => blocking"
-                : $"{item} => nonblocking")
+                ? "blocking"
+                : "nonblocking")
             .ToArray();
     }
 

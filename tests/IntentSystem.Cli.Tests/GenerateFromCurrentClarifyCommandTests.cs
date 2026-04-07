@@ -59,9 +59,9 @@ public sealed class GenerateFromCurrentClarifyCommandTests
             Assert.Equal("auth", artifact.DomainSlug);
             Assert.Single(artifact.ClarifyItems);
             Assert.Equal(".intent-cli/intake/auth.developer-confirmation.yaml", artifact.DeveloperConfirmationArtifactPath);
-            Assert.Contains("README.md", artifact.AffectedParentRefs, StringComparer.Ordinal);
+            Assert.Contains("intents/intent-cli/specs/11-reconstruction-review-and-confirmation.md", artifact.AffectedParentRefs, StringComparer.Ordinal);
             Assert.Contains("Clarify the authn/authz model and trust boundary for 'auth'.", artifact.Reasons, StringComparer.Ordinal);
-            Assert.Contains("=> blocking", artifact.Blockingness.Single(), StringComparison.Ordinal);
+            Assert.Equal("blocking", artifact.Blockingness.Single());
         }
         finally
         {
@@ -96,6 +96,47 @@ public sealed class GenerateFromCurrentClarifyCommandTests
                     DownstreamReadiness = "ready",
                     ReturnToIntentPaths = ["README.md"]
                 }));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.best-practice-review.md"),
+            """
+            # Best Practice Review
+            ## Domain
+            `auth`
+
+            reconstructed_artifact_paths:
+            - .intent-cli/intake/auth.reconstructed-concept.yaml
+            - .intent-cli/intake/auth.reconstructed-interview.md
+
+            reviewed_dimensions:
+            - architecture: needs-confirmation
+
+            model_refs:
+            - .intent/model-registry/auth-model.md
+
+            knowledge_refs:
+            - .intent/best-practices/security.md
+
+            parent_rule_spec_refs:
+            - intents/intent-cli/specs/11-reconstruction-review-and-confirmation.md
+
+            recommended_intent_additions:
+            - none
+
+            recommended_clarifications:
+            - Clarify the authn/authz model and trust boundary for 'auth'.
+
+            developer_confirmation_items:
+            - clarify: resolve auth boundary before issue-cut-ready treatment.
+
+            return_to_intent_paths:
+            - README.md
+
+            confidence_deltas:
+            - execution: medium -> high
+
+            skipped_stages:
+            - none
+            """);
         using var writer = new StringWriter();
         var originalExecutor = GenerateFromCurrentClarifyCommand.BestPracticeExecutor;
 
