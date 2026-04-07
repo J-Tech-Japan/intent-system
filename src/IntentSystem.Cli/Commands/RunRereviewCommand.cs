@@ -22,39 +22,10 @@ internal static class RunRereviewCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
-        {
-            return 1;
-        }
-
-        var executionUnit = args[0];
-        if (!queueState.Items.Any(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal)))
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
-        }
-
-        var runLogPath = context.GetRunLogPath();
-        if (!File.Exists(runLogPath))
-        {
-            writer.WriteLine($"Run log was not found at {runLogPath}");
-            return 1;
-        }
-
         try
         {
-            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
-            var linkedPr = LatestLinkedPrResolver.Resolve(runEvents, executionUnit);
-            var transition = QueueManager.ResubmitForReview(
-                queueState,
-                executionUnit,
-                TransitionActor,
-                TimestampFactory(),
-                linkedPr);
-
-            PersistRereview(context, transition);
-            writer.WriteLine($"Run rereviewed for {executionUnit}.");
+            var result = ExecuteCore(context, args[0]);
+            writer.WriteLine($"Run rereviewed for {result.ExecutionUnit}.");
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -62,6 +33,46 @@ internal static class RunRereviewCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static RunRereviewResult ExecuteCore(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
+        if (!queueState.Items.Any(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
+        }
+
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            throw new InvalidOperationException($"Run log was not found at {runLogPath}");
+        }
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        var linkedPr = LatestLinkedPrResolver.Resolve(runEvents, executionUnit);
+        var transition = QueueManager.ResubmitForReview(
+            queueState,
+            executionUnit,
+            TransitionActor,
+            TimestampFactory(),
+            linkedPr);
+
+        PersistRereview(context, transition);
+        return new RunRereviewResult
+        {
+            ExecutionUnit = executionUnit,
+            LinkedPr = linkedPr
+        };
     }
 
     private static void PersistRereview(CliContext context, QueueTransitionResult result)
