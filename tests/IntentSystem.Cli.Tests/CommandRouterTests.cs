@@ -461,7 +461,7 @@ public sealed class CommandRouterTests
         tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "model-registry"));
         tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "best-practices"));
         tempDirectory.CreateFile(Path.Combine("repo", ".intent", "model-registry", "auth-model.md"), "# auth model");
-        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "best-practices", "security.md"), "# security");
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "best-practices", "performance.md"), "# performance");
         tempDirectory.CreateFile(Path.Combine("repo", "README.md"), "# Intent System");
         tempDirectory.CreateFile(Path.Combine("repo", "AGENTS.md"), "# Agent Guide");
         tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
@@ -496,7 +496,7 @@ public sealed class CommandRouterTests
         tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "model-registry"));
         tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "best-practices"));
         tempDirectory.CreateFile(Path.Combine("repo", ".intent", "model-registry", "auth-model.md"), "# auth model");
-        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "best-practices", "security.md"), "# security");
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "best-practices", "performance.md"), "# performance");
         tempDirectory.CreateFile(Path.Combine("repo", "README.md"), "# Intent System");
         tempDirectory.CreateFile(Path.Combine("repo", "AGENTS.md"), "# Agent Guide");
         tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
@@ -521,6 +521,54 @@ public sealed class CommandRouterTests
 
             Assert.Equal(0, exitCode);
             Assert.Contains("Generate-from-current confirm processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = originalFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenGenerateFromCurrentClarifyCommand_DispatchesToClarifyRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var parentRepoRoot = tempDirectory.CreateDirectory("parent");
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "model-registry"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "best-practices"));
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "model-registry", "auth-model.md"), "# auth model");
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent", "best-practices", "performance.md"), "# performance");
+        tempDirectory.CreateFile(Path.Combine("repo", "README.md"), "# Intent System");
+        tempDirectory.CreateFile(Path.Combine("repo", "AGENTS.md"), "# Agent Guide");
+        tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
+        tempDirectory.CreateFile(Path.Combine("parent", "intents", "intent-cli", "specs", "11-reconstruction-review-and-confirmation.md"), "# review");
+        tempDirectory.CreateFile(Path.Combine("parent", "intents", "rules", "reconstruction-feedback-loop.md"), "# loop");
+        tempDirectory.CreateFile(Path.Combine("repo", "prepared", "auth.decisions.md"), """
+            # Current review decisions
+            - confirm: validate the best-practice review suggestions for 'auth' against parent rules/specs before any canonical mutation.
+            - reject: explicitly reject any suggested intent addition that conflicts with project rules or specs.
+            - clarify: resolve 1 clarification candidate(s) before issue-cut-ready treatment.
+            """);
+        using var writer = new StringWriter();
+        var originalFactory = GenerateFromCurrentCommand.GitHubCommandRunnerFactory;
+
+        try
+        {
+            GenerateFromCurrentCommand.GitHubCommandRunnerFactory = () => new FakeGenerateFromCurrentGitHubRunner();
+
+            var confirmExitCode = CommandRouter.Execute(
+                ["generate-from-current", "confirm", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution", "--from-file", "prepared/auth.decisions.md"],
+                CreateContext(repoRoot, parentRepoRoot),
+                TextWriter.Null);
+            Assert.Equal(0, confirmExitCode);
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "clarify", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution"],
+                CreateContext(repoRoot, parentRepoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current clarify processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
         }
         finally
         {
