@@ -502,20 +502,10 @@ public sealed class CommandRouterTests
         tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
         tempDirectory.CreateFile(Path.Combine("parent", "intents", "intent-cli", "specs", "11-reconstruction-review-and-confirmation.md"), "# review");
         tempDirectory.CreateFile(Path.Combine("repo", "prepared", "auth.decisions.md"), """
-            # Developer Confirmation Decisions
-
-            ## Confirm
+            # Current review decisions
             - confirm: validate the best-practice review suggestions for 'auth' against parent rules/specs before any canonical mutation.
             - confirm: choose which of the 2 suggested intent additions should return to the parent intent tree.
-
-            ## Reject
             - reject: explicitly reject any suggested intent addition that conflicts with project rules or specs.
-
-            ## Clarify
-            - none
-
-            ## Defer
-            - none
             """);
         using var writer = new StringWriter();
         var originalFactory = GenerateFromCurrentCommand.GitHubCommandRunnerFactory;

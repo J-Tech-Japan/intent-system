@@ -13,81 +13,107 @@ internal sealed record DeveloperDecisionFile
 
 internal static class DeveloperDecisionFileMarkdown
 {
-    private static readonly string[] RequiredSections =
+    private static readonly string[] SupportedDecisionPrefixes =
     [
-        "Confirm",
-        "Reject",
-        "Clarify",
-        "Defer"
+        "confirm:",
+        "reject:",
+        "clarify:",
+        "defer:"
     ];
 
     public static DeveloperDecisionFile Deserialize(string markdown)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(markdown);
 
-        var sections = RequiredSections.ToDictionary(section => section, _ => new List<string>(), StringComparer.Ordinal);
-        var seenSections = new HashSet<string>(StringComparer.Ordinal);
+        var confirmedItems = new List<string>();
+        var rejectedItems = new List<string>();
+        var clarifyItems = new List<string>();
+        var deferredItems = new List<string>();
         var lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n', StringSplitOptions.None);
-        var sawTitle = false;
-        string? currentSection = null;
 
         foreach (var rawLine in lines)
         {
-            var line = rawLine.TrimEnd();
+            var line = NormalizeDecisionLine(rawLine);
             if (string.IsNullOrWhiteSpace(line))
             {
                 continue;
             }
 
-            if (string.Equals(line, "# Developer Confirmation Decisions", StringComparison.Ordinal))
+            if (TryReadDecision(line, out var decisionType, out var decisionValue))
             {
-                sawTitle = true;
-                currentSection = null;
-                continue;
-            }
-
-            if (line.StartsWith("## ", StringComparison.Ordinal))
-            {
-                var section = line[3..].Trim();
-                if (!sections.ContainsKey(section))
+                switch (decisionType)
                 {
-                    throw new InvalidOperationException($"Developer decision file section '{section}' is not supported.");
+                    case "confirm":
+                        confirmedItems.Add(decisionValue);
+                        break;
+                    case "reject":
+                        rejectedItems.Add(decisionValue);
+                        break;
+                    case "clarify":
+                        clarifyItems.Add(decisionValue);
+                        break;
+                    case "defer":
+                        deferredItems.Add(decisionValue);
+                        break;
                 }
-
-                currentSection = section;
-                seenSections.Add(section);
-                continue;
-            }
-
-            if (!line.StartsWith("- ", StringComparison.Ordinal) || currentSection is null)
-            {
-                continue;
-            }
-
-            var value = line[2..].Trim();
-            if (!string.Equals(value, "none", StringComparison.Ordinal))
-            {
-                sections[currentSection].Add(value);
             }
         }
 
-        if (!sawTitle)
+        if (confirmedItems.Count == 0
+            && rejectedItems.Count == 0
+            && clarifyItems.Count == 0
+            && deferredItems.Count == 0)
         {
-            throw new InvalidOperationException("Developer decision file must start with '# Developer Confirmation Decisions'.");
-        }
-
-        var missingSection = RequiredSections.FirstOrDefault(section => !seenSections.Contains(section));
-        if (missingSection is not null)
-        {
-            throw new InvalidOperationException($"Developer decision file must contain section '## {missingSection}'.");
+            throw new InvalidOperationException(
+                "Prepared developer decision file must contain at least one bounded decision line using 'confirm:', 'reject:', 'clarify:', or 'defer:'.");
         }
 
         return new DeveloperDecisionFile
         {
-            ConfirmedItems = sections["Confirm"].ToArray(),
-            RejectedItems = sections["Reject"].ToArray(),
-            ClarifyItems = sections["Clarify"].ToArray(),
-            DeferredItems = sections["Defer"].ToArray()
+            ConfirmedItems = confirmedItems,
+            RejectedItems = rejectedItems,
+            ClarifyItems = clarifyItems,
+            DeferredItems = deferredItems
         };
+    }
+
+    private static string NormalizeDecisionLine(string rawLine)
+    {
+        var line = rawLine.Trim();
+        if (line.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (line.StartsWith("- ", StringComparison.Ordinal)
+            || line.StartsWith("* ", StringComparison.Ordinal))
+        {
+            return line[2..].TrimStart();
+        }
+
+        var periodIndex = line.IndexOf(". ", StringComparison.Ordinal);
+        if (periodIndex > 0 && line[..periodIndex].All(char.IsDigit))
+        {
+            return line[(periodIndex + 2)..].TrimStart();
+        }
+
+        return line;
+    }
+
+    private static bool TryReadDecision(string line, out string decisionType, out string decisionValue)
+    {
+        foreach (var prefix in SupportedDecisionPrefixes)
+        {
+            if (line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                decisionType = prefix[..^1];
+                decisionValue = line;
+                return true;
+            }
+        }
+
+        decisionType = string.Empty;
+        decisionValue = string.Empty;
+        return false;
     }
 }

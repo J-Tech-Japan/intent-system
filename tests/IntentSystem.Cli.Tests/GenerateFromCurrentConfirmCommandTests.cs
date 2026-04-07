@@ -24,20 +24,12 @@ public sealed class GenerateFromCurrentConfirmCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", "prepared", "auth.decisions.md"),
             """
-            # Developer Confirmation Decisions
+            # Review Follow-up For Auth
 
-            ## Confirm
+            These are the bounded decisions for the current reconstruction review.
             - confirm: validate the best-practice review suggestions for 'auth' against parent rules/specs before any canonical mutation.
             - confirm: choose which of the 2 suggested intent additions should return to the parent intent tree.
-
-            ## Reject
-            - reject: explicitly reject any suggested intent addition that conflicts with project rules or specs.
-
-            ## Clarify
-            - none
-
-            ## Defer
-            - none
+            1. reject: explicitly reject any suggested intent addition that conflicts with project rules or specs.
             """);
         using var writer = new StringWriter();
         var originalFactory = GenerateFromCurrentCommand.GitHubCommandRunnerFactory;
@@ -81,19 +73,9 @@ public sealed class GenerateFromCurrentConfirmCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", "prepared", "auth.decisions.md"),
             """
-            # Developer Confirmation Decisions
+            # Follow-up
 
-            ## Confirm
             - confirm: validate current auth boundary
-
-            ## Reject
-            - none
-
-            ## Clarify
-            - none
-
-            ## Defer
-            - none
             """);
         using var writer = new StringWriter();
         var originalExecutor = GenerateFromCurrentConfirmCommand.BestPracticeExecutor;
@@ -154,6 +136,59 @@ public sealed class GenerateFromCurrentConfirmCommandTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("--from-file", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenDecisionFileWithoutBoundedDecisionLines_ReturnsExitCodeOne()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "prepared", "auth.decisions.md"),
+            """
+            # Notes
+
+            We should probably confirm the current auth approach later.
+            """);
+        using var writer = new StringWriter();
+        var originalExecutor = GenerateFromCurrentConfirmCommand.BestPracticeExecutor;
+
+        try
+        {
+            GenerateFromCurrentConfirmCommand.BestPracticeExecutor = (_, _) => new GenerateFromCurrentBestPracticeResult
+            {
+                Domain = "auth",
+                SourceBundleArtifactPath = ".intent-cli/intake/auth.current-sources.yaml",
+                ReconstructedArtifactPaths =
+                [
+                    ".intent-cli/intake/auth.reconstructed-concept.yaml",
+                    ".intent-cli/intake/auth.reconstructed-interview.md"
+                ],
+                ReviewArtifactPath = ".intent-cli/intake/auth.best-practice-review.md",
+                ReviewedDimensions = ["architecture: needs-confirmation"],
+                ModelRefs = [".intent/model-registry/auth-model.md"],
+                KnowledgeRefs = [".intent/best-practices/security.md"],
+                RecommendedIntentAdditions = [],
+                RecommendedClarifications = [],
+                DeveloperConfirmationItems = ["confirm: validate current auth boundary"],
+                ReturnToIntentPaths = ["README.md"],
+                ConfidenceDeltas = ["execution: medium -> high"],
+                ReadinessStatus = "ready",
+                SkippedStages = []
+            };
+
+            var exitCode = GenerateFromCurrentConfirmCommand.Execute(
+                CreateContext(repoRoot),
+                ["auth", "--from-path", "src/feature", "--from-file", "prepared/auth.decisions.md"],
+                writer);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("bounded decision line", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentConfirmCommand.BestPracticeExecutor = originalExecutor;
+        }
     }
 
     private static CliContext CreateContext(string repoRoot, string? parentIntentRepoRoot = null)
