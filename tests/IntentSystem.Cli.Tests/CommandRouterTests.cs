@@ -457,6 +457,7 @@ public sealed class CommandRouterTests
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
+        var parentRepoRoot = tempDirectory.CreateDirectory("parent");
         tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "model-registry"));
         tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "best-practices"));
         tempDirectory.CreateFile(Path.Combine("repo", ".intent", "model-registry", "auth-model.md"), "# auth model");
@@ -464,21 +465,17 @@ public sealed class CommandRouterTests
         tempDirectory.CreateFile(Path.Combine("repo", "README.md"), "# Intent System");
         tempDirectory.CreateFile(Path.Combine("repo", "AGENTS.md"), "# Agent Guide");
         tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
+        tempDirectory.CreateFile(Path.Combine("parent", "intents", "intent-cli", "specs", "11-reconstruction-review-and-confirmation.md"), "# review");
         using var writer = new StringWriter();
         var originalFactory = GenerateFromCurrentCommand.GitHubCommandRunnerFactory;
-        var originalParentRefProvider = GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider;
 
         try
         {
             GenerateFromCurrentCommand.GitHubCommandRunnerFactory = () => new FakeGenerateFromCurrentGitHubRunner();
-            GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider = () =>
-            [
-                "intents/intent-cli/specs/11-reconstruction-review-and-confirmation.md"
-            ];
 
             var exitCode = CommandRouter.Execute(
                 ["generate-from-current", "best-practice", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution"],
-                CreateContext(repoRoot),
+                CreateContext(repoRoot, parentRepoRoot),
                 writer);
 
             Assert.Equal(0, exitCode);
@@ -487,7 +484,6 @@ public sealed class CommandRouterTests
         finally
         {
             GenerateFromCurrentCommand.GitHubCommandRunnerFactory = originalFactory;
-            GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider = originalParentRefProvider;
         }
     }
 
@@ -1899,7 +1895,7 @@ public sealed class CommandRouterTests
         Assert.Contains("Execution unit: G22", writer.ToString(), StringComparison.Ordinal);
     }
 
-    private static CliContext CreateContext(string repoRoot)
+    private static CliContext CreateContext(string repoRoot, string? parentIntentRepoRoot = null)
     {
         return new CliContext
         {
@@ -1910,7 +1906,8 @@ public sealed class CommandRouterTests
                 {
                     Domain = "intent-cli",
                     WorkflowEngine = "takt",
-                    ArtifactRoot = ".intent-cli"
+                    ArtifactRoot = ".intent-cli",
+                    ParentIntentRepoRoot = parentIntentRepoRoot ?? string.Empty
                 }
             }
         };

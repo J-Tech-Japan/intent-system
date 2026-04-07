@@ -15,13 +15,13 @@ internal static class GenerateFromCurrentBestPracticeCommand
 
     private static readonly string[] ParentRuleSpecCandidates =
     [
-        "/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/04-concept-intake-and-interview.md",
-        "/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/05-intent-cli-surface.md",
-        "/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/10-generate-from-current-and-historical-signals.md",
-        "/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/specs/11-reconstruction-review-and-confirmation.md",
-        "/Users/tomohisa/dev/GitHub/MyIntentHost/intents/intent-cli/intent-tree/means/02-tooling-strategy.md",
-        "/Users/tomohisa/dev/GitHub/MyIntentHost/intents/rules/reconstruction-feedback-loop.md",
-        "/Users/tomohisa/dev/GitHub/MyIntentHost/intents/rules/issue-lifecycle-and-landing.md"
+        "intents/intent-cli/specs/04-concept-intake-and-interview.md",
+        "intents/intent-cli/specs/05-intent-cli-surface.md",
+        "intents/intent-cli/specs/10-generate-from-current-and-historical-signals.md",
+        "intents/intent-cli/specs/11-reconstruction-review-and-confirmation.md",
+        "intents/intent-cli/intent-tree/means/02-tooling-strategy.md",
+        "intents/rules/reconstruction-feedback-loop.md",
+        "intents/rules/issue-lifecycle-and-landing.md"
     ];
 
     private static readonly string[] ModelRegistryDirectories =
@@ -51,8 +51,8 @@ internal static class GenerateFromCurrentBestPracticeCommand
     public static Func<string, IReadOnlyList<string>> KnowledgeRefProvider { get; set; } =
         repoRoot => ReadProjectRefs(repoRoot, KnowledgeBaseDirectories);
 
-    public static Func<IReadOnlyList<string>> ParentRuleSpecRefProvider { get; set; } =
-        () => ParentRuleSpecCandidates.Where(File.Exists).ToArray();
+    public static Func<string?, IReadOnlyList<string>> ParentRuleSpecRefProvider { get; set; } =
+        parentRepoRoot => ReadParentRuleSpecRefs(parentRepoRoot, ParentRuleSpecCandidates);
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -85,34 +85,39 @@ internal static class GenerateFromCurrentBestPracticeCommand
         var reconstructionResult = ReconstructionExecutor(context, domain);
         var modelRefs = ModelRefProvider(context.RepoRoot);
         var knowledgeRefs = KnowledgeRefProvider(context.RepoRoot);
-        var parentRefs = ParentRuleSpecRefProvider();
+        var parentRefs = ParentRuleSpecRefProvider(context.ResolveParentIntentRepoRootPath());
         var reviewedDimensions = BuildReviewedDimensions(
             sourceBundleResult,
             reconstructionResult,
             modelRefs,
-            knowledgeRefs);
+            knowledgeRefs,
+            parentRefs);
         var recommendedIntentAdditions = BuildRecommendedIntentAdditions(
             domain,
             reconstructionResult,
             modelRefs,
-            knowledgeRefs);
+            knowledgeRefs,
+            parentRefs);
         var recommendedClarifications = BuildRecommendedClarifications(
             domain,
             reconstructionResult,
             modelRefs,
-            knowledgeRefs);
+            knowledgeRefs,
+            parentRefs);
         var developerConfirmationItems = BuildDeveloperConfirmationItems(
             domain,
             recommendedIntentAdditions,
             recommendedClarifications,
             modelRefs,
-            knowledgeRefs);
+            knowledgeRefs,
+            parentRefs);
         var confidenceDeltas = BuildConfidenceDeltas(
             reconstructionResult.ConfidenceByAltitude,
             modelRefs,
-            knowledgeRefs);
-        var readinessStatus = DetermineReadinessStatus(modelRefs, knowledgeRefs, recommendedClarifications);
-        var skippedStages = BuildSkippedStages(modelRefs, knowledgeRefs);
+            knowledgeRefs,
+            parentRefs);
+        var readinessStatus = DetermineReadinessStatus(modelRefs, knowledgeRefs, parentRefs, recommendedClarifications);
+        var skippedStages = BuildSkippedStages(modelRefs, knowledgeRefs, parentRefs);
 
         var artifactPath = WriteArtifact(
             context.RepoRoot,
@@ -180,25 +185,40 @@ internal static class GenerateFromCurrentBestPracticeCommand
         return refs.Distinct(StringComparer.Ordinal).ToArray();
     }
 
+    private static IReadOnlyList<string> ReadParentRuleSpecRefs(string? parentRepoRoot, IReadOnlyList<string> relativePaths)
+    {
+        if (string.IsNullOrWhiteSpace(parentRepoRoot) || !Directory.Exists(parentRepoRoot))
+        {
+            return [];
+        }
+
+        return relativePaths
+            .Where(relativePath => File.Exists(Path.Combine(parentRepoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar))))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
     private static IReadOnlyList<string> BuildReviewedDimensions(
         GenerateFromCurrentResult sourceBundleResult,
         GenerateFromCurrentReconstructionResult reconstructionResult,
         IReadOnlyList<string> modelRefs,
-        IReadOnlyList<string> knowledgeRefs)
+        IReadOnlyList<string> knowledgeRefs,
+        IReadOnlyList<string> parentRefs)
     {
         var hasModelRefs = modelRefs.Count > 0;
         var hasKnowledgeRefs = knowledgeRefs.Count > 0;
+        var hasParentRefs = parentRefs.Count > 0;
         var hasAuthKnowledge = knowledgeRefs.Any(reference => reference.Contains("auth", StringComparison.OrdinalIgnoreCase)
             || reference.Contains("security", StringComparison.OrdinalIgnoreCase));
         var hasTestSignals = sourceBundleResult.SourceRefs.Any(reference => reference.StartsWith("test:", StringComparison.Ordinal));
 
         return ReviewedDimensions.Select(dimension => dimension switch
         {
-            "architecture" => $"{dimension}: {(hasModelRefs ? "needs-confirmation" : "missing-model-registry")}",
-            "security" => $"{dimension}: {(hasKnowledgeRefs ? "needs-confirmation" : "missing-knowledge-base")}",
-            "auth" => $"{dimension}: {(hasAuthKnowledge ? "clarify" : "missing-auth-guidance")}",
-            "data-modeling" => $"{dimension}: {(hasModelRefs ? "clarify" : "missing-model-registry")}",
-            "error-handling" => $"{dimension}: {(hasKnowledgeRefs ? "needs-confirmation" : "missing-knowledge-base")}",
+            "architecture" => $"{dimension}: {(hasParentRefs && hasModelRefs ? "needs-confirmation" : hasParentRefs ? "missing-model-registry" : "missing-parent-rules-specs")}",
+            "security" => $"{dimension}: {(hasParentRefs && hasKnowledgeRefs ? "needs-confirmation" : hasParentRefs ? "missing-knowledge-base" : "missing-parent-rules-specs")}",
+            "auth" => $"{dimension}: {(hasParentRefs && hasAuthKnowledge ? "clarify" : hasParentRefs ? "missing-auth-guidance" : "missing-parent-rules-specs")}",
+            "data-modeling" => $"{dimension}: {(hasParentRefs && hasModelRefs ? "clarify" : hasParentRefs ? "missing-model-registry" : "missing-parent-rules-specs")}",
+            "error-handling" => $"{dimension}: {(hasParentRefs && hasKnowledgeRefs ? "needs-confirmation" : hasParentRefs ? "missing-knowledge-base" : "missing-parent-rules-specs")}",
             "performance" => $"{dimension}: {(reconstructionResult.CandidateExecutionUnits.Count > 0 ? "defer" : "needs-confirmation")}",
             "testability" => $"{dimension}: {(hasTestSignals ? "needs-confirmation" : "missing-test-signal")}",
             _ => $"{dimension}: needs-confirmation"
@@ -209,16 +229,17 @@ internal static class GenerateFromCurrentBestPracticeCommand
         string domain,
         GenerateFromCurrentReconstructionResult reconstructionResult,
         IReadOnlyList<string> modelRefs,
-        IReadOnlyList<string> knowledgeRefs)
+        IReadOnlyList<string> knowledgeRefs,
+        IReadOnlyList<string> parentRefs)
     {
         var suggestions = new List<string>();
 
-        if (reconstructionResult.CandidateIntentNodes.Count > 0)
+        if (parentRefs.Count > 0 && reconstructionResult.CandidateIntentNodes.Count > 0)
         {
             suggestions.Add($"Promote reconstructed intent candidates for '{domain}' into explicit parent intent additions after confirmation.");
         }
 
-        if (reconstructionResult.CandidateExecutionUnits.Count > 0)
+        if (parentRefs.Count > 0 && reconstructionResult.CandidateExecutionUnits.Count > 0)
         {
             suggestions.Add($"Add execution-near intent for '{domain}' before issue-cut based on the reconstructed execution candidates.");
         }
@@ -240,11 +261,17 @@ internal static class GenerateFromCurrentBestPracticeCommand
         string domain,
         GenerateFromCurrentReconstructionResult reconstructionResult,
         IReadOnlyList<string> modelRefs,
-        IReadOnlyList<string> knowledgeRefs)
+        IReadOnlyList<string> knowledgeRefs,
+        IReadOnlyList<string> parentRefs)
     {
         var clarifications = reconstructionResult.Gaps
             .Select(gap => $"Clarify: {gap}")
             .ToList();
+
+        if (parentRefs.Count == 0)
+        {
+            clarifications.Add($"Clarify the runtime parent intent repo root and required parent rules/spec refs for '{domain}' before best-practice review is treated as complete.");
+        }
 
         if (modelRefs.Count == 0)
         {
@@ -270,7 +297,8 @@ internal static class GenerateFromCurrentBestPracticeCommand
         IReadOnlyList<string> recommendedIntentAdditions,
         IReadOnlyList<string> recommendedClarifications,
         IReadOnlyList<string> modelRefs,
-        IReadOnlyList<string> knowledgeRefs)
+        IReadOnlyList<string> knowledgeRefs,
+        IReadOnlyList<string> parentRefs)
     {
         var items = new List<string>
         {
@@ -283,9 +311,9 @@ internal static class GenerateFromCurrentBestPracticeCommand
             items.Add($"clarify: resolve {recommendedClarifications.Count} clarification candidate(s) before issue-cut-ready treatment.");
         }
 
-        if (modelRefs.Count == 0 || knowledgeRefs.Count == 0)
+        if (modelRefs.Count == 0 || knowledgeRefs.Count == 0 || parentRefs.Count == 0)
         {
-            items.Add("defer: keep the reconstructed result out of issue-cut and source-of-truth mutation until project-local model registry and knowledge base coverage improve.");
+            items.Add("defer: keep the reconstructed result out of issue-cut and source-of-truth mutation until parent rules/specs, project-local model registry, and knowledge base coverage are resolved.");
         }
 
         if (recommendedIntentAdditions.Count > 0)
@@ -299,9 +327,10 @@ internal static class GenerateFromCurrentBestPracticeCommand
     private static IReadOnlyList<string> BuildConfidenceDeltas(
         IReadOnlyList<string> confidenceByAltitude,
         IReadOnlyList<string> modelRefs,
-        IReadOnlyList<string> knowledgeRefs)
+        IReadOnlyList<string> knowledgeRefs,
+        IReadOnlyList<string> parentRefs)
     {
-        var hasCompleteReviewInputs = modelRefs.Count > 0 && knowledgeRefs.Count > 0;
+        var hasCompleteReviewInputs = modelRefs.Count > 0 && knowledgeRefs.Count > 0 && parentRefs.Count > 0;
         return confidenceByAltitude
             .Select(entry =>
             {
@@ -342,10 +371,12 @@ internal static class GenerateFromCurrentBestPracticeCommand
     private static string DetermineReadinessStatus(
         IReadOnlyList<string> modelRefs,
         IReadOnlyList<string> knowledgeRefs,
+        IReadOnlyList<string> parentRefs,
         IReadOnlyList<string> recommendedClarifications)
     {
         return modelRefs.Count > 0
             && knowledgeRefs.Count > 0
+            && parentRefs.Count > 0
             && recommendedClarifications.Count == 0
             ? "ready"
             : "not-ready";
@@ -353,9 +384,15 @@ internal static class GenerateFromCurrentBestPracticeCommand
 
     private static IReadOnlyList<string> BuildSkippedStages(
         IReadOnlyList<string> modelRefs,
-        IReadOnlyList<string> knowledgeRefs)
+        IReadOnlyList<string> knowledgeRefs,
+        IReadOnlyList<string> parentRefs)
     {
         var skippedStages = new List<string>();
+        if (parentRefs.Count == 0)
+        {
+            skippedStages.Add("parent-rule-spec-review");
+        }
+
         if (modelRefs.Count == 0)
         {
             skippedStages.Add("model-registry-review");

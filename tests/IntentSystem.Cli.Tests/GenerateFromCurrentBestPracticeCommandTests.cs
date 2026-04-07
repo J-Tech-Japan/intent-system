@@ -11,6 +11,7 @@ public sealed class GenerateFromCurrentBestPracticeCommandTests
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
+        var parentRepoRoot = tempDirectory.CreateDirectory("parent");
         tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "model-registry"));
         tempDirectory.CreateDirectory(Path.Combine("repo", ".intent", "best-practices"));
         tempDirectory.CreateFile(Path.Combine("repo", ".intent", "model-registry", "auth-model.md"), "# auth model");
@@ -20,19 +21,15 @@ public sealed class GenerateFromCurrentBestPracticeCommandTests
         tempDirectory.CreateFile(Path.Combine("repo", "src", "feature", "FeatureA.cs"), "namespace FeatureA;");
         using var writer = new StringWriter();
         var originalFactory = GenerateFromCurrentCommand.GitHubCommandRunnerFactory;
-        var originalParentRefProvider = GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider;
 
         try
         {
             GenerateFromCurrentCommand.GitHubCommandRunnerFactory = () => new FakeGitHubRunner();
-            GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider = () =>
-            [
-                "intents/intent-cli/specs/11-reconstruction-review-and-confirmation.md",
-                "intents/rules/reconstruction-feedback-loop.md"
-            ];
+            tempDirectory.CreateFile(Path.Combine("parent", "intents", "intent-cli", "specs", "11-reconstruction-review-and-confirmation.md"), "# review");
+            tempDirectory.CreateFile(Path.Combine("parent", "intents", "rules", "reconstruction-feedback-loop.md"), "# loop");
 
             var exitCode = GenerateFromCurrentCommand.Execute(
-                CreateContext(repoRoot),
+                CreateContext(repoRoot, parentRepoRoot),
                 ["best-practice", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,rules,execution"],
                 writer);
 
@@ -53,18 +50,19 @@ public sealed class GenerateFromCurrentBestPracticeCommandTests
             Assert.Contains("knowledge_refs:", artifact, StringComparison.Ordinal);
             Assert.Contains("- .intent/best-practices/security.md", artifact, StringComparison.Ordinal);
             Assert.Contains("parent_rule_spec_refs:", artifact, StringComparison.Ordinal);
+            Assert.Contains("- intents/intent-cli/specs/11-reconstruction-review-and-confirmation.md", artifact, StringComparison.Ordinal);
+            Assert.Contains("- intents/rules/reconstruction-feedback-loop.md", artifact, StringComparison.Ordinal);
             Assert.Contains("recommended_intent_additions:", artifact, StringComparison.Ordinal);
             Assert.Contains("developer_confirmation_items:", artifact, StringComparison.Ordinal);
         }
         finally
         {
             GenerateFromCurrentCommand.GitHubCommandRunnerFactory = originalFactory;
-            GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider = originalParentRefProvider;
         }
     }
 
     [Fact]
-    public void Execute_GivenMissingProjectInputs_ReturnsNotReadyReview()
+    public void Execute_GivenMissingParentRuleSpecInputs_ReturnsNotReadyReview()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -73,7 +71,6 @@ public sealed class GenerateFromCurrentBestPracticeCommandTests
         var originalReconstructionExecutor = GenerateFromCurrentBestPracticeCommand.ReconstructionExecutor;
         var originalModelRefProvider = GenerateFromCurrentBestPracticeCommand.ModelRefProvider;
         var originalKnowledgeRefProvider = GenerateFromCurrentBestPracticeCommand.KnowledgeRefProvider;
-        var originalParentRefProvider = GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider;
 
         try
         {
@@ -104,9 +101,8 @@ public sealed class GenerateFromCurrentBestPracticeCommandTests
                 ReturnToIntentPaths = ["README.md"],
                 Gaps = ["Need stronger auth signal."]
             };
-            GenerateFromCurrentBestPracticeCommand.ModelRefProvider = _ => [];
-            GenerateFromCurrentBestPracticeCommand.KnowledgeRefProvider = _ => [];
-            GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider = () => [];
+            GenerateFromCurrentBestPracticeCommand.ModelRefProvider = _ => [".intent/model-registry/auth-model.md"];
+            GenerateFromCurrentBestPracticeCommand.KnowledgeRefProvider = _ => [".intent/best-practices/security.md"];
 
             var exitCode = GenerateFromCurrentBestPracticeCommand.Execute(
                 CreateContext(repoRoot),
@@ -116,8 +112,10 @@ public sealed class GenerateFromCurrentBestPracticeCommandTests
             Assert.Equal(0, exitCode);
             var output = writer.ToString();
             Assert.Contains("Readiness status: not-ready", output, StringComparison.Ordinal);
-            Assert.Contains("- model-registry-review", output, StringComparison.Ordinal);
-            Assert.Contains("- best-practice-knowledge-review", output, StringComparison.Ordinal);
+            Assert.Contains("- parent-rule-spec-review", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("- model-registry-review", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("- best-practice-knowledge-review", output, StringComparison.Ordinal);
+            Assert.Contains("runtime parent intent repo root", output, StringComparison.Ordinal);
         }
         finally
         {
@@ -125,7 +123,6 @@ public sealed class GenerateFromCurrentBestPracticeCommandTests
             GenerateFromCurrentBestPracticeCommand.ReconstructionExecutor = originalReconstructionExecutor;
             GenerateFromCurrentBestPracticeCommand.ModelRefProvider = originalModelRefProvider;
             GenerateFromCurrentBestPracticeCommand.KnowledgeRefProvider = originalKnowledgeRefProvider;
-            GenerateFromCurrentBestPracticeCommand.ParentRuleSpecRefProvider = originalParentRefProvider;
         }
     }
 
@@ -140,7 +137,7 @@ public sealed class GenerateFromCurrentBestPracticeCommandTests
         Assert.Contains("requires a domain", writer.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static CliContext CreateContext(string repoRoot)
+    private static CliContext CreateContext(string repoRoot, string? parentIntentRepoRoot = null)
     {
         return new CliContext
         {
@@ -152,7 +149,8 @@ public sealed class GenerateFromCurrentBestPracticeCommandTests
                     Domain = "intent-system",
                     WorkflowEngine = "intent-cli",
                     ArtifactRoot = ".intent-cli",
-                    WorktreeRoot = ".intent-cli/worktrees"
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    ParentIntentRepoRoot = parentIntentRepoRoot ?? string.Empty
                 }
             }
         };

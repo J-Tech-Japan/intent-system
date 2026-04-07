@@ -49,4 +49,20 @@ internal sealed record CliContext
 
         return Path.GetFullPath(Path.Combine(RepoRoot, worktreeRoot));
     }
+
+    public string? ResolveParentIntentRepoRootPath()
+    {
+        var parentIntentRepoRoot = Config.Project.ParentIntentRepoRoot;
+        if (string.IsNullOrWhiteSpace(parentIntentRepoRoot))
+        {
+            return null;
+        }
+
+        if (Path.IsPathRooted(parentIntentRepoRoot))
+        {
+            return parentIntentRepoRoot;
+        }
+
+        return Path.GetFullPath(Path.Combine(RepoRoot, parentIntentRepoRoot));
+    }
 }

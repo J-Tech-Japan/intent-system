@@ -12,6 +12,7 @@ public sealed class CliConfigLoaderTests
         workflow_engine = "takt"
         artifact_root = ".intent-cli"
         worktree_root = ".intent-cli/worktrees"
+        parent_intent_repo_root = "../MyIntentHost"
         """;
 
         var config = CliConfigLoader.Load(toml);
@@ -20,6 +21,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
+        Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
         Assert.Equal("Claude", config.Roles.Implement);
         Assert.Equal("Codex", config.Roles.Review);
     }
@@ -35,6 +37,7 @@ public sealed class CliConfigLoaderTests
             workflow_engine = "takt"
             artifact_root = ".intent-cli"
             worktree_root = ".intent-cli/worktrees"
+            parent_intent_repo_root = "../MyIntentHost"
             """);
 
         var config = CliConfigLoader.LoadFromFile(configPath);
@@ -43,6 +46,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
+        Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
         Assert.Equal("Claude", config.Roles.Implement);
     }
 
@@ -55,6 +59,7 @@ public sealed class CliConfigLoaderTests
         workflow_engine = "takt"
         artifact_root = ".intent-cli"
         worktree_root = ".intent-cli/worktrees"
+        parent_intent_repo_root = "../MyIntentHost"
         """;
 
         var config = CliConfigLoader.Load(toml);
@@ -63,6 +68,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
+        Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
         Assert.Equal("Claude", config.Roles.Implement);
     }
 
