@@ -40,6 +40,12 @@ internal static class GenerateFromCurrentCommand
         ArgumentNullException.ThrowIfNull(writer);
 
         if (args.Length > 0
+            && string.Equals(args[0], "advance", StringComparison.Ordinal))
+        {
+            return GenerateFromCurrentAdvanceCommand.Execute(context, args[1..], writer);
+        }
+
+        if (args.Length > 0
             && string.Equals(args[0], "bridge", StringComparison.Ordinal))
         {
             return GenerateFromCurrentBridgeCommand.Execute(context, args[1..], writer);
