@@ -28,82 +28,10 @@ internal static class RunSubmitCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
-        {
-            return 1;
-        }
-
-        var executionUnit = args[0];
-        var queueItem = queueState.Items.FirstOrDefault(item =>
-            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
-
-        if (queueItem is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
-        }
-
-        if (queueItem.LinkedIssue is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' must have a linked issue before run submit.");
-            return 1;
-        }
-
-        var packetPath = Path.Combine(
-            context.RepoRoot,
-            queueItem.PacketPaths.Yaml.Replace('/', Path.DirectorySeparatorChar));
-        if (!File.Exists(packetPath))
-        {
-            writer.WriteLine($"Projection packet artifact was not found at {packetPath}");
-            return 1;
-        }
-
         try
         {
-            var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
-            var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
-            if (string.IsNullOrWhiteSpace(childRepoRef))
-            {
-                throw new InvalidOperationException("Projection packet must contain a target repo.");
-            }
-
-            var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
-            if (!Directory.Exists(childRepoPath))
-            {
-                throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
-            }
-
-            var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
-            if (!Directory.Exists(worktreePath))
-            {
-                throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
-            }
-
-            var branchName = RunStartCommand.ResolveBranchName(executionUnit, queueItem.LinkedIssue);
-            var gitRunner = GitCommandRunnerFactory();
-            EnsureBranchMatches(worktreePath, branchName, gitRunner);
-            PushBranch(worktreePath, branchName, gitRunner);
-
-            var targetRepo = ResolveGitHubTargetRepo(childRepoPath, gitRunner);
-            var pullRequestTitle = ResolvePullRequestTitle(queueItem);
-            var pullRequestBody = ResolvePullRequestBody(queueItem);
-            var linkedPr = PublisherFactory().CreateDraftPullRequest(
-                targetRepo,
-                branchName,
-                pullRequestTitle,
-                pullRequestBody);
-
-            var timestamp = TimestampFactory();
-            var transition = QueueManager.SubmitForReview(
-                queueState,
-                executionUnit,
-                TransitionActor,
-                timestamp,
-                linkedPr);
-            PersistSubmit(context, transition);
-
-            writer.WriteLine($"Run submitted for {executionUnit}.");
+            var result = ExecuteCore(context, args[0]);
+            writer.WriteLine($"Run submitted for {result.ExecutionUnit}.");
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -111,6 +39,89 @@ internal static class RunSubmitCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static RunSubmitResult ExecuteCore(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
+        var queueItem = queueState.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+        if (queueItem is null)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
+        }
+
+        if (queueItem.LinkedIssue is null)
+        {
+            throw new InvalidOperationException(
+                $"Execution unit '{executionUnit}' must have a linked issue before run submit.");
+        }
+
+        var packetPath = Path.Combine(
+            context.RepoRoot,
+            queueItem.PacketPaths.Yaml.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(packetPath))
+        {
+            throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
+        }
+
+        var packet = ProjectionPacketSerializer.Deserialize(File.ReadAllText(packetPath));
+        var childRepoRef = packet.ImplementationIssuePacket.TargetRepo;
+        if (string.IsNullOrWhiteSpace(childRepoRef))
+        {
+            throw new InvalidOperationException("Projection packet must contain a target repo.");
+        }
+
+        var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
+        if (!Directory.Exists(childRepoPath))
+        {
+            throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
+        }
+
+        var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
+        if (!Directory.Exists(worktreePath))
+        {
+            throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
+        }
+
+        var branchName = RunStartCommand.ResolveBranchName(executionUnit, queueItem.LinkedIssue);
+        var gitRunner = GitCommandRunnerFactory();
+        EnsureBranchMatches(worktreePath, branchName, gitRunner);
+        PushBranch(worktreePath, branchName, gitRunner);
+
+        var targetRepo = ResolveGitHubTargetRepo(childRepoPath, gitRunner);
+        var pullRequestTitle = ResolvePullRequestTitle(queueItem);
+        var pullRequestBody = ResolvePullRequestBody(queueItem);
+        var linkedPr = PublisherFactory().CreateDraftPullRequest(
+            targetRepo,
+            branchName,
+            pullRequestTitle,
+            pullRequestBody);
+
+        var timestamp = TimestampFactory();
+        var transition = QueueManager.SubmitForReview(
+            queueState,
+            executionUnit,
+            TransitionActor,
+            timestamp,
+            linkedPr);
+        PersistSubmit(context, transition);
+
+        return new RunSubmitResult
+        {
+            ExecutionUnit = executionUnit,
+            LinkedPr = linkedPr
+        };
     }
 
     internal static string ResolvePullRequestTitle(QueueItem queueItem)
