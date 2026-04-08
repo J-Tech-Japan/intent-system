@@ -106,6 +106,12 @@ internal static class GenerateFromCurrentCommand
         }
 
         if (args.Length > 0
+            && string.Equals(args[0], "reconcile", StringComparison.Ordinal))
+        {
+            return GenerateFromCurrentReconcileCommand.Execute(context, args[1..], writer);
+        }
+
+        if (args.Length > 0
             && string.Equals(args[0], "clarify", StringComparison.Ordinal))
         {
             return GenerateFromCurrentClarifyCommand.Execute(context, args[1..], writer);
