@@ -2,10 +2,14 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class RunSupervisionSessionArtifactPathResolver
 {
-    public static string Resolve(string executionUnit)
+    public static string Resolve(string artifactRoot, string executionUnit)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(artifactRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
-        return $".intent-cli/supervision/{executionUnit.Trim()}.session.json";
+        var normalizedRoot = artifactRoot.Trim().TrimEnd('/', '\\');
+        var normalizedUnit = executionUnit.Trim();
+
+        return $"{normalizedRoot.Replace('\\', '/')}/{normalizedUnit}.session.json";
     }
 }

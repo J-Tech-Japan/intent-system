@@ -117,6 +117,62 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenConfiguredSupervisionPolicy_UsesConfiguredRetryDelayAndArtifactRoot()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateActiveRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runtime-supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession()));
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:20:00Z");
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(
+                repoRoot,
+                supervisionArtifactRoot: ".intent-cli/runtime-supervision",
+                staleHeartbeatTimeoutMinutes: 10,
+                retryDelayMinutes: 12,
+                retryBudget: 5), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains(".intent-cli/runtime-supervision/G25.session.json", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Retry count: 0/5", writer.ToString(), StringComparison.Ordinal);
+
+            var sessionPath = Path.Combine(repoRoot, ".intent-cli", "runtime-supervision", "G25.session.json");
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionPath));
+            Assert.Equal(RunSupervisionSessionStatus.RetryScheduled, session.Status);
+            Assert.Equal(5, session.RetryBudget);
+            Assert.Equal("2026-04-08T10:32:00.0000000+00:00", session.NextRetryAt?.ToString("O"));
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("retry-scheduled", runEvents[^1].Event);
+            Assert.Contains("Heartbeat expired after 10 minutes", runEvents[^1].Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenDueRetrySchedule_AutoResumesSameWorkerEntryAndAppendsRunEvents()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -262,7 +318,12 @@ public sealed class RunSuperviseCommandTests
         }
     }
 
-    private static CliContext CreateContext(string repoRoot)
+    private static CliContext CreateContext(
+        string repoRoot,
+        string supervisionArtifactRoot = ".intent-cli/supervision",
+        int staleHeartbeatTimeoutMinutes = 15,
+        int retryDelayMinutes = 5,
+        int retryBudget = 3)
     {
         return new CliContext
         {
@@ -282,6 +343,13 @@ public sealed class RunSuperviseCommandTests
                     Review = "Codex",
                     Interview = "Claude",
                     Clarify = "Codex"
+                },
+                Supervision = new SupervisionConfig
+                {
+                    ArtifactRoot = supervisionArtifactRoot,
+                    StaleHeartbeatTimeoutMinutes = staleHeartbeatTimeoutMinutes,
+                    RetryDelayMinutes = retryDelayMinutes,
+                    RetryBudget = retryBudget
                 }
             }
         };

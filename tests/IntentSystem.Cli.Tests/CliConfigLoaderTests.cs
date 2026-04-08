@@ -24,6 +24,10 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
         Assert.Equal("Claude", config.Roles.Implement);
         Assert.Equal("Codex", config.Roles.Review);
+        Assert.Equal(".intent-cli/supervision", config.Supervision.ArtifactRoot);
+        Assert.Equal(15, config.Supervision.StaleHeartbeatTimeoutMinutes);
+        Assert.Equal(5, config.Supervision.RetryDelayMinutes);
+        Assert.Equal(3, config.Supervision.RetryBudget);
     }
 
     [Fact]
@@ -93,6 +97,29 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("Claude", config.Roles.Review);
         Assert.Equal("Codex", config.Roles.Interview);
         Assert.Equal("Claude", config.Roles.Clarify);
+    }
+
+    [Fact]
+    public void Load_GivenSupervisionSection_RestoresRetryPolicyAndArtifactRoot()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        workflow_engine = "takt"
+        artifact_root = ".intent-cli"
+
+        [supervision]
+        artifact_root = ".intent-cli/runtime-supervision"
+        stale_heartbeat_timeout_minutes = 30
+        retry_delay_minutes = 12
+        retry_budget = 7
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal(".intent-cli/runtime-supervision", config.Supervision.ArtifactRoot);
+        Assert.Equal(30, config.Supervision.StaleHeartbeatTimeoutMinutes);
+        Assert.Equal(12, config.Supervision.RetryDelayMinutes);
+        Assert.Equal(7, config.Supervision.RetryBudget);
     }
 
     [Fact]

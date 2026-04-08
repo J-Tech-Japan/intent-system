@@ -54,8 +54,16 @@ internal static class CliConfigLoader
         var parentIntentRepoRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
         var roles = ReadRoles(rootTable);
+        var supervision = ReadSupervision(rootTable);
 
-        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot, parentIntentRepoRoot, roles);
+        config = CreateConfig(
+            domain,
+            workflowEngine,
+            artifactRoot,
+            worktreeRoot,
+            parentIntentRepoRoot,
+            roles,
+            supervision);
         return true;
     }
 
@@ -83,8 +91,16 @@ internal static class CliConfigLoader
         var parentIntentRepoRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
         var roles = ReadRoles(rootTable);
+        var supervision = ReadSupervision(rootTable);
 
-        config = CreateConfig(domain, workflowEngine, artifactRoot, worktreeRoot, parentIntentRepoRoot, roles);
+        config = CreateConfig(
+            domain,
+            workflowEngine,
+            artifactRoot,
+            worktreeRoot,
+            parentIntentRepoRoot,
+            roles,
+            supervision);
         return true;
     }
 
@@ -94,7 +110,8 @@ internal static class CliConfigLoader
         string artifactRoot,
         string worktreeRoot,
         string parentIntentRepoRoot,
-        RoleMappings roles)
+        RoleMappings roles,
+        SupervisionConfig supervision)
     {
         return new CliConfig
         {
@@ -106,7 +123,8 @@ internal static class CliConfigLoader
                 WorktreeRoot = worktreeRoot,
                 ParentIntentRepoRoot = parentIntentRepoRoot
             },
-            Roles = roles
+            Roles = roles,
+            Supervision = supervision
         };
     }
 
@@ -130,6 +148,33 @@ internal static class CliConfigLoader
                 ?? CliRuntimeContracts.DefaultInterviewRole,
             Clarify = TryGetOptionalString(rolesTable, CliRuntimeContracts.ClarifyRoleKey)
                 ?? CliRuntimeContracts.DefaultClarifyRole
+        };
+    }
+
+    private static SupervisionConfig ReadSupervision(TomlTable rootTable)
+    {
+        ArgumentNullException.ThrowIfNull(rootTable);
+
+        if (!rootTable.TryGetValue(CliRuntimeContracts.SupervisionSectionName, out var section)
+            || section is not TomlTable supervisionTable)
+        {
+            return new SupervisionConfig();
+        }
+
+        return new SupervisionConfig
+        {
+            ArtifactRoot = TryGetOptionalString(supervisionTable, CliRuntimeContracts.ArtifactRootKey)
+                ?? CliRuntimeContracts.DefaultSupervisionArtifactRoot,
+            StaleHeartbeatTimeoutMinutes = TryGetOptionalInt32(
+                supervisionTable,
+                CliRuntimeContracts.StaleHeartbeatTimeoutMinutesKey)
+                ?? CliRuntimeContracts.DefaultSupervisionStaleHeartbeatTimeoutMinutes,
+            RetryDelayMinutes = TryGetOptionalInt32(
+                supervisionTable,
+                CliRuntimeContracts.RetryDelayMinutesKey)
+                ?? CliRuntimeContracts.DefaultSupervisionRetryDelayMinutes,
+            RetryBudget = TryGetOptionalInt32(supervisionTable, CliRuntimeContracts.RetryBudgetKey)
+                ?? CliRuntimeContracts.DefaultSupervisionRetryBudget
         };
     }
 
@@ -169,5 +214,30 @@ internal static class CliConfigLoader
         }
 
         return textValue;
+    }
+
+    private static int? TryGetOptionalInt32(TomlTable table, string key)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        if (!table.TryGetValue(key, out var rawValue))
+        {
+            return null;
+        }
+
+        if (rawValue is long longValue)
+        {
+            if (longValue <= 0 || longValue > int.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value '{key}' must be a positive integer.");
+            }
+
+            return (int)longValue;
+        }
+
+        throw new InvalidOperationException(
+            $"CLI config value '{key}' must be a positive integer.");
     }
 }

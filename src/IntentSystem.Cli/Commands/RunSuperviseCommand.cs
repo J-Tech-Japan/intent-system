@@ -8,9 +8,6 @@ namespace IntentSystem.Cli.Commands;
 internal static class RunSuperviseCommand
 {
     private const string TransitionActor = "intent-cli";
-    private static readonly TimeSpan HeartbeatTimeout = TimeSpan.FromMinutes(15);
-    private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(5);
-    private const int RetryBudget = 3;
 
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
 
@@ -90,11 +87,16 @@ internal static class RunSuperviseCommand
             throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
         }
 
-        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(executionUnit);
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            executionUnit);
         var sessionArtifactPath = ResolveArtifactPath(context.RepoRoot, sessionArtifactRef);
         var now = TimestampFactory();
         var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
         var supervisionContext = ResolveSupervisionContext(context, queueItem, runEvents, packetPath);
+        var heartbeatTimeout = TimeSpan.FromMinutes(context.Config.Supervision.StaleHeartbeatTimeoutMinutes);
+        var retryDelay = TimeSpan.FromMinutes(context.Config.Supervision.RetryDelayMinutes);
+        var retryBudget = context.Config.Supervision.RetryBudget;
 
         var session = File.Exists(sessionArtifactPath)
             ? RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath))
@@ -109,7 +111,7 @@ internal static class RunSuperviseCommand
 
         if (session is null)
         {
-            var createdSession = CreateSession(supervisionContext, now);
+            var createdSession = CreateSession(supervisionContext, now, retryBudget);
             PersistSession(sessionArtifactPath, createdSession);
             return CreateResult(sessionArtifactRef, createdSession);
         }
@@ -129,7 +131,8 @@ internal static class RunSuperviseCommand
             LinkedIssue = supervisionContext.LinkedIssue,
             LinkedPr = supervisionContext.LinkedPr,
             CommentRef = supervisionContext.CommentRef,
-            HandoffArtifactRef = supervisionContext.HandoffArtifactRef
+            HandoffArtifactRef = supervisionContext.HandoffArtifactRef,
+            RetryBudget = retryBudget
         };
 
         if (session.Status == RunSupervisionSessionStatus.RetryScheduled)
@@ -158,7 +161,7 @@ internal static class RunSuperviseCommand
                 now);
         }
 
-        if (now - session.LastHeartbeatAt > HeartbeatTimeout)
+        if (now - session.LastHeartbeatAt > heartbeatTimeout)
         {
             if (session.RetryCount >= session.RetryBudget)
             {
@@ -175,12 +178,12 @@ internal static class RunSuperviseCommand
             }
 
             var reason =
-                $"Heartbeat expired after {HeartbeatTimeout.TotalMinutes:0} minutes while supervising '{executionUnit}'.";
+                $"Heartbeat expired after {heartbeatTimeout.TotalMinutes:0} minutes while supervising '{executionUnit}'.";
             var scheduledSession = session with
             {
                 Status = RunSupervisionSessionStatus.RetryScheduled,
                 UpdatedAt = now,
-                NextRetryAt = now.Add(RetryDelay),
+                NextRetryAt = now.Add(retryDelay),
                 LastInterruptionReason = reason
             };
 
@@ -453,7 +456,10 @@ internal static class RunSuperviseCommand
         };
     }
 
-    private static RunSupervisionSession CreateSession(RunSupervisionContext context, DateTimeOffset now)
+    private static RunSupervisionSession CreateSession(
+        RunSupervisionContext context,
+        DateTimeOffset now,
+        int retryBudget)
     {
         return new RunSupervisionSession
         {
@@ -469,7 +475,7 @@ internal static class RunSuperviseCommand
             CommentRef = context.CommentRef,
             HandoffArtifactRef = context.HandoffArtifactRef,
             RetryCount = 0,
-            RetryBudget = RetryBudget,
+            RetryBudget = retryBudget,
             CreatedAt = now,
             UpdatedAt = now,
             LastHeartbeatAt = now
