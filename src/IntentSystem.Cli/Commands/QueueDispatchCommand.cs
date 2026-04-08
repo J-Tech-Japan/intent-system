@@ -41,6 +41,23 @@ internal static class QueueDispatchCommand
             return 1;
         }
 
+        if (queueItem.LinkedIssue is not null)
+        {
+            PersistRunEvent(
+                context,
+                new IntentSystem.Supervisor.Models.RunEvent
+                {
+                    Ts = TimestampFactory(),
+                    ExecutionUnit = executionUnit,
+                    Event = "issue-reused",
+                    By = TransitionActor,
+                    LinkedIssue = queueItem.LinkedIssue.Url
+                });
+
+            writer.WriteLine($"Queue item {executionUnit} reused existing linked issue {queueItem.LinkedIssue.Url}.");
+            return 0;
+        }
+
         var packetPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.Yaml);
         if (!File.Exists(packetPath))
         {
@@ -116,12 +133,17 @@ internal static class QueueDispatchCommand
         var queueStatePath = context.GetQueueStatePath();
         File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(result.UpdatedState));
 
+        PersistRunEvent(context, result.Event);
+    }
+
+    private static void PersistRunEvent(CliContext context, IntentSystem.Supervisor.Models.RunEvent runEvent)
+    {
         var runLogPath = context.GetRunLogPath();
         var runLogDirectory = Path.GetDirectoryName(runLogPath)
             ?? throw new InvalidOperationException("Run log path did not contain a directory.");
         Directory.CreateDirectory(runLogDirectory);
         File.AppendAllText(
             runLogPath,
-            RunLogSerializer.SerializeLine(result.Event) + Environment.NewLine);
+            RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
     }
 }

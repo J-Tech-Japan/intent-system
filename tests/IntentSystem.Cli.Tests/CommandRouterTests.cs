@@ -1331,6 +1331,38 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenQueueDispatchCommandWithExistingLinkedIssue_DispatchesToReuseRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueDispatchQueueState(withExistingLinkedIssue: true)));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalTimestampFactory = QueueDispatchCommand.TimestampFactory;
+
+        try
+        {
+            QueueDispatchCommand.PublisherFactory = () => new ThrowingQueueDispatchPublisher();
+            QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T06:00:00Z");
+
+            var exitCode = CommandRouter.Execute(["queue", "dispatch", "G13"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("reused existing linked issue", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenQueueEnqueueCommand_DispatchesToQueueEnqueueRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -2780,7 +2812,7 @@ public sealed class CommandRouterTests
         };
     }
 
-    private static QueueState CreateQueueDispatchQueueState()
+    private static QueueState CreateQueueDispatchQueueState(bool withExistingLinkedIssue = false)
     {
         return new QueueState
         {
@@ -2802,6 +2834,14 @@ public sealed class CommandRouterTests
                         ReviewContext = ".intent-cli/issues/G13/review-context.md",
                         Yaml = ".intent-cli/issues/G13/packet.yaml"
                     },
+                    LinkedIssue = withExistingLinkedIssue
+                        ? new LinkedIssue
+                        {
+                            Repo = "J-Tech-Japan/intent-system",
+                            Number = 41,
+                            Url = "https://github.com/J-Tech-Japan/intent-system/issues/41"
+                        }
+                        : null,
                     WorkerRole = "coder",
                     ReviewRole = "reviewer",
                     Priority = "high"
@@ -4247,6 +4287,14 @@ recommended_updates:
                 Number = 53,
                 Url = "https://github.com/J-Tech-Japan/intent-system/issues/53"
             };
+        }
+    }
+
+    private sealed class ThrowingQueueDispatchPublisher : IQueueDispatchPublisher
+    {
+        public LinkedIssue CreateIssue(string targetRepo, string title, string body)
+        {
+            throw new InvalidOperationException("CreateIssue should not be called when linked issue already exists.");
         }
     }
 

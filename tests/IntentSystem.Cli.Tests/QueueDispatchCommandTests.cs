@@ -67,6 +67,45 @@ public sealed class QueueDispatchCommandTests
     }
 
     [Fact]
+    public void Execute_GivenExistingLinkedIssue_ReusesItWithoutCreatingDuplicateIssueOrMutatingQueue()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(withExistingLinkedIssue: true)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalTimestampFactory = QueueDispatchCommand.TimestampFactory;
+
+        try
+        {
+            QueueDispatchCommand.PublisherFactory = () => new ThrowingPublisher();
+            QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T06:00:00Z");
+
+            var originalQueueState = File.ReadAllText(queueStatePath);
+            var exitCode = QueueDispatchCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("reused existing linked issue", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            var reuseEvent = Assert.Single(runEvents);
+            Assert.Equal("issue-reused", reuseEvent.Event);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/41", reuseEvent.LinkedIssue);
+        }
+        finally
+        {
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenMissingPacketArtifact_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -244,7 +283,7 @@ public sealed class QueueDispatchCommandTests
         };
     }
 
-    private static QueueState CreateQueueState()
+    private static QueueState CreateQueueState(bool withExistingLinkedIssue = false)
     {
         return new QueueState
         {
@@ -252,13 +291,16 @@ public sealed class QueueDispatchCommandTests
             UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
             Items =
             [
-                CreateItem("G13", QueueItemState.Queued),
+                CreateItem("G13", QueueItemState.Queued, withExistingLinkedIssue),
                 CreateItem("G14", QueueItemState.Queued)
             ]
         };
     }
 
-    private static QueueItem CreateItem(string executionUnit, QueueItemState state)
+    private static QueueItem CreateItem(
+        string executionUnit,
+        QueueItemState state,
+        bool withExistingLinkedIssue = false)
     {
         return new QueueItem
         {
@@ -274,6 +316,14 @@ public sealed class QueueDispatchCommandTests
                 ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
                 Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml"
             },
+            LinkedIssue = withExistingLinkedIssue
+                ? new LinkedIssue
+                {
+                    Repo = "J-Tech-Japan/intent-system",
+                    Number = 41,
+                    Url = "https://github.com/J-Tech-Japan/intent-system/issues/41"
+                }
+                : null,
             WorkerRole = "coder",
             ReviewRole = "reviewer",
             Priority = "high"
@@ -359,6 +409,14 @@ public sealed class QueueDispatchCommandTests
                 Number = 53,
                 Url = "https://github.com/J-Tech-Japan/intent-system/issues/53"
             };
+        }
+    }
+
+    private sealed class ThrowingPublisher : IQueueDispatchPublisher
+    {
+        public LinkedIssue CreateIssue(string targetRepo, string title, string body)
+        {
+            throw new InvalidOperationException("CreateIssue should not be called when linked issue already exists.");
         }
     }
 
