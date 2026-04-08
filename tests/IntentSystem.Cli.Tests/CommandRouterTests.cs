@@ -674,6 +674,44 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentConfirmedAdvanceCommand_DispatchesToConfirmedAdvanceRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        using var writer = new StringWriter();
+        var originalBridgeExecutor = GenerateFromCurrentConfirmedAdvanceCommand.ConfirmedBridgeExecutor;
+
+        try
+        {
+            GenerateFromCurrentConfirmedAdvanceCommand.ConfirmedBridgeExecutor = (_, _) => new GenerateFromCurrentConfirmedBridgeResult
+            {
+                Domain = "auth",
+                Route = "reconciliation-required",
+                ConceptArtifactPath = null,
+                InterviewArtifactPaths = [],
+                ClarificationReturnArtifactPath = null,
+                ConfirmedReconstructionArtifactPath = ".intent-cli/intake/auth.confirmed-reconstruction.yaml",
+                RegeneratedArtifactPaths = [".intent-cli/intake/auth.confirmed-reconstruction.yaml"],
+                ConfirmedItems = ["confirm: validate current auth boundary"],
+                BlockedItems = ["defer: return interface cleanup after clarification"],
+                DownstreamReadiness = "not-ready"
+            };
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "confirmed-advance", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current confirmed-advance processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentConfirmedAdvanceCommand.ConfirmedBridgeExecutor = originalBridgeExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentImplementCommand_DispatchesToImplementRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
