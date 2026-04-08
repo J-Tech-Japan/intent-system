@@ -2388,6 +2388,34 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRunSuperviseCommand_DispatchesToRunSuperviseRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateRunSuperviseQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunSuperviseRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreateRunSupervisePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["run", "supervise", "G25"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Run supervision updated for G25", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Worker entry: run implement", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -3590,6 +3618,69 @@ public sealed class CommandRouterTests
             - "run fix command remains handoff-only"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
         """;
+    }
+
+    private static QueueState CreateRunSuperviseQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-08T10:00:00Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "G25",
+                    Title = "[G25] Run Supervise Command",
+                    State = QueueItemState.Active,
+                    Dependencies = [],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G25/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G25/review-context.md",
+                        Yaml = ".intent-cli/issues/G25/packet.yaml"
+                    },
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 178,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/issues/178"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "P1"
+                }
+            ]
+        };
+    }
+
+    private static string CreateRunSupervisePacketYaml()
+    {
+        return """
+        execution_unit: "G25"
+
+        implementation_issue:
+          issue_title: "[G25] Run Supervise Command"
+          goal: "Supervise retryable run interruptions."
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli run supervise command"
+          dependencies: []
+
+        review:
+          review_context_path: ".intent-cli/issues/G25/review-context.md"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
+    }
+
+    private static string CreateRunSuperviseRunLog()
+    {
+        return """
+        {"ts":"2026-04-08T09:50:00Z","execution_unit":"G25","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/178"}
+        {"ts":"2026-04-08T10:00:00Z","execution_unit":"G25","event":"activated","by":"intent-cli"}
+        """ + Environment.NewLine;
     }
 
     private static string CreateClarifyOpenPacketYaml()

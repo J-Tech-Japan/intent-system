@@ -33,6 +33,7 @@ internal static class CommandRouter
             ["run"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["start"] = RunStartCommand.Execute,
+                ["supervise"] = RunSuperviseCommand.Execute,
                 ["submit"] = RunSubmitCommand.Execute,
                 ["resubmit"] = RunResubmitCommand.Execute,
                 ["rereview"] = RunRereviewCommand.Execute,
