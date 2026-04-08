@@ -975,6 +975,54 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentConfirmedCloseoutCommand_DispatchesToConfirmedCloseoutRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        using var writer = new StringWriter();
+        var originalAcceptExecutor = GenerateFromCurrentConfirmedCloseoutCommand.ConfirmedAcceptExecutor;
+
+        try
+        {
+            GenerateFromCurrentConfirmedCloseoutCommand.ConfirmedAcceptExecutor = (_, _, _) => new GenerateFromCurrentConfirmedAcceptResult
+            {
+                Domain = "auth",
+                Route = "reconciliation-required",
+                ClarificationReturnArtifactPath = null,
+                ConfirmedReconstructionArtifactPath = ".intent-cli/intake/auth.confirmed-reconstruction.yaml",
+                UpdatedSourceFilePaths = ["intents/intent-cli/concepts/auth-oauth2.md"],
+                UpdatedExecutionFilePaths = ["intents/intent-cli/execution/05-post-mvp-sub-slices.md"],
+                RegeneratedArtifactPaths = [".intent-cli/intake/auth.confirmed-reconstruction.yaml"],
+                StartedExecutionUnits = [],
+                CreatedIssueRefs = [],
+                WorktreePaths = [],
+                ImplementRequestArtifactPaths = [],
+                CreatedPrRefs = [],
+                ReviewExecutionUnits = [],
+                ReviewRequestArtifactPaths = [],
+                MergedPrRefs = [],
+                ClosedIssueRefs = [],
+                CompletedExecutionUnits = [],
+                ConfirmedItems = ["confirm: validate current auth boundary"],
+                BlockedItems = ["defer: return interface cleanup after clarification"],
+                DownstreamReadiness = "not-ready"
+            };
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "confirmed-closeout", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current confirmed-closeout processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentConfirmedCloseoutCommand.ConfirmedAcceptExecutor = originalAcceptExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentConfirmedCommentCommand_DispatchesToConfirmedCommentRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
