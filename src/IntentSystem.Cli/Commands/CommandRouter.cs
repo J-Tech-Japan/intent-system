@@ -78,7 +78,8 @@ internal static class CommandRouter
             },
             ["bug"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
-                ["report"] = BugReportCommand.Execute
+                ["report"] = BugReportCommand.Execute,
+                ["triage"] = BugTriageCommand.Execute
             },
             ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

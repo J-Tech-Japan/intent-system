@@ -1427,6 +1427,43 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugTriageCommand_DispatchesToBugTriageRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.report.yaml"),
+            BugReportArtifactYaml.Serialize(
+                new BugReportArtifact
+                {
+                    DomainSlug = "auth",
+                    BugId = "BUG-123",
+                    Title = "OAuth callback loop",
+                    ReportSource = "from-file",
+                    ProblemStatement = "Observed callback loop after login.",
+                    SuspectedFailureLocus = "Observed callback loop after login.",
+                    OriginalInstructionRefs = ["ICL.P.PRODUCT_GOAL"],
+                    AffectedIntentRefs = ["intents/intent-cli/means/auth.md"],
+                    AffectedRuleSpecRefs = ["intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"],
+                    ClarificationCandidates = ["Should provider retry reuse callback state token?"],
+                    LinkedExecutionUnits = ["G25"],
+                    LinkedIssueRefs = [],
+                    LinkedPrRefs = [],
+                    LinkedReviewRefs = ["https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1"]
+                }));
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "issues", "G25", "implementation.md"), "# Implementation");
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "issues", "G25", "review-context.md"), "# Review Context");
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"), "execution_unit: G25");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["bug", "triage", "BUG-123"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Bug triage artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Classification: implementation-and-intent-impact", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenInterviewStartCommand_DispatchesToInterviewStartRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
