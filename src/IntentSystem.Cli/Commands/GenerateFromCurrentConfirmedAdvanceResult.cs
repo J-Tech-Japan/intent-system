@@ -1,0 +1,24 @@
+namespace IntentSystem.Cli.Commands;
+
+internal sealed record GenerateFromCurrentConfirmedAdvanceResult
+{
+    public required string Domain { get; init; }
+
+    public required string Route { get; init; }
+
+    public string? ClarificationReturnArtifactPath { get; init; }
+
+    public string? ConfirmedReconstructionArtifactPath { get; init; }
+
+    public required IReadOnlyList<string> UpdatedSourceFilePaths { get; init; }
+
+    public required IReadOnlyList<string> UpdatedExecutionFilePaths { get; init; }
+
+    public required IReadOnlyList<string> RegeneratedArtifactPaths { get; init; }
+
+    public required IReadOnlyList<string> ConfirmedItems { get; init; }
+
+    public required IReadOnlyList<string> BlockedItems { get; init; }
+
+    public required string DownstreamReadiness { get; init; }
+}
