@@ -4,7 +4,7 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class GenerateFromCurrentBridgeCommand
 {
-    private static readonly DateTimeOffset CreatedAtBase = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+    internal static readonly DateTimeOffset CreatedAtBase = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -61,7 +61,7 @@ internal static class GenerateFromCurrentBridgeCommand
         };
     }
 
-    private static string ParseDomain(string[] args)
+    internal static string ParseDomain(string[] args)
     {
         if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
         {
@@ -71,7 +71,7 @@ internal static class GenerateFromCurrentBridgeCommand
         return args[0].Trim();
     }
 
-    private static ReconstructedConceptArtifact LoadReconstructedConcept(string repoRoot, string domain)
+    internal static ReconstructedConceptArtifact LoadReconstructedConcept(string repoRoot, string domain)
     {
         var artifactPath = Path.Combine(
             repoRoot,
@@ -91,7 +91,7 @@ internal static class GenerateFromCurrentBridgeCommand
         return artifact;
     }
 
-    private static ReconstructedInterviewArtifact LoadReconstructedInterview(string repoRoot, string domain)
+    internal static ReconstructedInterviewArtifact LoadReconstructedInterview(string repoRoot, string domain)
     {
         var artifactPath = Path.Combine(
             repoRoot,
@@ -111,7 +111,7 @@ internal static class GenerateFromCurrentBridgeCommand
         return artifact;
     }
 
-    private static IReadOnlyList<string> BuildRecommendedUpdates(ReconstructedInterviewArtifact reconstructedInterview)
+    internal static IReadOnlyList<string> BuildRecommendedUpdates(ReconstructedInterviewArtifact reconstructedInterview)
     {
         return reconstructedInterview.RootNearIntentCandidates
             .Concat(reconstructedInterview.ExecutionNearUpdateCandidates)
@@ -170,7 +170,7 @@ internal static class GenerateFromCurrentBridgeCommand
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static IReadOnlyList<string> WriteInterviewArtifacts(
+    internal static IReadOnlyList<string> WriteInterviewArtifacts(
         string repoRoot,
         string domain,
         ReconstructedConceptArtifact reconstructedConcept,
@@ -288,7 +288,7 @@ internal static class GenerateFromCurrentBridgeCommand
         lines.AddRange(values.Select(value => $"- {value}"));
     }
 
-    private static string ToRelativePath(string repoRoot, string absolutePath)
+    internal static string ToRelativePath(string repoRoot, string absolutePath)
     {
         return Path.GetRelativePath(repoRoot, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
     }
