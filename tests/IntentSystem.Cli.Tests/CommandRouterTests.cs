@@ -750,6 +750,47 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentConfirmedImplementCommand_DispatchesToConfirmedImplementRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        using var writer = new StringWriter();
+        var originalActivateExecutor = GenerateFromCurrentConfirmedImplementCommand.ConfirmedActivateExecutor;
+
+        try
+        {
+            GenerateFromCurrentConfirmedImplementCommand.ConfirmedActivateExecutor = (_, _, _) => new GenerateFromCurrentConfirmedActivateResult
+            {
+                Domain = "auth",
+                Route = "reconciliation-required",
+                ClarificationReturnArtifactPath = null,
+                ConfirmedReconstructionArtifactPath = ".intent-cli/intake/auth.confirmed-reconstruction.yaml",
+                UpdatedSourceFilePaths = ["intents/intent-cli/concepts/auth-oauth2.md"],
+                UpdatedExecutionFilePaths = ["intents/intent-cli/execution/05-post-mvp-sub-slices.md"],
+                RegeneratedArtifactPaths = [".intent-cli/intake/auth.confirmed-reconstruction.yaml"],
+                StartedExecutionUnits = [],
+                CreatedIssueRefs = [],
+                WorktreePaths = [],
+                ConfirmedItems = ["confirm: validate current auth boundary"],
+                BlockedItems = ["defer: return interface cleanup after clarification"],
+                DownstreamReadiness = "not-ready"
+            };
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "confirmed-implement", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current confirmed-implement processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentConfirmedImplementCommand.ConfirmedActivateExecutor = originalActivateExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentImplementCommand_DispatchesToImplementRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
