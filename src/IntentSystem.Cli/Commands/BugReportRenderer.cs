@@ -12,7 +12,11 @@ internal static class BugReportRenderer
         writer.WriteLine($"Bug ID: {artifact.BugId}");
         writer.WriteLine($"Title: {artifact.Title}");
         writer.WriteLine($"Artifact path: {artifactPath}");
+        writer.WriteLine($"Suspected failure locus: {artifact.SuspectedFailureLocus}");
         writer.WriteLine($"Original instruction refs: {artifact.OriginalInstructionRefs.Count}");
+        writer.WriteLine($"Affected intent refs: {artifact.AffectedIntentRefs.Count}");
+        writer.WriteLine($"Affected rule/spec refs: {artifact.AffectedRuleSpecRefs.Count}");
+        writer.WriteLine($"Clarification candidates: {artifact.ClarificationCandidates.Count}");
         writer.WriteLine($"Linked execution units: {artifact.LinkedExecutionUnits.Count}");
         writer.WriteLine($"Linked issue refs: {artifact.LinkedIssueRefs.Count}");
         writer.WriteLine($"Linked PR refs: {artifact.LinkedPrRefs.Count}");

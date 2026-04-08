@@ -12,7 +12,15 @@ internal sealed record BugReportArtifact
 
     public required string ProblemStatement { get; init; }
 
+    public required string SuspectedFailureLocus { get; init; }
+
     public required IReadOnlyList<string> OriginalInstructionRefs { get; init; }
+
+    public required IReadOnlyList<string> AffectedIntentRefs { get; init; }
+
+    public required IReadOnlyList<string> AffectedRuleSpecRefs { get; init; }
+
+    public required IReadOnlyList<string> ClarificationCandidates { get; init; }
 
     public required IReadOnlyList<string> LinkedExecutionUnits { get; init; }
 
@@ -32,7 +40,11 @@ internal static class BugReportArtifactYaml
         "title",
         "report_source",
         "problem_statement",
+        "suspected_failure_locus",
         "original_instruction_refs",
+        "affected_intent_refs",
+        "affected_rule_spec_refs",
+        "clarification_candidates",
         "linked_execution_units",
         "linked_issue_refs",
         "linked_pr_refs",
@@ -49,10 +61,14 @@ internal static class BugReportArtifactYaml
             $"bug_id: {artifact.BugId}",
             $"title: {Quote(artifact.Title)}",
             $"report_source: {artifact.ReportSource}",
-            $"problem_statement: {Quote(artifact.ProblemStatement)}"
+            $"problem_statement: {Quote(artifact.ProblemStatement)}",
+            $"suspected_failure_locus: {Quote(artifact.SuspectedFailureLocus)}"
         };
 
         AppendList(lines, "original_instruction_refs", artifact.OriginalInstructionRefs);
+        AppendList(lines, "affected_intent_refs", artifact.AffectedIntentRefs);
+        AppendList(lines, "affected_rule_spec_refs", artifact.AffectedRuleSpecRefs);
+        AppendList(lines, "clarification_candidates", artifact.ClarificationCandidates);
         AppendList(lines, "linked_execution_units", artifact.LinkedExecutionUnits);
         AppendList(lines, "linked_issue_refs", artifact.LinkedIssueRefs);
         AppendList(lines, "linked_pr_refs", artifact.LinkedPrRefs);
@@ -75,7 +91,11 @@ internal static class BugReportArtifactYaml
             Title = GetRequiredScalar(values, "title"),
             ReportSource = GetRequiredScalar(values, "report_source"),
             ProblemStatement = GetRequiredScalar(values, "problem_statement"),
+            SuspectedFailureLocus = GetRequiredScalar(values, "suspected_failure_locus"),
             OriginalInstructionRefs = GetRequiredList(values, "original_instruction_refs"),
+            AffectedIntentRefs = GetRequiredList(values, "affected_intent_refs"),
+            AffectedRuleSpecRefs = GetRequiredList(values, "affected_rule_spec_refs"),
+            ClarificationCandidates = GetRequiredList(values, "clarification_candidates"),
             LinkedExecutionUnits = GetRequiredList(values, "linked_execution_units"),
             LinkedIssueRefs = GetRequiredList(values, "linked_issue_refs"),
             LinkedPrRefs = GetRequiredList(values, "linked_pr_refs"),

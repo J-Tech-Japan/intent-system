@@ -23,7 +23,11 @@ public sealed class BugReportCommandTests
                 "BUG-123",
                 "--title", "OAuth callback loop",
                 "--from-file", "prepared/bug.md",
+                "--suspected-failure-locus", "auth/callback handler state transition after provider return",
                 "--instruction-refs", "ICL.P.PRODUCT_GOAL,intents/rules/provider-interruption-and-retry.md",
+                "--affected-intent-refs", "intents/intent-cli/means/auth.md,intents/intent-cli/README.md",
+                "--affected-rule-spec-refs", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md",
+                "--clarification-candidates", "Should provider retry reuse callback state token?,Should callback token be invalidated on second pass?",
                 "--execution-units", "G25,G77",
                 "--issues", "https://github.com/J-Tech-Japan/intent-system/issues/178",
                 "--prs", "https://github.com/J-Tech-Japan/intent-system/pull/180",
@@ -44,7 +48,13 @@ public sealed class BugReportCommandTests
         Assert.Equal(
             "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path.",
             artifact.ProblemStatement);
+        Assert.Equal("auth/callback handler state transition after provider return", artifact.SuspectedFailureLocus);
         Assert.Equal(["ICL.P.PRODUCT_GOAL", "intents/rules/provider-interruption-and-retry.md"], artifact.OriginalInstructionRefs);
+        Assert.Equal(["intents/intent-cli/means/auth.md", "intents/intent-cli/README.md"], artifact.AffectedIntentRefs);
+        Assert.Equal(["intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"], artifact.AffectedRuleSpecRefs);
+        Assert.Equal(
+            ["Should provider retry reuse callback state token?", "Should callback token be invalidated on second pass?"],
+            artifact.ClarificationCandidates);
         Assert.Equal(["G25", "G77"], artifact.LinkedExecutionUnits);
         Assert.Equal(["https://github.com/J-Tech-Japan/intent-system/issues/178"], artifact.LinkedIssueRefs);
         Assert.Equal(["https://github.com/J-Tech-Japan/intent-system/pull/180"], artifact.LinkedPrRefs);
@@ -60,7 +70,7 @@ public sealed class BugReportCommandTests
 
         var exitCode = BugReportCommand.Execute(
             CreateContext(repoRoot),
-            ["auth", "BUG-123", "--title", "OAuth callback loop", "--from-file", "prepared/missing.md"],
+            ["auth", "BUG-123", "--title", "OAuth callback loop", "--from-file", "prepared/missing.md", "--suspected-failure-locus", "callback state transition"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -76,6 +86,23 @@ public sealed class BugReportCommandTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("requires '<domain> <bug-id> --title <text> --from-file <path>'", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenMissingSuspectedFailureLocus_ReturnsExitCodeOne()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(Path.Combine("repo", "prepared", "bug.md"), "Observed callback loop after login.");
+        using var writer = new StringWriter();
+
+        var exitCode = BugReportCommand.Execute(
+            CreateContext(repoRoot),
+            ["auth", "BUG-123", "--title", "OAuth callback loop", "--from-file", "prepared/bug.md"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--suspected-failure-locus <text>", writer.ToString(), StringComparison.Ordinal);
     }
 
     private static CliContext CreateContext(string repoRoot)

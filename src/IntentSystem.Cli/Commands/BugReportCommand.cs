@@ -46,7 +46,11 @@ internal static class BugReportCommand
             Title = parsed.Title,
             ReportSource = "from-file",
             ProblemStatement = problemStatement,
+            SuspectedFailureLocus = parsed.SuspectedFailureLocus,
             OriginalInstructionRefs = parsed.OriginalInstructionRefs,
+            AffectedIntentRefs = parsed.AffectedIntentRefs,
+            AffectedRuleSpecRefs = parsed.AffectedRuleSpecRefs,
+            ClarificationCandidates = parsed.ClarificationCandidates,
             LinkedExecutionUnits = parsed.LinkedExecutionUnits,
             LinkedIssueRefs = parsed.LinkedIssueRefs,
             LinkedPrRefs = parsed.LinkedPrRefs,
@@ -73,7 +77,11 @@ internal static class BugReportCommand
         var bugId = args[1].Trim();
         string? title = null;
         string? problemStatementPath = null;
+        string? suspectedFailureLocus = null;
         var originalInstructionRefs = Array.Empty<string>();
+        var affectedIntentRefs = Array.Empty<string>();
+        var affectedRuleSpecRefs = Array.Empty<string>();
+        var clarificationCandidates = Array.Empty<string>();
         var linkedExecutionUnits = Array.Empty<string>();
         var linkedIssueRefs = Array.Empty<string>();
         var linkedPrRefs = Array.Empty<string>();
@@ -97,8 +105,20 @@ internal static class BugReportCommand
                 case "--from-file":
                     problemStatementPath = value.Trim();
                     break;
+                case "--suspected-failure-locus":
+                    suspectedFailureLocus = value.Trim();
+                    break;
                 case "--instruction-refs":
                     originalInstructionRefs = ParseCsvList(value);
+                    break;
+                case "--affected-intent-refs":
+                    affectedIntentRefs = ParseCsvList(value);
+                    break;
+                case "--affected-rule-spec-refs":
+                    affectedRuleSpecRefs = ParseCsvList(value);
+                    break;
+                case "--clarification-candidates":
+                    clarificationCandidates = ParseCsvList(value);
                     break;
                 case "--execution-units":
                     linkedExecutionUnits = ParseCsvList(value);
@@ -114,7 +134,7 @@ internal static class BugReportCommand
                     break;
                 default:
                     throw new InvalidOperationException(
-                        "Bug report command supports '--title <text>', '--from-file <path>', '--instruction-refs <csv>', '--execution-units <csv>', '--issues <csv>', '--prs <csv>', and '--reviews <csv>'.");
+                        "Bug report command supports '--title <text>', '--from-file <path>', '--suspected-failure-locus <text>', '--instruction-refs <csv>', '--affected-intent-refs <csv>', '--affected-rule-spec-refs <csv>', '--clarification-candidates <csv>', '--execution-units <csv>', '--issues <csv>', '--prs <csv>', and '--reviews <csv>'.");
             }
         }
 
@@ -128,13 +148,22 @@ internal static class BugReportCommand
             throw new InvalidOperationException("Bug report command requires '--from-file <path>'.");
         }
 
+        if (string.IsNullOrWhiteSpace(suspectedFailureLocus))
+        {
+            throw new InvalidOperationException("Bug report command requires '--suspected-failure-locus <text>'.");
+        }
+
         return new ParsedArgs
         {
             Domain = domain,
             BugId = bugId,
             Title = title,
             ProblemStatementPath = problemStatementPath,
+            SuspectedFailureLocus = suspectedFailureLocus,
             OriginalInstructionRefs = originalInstructionRefs,
+            AffectedIntentRefs = affectedIntentRefs,
+            AffectedRuleSpecRefs = affectedRuleSpecRefs,
+            ClarificationCandidates = clarificationCandidates,
             LinkedExecutionUnits = linkedExecutionUnits,
             LinkedIssueRefs = linkedIssueRefs,
             LinkedPrRefs = linkedPrRefs,
@@ -179,7 +208,15 @@ internal static class BugReportCommand
 
         public required string ProblemStatementPath { get; init; }
 
+        public required string SuspectedFailureLocus { get; init; }
+
         public required string[] OriginalInstructionRefs { get; init; }
+
+        public required string[] AffectedIntentRefs { get; init; }
+
+        public required string[] AffectedRuleSpecRefs { get; init; }
+
+        public required string[] ClarificationCandidates { get; init; }
 
         public required string[] LinkedExecutionUnits { get; init; }
 
