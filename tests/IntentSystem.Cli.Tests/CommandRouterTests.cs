@@ -922,6 +922,59 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentConfirmedReacceptCommand_DispatchesToConfirmedReacceptRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        using var writer = new StringWriter();
+        var originalRereviewExecutor = GenerateFromCurrentConfirmedReacceptCommand.ConfirmedRereviewExecutor;
+
+        try
+        {
+            GenerateFromCurrentConfirmedReacceptCommand.ConfirmedRereviewExecutor = (_, _, _) => new GenerateFromCurrentConfirmedRereviewResult
+            {
+                Domain = "auth",
+                Route = "reconciliation-required",
+                ClarificationReturnArtifactPath = null,
+                ConfirmedReconstructionArtifactPath = ".intent-cli/intake/auth.confirmed-reconstruction.yaml",
+                UpdatedSourceFilePaths = ["intents/intent-cli/concepts/auth-oauth2.md"],
+                UpdatedExecutionFilePaths = ["intents/intent-cli/execution/05-post-mvp-sub-slices.md"],
+                RegeneratedArtifactPaths = [".intent-cli/intake/auth.confirmed-reconstruction.yaml"],
+                StartedExecutionUnits = [],
+                CreatedIssueRefs = [],
+                WorktreePaths = [],
+                ImplementRequestArtifactPaths = [],
+                CreatedPrRefs = [],
+                ReviewExecutionUnits = [],
+                ReviewRequestArtifactPaths = [],
+                PostedCommentArtifactPaths = [],
+                CommentRefs = [],
+                FixingExecutionUnits = [],
+                FixRequestArtifactPaths = [],
+                ResubmittedExecutionUnits = [],
+                ResubmittedPrRefs = [],
+                RereviewedExecutionUnits = [],
+                RereviewedPrRefs = [],
+                ConfirmedItems = ["confirm: validate current auth boundary"],
+                BlockedItems = ["defer: return interface cleanup after clarification"],
+                DownstreamReadiness = "not-ready"
+            };
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "confirmed-reaccept", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current confirmed-reaccept processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentConfirmedReacceptCommand.ConfirmedRereviewExecutor = originalRereviewExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentConfirmedCommentCommand_DispatchesToConfirmedCommentRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
