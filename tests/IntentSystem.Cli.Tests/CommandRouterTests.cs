@@ -1392,6 +1392,38 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugReportCommand_DispatchesToBugReportRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "prepared", "bug.md"),
+            "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path.");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            [
+                "bug",
+                "report",
+                "auth",
+                "BUG-123",
+                "--title", "OAuth callback loop",
+                "--from-file", "prepared/bug.md",
+                "--instruction-refs", "ICL.P.PRODUCT_GOAL",
+                "--execution-units", "G25",
+                "--issues", "https://github.com/J-Tech-Japan/intent-system/issues/178",
+                "--prs", "https://github.com/J-Tech-Japan/intent-system/pull/180",
+                "--reviews", "https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1"
+            ],
+            CreateContext(repoRoot),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Bug report artifact generated for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Bug ID: BUG-123", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenInterviewStartCommand_DispatchesToInterviewStartRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();

@@ -10,6 +10,7 @@ internal static class CommandRouter
         "project",
         "projection",
         "queue",
+        "bug",
         "run",
         "review",
         "interview",
@@ -74,6 +75,10 @@ internal static class CommandRouter
                 ["enqueue"] = QueueEnqueueCommand.Execute,
                 ["dispatch"] = QueueDispatchCommand.Execute,
                 ["transition"] = QueueTransitionCommand.Execute
+            },
+            ["bug"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["report"] = BugReportCommand.Execute
             },
             ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
