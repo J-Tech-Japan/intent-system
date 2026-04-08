@@ -1,5 +1,9 @@
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Review.Models;
+using IntentSystem.Review.Serialization;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -7,71 +11,91 @@ namespace IntentSystem.Cli.Tests;
 public sealed class GenerateFromCurrentConfirmedFixCommandTests
 {
     [Fact]
-    public void Execute_GivenReadyConfirmedComment_GeneratesFixRequestArtifacts()
+    public void Execute_GivenExistingFixingStateAndCommentArtifacts_GeneratesFixRequestArtifacts()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
+        string[]? confirmedReviewArgs = null;
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "AUTH-01.comment.json"),
+            ReviewCommentArtifactSerializer.Serialize(
+                new ReviewCommentArtifact
+                {
+                    ExecutionUnit = "AUTH-01",
+                    ReviewRequestRef = ".intent-cli/reviews/AUTH-01.request.json",
+                    LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/501",
+                    CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/501#issuecomment-1",
+                    BodyPath = "comment.md"
+                }));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "AUTH-02.comment.json"),
+            ReviewCommentArtifactSerializer.Serialize(
+                new ReviewCommentArtifact
+                {
+                    ExecutionUnit = "AUTH-02",
+                    ReviewRequestRef = ".intent-cli/reviews/AUTH-02.request.json",
+                    LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/502",
+                    CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/502#issuecomment-2",
+                    BodyPath = "comment.md"
+                }));
         using var writer = new StringWriter();
-        var originalCommentExecutor = GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor;
+        var originalReviewExecutor = GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor;
         var originalRunFixExecutor = GenerateFromCurrentConfirmedFixCommand.RunFixExecutor;
 
         try
         {
-            GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor = (_, _, _) => new GenerateFromCurrentConfirmedCommentResult
+            GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor = (_, args, _) =>
             {
-                Domain = "auth",
-                Route = "confirmed-comment",
-                ClarificationReturnArtifactPath = null,
-                ConfirmedReconstructionArtifactPath = ".intent-cli/intake/auth.confirmed-reconstruction.yaml",
-                UpdatedSourceFilePaths = ["intents/intent-cli/concepts/auth-oauth2.md"],
-                UpdatedExecutionFilePaths = ["intents/intent-cli/execution/05-post-mvp-sub-slices.md"],
-                RegeneratedArtifactPaths =
-                [
-                    ".intent-cli/intake/auth.concept.yaml",
-                    ".intent-cli/intake/auth.execution.md",
-                    ".intent-cli/issues/AUTH-01/packet.yaml"
-                ],
-                StartedExecutionUnits = ["AUTH-01", "AUTH-02"],
-                CreatedIssueRefs =
-                [
-                    "https://github.com/J-Tech-Japan/intent-system/issues/501",
-                    "https://github.com/J-Tech-Japan/intent-system/issues/502"
-                ],
-                WorktreePaths =
-                [
-                    "/tmp/worktrees/AUTH-01",
-                    "/tmp/worktrees/AUTH-02"
-                ],
-                ImplementRequestArtifactPaths =
-                [
-                    ".intent-cli/implement/AUTH-01.request.md",
-                    ".intent-cli/implement/AUTH-02.request.md"
-                ],
-                CreatedPrRefs =
-                [
-                    "https://github.com/J-Tech-Japan/intent-system/pull/501",
-                    "https://github.com/J-Tech-Japan/intent-system/pull/502"
-                ],
-                ReviewExecutionUnits = ["AUTH-01", "AUTH-02"],
-                ReviewRequestArtifactPaths =
-                [
-                    ".intent-cli/reviews/AUTH-01.request.json",
-                    ".intent-cli/reviews/AUTH-02.request.json"
-                ],
-                PostedCommentArtifactPaths =
-                [
-                    ".intent-cli/reviews/AUTH-01.comment.json",
-                    ".intent-cli/reviews/AUTH-02.comment.json"
-                ],
-                CommentRefs =
-                [
-                    "https://github.com/J-Tech-Japan/intent-system/pull/501#issuecomment-1",
-                    "https://github.com/J-Tech-Japan/intent-system/pull/502#issuecomment-2"
-                ],
-                FixingExecutionUnits = ["AUTH-01", "AUTH-02"],
-                ConfirmedItems = ["confirm: validate current auth boundary"],
-                BlockedItems = [],
-                DownstreamReadiness = "ready"
+                confirmedReviewArgs = args;
+
+                return new GenerateFromCurrentConfirmedReviewResult
+                {
+                    Domain = "auth",
+                    Route = "confirmed-review",
+                    ClarificationReturnArtifactPath = null,
+                    ConfirmedReconstructionArtifactPath = ".intent-cli/intake/auth.confirmed-reconstruction.yaml",
+                    UpdatedSourceFilePaths = ["intents/intent-cli/concepts/auth-oauth2.md"],
+                    UpdatedExecutionFilePaths = ["intents/intent-cli/execution/05-post-mvp-sub-slices.md"],
+                    RegeneratedArtifactPaths =
+                    [
+                        ".intent-cli/intake/auth.concept.yaml",
+                        ".intent-cli/intake/auth.execution.md",
+                        ".intent-cli/issues/AUTH-01/packet.yaml"
+                    ],
+                    StartedExecutionUnits = ["AUTH-01", "AUTH-02"],
+                    CreatedIssueRefs =
+                    [
+                        "https://github.com/J-Tech-Japan/intent-system/issues/501",
+                        "https://github.com/J-Tech-Japan/intent-system/issues/502"
+                    ],
+                    WorktreePaths =
+                    [
+                        "/tmp/worktrees/AUTH-01",
+                        "/tmp/worktrees/AUTH-02"
+                    ],
+                    ImplementRequestArtifactPaths =
+                    [
+                        ".intent-cli/implement/AUTH-01.request.md",
+                        ".intent-cli/implement/AUTH-02.request.md"
+                    ],
+                    CreatedPrRefs =
+                    [
+                        "https://github.com/J-Tech-Japan/intent-system/pull/501",
+                        "https://github.com/J-Tech-Japan/intent-system/pull/502"
+                    ],
+                    ReviewExecutionUnits = ["AUTH-01", "AUTH-02"],
+                    ReviewRequestArtifactPaths =
+                    [
+                        ".intent-cli/reviews/AUTH-01.request.json",
+                        ".intent-cli/reviews/AUTH-02.request.json"
+                    ],
+                    ConfirmedItems = ["confirm: validate current auth boundary"],
+                    BlockedItems = [],
+                    DownstreamReadiness = "ready"
+                };
             };
             GenerateFromCurrentConfirmedFixCommand.RunFixExecutor = (_, executionUnit) => new RunFixResult
             {
@@ -109,12 +133,16 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
 
             var exitCode = GenerateFromCurrentConfirmedFixCommand.Execute(
                 CreateContext(repoRoot),
-                ["auth", "--from-path", "src/feature", "--from-file", "comment.md"],
+                ["auth", "--from-path", "src/feature"],
                 writer);
 
             Assert.Equal(0, exitCode);
             var output = writer.ToString();
             Assert.Contains("Generate-from-current confirmed-fix processed for domain 'auth'.", output, StringComparison.Ordinal);
+            Assert.NotNull(confirmedReviewArgs);
+            Assert.DoesNotContain("--from-file", confirmedReviewArgs!, StringComparer.Ordinal);
+            Assert.Contains("- .intent-cli/reviews/AUTH-01.comment.json", output, StringComparison.Ordinal);
+            Assert.Contains("- https://github.com/J-Tech-Japan/intent-system/pull/501#issuecomment-1", output, StringComparison.Ordinal);
             Assert.Contains("- .intent-cli/fix/AUTH-01.request.md", output, StringComparison.Ordinal);
             Assert.Contains("- .intent-cli/fix/AUTH-02.request.md", output, StringComparison.Ordinal);
             Assert.Contains("Fixing execution units:", output, StringComparison.Ordinal);
@@ -123,7 +151,7 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
         }
         finally
         {
-            GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor = originalCommentExecutor;
+            GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor = originalReviewExecutor;
             GenerateFromCurrentConfirmedFixCommand.RunFixExecutor = originalRunFixExecutor;
         }
     }
@@ -134,11 +162,11 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         using var writer = new StringWriter();
-        var originalCommentExecutor = GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor;
+        var originalReviewExecutor = GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor;
 
         try
         {
-            GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor = (_, _, _) => new GenerateFromCurrentConfirmedCommentResult
+            GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor = (_, _, _) => new GenerateFromCurrentConfirmedReviewResult
             {
                 Domain = "auth",
                 Route = "clarification-return",
@@ -153,9 +181,6 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
                 CreatedPrRefs = [],
                 ReviewExecutionUnits = [],
                 ReviewRequestArtifactPaths = [],
-                PostedCommentArtifactPaths = [],
-                CommentRefs = [],
-                FixingExecutionUnits = [],
                 ConfirmedItems = [],
                 BlockedItems = ["clarify: resolve auth boundary before repair worker handoff treatment."],
                 DownstreamReadiness = "not-ready"
@@ -163,7 +188,7 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
 
             var exitCode = GenerateFromCurrentConfirmedFixCommand.Execute(
                 CreateContext(repoRoot),
-                ["auth", "--from-path", "src/feature", "--from-file", "comment.md"],
+                ["auth", "--from-path", "src/feature"],
                 writer);
 
             Assert.Equal(0, exitCode);
@@ -171,21 +196,21 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
         }
         finally
         {
-            GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor = originalCommentExecutor;
+            GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor = originalReviewExecutor;
         }
     }
 
     [Fact]
-    public void Execute_GivenNotReadyConfirmedComment_StopsAtReconciliationPath()
+    public void Execute_GivenNotReadyConfirmedReview_StopsAtReconciliationPath()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         using var writer = new StringWriter();
-        var originalCommentExecutor = GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor;
+        var originalReviewExecutor = GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor;
 
         try
         {
-            GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor = (_, _, _) => new GenerateFromCurrentConfirmedCommentResult
+            GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor = (_, _, _) => new GenerateFromCurrentConfirmedReviewResult
             {
                 Domain = "auth",
                 Route = "reconciliation-required",
@@ -201,9 +226,6 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
                 CreatedPrRefs = [],
                 ReviewExecutionUnits = [],
                 ReviewRequestArtifactPaths = [],
-                PostedCommentArtifactPaths = [],
-                CommentRefs = [],
-                FixingExecutionUnits = [],
                 ConfirmedItems = ["confirm: validate current auth boundary"],
                 BlockedItems = ["defer: return interface cleanup after clarification"],
                 DownstreamReadiness = "not-ready"
@@ -211,7 +233,7 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
 
             var exitCode = GenerateFromCurrentConfirmedFixCommand.Execute(
                 CreateContext(repoRoot),
-                ["auth", "--from-path", "src/feature", "--from-file", "comment.md"],
+                ["auth", "--from-path", "src/feature"],
                 writer);
 
             Assert.Equal(0, exitCode);
@@ -221,7 +243,7 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
         }
         finally
         {
-            GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor = originalCommentExecutor;
+            GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor = originalReviewExecutor;
         }
     }
 
@@ -243,6 +265,50 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
         };
     }
 
+    private static QueueState CreateQueueState()
+    {
+        return new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-08T06:15:00Z"),
+            Items =
+            [
+                CreateItem("AUTH-01"),
+                CreateItem("AUTH-02")
+            ]
+        };
+    }
+
+    private static QueueItem CreateItem(string executionUnit)
+    {
+        var issueNumber = executionUnit == "AUTH-01" ? 501 : 502;
+
+        return new QueueItem
+        {
+            ExecutionUnit = executionUnit,
+            Title = $"[{executionUnit}] Confirmed Fix",
+            State = QueueItemState.Fixing,
+            Dependencies = [],
+            BlockedBy = [],
+            ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+            PacketPaths = new PacketPaths
+            {
+                Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
+                ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
+                Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml"
+            },
+            LinkedIssue = new LinkedIssue
+            {
+                Repo = "J-Tech-Japan/intent-system",
+                Number = issueNumber,
+                Url = $"https://github.com/J-Tech-Japan/intent-system/issues/{issueNumber}"
+            },
+            WorkerRole = "Claude",
+            ReviewRole = "Codex",
+            Priority = "high"
+        };
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         private readonly string rootPath = Directory.CreateTempSubdirectory("intent-cli-generate-from-current-confirmed-fix-tests-").FullName;
@@ -251,6 +317,19 @@ public sealed class GenerateFromCurrentConfirmedFixCommandTests
         {
             var fullPath = Path.Combine(rootPath, relativePath);
             Directory.CreateDirectory(fullPath);
+            return fullPath;
+        }
+
+        public string CreateFile(string relativePath, string contents)
+        {
+            var fullPath = Path.Combine(rootPath, relativePath);
+            var directoryPath = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(directoryPath))
+            {
+                Directory.CreateDirectory(directoryPath);
+            }
+
+            File.WriteAllText(fullPath, contents);
             return fullPath;
         }
 

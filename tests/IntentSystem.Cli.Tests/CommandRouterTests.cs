@@ -972,11 +972,11 @@ public sealed class CommandRouterTests
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         using var writer = new StringWriter();
-        var originalCommentExecutor = GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor;
+        var originalReviewExecutor = GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor;
 
         try
         {
-            GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor = (_, _, _) => new GenerateFromCurrentConfirmedCommentResult
+            GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor = (_, _, _) => new GenerateFromCurrentConfirmedReviewResult
             {
                 Domain = "auth",
                 Route = "reconciliation-required",
@@ -992,16 +992,13 @@ public sealed class CommandRouterTests
                 CreatedPrRefs = [],
                 ReviewExecutionUnits = [],
                 ReviewRequestArtifactPaths = [],
-                PostedCommentArtifactPaths = [],
-                CommentRefs = [],
-                FixingExecutionUnits = [],
                 ConfirmedItems = ["confirm: validate current auth boundary"],
                 BlockedItems = ["defer: return interface cleanup after clarification"],
                 DownstreamReadiness = "not-ready"
             };
 
             var exitCode = CommandRouter.Execute(
-                ["generate-from-current", "confirmed-fix", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution", "--from-file", "comment.md"],
+                ["generate-from-current", "confirmed-fix", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution"],
                 CreateContext(repoRoot),
                 writer);
 
@@ -1010,7 +1007,7 @@ public sealed class CommandRouterTests
         }
         finally
         {
-            GenerateFromCurrentConfirmedFixCommand.ConfirmedCommentExecutor = originalCommentExecutor;
+            GenerateFromCurrentConfirmedFixCommand.ConfirmedReviewExecutor = originalReviewExecutor;
         }
     }
 

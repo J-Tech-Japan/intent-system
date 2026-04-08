@@ -1,9 +1,16 @@
+using IntentSystem.Review;
+using IntentSystem.Review.Serialization;
+using IntentSystem.Supervisor.Models;
+
 namespace IntentSystem.Cli.Commands;
 
 internal static class GenerateFromCurrentConfirmedFixCommand
 {
-    public static Func<CliContext, string[], TextWriter, GenerateFromCurrentConfirmedCommentResult> ConfirmedCommentExecutor { get; set; } =
-        (context, args, writer) => GenerateFromCurrentConfirmedCommentCommand.ExecuteCore(context, args, writer);
+    public static Func<CliContext, string[], TextWriter, GenerateFromCurrentConfirmedReviewResult> ConfirmedReviewExecutor { get; set; } =
+        (context, args, writer) => GenerateFromCurrentConfirmedReviewCommand.ExecuteCore(context, args, writer);
+
+    public static Func<CliContext, IReadOnlyList<string>, ConfirmedCommentHandoff> ExistingCommentHandoffResolver { get; set; } =
+        ResolveExistingCommentHandoff;
 
     public static Func<CliContext, string, RunFixResult> RunFixExecutor { get; set; } =
         (context, executionUnit) => RunFixCommand.ExecuteCore(context, executionUnit);
@@ -33,64 +40,159 @@ internal static class GenerateFromCurrentConfirmedFixCommand
         TextWriter writer)
     {
         var domain = ParseDomain(args);
-        var confirmedCommentResult = ConfirmedCommentExecutor(context, args, writer);
+        var confirmedReviewResult = ConfirmedReviewExecutor(context, args, writer);
 
-        if (!string.Equals(confirmedCommentResult.Domain, domain, StringComparison.Ordinal))
+        if (!string.Equals(confirmedReviewResult.Domain, domain, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Confirmed comment result domain '{confirmedCommentResult.Domain}' does not match requested domain '{domain}'.");
+                $"Confirmed review result domain '{confirmedReviewResult.Domain}' does not match requested domain '{domain}'.");
         }
 
-        if (string.Equals(confirmedCommentResult.Route, "clarification-return", StringComparison.Ordinal))
+        if (string.Equals(confirmedReviewResult.Route, "clarification-return", StringComparison.Ordinal))
         {
-            return CreateResult(domain, "clarification-return", confirmedCommentResult, []);
+            return CreateResult(
+                domain,
+                "clarification-return",
+                confirmedReviewResult,
+                new ConfirmedCommentHandoff
+                {
+                    PostedCommentArtifactPaths = [],
+                    CommentRefs = [],
+                    FixingExecutionUnits = []
+                },
+                []);
         }
 
-        if (!string.Equals(confirmedCommentResult.DownstreamReadiness, "ready", StringComparison.Ordinal))
+        if (!string.Equals(confirmedReviewResult.DownstreamReadiness, "ready", StringComparison.Ordinal))
         {
-            return CreateResult(domain, "reconciliation-required", confirmedCommentResult, []);
+            return CreateResult(
+                domain,
+                "reconciliation-required",
+                confirmedReviewResult,
+                new ConfirmedCommentHandoff
+                {
+                    PostedCommentArtifactPaths = [],
+                    CommentRefs = [],
+                    FixingExecutionUnits = []
+                },
+                []);
         }
 
-        var fixResults = confirmedCommentResult.FixingExecutionUnits
+        var commentHandoff = ExistingCommentHandoffResolver(context, confirmedReviewResult.ReviewExecutionUnits);
+
+        var fixResults = commentHandoff.FixingExecutionUnits
             .Select(executionUnit => RunFixExecutor(context, executionUnit))
             .ToArray();
 
         return CreateResult(
             domain,
             "confirmed-fix",
-            confirmedCommentResult,
+            confirmedReviewResult,
+            commentHandoff,
             fixResults.Select(result => result.ArtifactPath).ToArray());
     }
 
     private static GenerateFromCurrentConfirmedFixResult CreateResult(
         string domain,
         string route,
-        GenerateFromCurrentConfirmedCommentResult confirmedCommentResult,
+        GenerateFromCurrentConfirmedReviewResult confirmedReviewResult,
+        ConfirmedCommentHandoff commentHandoff,
         IReadOnlyList<string> fixRequestArtifactPaths)
     {
         return new GenerateFromCurrentConfirmedFixResult
         {
             Domain = domain,
             Route = route,
-            ClarificationReturnArtifactPath = confirmedCommentResult.ClarificationReturnArtifactPath,
-            ConfirmedReconstructionArtifactPath = confirmedCommentResult.ConfirmedReconstructionArtifactPath,
-            UpdatedSourceFilePaths = confirmedCommentResult.UpdatedSourceFilePaths,
-            UpdatedExecutionFilePaths = confirmedCommentResult.UpdatedExecutionFilePaths,
-            RegeneratedArtifactPaths = confirmedCommentResult.RegeneratedArtifactPaths,
-            StartedExecutionUnits = confirmedCommentResult.StartedExecutionUnits,
-            CreatedIssueRefs = confirmedCommentResult.CreatedIssueRefs,
-            WorktreePaths = confirmedCommentResult.WorktreePaths,
-            ImplementRequestArtifactPaths = confirmedCommentResult.ImplementRequestArtifactPaths,
-            CreatedPrRefs = confirmedCommentResult.CreatedPrRefs,
-            ReviewExecutionUnits = confirmedCommentResult.ReviewExecutionUnits,
-            ReviewRequestArtifactPaths = confirmedCommentResult.ReviewRequestArtifactPaths,
-            PostedCommentArtifactPaths = confirmedCommentResult.PostedCommentArtifactPaths,
-            CommentRefs = confirmedCommentResult.CommentRefs,
-            FixingExecutionUnits = confirmedCommentResult.FixingExecutionUnits,
+            ClarificationReturnArtifactPath = confirmedReviewResult.ClarificationReturnArtifactPath,
+            ConfirmedReconstructionArtifactPath = confirmedReviewResult.ConfirmedReconstructionArtifactPath,
+            UpdatedSourceFilePaths = confirmedReviewResult.UpdatedSourceFilePaths,
+            UpdatedExecutionFilePaths = confirmedReviewResult.UpdatedExecutionFilePaths,
+            RegeneratedArtifactPaths = confirmedReviewResult.RegeneratedArtifactPaths,
+            StartedExecutionUnits = confirmedReviewResult.StartedExecutionUnits,
+            CreatedIssueRefs = confirmedReviewResult.CreatedIssueRefs,
+            WorktreePaths = confirmedReviewResult.WorktreePaths,
+            ImplementRequestArtifactPaths = confirmedReviewResult.ImplementRequestArtifactPaths,
+            CreatedPrRefs = confirmedReviewResult.CreatedPrRefs,
+            ReviewExecutionUnits = confirmedReviewResult.ReviewExecutionUnits,
+            ReviewRequestArtifactPaths = confirmedReviewResult.ReviewRequestArtifactPaths,
+            PostedCommentArtifactPaths = commentHandoff.PostedCommentArtifactPaths,
+            CommentRefs = commentHandoff.CommentRefs,
+            FixingExecutionUnits = commentHandoff.FixingExecutionUnits,
             FixRequestArtifactPaths = fixRequestArtifactPaths,
-            ConfirmedItems = confirmedCommentResult.ConfirmedItems,
-            BlockedItems = confirmedCommentResult.BlockedItems,
-            DownstreamReadiness = confirmedCommentResult.DownstreamReadiness
+            ConfirmedItems = confirmedReviewResult.ConfirmedItems,
+            BlockedItems = confirmedReviewResult.BlockedItems,
+            DownstreamReadiness = confirmedReviewResult.DownstreamReadiness
+        };
+    }
+
+    private static ConfirmedCommentHandoff ResolveExistingCommentHandoff(
+        CliContext context,
+        IReadOnlyList<string> reviewExecutionUnits)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(reviewExecutionUnits);
+
+        if (reviewExecutionUnits.Count == 0)
+        {
+            return new ConfirmedCommentHandoff
+            {
+                PostedCommentArtifactPaths = [],
+                CommentRefs = [],
+                FixingExecutionUnits = []
+            };
+        }
+
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null)
+            ?? throw new InvalidOperationException($"No queue state found at {context.GetQueueStatePath()}");
+
+        var postedCommentArtifactPaths = new List<string>();
+        var commentRefs = new List<string>();
+        var fixingExecutionUnits = new List<string>();
+
+        foreach (var executionUnit in reviewExecutionUnits)
+        {
+            var queueItem = queueState.Items.FirstOrDefault(item =>
+                string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+            if (queueItem is null)
+            {
+                throw new InvalidOperationException(
+                    $"Execution unit '{executionUnit}' was not found in queue state for confirmed-fix.");
+            }
+
+            if (queueItem.State is not QueueItemState.Fixing)
+            {
+                throw new InvalidOperationException(
+                    $"Execution unit '{executionUnit}' must be fixing before confirmed-fix can continue.");
+            }
+
+            var artifactRef = ReviewCommentArtifactPathResolver.Resolve(executionUnit);
+            var artifactPath = Path.Combine(
+                context.RepoRoot,
+                artifactRef.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(artifactPath))
+            {
+                throw new InvalidOperationException(
+                    $"Review comment artifact was not found at {artifactPath}");
+            }
+
+            var artifact = ReviewCommentArtifactSerializer.Deserialize(File.ReadAllText(artifactPath));
+            if (!string.Equals(artifact.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Review comment artifact execution unit '{artifact.ExecutionUnit}' must match '{executionUnit}'.");
+            }
+
+            postedCommentArtifactPaths.Add(artifactRef);
+            commentRefs.Add(artifact.CommentRef);
+            fixingExecutionUnits.Add(executionUnit);
+        }
+
+        return new ConfirmedCommentHandoff
+        {
+            PostedCommentArtifactPaths = postedCommentArtifactPaths,
+            CommentRefs = commentRefs,
+            FixingExecutionUnits = fixingExecutionUnits
         };
     }
 
@@ -103,4 +205,13 @@ internal static class GenerateFromCurrentConfirmedFixCommand
 
         return args[0].Trim();
     }
+}
+
+internal sealed record ConfirmedCommentHandoff
+{
+    public required IReadOnlyList<string> PostedCommentArtifactPaths { get; init; }
+
+    public required IReadOnlyList<string> CommentRefs { get; init; }
+
+    public required IReadOnlyList<string> FixingExecutionUnits { get; init; }
 }
