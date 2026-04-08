@@ -627,6 +627,53 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenGenerateFromCurrentConfirmedBridgeCommand_DispatchesToConfirmedBridgeRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        using var writer = new StringWriter();
+        var originalExecutor = GenerateFromCurrentConfirmedBridgeCommand.ReconcileExecutor;
+
+        try
+        {
+            GenerateFromCurrentConfirmedBridgeCommand.ReconcileExecutor = (_, _) => new GenerateFromCurrentReconcileResult
+            {
+                Domain = "auth",
+                Route = "clarification-return",
+                SourceBundleArtifactPath = ".intent-cli/intake/auth.current-sources.yaml",
+                ReconstructedArtifactPaths =
+                [
+                    ".intent-cli/intake/auth.reconstructed-concept.yaml",
+                    ".intent-cli/intake/auth.reconstructed-interview.md"
+                ],
+                ReviewArtifactPath = ".intent-cli/intake/auth.best-practice-review.md",
+                DeveloperConfirmationArtifactPath = ".intent-cli/intake/auth.developer-confirmation.yaml",
+                ConfirmedReconstructionArtifactPath = null,
+                ClarificationReturnArtifactPath = ".intent-cli/intake/auth.clarification-return.yaml",
+                ConfirmedItems = [],
+                RejectedItems = [],
+                DeferredItems = [],
+                BlockedItems = ["clarify: resolve auth boundary before issue-cut-ready treatment."],
+                ClarifyItems = ["clarify: resolve auth boundary before issue-cut-ready treatment."],
+                ReturnToIntentPaths = ["README.md"],
+                DownstreamReadiness = "not-ready"
+            };
+
+            var exitCode = CommandRouter.Execute(
+                ["generate-from-current", "confirmed-bridge", "auth", "--from-path", "src/feature", "--issues", "114", "--prs", "113", "--altitudes", "purpose,execution"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Generate-from-current confirmed-bridge processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            GenerateFromCurrentConfirmedBridgeCommand.ReconcileExecutor = originalExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentImplementCommand_DispatchesToImplementRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
