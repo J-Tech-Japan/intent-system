@@ -1409,7 +1409,6 @@ public sealed class CommandRouterTests
                 "BUG-123",
                 "--title", "OAuth callback loop",
                 "--from-file", "prepared/bug.md",
-                "--suspected-failure-locus", "auth/callback handler state transition after provider return",
                 "--instruction-refs", "ICL.P.PRODUCT_GOAL",
                 "--affected-intent-refs", "intents/intent-cli/means/auth.md",
                 "--affected-rule-spec-refs", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md",

@@ -23,7 +23,6 @@ public sealed class BugReportCommandTests
                 "BUG-123",
                 "--title", "OAuth callback loop",
                 "--from-file", "prepared/bug.md",
-                "--suspected-failure-locus", "auth/callback handler state transition after provider return",
                 "--instruction-refs", "ICL.P.PRODUCT_GOAL,intents/rules/provider-interruption-and-retry.md",
                 "--affected-intent-refs", "intents/intent-cli/means/auth.md,intents/intent-cli/README.md",
                 "--affected-rule-spec-refs", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md",
@@ -48,7 +47,7 @@ public sealed class BugReportCommandTests
         Assert.Equal(
             "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path.",
             artifact.ProblemStatement);
-        Assert.Equal("auth/callback handler state transition after provider return", artifact.SuspectedFailureLocus);
+        Assert.Equal("Observed callback loop after login.", artifact.SuspectedFailureLocus);
         Assert.Equal(["ICL.P.PRODUCT_GOAL", "intents/rules/provider-interruption-and-retry.md"], artifact.OriginalInstructionRefs);
         Assert.Equal(["intents/intent-cli/means/auth.md", "intents/intent-cli/README.md"], artifact.AffectedIntentRefs);
         Assert.Equal(["intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"], artifact.AffectedRuleSpecRefs);
@@ -70,7 +69,7 @@ public sealed class BugReportCommandTests
 
         var exitCode = BugReportCommand.Execute(
             CreateContext(repoRoot),
-            ["auth", "BUG-123", "--title", "OAuth callback loop", "--from-file", "prepared/missing.md", "--suspected-failure-locus", "callback state transition"],
+            ["auth", "BUG-123", "--title", "OAuth callback loop", "--from-file", "prepared/missing.md"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -89,7 +88,7 @@ public sealed class BugReportCommandTests
     }
 
     [Fact]
-    public void Execute_GivenMissingSuspectedFailureLocus_ReturnsExitCodeOne()
+    public void Execute_GivenSuspectedFailureLocusFlag_UsesExplicitValue()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -98,11 +97,20 @@ public sealed class BugReportCommandTests
 
         var exitCode = BugReportCommand.Execute(
             CreateContext(repoRoot),
-            ["auth", "BUG-123", "--title", "OAuth callback loop", "--from-file", "prepared/bug.md"],
+            [
+                "auth",
+                "BUG-123",
+                "--title", "OAuth callback loop",
+                "--from-file", "prepared/bug.md",
+                "--suspected-failure-locus", "explicit fallback locus"
+            ],
             writer);
 
-        Assert.Equal(1, exitCode);
-        Assert.Contains("--suspected-failure-locus <text>", writer.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, exitCode);
+
+        var artifact = BugReportArtifactYaml.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.report.yaml")));
+        Assert.Equal("explicit fallback locus", artifact.SuspectedFailureLocus);
     }
 
     private static CliContext CreateContext(string repoRoot)

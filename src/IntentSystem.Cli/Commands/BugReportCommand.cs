@@ -39,6 +39,10 @@ internal static class BugReportCommand
             throw new InvalidOperationException("Prepared problem statement file must not be empty.");
         }
 
+        var suspectedFailureLocus = string.IsNullOrWhiteSpace(parsed.SuspectedFailureLocus)
+            ? DeriveSuspectedFailureLocus(parsed.Title, problemStatement)
+            : parsed.SuspectedFailureLocus;
+
         var artifact = new BugReportArtifact
         {
             DomainSlug = parsed.Domain,
@@ -46,7 +50,7 @@ internal static class BugReportCommand
             Title = parsed.Title,
             ReportSource = "from-file",
             ProblemStatement = problemStatement,
-            SuspectedFailureLocus = parsed.SuspectedFailureLocus,
+            SuspectedFailureLocus = suspectedFailureLocus,
             OriginalInstructionRefs = parsed.OriginalInstructionRefs,
             AffectedIntentRefs = parsed.AffectedIntentRefs,
             AffectedRuleSpecRefs = parsed.AffectedRuleSpecRefs,
@@ -148,11 +152,6 @@ internal static class BugReportCommand
             throw new InvalidOperationException("Bug report command requires '--from-file <path>'.");
         }
 
-        if (string.IsNullOrWhiteSpace(suspectedFailureLocus))
-        {
-            throw new InvalidOperationException("Bug report command requires '--suspected-failure-locus <text>'.");
-        }
-
         return new ParsedArgs
         {
             Domain = domain,
@@ -176,6 +175,19 @@ internal static class BugReportCommand
         return value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static string DeriveSuspectedFailureLocus(string title, string problemStatement)
+    {
+        foreach (var line in problemStatement.Split(['\r', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                return line;
+            }
+        }
+
+        return title;
     }
 
     private static string ResolveInputPath(string repoRoot, string path)
@@ -208,7 +220,7 @@ internal static class BugReportCommand
 
         public required string ProblemStatementPath { get; init; }
 
-        public required string SuspectedFailureLocus { get; init; }
+        public string? SuspectedFailureLocus { get; init; }
 
         public required string[] OriginalInstructionRefs { get; init; }
 
