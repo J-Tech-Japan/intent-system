@@ -47,9 +47,12 @@ internal static class BugExecutionCommand
             throw new InvalidOperationException($"Bug triage artifact was not found at {triagePath}");
         }
 
-        var report = BugReportArtifactYaml.Deserialize(File.ReadAllText(reportPath));
+        BugReportArtifactYaml.Deserialize(File.ReadAllText(reportPath));
         var triage = BugTriageArtifactYaml.Deserialize(File.ReadAllText(triagePath));
 
+        var resolvedImplementationRefs = DistinctOrdered(triage.ResolvedImplementationRefs);
+        var resolvedReviewContextRefs = DistinctOrdered(triage.ResolvedReviewContextRefs);
+        var resolvedPacketRefs = DistinctOrdered(triage.ResolvedPacketRefs);
         string[] implementationTaskCandidates;
         string[] intentTaskCandidates;
         var clarificationRequired = triage.ClarificationRequired;
@@ -61,8 +64,8 @@ internal static class BugExecutionCommand
         }
         else
         {
-            implementationTaskCandidates = NormalizeImplementationCandidates(triage);
-            intentTaskCandidates = NormalizeIntentCandidates(report, triage);
+            implementationTaskCandidates = DistinctOrdered(triage.ImplementationRepairCandidates);
+            intentTaskCandidates = DistinctOrdered(triage.IntentRepairCandidates);
         }
 
         var readyToLaunch = !clarificationRequired
@@ -75,6 +78,9 @@ internal static class BugExecutionCommand
             ReportRef = reportRef,
             TriageRef = triageRef,
             DownstreamAction = triage.DownstreamAction,
+            ResolvedImplementationRefs = resolvedImplementationRefs,
+            ResolvedReviewContextRefs = resolvedReviewContextRefs,
+            ResolvedPacketRefs = resolvedPacketRefs,
             ImplementationTaskCandidates = implementationTaskCandidates,
             IntentTaskCandidates = intentTaskCandidates,
             ClarificationRequired = clarificationRequired,
@@ -89,44 +95,6 @@ internal static class BugExecutionCommand
         };
     }
 
-    private static string[] NormalizeImplementationCandidates(BugTriageArtifact triage)
-    {
-        if (!string.Equals(triage.DownstreamAction, "implementation-only", StringComparison.Ordinal)
-            && !string.Equals(triage.DownstreamAction, "dual-track", StringComparison.Ordinal))
-        {
-            return [];
-        }
-
-        return triage.ResolvedExecutionUnits
-            .Zip(
-                triage.ResolvedPacketRefs,
-                (executionUnit, packetRef) => (executionUnit, packetRef))
-            .Zip(
-                triage.ResolvedReviewContextRefs,
-                (pair, reviewContextRef) => $"execution_unit={pair.executionUnit};packet_ref={pair.packetRef};review_context_ref={reviewContextRef}")
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-    }
-
-    private static string[] NormalizeIntentCandidates(BugReportArtifact report, BugTriageArtifact triage)
-    {
-        if (!string.Equals(triage.DownstreamAction, "intent-only", StringComparison.Ordinal)
-            && !string.Equals(triage.DownstreamAction, "dual-track", StringComparison.Ordinal))
-        {
-            return [];
-        }
-
-        var affectedIntentCandidates = report.AffectedIntentRefs
-            .Select(reference => $"intent_ref={reference};source=intent");
-        var affectedRuleSpecCandidates = report.AffectedRuleSpecRefs
-            .Select(reference => $"intent_ref={reference};source=rule-spec");
-
-        return affectedIntentCandidates
-            .Concat(affectedRuleSpecCandidates)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-    }
-
     private static string WriteArtifact(string repoRoot, BugExecutionArtifact artifact)
     {
         var relativePath = BugExecutionArtifactPathResolver.Resolve(artifact.BugId);
@@ -138,5 +106,16 @@ internal static class BugExecutionCommand
         File.WriteAllText(absolutePath, BugExecutionArtifactYaml.Serialize(artifact));
 
         return relativePath;
+    }
+
+    private static string[] DistinctOrdered(IEnumerable<string> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        return values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 }

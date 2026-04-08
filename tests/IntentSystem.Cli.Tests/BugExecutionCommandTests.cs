@@ -35,14 +35,12 @@ public sealed class BugExecutionCommandTests
         Assert.Equal("dual-track", artifact.DownstreamAction);
         Assert.False(artifact.ClarificationRequired);
         Assert.True(artifact.ReadyToLaunch);
+        Assert.Equal([".intent-cli/issues/G25/implementation.md"], artifact.ResolvedImplementationRefs);
+        Assert.Equal([".intent-cli/issues/G25/review-context.md"], artifact.ResolvedReviewContextRefs);
+        Assert.Equal([".intent-cli/issues/G25/packet.yaml"], artifact.ResolvedPacketRefs);
+        Assert.Equal(["G25"], artifact.ImplementationTaskCandidates);
         Assert.Equal(
-            ["execution_unit=G25;packet_ref=.intent-cli/issues/G25/packet.yaml;review_context_ref=.intent-cli/issues/G25/review-context.md"],
-            artifact.ImplementationTaskCandidates);
-        Assert.Equal(
-            [
-                "intent_ref=intents/intent-cli/means/auth.md;source=intent",
-                "intent_ref=intents/intent-cli/specs/12-bug-fix-and-intent-repair.md;source=rule-spec"
-            ],
+            ["intents/intent-cli/means/auth.md", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"],
             artifact.IntentTaskCandidates);
     }
 
@@ -101,8 +99,8 @@ public sealed class BugExecutionCommandTests
             ProblemStatement = "Observed callback loop after login.",
             SuspectedFailureLocus = "Observed callback loop after login.",
             OriginalInstructionRefs = ["ICL.P.PRODUCT_GOAL"],
-            AffectedIntentRefs = ["intents/intent-cli/means/auth.md"],
-            AffectedRuleSpecRefs = ["intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"],
+            AffectedIntentRefs = ["intents/intent-cli/means/auth.md", "intents/intent-cli/means/session.md"],
+            AffectedRuleSpecRefs = ["intents/intent-cli/specs/12-bug-fix-and-intent-repair.md", "intents/intent-cli/specs/99-extra.md"],
             ClarificationCandidates = ["Should provider retry reuse callback state token?"],
             LinkedExecutionUnits = ["G25"],
             LinkedIssueRefs = [],

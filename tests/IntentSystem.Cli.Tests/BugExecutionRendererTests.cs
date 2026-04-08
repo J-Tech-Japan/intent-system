@@ -17,14 +17,11 @@ public sealed class BugExecutionRendererTests
                 ReportRef = ".intent-cli/bugs/BUG-123.report.yaml",
                 TriageRef = ".intent-cli/bugs/BUG-123.triage.yaml",
                 DownstreamAction = "dual-track",
-                ImplementationTaskCandidates =
-                [
-                    "execution_unit=G25;packet_ref=.intent-cli/issues/G25/packet.yaml;review_context_ref=.intent-cli/issues/G25/review-context.md"
-                ],
-                IntentTaskCandidates =
-                [
-                    "intent_ref=intents/intent-cli/means/auth.md;source=intent"
-                ],
+                ResolvedImplementationRefs = [".intent-cli/issues/G25/implementation.md"],
+                ResolvedReviewContextRefs = [".intent-cli/issues/G25/review-context.md"],
+                ResolvedPacketRefs = [".intent-cli/issues/G25/packet.yaml"],
+                ImplementationTaskCandidates = ["G25"],
+                IntentTaskCandidates = ["intents/intent-cli/means/auth.md"],
                 ClarificationRequired = false,
                 ReadyToLaunch = true
             },

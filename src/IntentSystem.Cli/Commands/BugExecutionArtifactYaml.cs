@@ -10,6 +10,12 @@ internal sealed record BugExecutionArtifact
 
     public required string DownstreamAction { get; init; }
 
+    public required IReadOnlyList<string> ResolvedImplementationRefs { get; init; }
+
+    public required IReadOnlyList<string> ResolvedReviewContextRefs { get; init; }
+
+    public required IReadOnlyList<string> ResolvedPacketRefs { get; init; }
+
     public required IReadOnlyList<string> ImplementationTaskCandidates { get; init; }
 
     public required IReadOnlyList<string> IntentTaskCandidates { get; init; }
@@ -27,6 +33,9 @@ internal static class BugExecutionArtifactYaml
         "report_ref",
         "triage_ref",
         "downstream_action",
+        "resolved_implementation_refs",
+        "resolved_review_context_refs",
+        "resolved_packet_refs",
         "implementation_task_candidates",
         "intent_task_candidates",
         "clarification_required",
@@ -47,6 +56,9 @@ internal static class BugExecutionArtifactYaml
             $"ready_to_launch: {artifact.ReadyToLaunch.ToString().ToLowerInvariant()}"
         };
 
+        AppendList(lines, "resolved_implementation_refs", artifact.ResolvedImplementationRefs);
+        AppendList(lines, "resolved_review_context_refs", artifact.ResolvedReviewContextRefs);
+        AppendList(lines, "resolved_packet_refs", artifact.ResolvedPacketRefs);
         AppendList(lines, "implementation_task_candidates", artifact.ImplementationTaskCandidates);
         AppendList(lines, "intent_task_candidates", artifact.IntentTaskCandidates);
 
@@ -66,6 +78,9 @@ internal static class BugExecutionArtifactYaml
             ReportRef = GetRequiredScalar(values, "report_ref"),
             TriageRef = GetRequiredScalar(values, "triage_ref"),
             DownstreamAction = GetRequiredScalar(values, "downstream_action"),
+            ResolvedImplementationRefs = GetRequiredList(values, "resolved_implementation_refs"),
+            ResolvedReviewContextRefs = GetRequiredList(values, "resolved_review_context_refs"),
+            ResolvedPacketRefs = GetRequiredList(values, "resolved_packet_refs"),
             ImplementationTaskCandidates = GetRequiredList(values, "implementation_task_candidates"),
             IntentTaskCandidates = GetRequiredList(values, "intent_task_candidates"),
             ClarificationRequired = GetRequiredBoolean(values, "clarification_required"),
