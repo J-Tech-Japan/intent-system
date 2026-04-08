@@ -11,7 +11,7 @@ public sealed class BugTriageArtifactYamlTests
         {
             BugId = "BUG-123",
             ReportRef = ".intent-cli/bugs/BUG-123.report.yaml",
-            Classification = "implementation-mismatch",
+            TriageClassification = "implementation-mismatch",
             DownstreamAction = "dual-track",
             ClarificationRequired = true,
             ClarificationReasons = ["execution unit roots could not be fully resolved for: G77"],
@@ -31,7 +31,7 @@ public sealed class BugTriageArtifactYamlTests
 
         Assert.Equal(artifact.BugId, roundTripped.BugId);
         Assert.Equal(artifact.ReportRef, roundTripped.ReportRef);
-        Assert.Equal(artifact.Classification, roundTripped.Classification);
+        Assert.Equal(artifact.TriageClassification, roundTripped.TriageClassification);
         Assert.Equal(artifact.DownstreamAction, roundTripped.DownstreamAction);
         Assert.Equal(artifact.ClarificationRequired, roundTripped.ClarificationRequired);
         Assert.Equal(artifact.ClarificationReasons, roundTripped.ClarificationReasons);
@@ -52,7 +52,7 @@ public sealed class BugTriageArtifactYamlTests
         var yaml = """
         bug_id: BUG-123
         report_ref: ".intent-cli/bugs/BUG-123.report.yaml"
-        classification: implementation-mismatch
+        triage_classification: implementation-mismatch
         downstream_action: implementation-only
         clarification_required: false
         clarification_reasons: []

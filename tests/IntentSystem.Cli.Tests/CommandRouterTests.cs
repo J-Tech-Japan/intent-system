@@ -1460,7 +1460,7 @@ public sealed class CommandRouterTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Bug triage artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("Classification: implementation-mismatch", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Triage classification: implementation-mismatch", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

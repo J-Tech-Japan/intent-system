@@ -23,13 +23,13 @@ public sealed class BugTriageCommandTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Bug triage artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("Classification: implementation-mismatch", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Triage classification: implementation-mismatch", writer.ToString(), StringComparison.Ordinal);
 
         var artifact = BugTriageArtifactYaml.Deserialize(
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.triage.yaml")));
         Assert.Equal("BUG-123", artifact.BugId);
         Assert.Equal(".intent-cli/bugs/BUG-123.report.yaml", artifact.ReportRef);
-        Assert.Equal("implementation-mismatch", artifact.Classification);
+        Assert.Equal("implementation-mismatch", artifact.TriageClassification);
         Assert.Equal("dual-track", artifact.DownstreamAction);
         Assert.False(artifact.ClarificationRequired);
         Assert.Equal(["G25"], artifact.ResolvedExecutionUnits);
@@ -75,7 +75,7 @@ public sealed class BugTriageCommandTests
 
         var artifact = BugTriageArtifactYaml.Deserialize(
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-124.triage.yaml")));
-        Assert.Equal("unknown", artifact.Classification);
+        Assert.Equal("unknown", artifact.TriageClassification);
         Assert.Equal("clarification-first", artifact.DownstreamAction);
         Assert.True(artifact.ClarificationRequired);
         Assert.Equal(["G77"], artifact.UnresolvedExecutionUnits);

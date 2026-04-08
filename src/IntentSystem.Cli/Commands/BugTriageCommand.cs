@@ -127,7 +127,7 @@ internal static class BugTriageCommand
         {
             BugId = bugId,
             ReportRef = reportRef,
-            Classification = classification,
+            TriageClassification = classification,
             DownstreamAction = downstreamAction,
             ClarificationRequired = clarificationReasons.Count > 0,
             ClarificationReasons = clarificationReasons,

@@ -9,7 +9,7 @@ internal static class BugTriageRenderer
         ArgumentException.ThrowIfNullOrWhiteSpace(artifactPath);
 
         writer.WriteLine($"Bug triage artifact generated for '{artifact.BugId}'.");
-        writer.WriteLine($"Classification: {artifact.Classification}");
+        writer.WriteLine($"Triage classification: {artifact.TriageClassification}");
         writer.WriteLine($"Downstream action: {artifact.DownstreamAction}");
         writer.WriteLine($"Clarification required: {artifact.ClarificationRequired.ToString().ToLowerInvariant()}");
         writer.WriteLine($"Artifact path: {artifactPath}");

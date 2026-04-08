@@ -6,7 +6,7 @@ internal sealed record BugTriageArtifact
 
     public required string ReportRef { get; init; }
 
-    public required string Classification { get; init; }
+    public required string TriageClassification { get; init; }
 
     public required string DownstreamAction { get; init; }
 
@@ -39,7 +39,7 @@ internal static class BugTriageArtifactYaml
     [
         "bug_id",
         "report_ref",
-        "classification",
+        "triage_classification",
         "downstream_action",
         "clarification_required",
         "clarification_reasons",
@@ -62,7 +62,7 @@ internal static class BugTriageArtifactYaml
         {
             $"bug_id: {artifact.BugId}",
             $"report_ref: {Quote(artifact.ReportRef)}",
-            $"classification: {artifact.Classification}",
+            $"triage_classification: {artifact.TriageClassification}",
             $"downstream_action: {artifact.DownstreamAction}",
             $"clarification_required: {artifact.ClarificationRequired.ToString().ToLowerInvariant()}"
         };
@@ -92,7 +92,7 @@ internal static class BugTriageArtifactYaml
         {
             BugId = GetRequiredScalar(values, "bug_id"),
             ReportRef = GetRequiredScalar(values, "report_ref"),
-            Classification = GetRequiredScalar(values, "classification"),
+            TriageClassification = GetRequiredScalar(values, "triage_classification"),
             DownstreamAction = GetRequiredScalar(values, "downstream_action"),
             ClarificationRequired = GetRequiredBoolean(values, "clarification_required"),
             ClarificationReasons = GetRequiredList(values, "clarification_reasons"),
