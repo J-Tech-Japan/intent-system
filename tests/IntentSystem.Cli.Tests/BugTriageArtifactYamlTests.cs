@@ -11,8 +11,8 @@ public sealed class BugTriageArtifactYamlTests
         {
             BugId = "BUG-123",
             ReportRef = ".intent-cli/bugs/BUG-123.report.yaml",
-            Classification = "implementation-and-intent-impact",
-            DownstreamAction = "implementation-and-intent-repair",
+            Classification = "implementation-mismatch",
+            DownstreamAction = "dual-track",
             ClarificationRequired = true,
             ClarificationReasons = ["execution unit roots could not be fully resolved for: G77"],
             OriginalInstructionRootRefs = ["ICL.P.PRODUCT_GOAL", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"],
@@ -52,8 +52,8 @@ public sealed class BugTriageArtifactYamlTests
         var yaml = """
         bug_id: BUG-123
         report_ref: ".intent-cli/bugs/BUG-123.report.yaml"
-        classification: implementation-impact
-        downstream_action: implementation-repair
+        classification: implementation-mismatch
+        downstream_action: implementation-only
         clarification_required: false
         clarification_reasons: []
         original_instruction_root_refs: []

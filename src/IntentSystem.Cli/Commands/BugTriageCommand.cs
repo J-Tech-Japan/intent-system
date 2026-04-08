@@ -95,24 +95,33 @@ internal static class BugTriageCommand
         var implementationRepairCandidates = resolvedExecutionUnits.ToArray();
         var intentRepairCandidates = DistinctOrdered(report.AffectedIntentRefs.Concat(report.AffectedRuleSpecRefs));
 
-        var classification = !canReconstructOriginalInstructionRoot
-            ? "clarification-first"
-            : implementationRepairCandidates.Length > 0 && intentRepairCandidates.Length > 0
-                ? "implementation-and-intent-impact"
-                : implementationRepairCandidates.Length > 0
-                    ? "implementation-impact"
-                    : intentRepairCandidates.Length > 0
-                        ? "intent-impact"
-                        : "review-linked-impact";
+        var hasIntentCandidates = report.AffectedIntentRefs.Count > 0;
+        var hasRuleCandidates = report.AffectedRuleSpecRefs.Count > 0;
+        var hasImplementationCandidates = implementationRepairCandidates.Length > 0;
 
-        var downstreamAction = classification switch
-        {
-            "clarification-first" => "clarification-first",
-            "implementation-and-intent-impact" => "implementation-and-intent-repair",
-            "implementation-impact" => "implementation-repair",
-            "intent-impact" => "intent-repair",
-            _ => "review-linked-investigation"
-        };
+        var classification = !canReconstructOriginalInstructionRoot
+            ? "unknown"
+            : unresolvedExecutionUnits.Count > 0
+                ? "packet-gap"
+                : hasImplementationCandidates
+                    ? "implementation-mismatch"
+                    : hasRuleCandidates
+                        ? "rule-gap"
+                        : hasIntentCandidates
+                            ? "intent-gap"
+                            : linkedReviewRefs.Length > 0
+                                ? "edge-case-gap"
+                                : "unknown";
+
+        var downstreamAction = !canReconstructOriginalInstructionRoot
+            ? "clarification-first"
+            : hasImplementationCandidates && (hasIntentCandidates || hasRuleCandidates)
+                ? "dual-track"
+                : hasImplementationCandidates
+                    ? "implementation-only"
+                    : hasIntentCandidates || hasRuleCandidates
+                        ? "intent-only"
+                        : "clarification-first";
 
         var artifact = new BugTriageArtifact
         {
