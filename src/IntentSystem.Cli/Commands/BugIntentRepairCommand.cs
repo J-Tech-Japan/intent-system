@@ -34,11 +34,11 @@ internal static class BugIntentRepairCommand
         var bugId = args[0].Trim();
         var reportRef = $".intent-cli/bugs/{bugId}.report.yaml";
         var triageRef = $".intent-cli/bugs/{bugId}.triage.yaml";
-        var executionRef = $".intent-cli/bugs/{bugId}.execution.yaml";
+        var executionRef = $".intent-cli/bugs/{bugId}.plan.yaml";
 
         var reportPath = ResolveExistingArtifactPath(context.RepoRoot, reportRef, "Bug report artifact");
         var triagePath = ResolveExistingArtifactPath(context.RepoRoot, triageRef, "Bug triage artifact");
-        var executionPath = ResolveExistingArtifactPath(context.RepoRoot, executionRef, "Bug execution artifact");
+        var executionPath = ResolveExistingArtifactPath(context.RepoRoot, executionRef, "Bug plan artifact");
 
         var report = BugReportArtifactYaml.Deserialize(File.ReadAllText(reportPath));
         var triage = BugTriageArtifactYaml.Deserialize(File.ReadAllText(triagePath));

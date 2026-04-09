@@ -1464,7 +1464,7 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
-    public void Execute_GivenBugExecutionCommand_DispatchesToBugExecutionRenderer()
+    public void Execute_GivenBugPlanCommand_DispatchesToBugExecutionRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -1511,11 +1511,22 @@ public sealed class CommandRouterTests
                 }));
         using var writer = new StringWriter();
 
-        var exitCode = CommandRouter.Execute(["bug", "execution", "BUG-123"], CreateContext(repoRoot), writer);
+        var exitCode = CommandRouter.Execute(["bug", "plan", "BUG-123"], CreateContext(repoRoot), writer);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("Bug execution artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Bug plan artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
         Assert.Contains("Ready to launch: true", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenRemovedBugExecutionSurface_ReturnsNotImplemented()
+    {
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["bug", "execution", "BUG-123"], CreateContext("/tmp/repo"), writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Command 'bug execution' is not yet implemented.", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1565,7 +1576,7 @@ public sealed class CommandRouterTests
                     IntentRepairCandidates = ["intents/intent-cli/means/auth.md", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"]
                 }));
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.execution.yaml"),
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.plan.yaml"),
             BugExecutionArtifactYaml.Serialize(
                 new BugExecutionArtifact
                 {
@@ -1637,7 +1648,7 @@ public sealed class CommandRouterTests
                     IntentRepairCandidates = ["intents/intent-cli/means/auth.md", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"]
                 }));
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.execution.yaml"),
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.plan.yaml"),
             BugExecutionArtifactYaml.Serialize(
                 new BugExecutionArtifact
                 {
@@ -1673,11 +1684,11 @@ public sealed class CommandRouterTests
                 new BugImplementationRepairArtifact
                 {
                     BugId = "BUG-123",
-                    ExecutionRef = ".intent-cli/bugs/BUG-123.execution.yaml",
+                    ExecutionRef = ".intent-cli/bugs/BUG-123.plan.yaml",
                     ImplementationTaskCandidates = ["G25"],
                     ImplementationRepairTargets = [".intent-cli/issues/G25/packet.yaml"],
                     SuggestedIssueTitle = "Implementation repair: OAuth callback loop (BUG-123)",
-                    SuggestedGoal = "Repair child implementation targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.execution.yaml: .intent-cli/issues/G25/packet.yaml",
+                    SuggestedGoal = "Repair child implementation targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.plan.yaml: .intent-cli/issues/G25/packet.yaml",
                     ReadyToIssueCut = true
                 }));
         tempDirectory.CreateFile(

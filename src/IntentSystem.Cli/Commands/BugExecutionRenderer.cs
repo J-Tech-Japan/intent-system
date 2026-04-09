@@ -8,7 +8,7 @@ internal static class BugExecutionRenderer
         ArgumentNullException.ThrowIfNull(artifact);
         ArgumentException.ThrowIfNullOrWhiteSpace(artifactPath);
 
-        writer.WriteLine($"Bug execution artifact generated for '{artifact.BugId}'.");
+        writer.WriteLine($"Bug plan artifact generated for '{artifact.BugId}'.");
         writer.WriteLine($"Downstream action: {artifact.DownstreamAction}");
         writer.WriteLine($"Clarification required: {artifact.ClarificationRequired.ToString().ToLowerInvariant()}");
         writer.WriteLine($"Ready to launch: {artifact.ReadyToLaunch.ToString().ToLowerInvariant()}");

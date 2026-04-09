@@ -24,11 +24,11 @@ public sealed class BugExecutionCommandTests
         var exitCode = BugExecutionCommand.Execute(CreateContext(repoRoot), ["BUG-123"], writer);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("Bug execution artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Bug plan artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
         Assert.Contains("Ready to launch: true", writer.ToString(), StringComparison.Ordinal);
 
         var artifact = BugExecutionArtifactYaml.Deserialize(
-            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.execution.yaml")));
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.plan.yaml")));
         Assert.Equal("BUG-123", artifact.BugId);
         Assert.Equal(".intent-cli/bugs/BUG-123.report.yaml", artifact.ReportRef);
         Assert.Equal(".intent-cli/bugs/BUG-123.triage.yaml", artifact.TriageRef);
@@ -64,7 +64,7 @@ public sealed class BugExecutionCommandTests
         Assert.Equal(0, exitCode);
 
         var artifact = BugExecutionArtifactYaml.Deserialize(
-            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-124.execution.yaml")));
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-124.plan.yaml")));
         Assert.Equal("clarification-first", artifact.DownstreamAction);
         Assert.True(artifact.ClarificationRequired);
         Assert.False(artifact.ReadyToLaunch);

@@ -10,7 +10,7 @@ public sealed class BugIntentRepairArtifactYamlTests
         var artifact = new BugIntentRepairArtifact
         {
             BugId = "BUG-123",
-            ExecutionRef = ".intent-cli/bugs/BUG-123.execution.yaml",
+            ExecutionRef = ".intent-cli/bugs/BUG-123.plan.yaml",
             IntentTaskCandidates =
             [
                 "intents/intent-cli/means/auth.md",
@@ -22,7 +22,7 @@ public sealed class BugIntentRepairArtifactYamlTests
                 "rule-spec:intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"
             ],
             SuggestedIssueTitle = "Intent repair: OAuth callback loop (BUG-123)",
-            SuggestedGoal = "Repair parent intent targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.execution.yaml: intent:intents/intent-cli/means/auth.md, rule-spec:intents/intent-cli/specs/12-bug-fix-and-intent-repair.md",
+            SuggestedGoal = "Repair parent intent targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.plan.yaml: intent:intents/intent-cli/means/auth.md, rule-spec:intents/intent-cli/specs/12-bug-fix-and-intent-repair.md",
             ReadyToIssueCut = true
         };
 
@@ -43,7 +43,7 @@ public sealed class BugIntentRepairArtifactYamlTests
     {
         var yaml = """
         bug_id: BUG-123
-        execution_ref: ".intent-cli/bugs/BUG-123.execution.yaml"
+        execution_ref: ".intent-cli/bugs/BUG-123.plan.yaml"
         intent_task_candidates: []
         parent_repair_targets: []
         suggested_issue_title: "Intent repair: OAuth callback loop (BUG-123)"
