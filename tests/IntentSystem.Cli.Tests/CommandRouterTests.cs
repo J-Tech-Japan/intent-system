@@ -2853,6 +2853,51 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugIntentCommentCommand_DispatchesToBugIntentCommentRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-review.yaml"),
+            BugIntentReviewArtifactYaml.Serialize(
+                new BugIntentReviewArtifact
+                {
+                    BugId = "BUG-123",
+                    IntentSubmitRef = ".intent-cli/bugs/BUG-123.intent-submit.yaml",
+                    ReviewedExecutionUnit = "G41",
+                    ReviewRequestRef = ".intent-cli/reviews/G41.request.json",
+                    LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/58",
+                    ReadyToReview = true
+                }));
+        tempDirectory.CreateFile(Path.Combine("repo", "prepared-comment.md"), "repair in place");
+        using var writer = new StringWriter();
+        var originalExecutor = BugIntentCommentCommand.ReviewCommentExecutor;
+
+        try
+        {
+            BugIntentCommentCommand.ReviewCommentExecutor = (_, executionUnit, _) => new ReviewCommentResult
+            {
+                ExecutionUnit = executionUnit,
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.comment.json",
+                CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/58#issuecomment-1"
+            };
+
+            var exitCode = CommandRouter.Execute(
+                ["bug", "intent-comment", "BUG-123", "--from-file", "prepared-comment.md"],
+                CreateContext(repoRoot),
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Bug intent-comment artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Ready to comment: true", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            BugIntentCommentCommand.ReviewCommentExecutor = originalExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenRunSubmitCommand_DispatchesToRunSubmitRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
