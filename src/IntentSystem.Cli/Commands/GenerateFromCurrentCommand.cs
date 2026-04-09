@@ -46,6 +46,12 @@ internal static class GenerateFromCurrentCommand
         }
 
         if (args.Length > 0
+            && string.Equals(args[0], "activate", StringComparison.Ordinal))
+        {
+            return GenerateFromCurrentActivateCommand.Execute(context, args[1..], writer);
+        }
+
+        if (args.Length > 0
             && string.Equals(args[0], "submit", StringComparison.Ordinal))
         {
             return GenerateFromCurrentSubmitCommand.Execute(context, args[1..], writer);
