@@ -65,7 +65,8 @@ public static class QueueManager
                 Ts = ts,
                 ExecutionUnit = normalizedItem.ExecutionUnit,
                 Event = "queued",
-                By = by
+                By = by,
+                LinkedIssue = normalizedItem.LinkedIssue?.Url
             }
         };
     }

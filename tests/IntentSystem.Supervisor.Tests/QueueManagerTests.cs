@@ -214,6 +214,26 @@ public sealed class QueueManagerTests
     }
 
     [Fact]
+    public void Enqueue_GivenLinkedIssue_PropagatesLinkedIssueToQueuedEvent()
+    {
+        var state = CreateState([]);
+        var candidate = CreateItem("B1", QueueItemState.Active) with
+        {
+            LinkedIssue = new LinkedIssue
+            {
+                Repo = "J-Tech-Japan/MyIntentHost",
+                Number = 53,
+                Url = "https://github.com/J-Tech-Japan/MyIntentHost/issues/53"
+            }
+        };
+
+        var result = QueueManager.Enqueue(state, candidate, "intent-cli", BaseTime);
+
+        Assert.NotNull(result.Event);
+        Assert.Equal("https://github.com/J-Tech-Japan/MyIntentHost/issues/53", result.Event!.LinkedIssue);
+    }
+
+    [Fact]
     public void Enqueue_GivenExistingExecutionUnit_SkipsWithoutMutation()
     {
         var existingItem = CreateItem("A1", QueueItemState.Queued);
