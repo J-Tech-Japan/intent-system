@@ -1591,6 +1591,78 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugImplementationRepairCommand_DispatchesToBugImplementationRepairRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.report.yaml"),
+            BugReportArtifactYaml.Serialize(
+                new BugReportArtifact
+                {
+                    DomainSlug = "auth",
+                    BugId = "BUG-123",
+                    Title = "OAuth callback loop",
+                    ReportSource = "from-file",
+                    ProblemStatement = "Observed callback loop after login.",
+                    SuspectedFailureLocus = "Observed callback loop after login.",
+                    OriginalInstructionRefs = ["ICL.P.PRODUCT_GOAL"],
+                    AffectedIntentRefs = ["intents/intent-cli/means/auth.md"],
+                    AffectedRuleSpecRefs = ["intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"],
+                    ClarificationCandidates = ["Should provider retry reuse callback state token?"],
+                    LinkedExecutionUnits = ["G25"],
+                    LinkedIssueRefs = [],
+                    LinkedPrRefs = [],
+                    LinkedReviewRefs = ["https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1"]
+                }));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.triage.yaml"),
+            BugTriageArtifactYaml.Serialize(
+                new BugTriageArtifact
+                {
+                    BugId = "BUG-123",
+                    ReportRef = ".intent-cli/bugs/BUG-123.report.yaml",
+                    TriageClassification = "implementation-mismatch",
+                    DownstreamAction = "dual-track",
+                    ClarificationRequired = false,
+                    ClarificationReasons = [],
+                    OriginalInstructionRootRefs = ["ICL.P.PRODUCT_GOAL"],
+                    LinkedReviewRefs = ["https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1"],
+                    ResolvedExecutionUnits = ["G25"],
+                    ResolvedImplementationRefs = [".intent-cli/issues/G25/implementation.md"],
+                    ResolvedReviewContextRefs = [".intent-cli/issues/G25/review-context.md"],
+                    ResolvedPacketRefs = [".intent-cli/issues/G25/packet.yaml"],
+                    UnresolvedExecutionUnits = [],
+                    ImplementationRepairCandidates = ["G25"],
+                    IntentRepairCandidates = ["intents/intent-cli/means/auth.md", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"]
+                }));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.execution.yaml"),
+            BugExecutionArtifactYaml.Serialize(
+                new BugExecutionArtifact
+                {
+                    BugId = "BUG-123",
+                    ReportRef = ".intent-cli/bugs/BUG-123.report.yaml",
+                    TriageRef = ".intent-cli/bugs/BUG-123.triage.yaml",
+                    DownstreamAction = "dual-track",
+                    ResolvedImplementationRefs = [".intent-cli/issues/G25/implementation.md"],
+                    ResolvedReviewContextRefs = [".intent-cli/issues/G25/review-context.md"],
+                    ResolvedPacketRefs = [".intent-cli/issues/G25/packet.yaml"],
+                    ImplementationTaskCandidates = ["G25"],
+                    IntentTaskCandidates = ["intents/intent-cli/means/auth.md", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"],
+                    ClarificationRequired = false,
+                    ReadyToLaunch = true
+                }));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["bug", "implementation-repair", "BUG-123"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Bug implementation-repair artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Ready to issue cut: true", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenInterviewStartCommand_DispatchesToInterviewStartRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
