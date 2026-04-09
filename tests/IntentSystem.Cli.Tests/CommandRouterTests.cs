@@ -1776,6 +1776,10 @@ public sealed class CommandRouterTests
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(Path.Combine("parent-intent", "intents", "intent-cli", "means", "auth.md"), "# auth");
+        tempDirectory.CreateFile(
+            Path.Combine("parent-intent", "intents", "intent-cli", "specs", "12-bug-fix-and-intent-repair.md"),
+            "# spec");
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-repair.yaml"),
             BugIntentRepairArtifactYaml.Serialize(
@@ -1807,7 +1811,7 @@ public sealed class CommandRouterTests
             BugIntentIssueCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
             BugIntentIssueCommand.GitCommandRunnerFactory = () => new FakeParentIntentGitRunner();
 
-            var exitCode = CommandRouter.Execute(["bug", "intent-issue", "BUG-123"], CreateContext(repoRoot, "../parent-intent"), writer);
+            var exitCode = CommandRouter.Execute(["bug", "intent-issue", "BUG-123"], CreateContext(repoRoot), writer);
 
             Assert.Equal(0, exitCode);
             Assert.Contains("Bug intent-issue artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);

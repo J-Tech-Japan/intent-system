@@ -11,7 +11,10 @@ public sealed class BugIntentIssueCommandTests
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
-        tempDirectory.CreateDirectory("parent-intent");
+        tempDirectory.CreateFile(Path.Combine("parent-intent", "intents", "intent-cli", "means", "auth.md"), "# auth");
+        tempDirectory.CreateFile(
+            Path.Combine("parent-intent", "intents", "intent-cli", "specs", "12-bug-fix-and-intent-repair.md"),
+            "# spec");
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-repair.yaml"),
             BugIntentRepairArtifactYaml.Serialize(CreateRepairArtifact(readyToIssueCut: true)));
@@ -124,8 +127,7 @@ public sealed class BugIntentIssueCommandTests
                 {
                     Domain = "intent-system",
                     WorkflowEngine = "intent-cli",
-                    ArtifactRoot = ".intent-cli",
-                    ParentIntentRepoRoot = "../parent-intent"
+                    ArtifactRoot = ".intent-cli"
                 }
             }
         };
