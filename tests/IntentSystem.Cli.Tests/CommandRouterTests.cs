@@ -1464,6 +1464,29 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugReportCommandWithoutBugIdAndWithText_DispatchesToBugReportRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            [
+                "bug",
+                "report",
+                "auth",
+                "--title", "OAuth callback loop",
+                "--text", "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path."
+            ],
+            CreateContext(repoRoot),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Bug report artifact generated for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Bug ID: BUG-", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenBugPlanCommand_DispatchesToBugExecutionRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
