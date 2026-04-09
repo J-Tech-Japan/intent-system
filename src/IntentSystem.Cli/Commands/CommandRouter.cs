@@ -82,6 +82,7 @@ internal static class CommandRouter
                 ["triage"] = BugTriageCommand.Execute,
                 ["plan"] = BugExecutionCommand.Execute,
                 ["intent-repair"] = BugIntentRepairCommand.Execute,
+                ["intent-issue"] = BugIntentIssueCommand.Execute,
                 ["implementation-repair"] = BugImplementationRepairCommand.Execute,
                 ["implementation-issue"] = BugImplementationIssueCommand.Execute
             },

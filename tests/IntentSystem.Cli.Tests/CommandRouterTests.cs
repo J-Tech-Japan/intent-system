@@ -1772,6 +1772,55 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugIntentIssueCommand_DispatchesToBugIntentIssueRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-repair.yaml"),
+            BugIntentRepairArtifactYaml.Serialize(
+                new BugIntentRepairArtifact
+                {
+                    BugId = "BUG-123",
+                    ExecutionRef = ".intent-cli/bugs/BUG-123.plan.yaml",
+                    IntentTaskCandidates =
+                    [
+                        "intents/intent-cli/means/auth.md",
+                        "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"
+                    ],
+                    ParentRepairTargets =
+                    [
+                        "intent:intents/intent-cli/means/auth.md",
+                        "rule-spec:intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"
+                    ],
+                    SuggestedIssueTitle = "Intent repair: OAuth callback loop (BUG-123)",
+                    SuggestedGoal = "Repair parent intent targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.plan.yaml: intent:intents/intent-cli/means/auth.md, rule-spec:intents/intent-cli/specs/12-bug-fix-and-intent-repair.md",
+                    ReadyToIssueCut = true
+                }));
+        tempDirectory.CreateDirectory(Path.Combine("parent-intent"));
+        using var writer = new StringWriter();
+        var originalPublisherFactory = BugIntentIssueCommand.PublisherFactory;
+        var originalGitRunnerFactory = BugIntentIssueCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            BugIntentIssueCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            BugIntentIssueCommand.GitCommandRunnerFactory = () => new FakeParentIntentGitRunner();
+
+            var exitCode = CommandRouter.Execute(["bug", "intent-issue", "BUG-123"], CreateContext(repoRoot, "../parent-intent"), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Bug intent-issue artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Created issue URL: https://github.com/J-Tech-Japan/intent-system/issues/53", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            BugIntentIssueCommand.PublisherFactory = originalPublisherFactory;
+            BugIntentIssueCommand.GitCommandRunnerFactory = originalGitRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenInterviewStartCommand_DispatchesToInterviewStartRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -4686,6 +4735,19 @@ recommended_updates:
             {
                 ExitCode = 0,
                 StdOut = "git@github.com:J-Tech-Japan/intent-system.git" + Environment.NewLine,
+                StdErr = string.Empty
+            };
+        }
+    }
+
+    private sealed class FakeParentIntentGitRunner : IGitRemoteCommandRunner
+    {
+        public GitRemoteCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            return new GitRemoteCommandResult
+            {
+                ExitCode = 0,
+                StdOut = "git@github.com:J-Tech-Japan/MyIntentHost.git" + Environment.NewLine,
                 StdErr = string.Empty
             };
         }
