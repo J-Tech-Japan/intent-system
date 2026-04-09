@@ -111,12 +111,11 @@ internal static class BugIntentEnqueueCommand
             {
                 BugId = bugId,
                 IntentIssueRef = intentIssueRef,
-                IntentRepairRef = intentIssue.IntentRepairRef,
                 AllocatedExecutionUnit = null,
                 LinkedIssueUrl = null,
-                ParentRepairTargets = intentIssue.ParentRepairTargets,
-                GeneratedPacketPaths = [],
-                WasEnqueued = false
+                LinkedIssueNumber = null,
+                PacketPaths = [],
+                ReadyToEnqueue = false
             };
 
             return new BugIntentEnqueueCommandResult
@@ -171,17 +170,16 @@ internal static class BugIntentEnqueueCommand
         {
             BugId = bugId,
             IntentIssueRef = intentIssueRef,
-            IntentRepairRef = intentIssue.IntentRepairRef,
             AllocatedExecutionUnit = executionUnit,
             LinkedIssueUrl = intentIssue.CreatedIssueUrl,
-            ParentRepairTargets = intentIssue.ParentRepairTargets,
-            GeneratedPacketPaths =
+            LinkedIssueNumber = intentIssue.CreatedIssueNumber,
+            PacketPaths =
             [
                 packet.Paths.Implementation,
                 packet.Paths.ReviewContext,
                 packet.Paths.Yaml
             ],
-            WasEnqueued = true
+            ReadyToEnqueue = true
         };
 
         return new BugIntentEnqueueCommandResult

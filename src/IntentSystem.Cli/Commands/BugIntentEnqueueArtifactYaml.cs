@@ -6,17 +6,15 @@ internal sealed record BugIntentEnqueueArtifact
 
     public required string IntentIssueRef { get; init; }
 
-    public required string IntentRepairRef { get; init; }
-
     public required string? AllocatedExecutionUnit { get; init; }
 
     public required string? LinkedIssueUrl { get; init; }
 
-    public required IReadOnlyList<string> ParentRepairTargets { get; init; }
+    public required int? LinkedIssueNumber { get; init; }
 
-    public required IReadOnlyList<string> GeneratedPacketPaths { get; init; }
+    public required IReadOnlyList<string> PacketPaths { get; init; }
 
-    public required bool WasEnqueued { get; init; }
+    public required bool ReadyToEnqueue { get; init; }
 }
 
 internal static class BugIntentEnqueueArtifactYaml
@@ -25,12 +23,11 @@ internal static class BugIntentEnqueueArtifactYaml
     [
         "bug_id",
         "intent_issue_ref",
-        "intent_repair_ref",
         "allocated_execution_unit",
         "linked_issue_url",
-        "parent_repair_targets",
-        "generated_packet_paths",
-        "was_enqueued"
+        "linked_issue_number",
+        "packet_paths",
+        "ready_to_enqueue"
     ];
 
     public static string Serialize(BugIntentEnqueueArtifact artifact)
@@ -41,14 +38,13 @@ internal static class BugIntentEnqueueArtifactYaml
         {
             $"bug_id: {artifact.BugId}",
             $"intent_issue_ref: {Quote(artifact.IntentIssueRef)}",
-            $"intent_repair_ref: {Quote(artifact.IntentRepairRef)}",
             $"allocated_execution_unit: {FormatNullableScalar(artifact.AllocatedExecutionUnit)}",
             $"linked_issue_url: {FormatNullableScalar(artifact.LinkedIssueUrl)}",
-            $"was_enqueued: {artifact.WasEnqueued.ToString().ToLowerInvariant()}"
+            $"linked_issue_number: {FormatNullableInteger(artifact.LinkedIssueNumber)}",
+            $"ready_to_enqueue: {artifact.ReadyToEnqueue.ToString().ToLowerInvariant()}"
         };
 
-        AppendList(lines, "parent_repair_targets", artifact.ParentRepairTargets);
-        AppendList(lines, "generated_packet_paths", artifact.GeneratedPacketPaths);
+        AppendList(lines, "packet_paths", artifact.PacketPaths);
 
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
@@ -64,12 +60,11 @@ internal static class BugIntentEnqueueArtifactYaml
         {
             BugId = GetRequiredScalar(values, "bug_id"),
             IntentIssueRef = GetRequiredScalar(values, "intent_issue_ref"),
-            IntentRepairRef = GetRequiredScalar(values, "intent_repair_ref"),
             AllocatedExecutionUnit = GetNullableScalar(values, "allocated_execution_unit"),
             LinkedIssueUrl = GetNullableScalar(values, "linked_issue_url"),
-            ParentRepairTargets = GetRequiredList(values, "parent_repair_targets"),
-            GeneratedPacketPaths = GetRequiredList(values, "generated_packet_paths"),
-            WasEnqueued = GetRequiredBoolean(values, "was_enqueued")
+            LinkedIssueNumber = GetNullableInteger(values, "linked_issue_number"),
+            PacketPaths = GetRequiredList(values, "packet_paths"),
+            ReadyToEnqueue = GetRequiredBoolean(values, "ready_to_enqueue")
         };
     }
 
@@ -136,6 +131,7 @@ internal static class BugIntentEnqueueArtifactYaml
                 "null" => null,
                 "true" => true,
                 "false" => false,
+                _ when int.TryParse(value, out var integerValue) => integerValue,
                 _ => ParseScalar(value)
             };
         }
@@ -204,9 +200,29 @@ internal static class BugIntentEnqueueArtifactYaml
         };
     }
 
+    private static int? GetNullableInteger(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            throw new InvalidOperationException($"Bug intent-enqueue YAML field '{key}' must be present.");
+        }
+
+        return value switch
+        {
+            null => null,
+            int integerValue => integerValue,
+            _ => throw new InvalidOperationException($"Bug intent-enqueue YAML field '{key}' must be an integer or null.")
+        };
+    }
+
     private static string FormatNullableScalar(string? value)
     {
         return value is null ? "null" : Quote(value);
+    }
+
+    private static string FormatNullableInteger(int? value)
+    {
+        return value?.ToString() ?? "null";
     }
 
     private static string ParseScalar(string value)

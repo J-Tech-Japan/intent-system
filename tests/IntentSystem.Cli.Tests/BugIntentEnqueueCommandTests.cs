@@ -41,10 +41,17 @@ public sealed class BugIntentEnqueueCommandTests
             var enqueueArtifact = BugIntentEnqueueArtifactYaml.Deserialize(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.intent-enqueue.yaml")));
             Assert.Equal(".intent-cli/bugs/BUG-123.intent-issue.yaml", enqueueArtifact.IntentIssueRef);
-            Assert.Equal(".intent-cli/bugs/BUG-123.intent-repair.yaml", enqueueArtifact.IntentRepairRef);
             Assert.Equal("G13", enqueueArtifact.AllocatedExecutionUnit);
             Assert.Equal("https://github.com/J-Tech-Japan/MyIntentHost/issues/53", enqueueArtifact.LinkedIssueUrl);
-            Assert.True(enqueueArtifact.WasEnqueued);
+            Assert.Equal(53, enqueueArtifact.LinkedIssueNumber);
+            Assert.True(enqueueArtifact.ReadyToEnqueue);
+            Assert.Equal(
+                [
+                    ".intent-cli/issues/G13/implementation.md",
+                    ".intent-cli/issues/G13/review-context.md",
+                    ".intent-cli/issues/G13/packet.yaml"
+                ],
+                enqueueArtifact.PacketPaths);
 
             Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "G13", "implementation.md")));
             Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "G13", "review-context.md")));
@@ -99,8 +106,9 @@ public sealed class BugIntentEnqueueCommandTests
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-124.intent-enqueue.yaml")));
         Assert.Null(artifact.AllocatedExecutionUnit);
         Assert.Null(artifact.LinkedIssueUrl);
-        Assert.False(artifact.WasEnqueued);
-        Assert.Empty(artifact.GeneratedPacketPaths);
+        Assert.Null(artifact.LinkedIssueNumber);
+        Assert.False(artifact.ReadyToEnqueue);
+        Assert.Empty(artifact.PacketPaths);
 
         Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
         Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));

@@ -15,17 +15,16 @@ public sealed class BugIntentEnqueueRendererTests
             {
                 BugId = "BUG-123",
                 IntentIssueRef = ".intent-cli/bugs/BUG-123.intent-issue.yaml",
-                IntentRepairRef = ".intent-cli/bugs/BUG-123.intent-repair.yaml",
                 AllocatedExecutionUnit = "G41",
                 LinkedIssueUrl = "https://github.com/J-Tech-Japan/MyIntentHost/issues/53",
-                ParentRepairTargets = ["intent:intents/intent-cli/means/auth.md"],
-                GeneratedPacketPaths =
+                LinkedIssueNumber = 53,
+                PacketPaths =
                 [
                     ".intent-cli/issues/G41/implementation.md",
                     ".intent-cli/issues/G41/review-context.md",
                     ".intent-cli/issues/G41/packet.yaml"
                 ],
-                WasEnqueued = true
+                ReadyToEnqueue = true
             },
             ".intent-cli/bugs/BUG-123.intent-enqueue.yaml");
 
@@ -34,7 +33,8 @@ public sealed class BugIntentEnqueueRendererTests
         Assert.Contains("Artifact path: .intent-cli/bugs/BUG-123.intent-enqueue.yaml", output, StringComparison.Ordinal);
         Assert.Contains("Allocated execution unit: G41", output, StringComparison.Ordinal);
         Assert.Contains("Linked issue URL: https://github.com/J-Tech-Japan/MyIntentHost/issues/53", output, StringComparison.Ordinal);
-        Assert.Contains("Generated packet paths: 3", output, StringComparison.Ordinal);
-        Assert.Contains("Was enqueued: true", output, StringComparison.Ordinal);
+        Assert.Contains("Linked issue number: 53", output, StringComparison.Ordinal);
+        Assert.Contains("Packet paths: 3", output, StringComparison.Ordinal);
+        Assert.Contains("Ready to enqueue: true", output, StringComparison.Ordinal);
     }
 }

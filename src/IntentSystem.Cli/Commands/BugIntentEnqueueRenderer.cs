@@ -12,7 +12,8 @@ internal static class BugIntentEnqueueRenderer
         writer.WriteLine($"Artifact path: {artifactPath}");
         writer.WriteLine($"Allocated execution unit: {artifact.AllocatedExecutionUnit ?? "not-allocated"}");
         writer.WriteLine($"Linked issue URL: {artifact.LinkedIssueUrl ?? "not-linked"}");
-        writer.WriteLine($"Generated packet paths: {artifact.GeneratedPacketPaths.Count}");
-        writer.WriteLine($"Was enqueued: {artifact.WasEnqueued.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"Linked issue number: {artifact.LinkedIssueNumber?.ToString() ?? "not-linked"}");
+        writer.WriteLine($"Packet paths: {artifact.PacketPaths.Count}");
+        writer.WriteLine($"Ready to enqueue: {artifact.ReadyToEnqueue.ToString().ToLowerInvariant()}");
     }
 }
