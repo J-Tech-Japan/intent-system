@@ -6,6 +6,6 @@ internal static class BugExecutionArtifactPathResolver
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(bugId);
 
-        return $".intent-cli/bugs/{bugId}.execution.yaml";
+        return $".intent-cli/bugs/{bugId}.plan.yaml";
     }
 }

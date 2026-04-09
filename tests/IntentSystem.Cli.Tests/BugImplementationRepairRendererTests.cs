@@ -14,11 +14,11 @@ public sealed class BugImplementationRepairRendererTests
             new BugImplementationRepairArtifact
             {
                 BugId = "BUG-123",
-                ExecutionRef = ".intent-cli/bugs/BUG-123.execution.yaml",
+                ExecutionRef = ".intent-cli/bugs/BUG-123.plan.yaml",
                 ImplementationTaskCandidates = ["G25"],
                 ImplementationRepairTargets = [".intent-cli/issues/G25/packet.yaml"],
                 SuggestedIssueTitle = "Implementation repair: OAuth callback loop (BUG-123)",
-                SuggestedGoal = "Repair child implementation targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.execution.yaml: .intent-cli/issues/G25/packet.yaml",
+                SuggestedGoal = "Repair child implementation targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.plan.yaml: .intent-cli/issues/G25/packet.yaml",
                 ReadyToIssueCut = true
             },
             ".intent-cli/bugs/BUG-123.implementation-repair.yaml");

@@ -97,13 +97,13 @@ public sealed class BugImplementationIssueCommandTests
         return new BugImplementationRepairArtifact
         {
             BugId = bugId,
-            ExecutionRef = $".intent-cli/bugs/{bugId}.execution.yaml",
+            ExecutionRef = $".intent-cli/bugs/{bugId}.plan.yaml",
             ImplementationTaskCandidates = readyToIssueCut ? ["G25"] : ["G25"],
             ImplementationRepairTargets = readyToIssueCut ? [".intent-cli/issues/G25/packet.yaml"] : [],
             SuggestedIssueTitle = $"Implementation repair: OAuth callback loop ({bugId})",
             SuggestedGoal = readyToIssueCut
-                ? $"Repair child implementation targets for 'OAuth callback loop' ({bugId}) using .intent-cli/bugs/{bugId}.execution.yaml: .intent-cli/issues/G25/packet.yaml"
-                : $"Prepare child implementation repair for 'OAuth callback loop' ({bugId}) once issue-cut blockers are cleared from .intent-cli/bugs/{bugId}.execution.yaml.",
+                ? $"Repair child implementation targets for 'OAuth callback loop' ({bugId}) using .intent-cli/bugs/{bugId}.plan.yaml: .intent-cli/issues/G25/packet.yaml"
+                : $"Prepare child implementation repair for 'OAuth callback loop' ({bugId}) once issue-cut blockers are cleared from .intent-cli/bugs/{bugId}.plan.yaml.",
             ReadyToIssueCut = readyToIssueCut
         };
     }

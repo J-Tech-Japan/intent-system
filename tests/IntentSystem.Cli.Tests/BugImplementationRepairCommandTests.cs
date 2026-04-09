@@ -18,7 +18,7 @@ public sealed class BugImplementationRepairCommandTests
             Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.triage.yaml"),
             BugTriageArtifactYaml.Serialize(CreateBugTriageArtifact("dual-track", clarificationRequired: false)));
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.execution.yaml"),
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.plan.yaml"),
             BugExecutionArtifactYaml.Serialize(CreateBugExecutionArtifact("dual-track")));
         using var writer = new StringWriter();
 
@@ -31,12 +31,12 @@ public sealed class BugImplementationRepairCommandTests
         var artifact = BugImplementationRepairArtifactYaml.Deserialize(
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.implementation-repair.yaml")));
         Assert.Equal("BUG-123", artifact.BugId);
-        Assert.Equal(".intent-cli/bugs/BUG-123.execution.yaml", artifact.ExecutionRef);
+        Assert.Equal(".intent-cli/bugs/BUG-123.plan.yaml", artifact.ExecutionRef);
         Assert.Equal(["G25"], artifact.ImplementationTaskCandidates);
         Assert.Equal([".intent-cli/issues/G25/packet.yaml"], artifact.ImplementationRepairTargets);
         Assert.Equal("Implementation repair: OAuth callback loop (BUG-123)", artifact.SuggestedIssueTitle);
         Assert.Equal(
-            "Repair child implementation targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.execution.yaml: .intent-cli/issues/G25/packet.yaml",
+            "Repair child implementation targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.plan.yaml: .intent-cli/issues/G25/packet.yaml",
             artifact.SuggestedGoal);
         Assert.True(artifact.ReadyToIssueCut);
     }
@@ -53,7 +53,7 @@ public sealed class BugImplementationRepairCommandTests
             Path.Combine("repo", ".intent-cli", "bugs", "BUG-124.triage.yaml"),
             BugTriageArtifactYaml.Serialize(CreateBugTriageArtifact("intent-only", clarificationRequired: false, bugId: "BUG-124")));
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "bugs", "BUG-124.execution.yaml"),
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-124.plan.yaml"),
             BugExecutionArtifactYaml.Serialize(CreateBugExecutionArtifact("intent-only", bugId: "BUG-124")));
         using var writer = new StringWriter();
 
@@ -84,7 +84,7 @@ public sealed class BugImplementationRepairCommandTests
         var exitCode = BugImplementationRepairCommand.Execute(CreateContext(repoRoot), ["BUG-123"], writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("Bug execution artifact was not found", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Bug plan artifact was not found", writer.ToString(), StringComparison.Ordinal);
     }
 
     private static BugReportArtifact CreateBugReportArtifact(string bugId = "BUG-123")

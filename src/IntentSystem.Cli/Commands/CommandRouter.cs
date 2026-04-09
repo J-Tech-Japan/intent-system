@@ -80,7 +80,7 @@ internal static class CommandRouter
             {
                 ["report"] = BugReportCommand.Execute,
                 ["triage"] = BugTriageCommand.Execute,
-                ["execution"] = BugExecutionCommand.Execute,
+                ["plan"] = BugExecutionCommand.Execute,
                 ["intent-repair"] = BugIntentRepairCommand.Execute,
                 ["implementation-repair"] = BugImplementationRepairCommand.Execute,
                 ["implementation-issue"] = BugImplementationIssueCommand.Execute

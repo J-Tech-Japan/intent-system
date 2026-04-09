@@ -10,11 +10,11 @@ public sealed class BugImplementationRepairArtifactYamlTests
         var artifact = new BugImplementationRepairArtifact
         {
             BugId = "BUG-123",
-            ExecutionRef = ".intent-cli/bugs/BUG-123.execution.yaml",
+            ExecutionRef = ".intent-cli/bugs/BUG-123.plan.yaml",
             ImplementationTaskCandidates = ["G25"],
             ImplementationRepairTargets = [".intent-cli/issues/G25/packet.yaml"],
             SuggestedIssueTitle = "Implementation repair: OAuth callback loop (BUG-123)",
-            SuggestedGoal = "Repair child implementation targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.execution.yaml: .intent-cli/issues/G25/packet.yaml",
+            SuggestedGoal = "Repair child implementation targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.plan.yaml: .intent-cli/issues/G25/packet.yaml",
             ReadyToIssueCut = true
         };
 
@@ -35,7 +35,7 @@ public sealed class BugImplementationRepairArtifactYamlTests
     {
         var yaml = """
         bug_id: BUG-123
-        execution_ref: ".intent-cli/bugs/BUG-123.execution.yaml"
+        execution_ref: ".intent-cli/bugs/BUG-123.plan.yaml"
         implementation_task_candidates: []
         implementation_repair_targets: []
         suggested_issue_title: "Implementation repair: OAuth callback loop (BUG-123)"

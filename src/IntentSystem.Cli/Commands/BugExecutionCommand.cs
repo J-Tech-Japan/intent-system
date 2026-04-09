@@ -28,7 +28,7 @@ internal static class BugExecutionCommand
 
         if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
         {
-            throw new InvalidOperationException("Bug execution command requires '<bug-id>'.");
+            throw new InvalidOperationException("Bug plan command requires '<bug-id>'.");
         }
 
         var bugId = args[0].Trim();
@@ -100,7 +100,7 @@ internal static class BugExecutionCommand
         var relativePath = BugExecutionArtifactPathResolver.Resolve(artifact.BugId);
         var absolutePath = Path.GetFullPath(Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
         var directoryPath = Path.GetDirectoryName(absolutePath)
-            ?? throw new InvalidOperationException("Bug execution artifact path did not contain a directory.");
+            ?? throw new InvalidOperationException("Bug plan artifact path did not contain a directory.");
 
         Directory.CreateDirectory(directoryPath);
         File.WriteAllText(absolutePath, BugExecutionArtifactYaml.Serialize(artifact));

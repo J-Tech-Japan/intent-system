@@ -25,14 +25,14 @@ public sealed class BugExecutionRendererTests
                 ClarificationRequired = false,
                 ReadyToLaunch = true
             },
-            ".intent-cli/bugs/BUG-123.execution.yaml");
+            ".intent-cli/bugs/BUG-123.plan.yaml");
 
         var output = writer.ToString();
-        Assert.Contains("Bug execution artifact generated for 'BUG-123'.", output, StringComparison.Ordinal);
+        Assert.Contains("Bug plan artifact generated for 'BUG-123'.", output, StringComparison.Ordinal);
         Assert.Contains("Downstream action: dual-track", output, StringComparison.Ordinal);
         Assert.Contains("Clarification required: false", output, StringComparison.Ordinal);
         Assert.Contains("Ready to launch: true", output, StringComparison.Ordinal);
-        Assert.Contains("Artifact path: .intent-cli/bugs/BUG-123.execution.yaml", output, StringComparison.Ordinal);
+        Assert.Contains("Artifact path: .intent-cli/bugs/BUG-123.plan.yaml", output, StringComparison.Ordinal);
         Assert.Contains("Implementation task candidates: 1", output, StringComparison.Ordinal);
         Assert.Contains("Intent task candidates: 1", output, StringComparison.Ordinal);
     }
