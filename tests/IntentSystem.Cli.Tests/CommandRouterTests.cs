@@ -2853,6 +2853,46 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugIntentReviewCommand_DispatchesToBugIntentReviewRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-submit.yaml"),
+            BugIntentSubmitArtifactYaml.Serialize(
+                new BugIntentSubmitArtifact
+                {
+                    BugId = "BUG-123",
+                    IntentStartRef = ".intent-cli/bugs/BUG-123.intent-start.yaml",
+                    SubmittedExecutionUnit = "G41",
+                    LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/58",
+                    LinkedPrNumber = 58,
+                    ReadyToSubmit = true
+                }));
+        using var writer = new StringWriter();
+        var originalExecutor = BugIntentReviewCommand.ReviewRunExecutor;
+
+        try
+        {
+            BugIntentReviewCommand.ReviewRunExecutor = (_, executionUnit) => new ReviewRunResult
+            {
+                ExecutionUnit = executionUnit,
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+            };
+
+            var exitCode = CommandRouter.Execute(["bug", "intent-review", "BUG-123"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Bug intent-review artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Ready to review: true", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            BugIntentReviewCommand.ReviewRunExecutor = originalExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenRunSubmitCommand_DispatchesToRunSubmitRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
