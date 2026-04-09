@@ -1854,6 +1854,101 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugIntentEnqueueCommand_DispatchesToBugIntentEnqueueRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(Path.Combine("parent-intent", "intents", "intent-cli", "means", "auth.md"), "# auth");
+        tempDirectory.CreateFile(
+            Path.Combine("parent-intent", "intents", "intent-cli", "specs", "12-bug-fix-and-intent-repair.md"),
+            "# spec");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(
+                new QueueState
+                {
+                    SchemaVersion = "1",
+                    UpdatedAt = DateTimeOffset.Parse("2026-04-08T12:00:00Z"),
+                    Items =
+                    [
+                        new QueueItem
+                        {
+                            ExecutionUnit = "G12",
+                            Title = "[G12] Existing Item",
+                            State = QueueItemState.Queued,
+                            Dependencies = [],
+                            BlockedBy = [],
+                            ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                            PacketPaths = new PacketPaths
+                            {
+                                Implementation = ".intent-cli/issues/G12/implementation.md",
+                                ReviewContext = ".intent-cli/issues/G12/review-context.md",
+                                Yaml = ".intent-cli/issues/G12/packet.yaml"
+                            },
+                            LinkedIssue = null,
+                            WorkerRole = "Claude",
+                            ReviewRole = "Codex",
+                            Priority = "high"
+                        }
+                    ]
+                }));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-repair.yaml"),
+            BugIntentRepairArtifactYaml.Serialize(
+                new BugIntentRepairArtifact
+                {
+                    BugId = "BUG-123",
+                    ExecutionRef = ".intent-cli/bugs/BUG-123.plan.yaml",
+                    IntentTaskCandidates =
+                    [
+                        "intents/intent-cli/means/auth.md",
+                        "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"
+                    ],
+                    ParentRepairTargets =
+                    [
+                        "intent:intents/intent-cli/means/auth.md",
+                        "rule-spec:intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"
+                    ],
+                    SuggestedIssueTitle = "Intent repair: OAuth callback loop (BUG-123)",
+                    SuggestedGoal = "Repair parent intent targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.plan.yaml: intent:intents/intent-cli/means/auth.md, rule-spec:intents/intent-cli/specs/12-bug-fix-and-intent-repair.md",
+                    ReadyToIssueCut = true
+                }));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-issue.yaml"),
+            BugIntentIssueArtifactYaml.Serialize(
+                new BugIntentIssueArtifact
+                {
+                    BugId = "BUG-123",
+                    IntentRepairRef = ".intent-cli/bugs/BUG-123.intent-repair.yaml",
+                    CreatedIssueTitle = "Intent repair: OAuth callback loop (BUG-123)",
+                    CreatedIssueUrl = "https://github.com/J-Tech-Japan/MyIntentHost/issues/53",
+                    CreatedIssueNumber = 53,
+                    ParentRepairTargets =
+                    [
+                        "intent:intents/intent-cli/means/auth.md",
+                        "rule-spec:intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"
+                    ]
+                }));
+        using var writer = new StringWriter();
+        var originalTimestampFactory = QueueEnqueueCommand.TimestampFactory;
+
+        try
+        {
+            QueueEnqueueCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T12:30:00Z");
+
+            var exitCode = CommandRouter.Execute(["bug", "intent-enqueue", "BUG-123"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Bug intent-enqueue artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Allocated execution unit: G13", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            QueueEnqueueCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenInterviewStartCommand_DispatchesToInterviewStartRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
