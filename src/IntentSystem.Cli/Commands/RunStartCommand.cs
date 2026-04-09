@@ -25,67 +25,10 @@ internal static class RunStartCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
-        {
-            return 1;
-        }
-
-        var executionUnit = args[0];
-        var queueItem = queueState.Items.FirstOrDefault(item =>
-            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
-
-        if (queueItem is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
-        }
-
-        if (queueItem.LinkedIssue is null)
-        {
-            writer.WriteLine($"Execution unit '{executionUnit}' must have a linked issue before run start.");
-            return 1;
-        }
-
-        var packetPath = Path.Combine(
-            context.RepoRoot,
-            queueItem.PacketPaths.Yaml.Replace('/', Path.DirectorySeparatorChar));
-        if (!File.Exists(packetPath))
-        {
-            writer.WriteLine($"Projection packet artifact was not found at {packetPath}");
-            return 1;
-        }
-
         try
         {
-            var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
-            var childRepoRef = packet.TargetRepo;
-            if (string.IsNullOrWhiteSpace(childRepoRef))
-            {
-                throw new InvalidOperationException("Projection packet must contain a target repo.");
-            }
-
-            var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
-            if (!Directory.Exists(childRepoPath))
-            {
-                throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
-            }
-
-            var worktreePath = ResolveWorktreePath(context, executionUnit);
-            if (Directory.Exists(worktreePath))
-            {
-                throw new InvalidOperationException($"Worktree path already exists at {worktreePath}");
-            }
-
-            var branchName = ResolveBranchName(executionUnit, queueItem.LinkedIssue);
-            var gitRunner = GitCommandRunnerFactory();
-            CreateWorktree(childRepoPath, worktreePath, branchName, gitRunner);
-
-            var timestamp = TimestampFactory();
-            var transition = QueueManager.Activate(queueState, executionUnit, TransitionActor, timestamp);
-            PersistStart(context, transition);
-
-            writer.WriteLine($"Run started for {executionUnit}.");
+            var result = ExecuteCore(context, args[0].Trim());
+            writer.WriteLine($"Run started for {result.ExecutionUnit}.");
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -93,6 +36,74 @@ internal static class RunStartCommand
             writer.WriteLine(exception.Message);
             return 1;
         }
+    }
+
+    internal static RunStartResult ExecuteCore(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        if (!File.Exists(queueStatePath))
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var queueItem = queueState.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+        if (queueItem is null)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
+        }
+
+        if (queueItem.LinkedIssue is null)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' must have a linked issue before run start.");
+        }
+
+        var packetPath = Path.Combine(
+            context.RepoRoot,
+            queueItem.PacketPaths.Yaml.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(packetPath))
+        {
+            throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
+        }
+
+        var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
+        var childRepoRef = packet.TargetRepo;
+        if (string.IsNullOrWhiteSpace(childRepoRef))
+        {
+            throw new InvalidOperationException("Projection packet must contain a target repo.");
+        }
+
+        var childRepoPath = ResolveChildRepoPath(context.RepoRoot, childRepoRef);
+        if (!Directory.Exists(childRepoPath))
+        {
+            throw new InvalidOperationException($"Child repo path was not found at {childRepoPath}");
+        }
+
+        var worktreePath = ResolveWorktreePath(context, executionUnit);
+        if (Directory.Exists(worktreePath))
+        {
+            throw new InvalidOperationException($"Worktree path already exists at {worktreePath}");
+        }
+
+        var branchName = ResolveBranchName(executionUnit, queueItem.LinkedIssue);
+        var gitRunner = GitCommandRunnerFactory();
+        CreateWorktree(childRepoPath, worktreePath, branchName, gitRunner);
+
+        var timestamp = TimestampFactory();
+        var transition = QueueManager.Activate(queueState, executionUnit, TransitionActor, timestamp);
+        PersistStart(context, transition);
+
+        return new RunStartResult
+        {
+            ExecutionUnit = executionUnit,
+            WorktreePath = worktreePath,
+            BranchName = branchName
+        };
     }
 
     internal static string ResolveBranchName(string executionUnit, LinkedIssue linkedIssue)

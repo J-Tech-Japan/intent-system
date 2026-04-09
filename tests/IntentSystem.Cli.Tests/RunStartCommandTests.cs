@@ -221,6 +221,45 @@ public sealed class RunStartCommandTests
             worktreePath);
     }
 
+    [Fact]
+    public void ExecuteCore_GivenQueuedItemWithLinkedIssue_ReturnsDeterministicResult()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        var gitRunner = new FakeGitRunner();
+        var originalGitFactory = RunStartCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = RunStartCommand.TimestampFactory;
+
+        try
+        {
+            RunStartCommand.GitCommandRunnerFactory = () => gitRunner;
+            RunStartCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T09:30:00Z");
+
+            var result = RunStartCommand.ExecuteCore(CreateContext(repoRoot), "G14");
+
+            Assert.Equal("G14", result.ExecutionUnit);
+            Assert.Equal(
+                Path.GetFullPath(Path.Combine(repoRoot, ".intent-cli", "worktrees", "G14")),
+                result.WorktreePath);
+            Assert.Equal("issue-56-g14", result.BranchName);
+        }
+        finally
+        {
+            RunStartCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunStartCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
