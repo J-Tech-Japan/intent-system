@@ -17,6 +17,7 @@ public sealed class BugIntentReviewRendererTests
                 IntentSubmitRef = ".intent-cli/bugs/BUG-123.intent-submit.yaml",
                 ReviewedExecutionUnit = "G41",
                 ReviewRequestRef = ".intent-cli/reviews/G41.request.json",
+                LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/58",
                 ReadyToReview = true
             },
             ".intent-cli/bugs/BUG-123.intent-review.yaml");
@@ -26,6 +27,7 @@ public sealed class BugIntentReviewRendererTests
         Assert.Contains("Artifact path: .intent-cli/bugs/BUG-123.intent-review.yaml", output, StringComparison.Ordinal);
         Assert.Contains("Reviewed execution unit: G41", output, StringComparison.Ordinal);
         Assert.Contains("Review request ref: .intent-cli/reviews/G41.request.json", output, StringComparison.Ordinal);
+        Assert.Contains("Linked PR URL: https://github.com/J-Tech-Japan/intent-system/pull/58", output, StringComparison.Ordinal);
         Assert.Contains("Ready to review: true", output, StringComparison.Ordinal);
     }
 }

@@ -10,6 +10,8 @@ internal sealed record BugIntentReviewArtifact
 
     public required string? ReviewRequestRef { get; init; }
 
+    public required string? LinkedPrUrl { get; init; }
+
     public required bool ReadyToReview { get; init; }
 }
 
@@ -21,6 +23,7 @@ internal static class BugIntentReviewArtifactYaml
         "intent_submit_ref",
         "reviewed_execution_unit",
         "review_request_ref",
+        "linked_pr_url",
         "ready_to_review"
     ];
 
@@ -34,6 +37,7 @@ internal static class BugIntentReviewArtifactYaml
             $"intent_submit_ref: {Quote(artifact.IntentSubmitRef)}",
             $"reviewed_execution_unit: {FormatNullableScalar(artifact.ReviewedExecutionUnit)}",
             $"review_request_ref: {FormatNullableScalar(artifact.ReviewRequestRef)}",
+            $"linked_pr_url: {FormatNullableScalar(artifact.LinkedPrUrl)}",
             $"ready_to_review: {artifact.ReadyToReview.ToString().ToLowerInvariant()}"
         };
 
@@ -53,6 +57,7 @@ internal static class BugIntentReviewArtifactYaml
             IntentSubmitRef = GetRequiredScalar(values, "intent_submit_ref"),
             ReviewedExecutionUnit = GetNullableScalar(values, "reviewed_execution_unit"),
             ReviewRequestRef = GetNullableScalar(values, "review_request_ref"),
+            LinkedPrUrl = GetNullableScalar(values, "linked_pr_url"),
             ReadyToReview = GetRequiredBoolean(values, "ready_to_review")
         };
     }

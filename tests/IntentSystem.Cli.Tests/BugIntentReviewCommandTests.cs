@@ -44,6 +44,7 @@ public sealed class BugIntentReviewCommandTests
             Assert.Equal(".intent-cli/bugs/BUG-123.intent-submit.yaml", artifact.IntentSubmitRef);
             Assert.Equal("G41", artifact.ReviewedExecutionUnit);
             Assert.Equal(".intent-cli/reviews/G41.request.json", artifact.ReviewRequestRef);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", artifact.LinkedPrUrl);
             Assert.True(artifact.ReadyToReview);
         }
         finally
@@ -86,6 +87,7 @@ public sealed class BugIntentReviewCommandTests
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-124.intent-review.yaml")));
             Assert.Null(artifact.ReviewedExecutionUnit);
             Assert.Null(artifact.ReviewRequestRef);
+            Assert.Null(artifact.LinkedPrUrl);
             Assert.False(artifact.ReadyToReview);
         }
         finally

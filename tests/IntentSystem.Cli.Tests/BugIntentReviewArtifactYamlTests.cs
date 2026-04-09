@@ -13,6 +13,7 @@ public sealed class BugIntentReviewArtifactYamlTests
             IntentSubmitRef = ".intent-cli/bugs/BUG-123.intent-submit.yaml",
             ReviewedExecutionUnit = "G41",
             ReviewRequestRef = ".intent-cli/reviews/G41.request.json",
+            LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/58",
             ReadyToReview = true
         };
 
@@ -28,11 +29,12 @@ public sealed class BugIntentReviewArtifactYamlTests
         bug_id: BUG-123
         intent_submit_ref: ".intent-cli/bugs/BUG-123.intent-submit.yaml"
         reviewed_execution_unit: null
+        review_request_ref: null
         ready_to_review: false
         """;
 
         var exception = Assert.Throws<InvalidOperationException>(() => BugIntentReviewArtifactYaml.Deserialize(yaml));
 
-        Assert.Contains("review_request_ref", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("linked_pr_url", exception.Message, StringComparison.Ordinal);
     }
 }

@@ -12,6 +12,7 @@ internal static class BugIntentReviewRenderer
         writer.WriteLine($"Artifact path: {artifactPath}");
         writer.WriteLine($"Reviewed execution unit: {artifact.ReviewedExecutionUnit ?? "not-reviewed"}");
         writer.WriteLine($"Review request ref: {artifact.ReviewRequestRef ?? "not-reviewed"}");
+        writer.WriteLine($"Linked PR URL: {artifact.LinkedPrUrl ?? "not-reviewed"}");
         writer.WriteLine($"Ready to review: {artifact.ReadyToReview.ToString().ToLowerInvariant()}");
     }
 }

@@ -66,6 +66,7 @@ internal static class BugIntentReviewCommand
                 IntentSubmitRef = intentSubmitRef,
                 ReviewedExecutionUnit = null,
                 ReviewRequestRef = null,
+                LinkedPrUrl = intentSubmit.LinkedPrUrl,
                 ReadyToReview = false
             };
 
@@ -83,6 +84,7 @@ internal static class BugIntentReviewCommand
             IntentSubmitRef = intentSubmitRef,
             ReviewedExecutionUnit = reviewRunResult.ExecutionUnit,
             ReviewRequestRef = reviewRunResult.ArtifactPath,
+            LinkedPrUrl = intentSubmit.LinkedPrUrl,
             ReadyToReview = true
         };
 
