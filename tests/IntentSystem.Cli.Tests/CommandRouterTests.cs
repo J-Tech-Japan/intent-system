@@ -1663,6 +1663,81 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugImplementationIssueCommand_DispatchesToBugImplementationIssueRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.implementation-repair.yaml"),
+            BugImplementationRepairArtifactYaml.Serialize(
+                new BugImplementationRepairArtifact
+                {
+                    BugId = "BUG-123",
+                    ExecutionRef = ".intent-cli/bugs/BUG-123.execution.yaml",
+                    ImplementationTaskCandidates = ["G25"],
+                    ImplementationRepairTargets = [".intent-cli/issues/G25/packet.yaml"],
+                    SuggestedIssueTitle = "Implementation repair: OAuth callback loop (BUG-123)",
+                    SuggestedGoal = "Repair child implementation targets for 'OAuth callback loop' (BUG-123) using .intent-cli/bugs/BUG-123.execution.yaml: .intent-cli/issues/G25/packet.yaml",
+                    ReadyToIssueCut = true
+                }));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            """
+            implementation_issue_packet:
+              issue_title: "[G25] Repair callback flow"
+              issue_kind: "bugfix"
+              source_execution_unit: "G25"
+              goal: "Repair callback flow."
+              in_scope: []
+              out_of_scope: []
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "auth callback"
+              dependencies: []
+              technical_baseline: []
+              project_local_guide: []
+              intent_baseline: []
+              intent_references: []
+              rules_and_specs: []
+              acceptance_criteria: []
+              verification_evidence: []
+              review_mode: "deterministic-review"
+              completion_action: "wait-for-deterministic-review"
+              landing_policy: "merge-after-review"
+
+            review_context_packet:
+              source_execution_unit: "G25"
+              parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+              intent_references: []
+              rules_and_specs: []
+              acceptance_criteria: []
+              deterministic_review_checks: []
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        using var writer = new StringWriter();
+        var originalPublisherFactory = BugImplementationIssueCommand.PublisherFactory;
+        var originalGitRunnerFactory = BugImplementationIssueCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            BugImplementationIssueCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            BugImplementationIssueCommand.GitCommandRunnerFactory = () => new FakeQueueDispatchGitRunner();
+
+            var exitCode = CommandRouter.Execute(["bug", "implementation-issue", "BUG-123"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Bug implementation-issue artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Created issue URL: https://github.com/J-Tech-Japan/intent-system/issues/53", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            BugImplementationIssueCommand.PublisherFactory = originalPublisherFactory;
+            BugImplementationIssueCommand.GitCommandRunnerFactory = originalGitRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenInterviewStartCommand_DispatchesToInterviewStartRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
