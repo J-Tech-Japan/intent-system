@@ -7,34 +7,45 @@ namespace IntentSystem.Cli.Tests;
 public sealed class BugIntentCommentCommandTests
 {
     [Fact]
-    public void Execute_GivenReadyIntentReview_PostsCommentAndWritesArtifact()
+    public void Execute_GivenGeneratedIntentReview_PostsCommentAndWritesArtifact()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         var bodyPath = tempDirectory.CreateFile(Path.Combine("repo", "prepared-comment.md"), "repair in place");
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-review.yaml"),
-            BugIntentReviewArtifactYaml.Serialize(
-                new BugIntentReviewArtifact
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-submit.yaml"),
+            BugIntentSubmitArtifactYaml.Serialize(
+                new BugIntentSubmitArtifact
                 {
                     BugId = "BUG-123",
-                    IntentSubmitRef = ".intent-cli/bugs/BUG-123.intent-submit.yaml",
-                    ReviewedExecutionUnit = "G41",
-                    ReviewRequestRef = ".intent-cli/reviews/G41.request.json",
+                    IntentStartRef = ".intent-cli/bugs/BUG-123.intent-start.yaml",
+                    SubmittedExecutionUnit = "G41",
                     LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/58",
-                    ReadyToReview = true
+                    LinkedPrNumber = 58,
+                    ReadyToSubmit = true
                 }));
         using var writer = new StringWriter();
+        var originalReviewExecutor = BugIntentReviewCommand.ReviewRunExecutor;
         var originalExecutor = BugIntentCommentCommand.ReviewCommentExecutor;
 
         try
         {
+            BugIntentReviewCommand.ReviewRunExecutor = (_, executionUnit) => new ReviewRunResult
+            {
+                ExecutionUnit = executionUnit,
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+            };
             BugIntentCommentCommand.ReviewCommentExecutor = (_, executionUnit, _) => new ReviewCommentResult
             {
                 ExecutionUnit = executionUnit,
                 ArtifactPath = $".intent-cli/reviews/{executionUnit}.comment.json",
                 CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/58#issuecomment-1"
             };
+
+            var reviewExitCode = BugIntentReviewCommand.Execute(CreateContext(repoRoot), ["BUG-123"], TextWriter.Null);
+
+            Assert.Equal(0, reviewExitCode);
+            Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.intent-review.yaml")));
 
             var exitCode = BugIntentCommentCommand.Execute(
                 CreateContext(repoRoot),
@@ -57,6 +68,7 @@ public sealed class BugIntentCommentCommandTests
         }
         finally
         {
+            BugIntentReviewCommand.ReviewRunExecutor = originalReviewExecutor;
             BugIntentCommentCommand.ReviewCommentExecutor = originalExecutor;
         }
     }
