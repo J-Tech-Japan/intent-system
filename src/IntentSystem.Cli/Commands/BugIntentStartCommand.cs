@@ -64,7 +64,7 @@ internal static class BugIntentStartCommand
             {
                 BugId = bugId,
                 IntentEnqueueRef = intentEnqueueRef,
-                AllocatedExecutionUnit = intentEnqueue.AllocatedExecutionUnit,
+                StartedExecutionUnit = null,
                 WorktreePath = null,
                 BranchName = null,
                 ReadyToStart = false
@@ -82,7 +82,7 @@ internal static class BugIntentStartCommand
         {
             BugId = bugId,
             IntentEnqueueRef = intentEnqueueRef,
-            AllocatedExecutionUnit = startResult.ExecutionUnit,
+            StartedExecutionUnit = startResult.ExecutionUnit,
             WorktreePath = startResult.WorktreePath,
             BranchName = startResult.BranchName,
             ReadyToStart = true

@@ -44,12 +44,12 @@ public sealed class BugIntentStartCommandTests
 
             Assert.Equal(0, exitCode);
             Assert.Contains("Bug intent-start artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
-            Assert.Contains("Allocated execution unit: G41", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Started execution unit: G41", writer.ToString(), StringComparison.Ordinal);
 
             var artifact = BugIntentStartArtifactYaml.Deserialize(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.intent-start.yaml")));
             Assert.Equal(".intent-cli/bugs/BUG-123.intent-enqueue.yaml", artifact.IntentEnqueueRef);
-            Assert.Equal("G41", artifact.AllocatedExecutionUnit);
+            Assert.Equal("G41", artifact.StartedExecutionUnit);
             Assert.Equal("/tmp/worktrees/G41", artifact.WorktreePath);
             Assert.Equal("issue-53-g41", artifact.BranchName);
             Assert.True(artifact.ReadyToStart);
@@ -93,7 +93,7 @@ public sealed class BugIntentStartCommandTests
 
             var artifact = BugIntentStartArtifactYaml.Deserialize(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-124.intent-start.yaml")));
-            Assert.Null(artifact.AllocatedExecutionUnit);
+            Assert.Null(artifact.StartedExecutionUnit);
             Assert.Null(artifact.WorktreePath);
             Assert.Null(artifact.BranchName);
             Assert.False(artifact.ReadyToStart);

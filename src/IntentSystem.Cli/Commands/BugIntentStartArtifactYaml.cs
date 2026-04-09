@@ -6,7 +6,7 @@ internal sealed record BugIntentStartArtifact
 
     public required string IntentEnqueueRef { get; init; }
 
-    public required string? AllocatedExecutionUnit { get; init; }
+    public required string? StartedExecutionUnit { get; init; }
 
     public required string? WorktreePath { get; init; }
 
@@ -21,7 +21,7 @@ internal static class BugIntentStartArtifactYaml
     [
         "bug_id",
         "intent_enqueue_ref",
-        "allocated_execution_unit",
+        "started_execution_unit",
         "worktree_path",
         "branch_name",
         "ready_to_start"
@@ -35,7 +35,7 @@ internal static class BugIntentStartArtifactYaml
         {
             $"bug_id: {artifact.BugId}",
             $"intent_enqueue_ref: {Quote(artifact.IntentEnqueueRef)}",
-            $"allocated_execution_unit: {FormatNullableScalar(artifact.AllocatedExecutionUnit)}",
+            $"started_execution_unit: {FormatNullableScalar(artifact.StartedExecutionUnit)}",
             $"worktree_path: {FormatNullableScalar(artifact.WorktreePath)}",
             $"branch_name: {FormatNullableScalar(artifact.BranchName)}",
             $"ready_to_start: {artifact.ReadyToStart.ToString().ToLowerInvariant()}"
@@ -55,7 +55,7 @@ internal static class BugIntentStartArtifactYaml
         {
             BugId = GetRequiredScalar(values, "bug_id"),
             IntentEnqueueRef = GetRequiredScalar(values, "intent_enqueue_ref"),
-            AllocatedExecutionUnit = GetNullableScalar(values, "allocated_execution_unit"),
+            StartedExecutionUnit = GetNullableScalar(values, "started_execution_unit"),
             WorktreePath = GetNullableScalar(values, "worktree_path"),
             BranchName = GetNullableScalar(values, "branch_name"),
             ReadyToStart = GetRequiredBoolean(values, "ready_to_start")

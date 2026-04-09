@@ -11,7 +11,7 @@ public sealed class BugIntentStartArtifactYamlTests
         {
             BugId = "BUG-123",
             IntentEnqueueRef = ".intent-cli/bugs/BUG-123.intent-enqueue.yaml",
-            AllocatedExecutionUnit = "G41",
+            StartedExecutionUnit = "G41",
             WorktreePath = "/tmp/repo/.intent-cli/worktrees/G41",
             BranchName = "issue-53-g41",
             ReadyToStart = true
@@ -28,7 +28,7 @@ public sealed class BugIntentStartArtifactYamlTests
         var yaml = """
         bug_id: BUG-123
         intent_enqueue_ref: ".intent-cli/bugs/BUG-123.intent-enqueue.yaml"
-        allocated_execution_unit: null
+        started_execution_unit: null
         worktree_path: null
         ready_to_start: false
         """;
