@@ -28,6 +28,10 @@ public sealed class CliConfigLoaderTests
         Assert.Equal(15, config.Supervision.StaleHeartbeatTimeoutMinutes);
         Assert.Equal(5, config.Supervision.RetryDelayMinutes);
         Assert.Equal(3, config.Supervision.RetryBudget);
+        Assert.Equal(".intent-cli/runs", config.DirectRun.ArtifactRoot);
+        Assert.Equal(string.Empty, config.DirectRun.Provider);
+        Assert.Equal("default", config.DirectRun.Model);
+        Assert.Equal("stdio", config.DirectRun.Transport);
     }
 
     [Fact]
@@ -120,6 +124,50 @@ public sealed class CliConfigLoaderTests
         Assert.Equal(30, config.Supervision.StaleHeartbeatTimeoutMinutes);
         Assert.Equal(12, config.Supervision.RetryDelayMinutes);
         Assert.Equal(7, config.Supervision.RetryBudget);
+    }
+
+    [Fact]
+    public void Load_GivenDirectBackendSection_RestoresDefaultAndEntrySpecificPolicies()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        workflow_engine = "takt"
+        artifact_root = ".intent-cli"
+
+        [direct_backend]
+        artifact_root = ".intent-cli/runtime-runs"
+        provider = "Codex"
+        model = "gpt-5.4"
+        transport = "stdio"
+
+        [direct_backend.implement]
+        model = "gpt-5.4-codex"
+
+        [direct_backend.fix]
+        provider = "Claude"
+        transport = "http"
+
+        [direct_backend.review]
+        provider = "ReviewBot"
+        model = "gpt-5.4-mini"
+        transport = "grpc"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal(".intent-cli/runtime-runs", config.DirectRun.ArtifactRoot);
+        Assert.Equal("Codex", config.DirectRun.Provider);
+        Assert.Equal("gpt-5.4", config.DirectRun.Model);
+        Assert.Equal("stdio", config.DirectRun.Transport);
+        Assert.Equal(string.Empty, config.DirectRun.Implement.Provider);
+        Assert.Equal("gpt-5.4-codex", config.DirectRun.Implement.Model);
+        Assert.Equal(string.Empty, config.DirectRun.Implement.Transport);
+        Assert.Equal("Claude", config.DirectRun.Fix.Provider);
+        Assert.Equal(string.Empty, config.DirectRun.Fix.Model);
+        Assert.Equal("http", config.DirectRun.Fix.Transport);
+        Assert.Equal("ReviewBot", config.DirectRun.Review.Provider);
+        Assert.Equal("gpt-5.4-mini", config.DirectRun.Review.Model);
+        Assert.Equal("grpc", config.DirectRun.Review.Transport);
     }
 
     [Fact]

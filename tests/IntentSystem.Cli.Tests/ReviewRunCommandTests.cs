@@ -24,25 +24,51 @@ public sealed class ReviewRunCommandTests
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             CreateRunLog());
         using var writer = new StringWriter();
+        var originalTimestampFactory = ReviewRunCommand.TimestampFactory;
 
-        var exitCode = ReviewRunCommand.Execute(CreateContext(repoRoot), ["G9"], writer);
+        try
+        {
+            ReviewRunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:35:00Z");
 
-        Assert.Equal(0, exitCode);
-        Assert.Contains("Review request artifact generated for G9", writer.ToString(), StringComparison.Ordinal);
+            var exitCode = ReviewRunCommand.Execute(CreateContext(repoRoot), ["G9"], writer);
 
-        var artifactPath = Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.request.json");
-        Assert.True(File.Exists(artifactPath));
-        var request = ReviewRequestSerializer.Deserialize(File.ReadAllText(artifactPath));
-        Assert.Equal("G9", request.ExecutionUnit);
-        Assert.Equal(".intent-cli/issues/G9/review-context.md", request.ReviewContextRef);
-        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/45", request.LinkedPr);
-        Assert.Equal(
-            ["review run command が PR comment 投稿や closeout の責務へ広がっていない"],
-            request.DeterministicReviewChecks);
-        Assert.Empty(request.AcceptanceCriteria);
-        Assert.Equal(
-            ["dotnet test IntentSystem.sln", "review run command tests"],
-            request.ExpectedEvidence);
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Review request artifact generated for G9", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Direct run request artifact: .intent-cli/runtime-runs/G9.request.json", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Direct provider: ReviewBot", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Direct model: gpt-5.4-mini", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Direct transport: grpc", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Provider session: reviewbot-review-g9-20260409103500", writer.ToString(), StringComparison.Ordinal);
+
+            var artifactPath = Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.request.json");
+            Assert.True(File.Exists(artifactPath));
+            var request = ReviewRequestSerializer.Deserialize(File.ReadAllText(artifactPath));
+            Assert.Equal("G9", request.ExecutionUnit);
+            Assert.Equal(".intent-cli/issues/G9/review-context.md", request.ReviewContextRef);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/45", request.LinkedPr);
+            Assert.Equal(
+                ["review run command が PR comment 投稿や closeout の責務へ広がっていない"],
+                request.DeterministicReviewChecks);
+            Assert.Empty(request.AcceptanceCriteria);
+            Assert.Equal(
+                ["dotnet test IntentSystem.sln", "review run command tests"],
+                request.ExpectedEvidence);
+
+            var directRunArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.request.json");
+            Assert.True(File.Exists(directRunArtifactPath));
+            var directRunArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(directRunArtifactPath));
+            Assert.Equal("G9", directRunArtifact.ExecutionUnit);
+            Assert.Equal("review", directRunArtifact.EntryKind);
+            Assert.Equal(".intent-cli/reviews/G9.request.json", directRunArtifact.UpstreamRequestRef);
+            Assert.Equal("ReviewBot", directRunArtifact.Provider);
+            Assert.Equal("gpt-5.4-mini", directRunArtifact.Model);
+            Assert.Equal("grpc", directRunArtifact.Transport);
+            Assert.Equal("reviewbot-review-g9-20260409103500", directRunArtifact.ProviderSessionId);
+        }
+        finally
+        {
+            ReviewRunCommand.TimestampFactory = originalTimestampFactory;
+        }
     }
 
     [Fact]
@@ -150,6 +176,16 @@ public sealed class ReviewRunCommandTests
                     Domain = "intent-system",
                     WorkflowEngine = "intent-cli",
                     ArtifactRoot = ".intent-cli"
+                },
+                DirectRun = new DirectRunConfig
+                {
+                    ArtifactRoot = ".intent-cli/runtime-runs",
+                    Review = new DirectRunEntryConfig
+                    {
+                        Provider = "ReviewBot",
+                        Model = "gpt-5.4-mini",
+                        Transport = "grpc"
+                    }
                 }
             }
         };

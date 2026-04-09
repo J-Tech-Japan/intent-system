@@ -15,15 +15,20 @@ internal static class CliRuntimeContracts
     public const string ParentIntentRepoRootKey = "parent_intent_repo_root";
     public const string RolesSectionName = "roles";
     public const string SupervisionSectionName = "supervision";
+    public const string DirectRunSectionName = "direct_backend";
     public const string ImplementRoleKey = "implement";
     public const string ReviewRoleKey = "review";
     public const string InterviewRoleKey = "interview";
     public const string ClarifyRoleKey = "clarify";
+    public const string ProviderKey = "provider";
+    public const string ModelKey = "model";
+    public const string TransportKey = "transport";
     public const string StaleHeartbeatTimeoutMinutesKey = "stale_heartbeat_timeout_minutes";
     public const string RetryDelayMinutesKey = "retry_delay_minutes";
     public const string RetryBudgetKey = "retry_budget";
     public const string DefaultWorktreeRoot = ".intent-cli/worktrees";
     public const string DefaultSupervisionArtifactRoot = ".intent-cli/supervision";
+    public const string DefaultDirectRunArtifactRoot = ".intent-cli/runs";
     public const int DefaultSupervisionStaleHeartbeatTimeoutMinutes = 15;
     public const int DefaultSupervisionRetryDelayMinutes = 5;
     public const int DefaultSupervisionRetryBudget = 3;
@@ -31,6 +36,8 @@ internal static class CliRuntimeContracts
     public const string DefaultReviewRole = "Codex";
     public const string DefaultInterviewRole = "Claude";
     public const string DefaultClarifyRole = "Codex";
+    public const string DefaultDirectRunModel = "default";
+    public const string DefaultDirectRunTransport = "stdio";
 
     public static string GetIntentCliDirectoryPath(string repoRoot)
     {

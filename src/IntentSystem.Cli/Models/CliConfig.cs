@@ -7,6 +7,8 @@ internal sealed record CliConfig
     public RoleMappings Roles { get; init; } = new();
 
     public SupervisionConfig Supervision { get; init; } = new();
+
+    public DirectRunConfig DirectRun { get; init; } = new();
 }
 
 internal sealed record ProjectConfig
@@ -43,4 +45,30 @@ internal sealed record SupervisionConfig
     public int RetryDelayMinutes { get; init; } = CliRuntimeContracts.DefaultSupervisionRetryDelayMinutes;
 
     public int RetryBudget { get; init; } = CliRuntimeContracts.DefaultSupervisionRetryBudget;
+}
+
+internal sealed record DirectRunConfig
+{
+    public string ArtifactRoot { get; init; } = CliRuntimeContracts.DefaultDirectRunArtifactRoot;
+
+    public string Provider { get; init; } = string.Empty;
+
+    public string Model { get; init; } = CliRuntimeContracts.DefaultDirectRunModel;
+
+    public string Transport { get; init; } = CliRuntimeContracts.DefaultDirectRunTransport;
+
+    public DirectRunEntryConfig Implement { get; init; } = new();
+
+    public DirectRunEntryConfig Fix { get; init; } = new();
+
+    public DirectRunEntryConfig Review { get; init; } = new();
+}
+
+internal sealed record DirectRunEntryConfig
+{
+    public string Provider { get; init; } = string.Empty;
+
+    public string Model { get; init; } = string.Empty;
+
+    public string Transport { get; init; } = string.Empty;
 }
