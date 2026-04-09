@@ -7,6 +7,33 @@ namespace IntentSystem.Cli.Tests;
 public sealed class BugReportCommandTests
 {
     [Fact]
+    public void ExecuteCore_GivenInlineTextWithoutBugId_UsesCurrentDatePlusNormalizedTitle()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var originalTimestampFactory = BugReportCommand.TimestampFactory;
+        BugReportCommand.TimestampFactory = () => new DateTimeOffset(2026, 4, 9, 8, 30, 0, TimeSpan.Zero);
+
+        try
+        {
+            var result = BugReportCommand.ExecuteCore(
+                CreateContext(repoRoot),
+                [
+                    "auth",
+                    "--title", "OAuth callback loop!",
+                    "--text", "Observed callback loop after login."
+                ]);
+
+            Assert.Equal("BUG-20260409-oauth-callback-loop", result.Artifact.BugId);
+            Assert.Equal(".intent-cli/bugs/BUG-20260409-oauth-callback-loop.report.yaml", result.ArtifactPath);
+        }
+        finally
+        {
+            BugReportCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenPreparedProblemStatementAndRefs_WritesBugReportArtifact()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -117,32 +144,150 @@ public sealed class BugReportCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenInlineTextWithoutBugId_SameTitleAndDateStayDeterministicAcrossDifferentText()
+    {
+        using var firstTempDirectory = new TemporaryDirectory();
+        using var secondTempDirectory = new TemporaryDirectory();
+        var firstRepoRoot = firstTempDirectory.CreateDirectory("repo");
+        var secondRepoRoot = secondTempDirectory.CreateDirectory("repo");
+        var originalTimestampFactory = BugReportCommand.TimestampFactory;
+        BugReportCommand.TimestampFactory = () => new DateTimeOffset(2026, 4, 9, 8, 30, 0, TimeSpan.Zero);
+
+        try
+        {
+            var firstResult = BugReportCommand.ExecuteCore(
+                CreateContext(firstRepoRoot),
+                [
+                    "auth",
+                    "--title", "OAuth callback loop",
+                    "--text", "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path."
+                ]);
+            var secondResult = BugReportCommand.ExecuteCore(
+                CreateContext(secondRepoRoot),
+                [
+                    "auth",
+                    "--title", "OAuth callback loop",
+                    "--text", "Observed callback loop after login." + Environment.NewLine + "Affects second-pass callback path."
+                ]);
+
+            Assert.Equal("BUG-20260409-oauth-callback-loop", firstResult.Artifact.BugId);
+            Assert.Equal(firstResult.Artifact.BugId, secondResult.Artifact.BugId);
+            Assert.Equal(firstResult.ArtifactPath, secondResult.ArtifactPath);
+            Assert.True(
+                File.Exists(
+                    Path.Combine(firstRepoRoot, ".intent-cli", "bugs", $"{firstResult.Artifact.BugId}.report.yaml")));
+        }
+        finally
+        {
+            BugReportCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenTextAndFileInput_ConvergeToSameArtifactShapeApartFromReportSource()
+    {
+        using var fileTempDirectory = new TemporaryDirectory();
+        using var textTempDirectory = new TemporaryDirectory();
+        var fileRepoRoot = fileTempDirectory.CreateDirectory("repo");
+        var textRepoRoot = textTempDirectory.CreateDirectory("repo");
+        fileTempDirectory.CreateFile(
+            Path.Combine("repo", "prepared", "bug.md"),
+            "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path.");
+        var originalTimestampFactory = BugReportCommand.TimestampFactory;
+        BugReportCommand.TimestampFactory = () => new DateTimeOffset(2026, 4, 9, 8, 30, 0, TimeSpan.Zero);
+
+        try
+        {
+            var fileResult = BugReportCommand.ExecuteCore(
+                CreateContext(fileRepoRoot),
+                [
+                    "auth",
+                    "--title", "OAuth callback loop",
+                    "--from-file", "prepared/bug.md",
+                    "--instruction-refs", "ICL.P.PRODUCT_GOAL",
+                    "--affected-intent-refs", "intents/intent-cli/means/auth.md",
+                    "--affected-rule-spec-refs", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md",
+                    "--clarification-candidates", "Should provider retry reuse callback state token?",
+                    "--execution-units", "G25",
+                    "--issues", "https://github.com/J-Tech-Japan/intent-system/issues/178",
+                    "--prs", "https://github.com/J-Tech-Japan/intent-system/pull/180",
+                    "--reviews", "https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1"
+                ]);
+            var textResult = BugReportCommand.ExecuteCore(
+                CreateContext(textRepoRoot),
+                [
+                    "auth",
+                    "--title", "OAuth callback loop",
+                    "--text", "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path.",
+                    "--instruction-refs", "ICL.P.PRODUCT_GOAL",
+                    "--affected-intent-refs", "intents/intent-cli/means/auth.md",
+                    "--affected-rule-spec-refs", "intents/intent-cli/specs/12-bug-fix-and-intent-repair.md",
+                    "--clarification-candidates", "Should provider retry reuse callback state token?",
+                    "--execution-units", "G25",
+                    "--issues", "https://github.com/J-Tech-Japan/intent-system/issues/178",
+                    "--prs", "https://github.com/J-Tech-Japan/intent-system/pull/180",
+                    "--reviews", "https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1"
+                ]);
+
+            Assert.Equal(fileResult.Artifact.DomainSlug, textResult.Artifact.DomainSlug);
+            Assert.Equal(fileResult.Artifact.BugId, textResult.Artifact.BugId);
+            Assert.Equal(fileResult.Artifact.Title, textResult.Artifact.Title);
+            Assert.Equal(fileResult.Artifact.ProblemStatement, textResult.Artifact.ProblemStatement);
+            Assert.Equal(fileResult.Artifact.SuspectedFailureLocus, textResult.Artifact.SuspectedFailureLocus);
+            Assert.Equal(fileResult.Artifact.OriginalInstructionRefs, textResult.Artifact.OriginalInstructionRefs);
+            Assert.Equal(fileResult.Artifact.AffectedIntentRefs, textResult.Artifact.AffectedIntentRefs);
+            Assert.Equal(fileResult.Artifact.AffectedRuleSpecRefs, textResult.Artifact.AffectedRuleSpecRefs);
+            Assert.Equal(fileResult.Artifact.ClarificationCandidates, textResult.Artifact.ClarificationCandidates);
+            Assert.Equal(fileResult.Artifact.LinkedExecutionUnits, textResult.Artifact.LinkedExecutionUnits);
+            Assert.Equal(fileResult.Artifact.LinkedIssueRefs, textResult.Artifact.LinkedIssueRefs);
+            Assert.Equal(fileResult.Artifact.LinkedPrRefs, textResult.Artifact.LinkedPrRefs);
+            Assert.Equal(fileResult.Artifact.LinkedReviewRefs, textResult.Artifact.LinkedReviewRefs);
+            Assert.Equal("from-file", fileResult.Artifact.ReportSource);
+            Assert.Equal("inline-text", textResult.Artifact.ReportSource);
+        }
+        finally
+        {
+            BugReportCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenInlineTextWithoutBugId_GeneratesDeterministicBugId()
     {
         using var firstTempDirectory = new TemporaryDirectory();
         using var secondTempDirectory = new TemporaryDirectory();
         var firstRepoRoot = firstTempDirectory.CreateDirectory("repo");
         var secondRepoRoot = secondTempDirectory.CreateDirectory("repo");
-        string[] args =
-        [
-            "auth",
-            "--title", "OAuth callback loop",
-            "--text", "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path."
-        ];
+        var originalTimestampFactory = BugReportCommand.TimestampFactory;
+        BugReportCommand.TimestampFactory = () => new DateTimeOffset(2026, 4, 9, 8, 30, 0, TimeSpan.Zero);
 
-        var firstResult = BugReportCommand.ExecuteCore(CreateContext(firstRepoRoot), args);
-        var secondResult = BugReportCommand.ExecuteCore(CreateContext(secondRepoRoot), args);
+        try
+        {
+            string[] args =
+            [
+                "auth",
+                "--title", "OAuth callback loop",
+                "--text", "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path."
+            ];
 
-        Assert.StartsWith("BUG-", firstResult.Artifact.BugId, StringComparison.Ordinal);
-        Assert.Equal(firstResult.Artifact.BugId, secondResult.Artifact.BugId);
-        Assert.Equal(firstResult.ArtifactPath, secondResult.ArtifactPath);
-        Assert.Equal("inline-text", firstResult.Artifact.ReportSource);
-        Assert.Equal(
-            "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path.",
-            firstResult.Artifact.ProblemStatement);
-        Assert.True(
-            File.Exists(
-                Path.Combine(firstRepoRoot, ".intent-cli", "bugs", $"{firstResult.Artifact.BugId}.report.yaml")));
+            var firstResult = BugReportCommand.ExecuteCore(CreateContext(firstRepoRoot), args);
+            var secondResult = BugReportCommand.ExecuteCore(CreateContext(secondRepoRoot), args);
+
+            Assert.Equal("BUG-20260409-oauth-callback-loop", firstResult.Artifact.BugId);
+            Assert.Equal(firstResult.Artifact.BugId, secondResult.Artifact.BugId);
+            Assert.Equal(firstResult.ArtifactPath, secondResult.ArtifactPath);
+            Assert.Equal("inline-text", firstResult.Artifact.ReportSource);
+            Assert.Equal(
+                "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path.",
+                firstResult.Artifact.ProblemStatement);
+            Assert.True(
+                File.Exists(
+                    Path.Combine(firstRepoRoot, ".intent-cli", "bugs", $"{firstResult.Artifact.BugId}.report.yaml")));
+        }
+        finally
+        {
+            BugReportCommand.TimestampFactory = originalTimestampFactory;
+        }
     }
 
     [Fact]

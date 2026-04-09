@@ -1,10 +1,12 @@
-using System.Security.Cryptography;
+using System.Globalization;
 using System.Text;
 
 namespace IntentSystem.Cli.Commands;
 
 internal static class BugReportCommand
 {
+    public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -32,7 +34,7 @@ internal static class BugReportCommand
         var parsed = ParseArgs(args);
         var (problemStatement, reportSource) = ResolveProblemStatement(context.RepoRoot, parsed);
         var bugId = string.IsNullOrWhiteSpace(parsed.BugId)
-            ? GenerateBugId(parsed.Domain, parsed.Title, problemStatement)
+            ? GenerateBugId(parsed.Title)
             : parsed.BugId;
 
         var suspectedFailureLocus = string.IsNullOrWhiteSpace(parsed.SuspectedFailureLocus)
@@ -238,15 +240,38 @@ internal static class BugReportCommand
         return title;
     }
 
-    private static string GenerateBugId(string domain, string title, string problemStatement)
+    private static string GenerateBugId(string title)
     {
-        var normalizedInput = string.Join(
-            "\n",
-            domain.Trim().ToLowerInvariant(),
-            title.Trim(),
-            problemStatement.Trim());
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalizedInput));
-        return $"BUG-{Convert.ToHexString(hash)[..12]}";
+        var currentDate = TimestampFactory().ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var normalizedTitle = NormalizeTitle(title);
+        return $"BUG-{currentDate}-{normalizedTitle}";
+    }
+
+    private static string NormalizeTitle(string title)
+    {
+        var builder = new StringBuilder();
+        var previousWasSeparator = false;
+
+        foreach (var character in title.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                builder.Append(character);
+                previousWasSeparator = false;
+                continue;
+            }
+
+            if (!previousWasSeparator)
+            {
+                builder.Append('-');
+                previousWasSeparator = true;
+            }
+        }
+
+        var normalizedTitle = builder.ToString().Trim('-');
+        return string.IsNullOrWhiteSpace(normalizedTitle)
+            ? "bug-report"
+            : normalizedTitle;
     }
 
     private static string ResolveInputPath(string repoRoot, string path)
