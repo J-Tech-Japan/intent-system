@@ -2766,6 +2766,53 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugIntentStartCommand_DispatchesToBugIntentStartRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-enqueue.yaml"),
+            BugIntentEnqueueArtifactYaml.Serialize(
+                new BugIntentEnqueueArtifact
+                {
+                    BugId = "BUG-123",
+                    IntentIssueRef = ".intent-cli/bugs/BUG-123.intent-issue.yaml",
+                    AllocatedExecutionUnit = "G41",
+                    LinkedIssueUrl = "https://github.com/J-Tech-Japan/MyIntentHost/issues/53",
+                    LinkedIssueNumber = 53,
+                    PacketPaths =
+                    [
+                        ".intent-cli/issues/G41/implementation.md",
+                        ".intent-cli/issues/G41/review-context.md",
+                        ".intent-cli/issues/G41/packet.yaml"
+                    ],
+                    ReadyToEnqueue = true
+                }));
+        using var writer = new StringWriter();
+        var originalExecutor = BugIntentStartCommand.RunStartExecutor;
+
+        try
+        {
+            BugIntentStartCommand.RunStartExecutor = (_, executionUnit) => new RunStartResult
+            {
+                ExecutionUnit = executionUnit,
+                WorktreePath = $"/tmp/worktrees/{executionUnit}",
+                BranchName = $"issue-53-{executionUnit.ToLowerInvariant()}"
+            };
+
+            var exitCode = CommandRouter.Execute(["bug", "intent-start", "BUG-123"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Bug intent-start artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Ready to start: true", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            BugIntentStartCommand.RunStartExecutor = originalExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenRunSubmitCommand_DispatchesToRunSubmitRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
