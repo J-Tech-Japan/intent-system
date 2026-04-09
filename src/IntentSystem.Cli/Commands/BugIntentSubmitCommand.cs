@@ -65,7 +65,8 @@ internal static class BugIntentSubmitCommand
                 BugId = bugId,
                 IntentStartRef = intentStartRef,
                 SubmittedExecutionUnit = null,
-                LinkedPr = null,
+                LinkedPrUrl = null,
+                LinkedPrNumber = null,
                 ReadyToSubmit = false
             };
 
@@ -82,7 +83,8 @@ internal static class BugIntentSubmitCommand
             BugId = bugId,
             IntentStartRef = intentStartRef,
             SubmittedExecutionUnit = submitResult.ExecutionUnit,
-            LinkedPr = submitResult.LinkedPr,
+            LinkedPrUrl = submitResult.LinkedPr,
+            LinkedPrNumber = ResolvePullRequestNumber(submitResult.LinkedPr),
             ReadyToSubmit = true
         };
 
@@ -100,5 +102,20 @@ internal static class BugIntentSubmitCommand
         Directory.CreateDirectory(directoryPath);
         File.WriteAllText(absolutePath, BugIntentSubmitArtifactYaml.Serialize(artifact));
         return relativePath;
+    }
+
+    private static int ResolvePullRequestNumber(string linkedPrUrl)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(linkedPrUrl);
+
+        var normalized = linkedPrUrl.TrimEnd('/');
+        var segment = normalized[(normalized.LastIndexOf('/') + 1)..];
+        if (int.TryParse(segment, out var number))
+        {
+            return number;
+        }
+
+        throw new InvalidOperationException(
+            $"Linked PR URL '{linkedPrUrl}' must end with a numeric pull request number.");
     }
 }

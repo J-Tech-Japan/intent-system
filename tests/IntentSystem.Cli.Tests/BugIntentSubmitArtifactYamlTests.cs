@@ -12,7 +12,8 @@ public sealed class BugIntentSubmitArtifactYamlTests
             BugId = "BUG-123",
             IntentStartRef = ".intent-cli/bugs/BUG-123.intent-start.yaml",
             SubmittedExecutionUnit = "G41",
-            LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/58",
+            LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/58",
+            LinkedPrNumber = 58,
             ReadyToSubmit = true
         };
 
@@ -28,11 +29,12 @@ public sealed class BugIntentSubmitArtifactYamlTests
         bug_id: BUG-123
         intent_start_ref: ".intent-cli/bugs/BUG-123.intent-start.yaml"
         submitted_execution_unit: null
+        linked_pr_url: null
         ready_to_submit: false
         """;
 
         var exception = Assert.Throws<InvalidOperationException>(() => BugIntentSubmitArtifactYaml.Deserialize(yaml));
 
-        Assert.Contains("linked_pr", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("linked_pr_number", exception.Message, StringComparison.Ordinal);
     }
 }

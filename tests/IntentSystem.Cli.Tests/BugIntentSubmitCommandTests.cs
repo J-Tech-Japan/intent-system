@@ -44,7 +44,8 @@ public sealed class BugIntentSubmitCommandTests
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.intent-submit.yaml")));
             Assert.Equal(".intent-cli/bugs/BUG-123.intent-start.yaml", artifact.IntentStartRef);
             Assert.Equal("G41", artifact.SubmittedExecutionUnit);
-            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", artifact.LinkedPr);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", artifact.LinkedPrUrl);
+            Assert.Equal(58, artifact.LinkedPrNumber);
             Assert.True(artifact.ReadyToSubmit);
         }
         finally
@@ -86,8 +87,49 @@ public sealed class BugIntentSubmitCommandTests
             var artifact = BugIntentSubmitArtifactYaml.Deserialize(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-124.intent-submit.yaml")));
             Assert.Null(artifact.SubmittedExecutionUnit);
-            Assert.Null(artifact.LinkedPr);
+            Assert.Null(artifact.LinkedPrUrl);
+            Assert.Null(artifact.LinkedPrNumber);
             Assert.False(artifact.ReadyToSubmit);
+        }
+        finally
+        {
+            BugIntentSubmitCommand.RunSubmitExecutor = originalExecutor;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenSubmitResultWithoutNumericPullRequestNumber_ReturnsExitCodeOne()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-125.intent-start.yaml"),
+            BugIntentStartArtifactYaml.Serialize(
+                new BugIntentStartArtifact
+                {
+                    BugId = "BUG-125",
+                    IntentEnqueueRef = ".intent-cli/bugs/BUG-125.intent-enqueue.yaml",
+                    StartedExecutionUnit = "G42",
+                    WorktreePath = "/tmp/worktrees/G42",
+                    BranchName = "issue-53-g42",
+                    ReadyToStart = true
+                }));
+        using var writer = new StringWriter();
+        var originalExecutor = BugIntentSubmitCommand.RunSubmitExecutor;
+
+        try
+        {
+            BugIntentSubmitCommand.RunSubmitExecutor = (_, executionUnit) => new RunSubmitResult
+            {
+                ExecutionUnit = executionUnit,
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/not-a-number"
+            };
+
+            var exitCode = BugIntentSubmitCommand.Execute(CreateContext(repoRoot), ["BUG-125"], writer);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("must end with a numeric pull request number", writer.ToString(), StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-125.intent-submit.yaml")));
         }
         finally
         {

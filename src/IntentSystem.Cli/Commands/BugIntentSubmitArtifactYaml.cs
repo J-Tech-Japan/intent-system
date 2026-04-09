@@ -8,7 +8,9 @@ internal sealed record BugIntentSubmitArtifact
 
     public required string? SubmittedExecutionUnit { get; init; }
 
-    public required string? LinkedPr { get; init; }
+    public required string? LinkedPrUrl { get; init; }
+
+    public required int? LinkedPrNumber { get; init; }
 
     public required bool ReadyToSubmit { get; init; }
 }
@@ -20,7 +22,8 @@ internal static class BugIntentSubmitArtifactYaml
         "bug_id",
         "intent_start_ref",
         "submitted_execution_unit",
-        "linked_pr",
+        "linked_pr_url",
+        "linked_pr_number",
         "ready_to_submit"
     ];
 
@@ -33,7 +36,8 @@ internal static class BugIntentSubmitArtifactYaml
             $"bug_id: {artifact.BugId}",
             $"intent_start_ref: {Quote(artifact.IntentStartRef)}",
             $"submitted_execution_unit: {FormatNullableScalar(artifact.SubmittedExecutionUnit)}",
-            $"linked_pr: {FormatNullableScalar(artifact.LinkedPr)}",
+            $"linked_pr_url: {FormatNullableScalar(artifact.LinkedPrUrl)}",
+            $"linked_pr_number: {FormatNullableInteger(artifact.LinkedPrNumber)}",
             $"ready_to_submit: {artifact.ReadyToSubmit.ToString().ToLowerInvariant()}"
         };
 
@@ -52,7 +56,8 @@ internal static class BugIntentSubmitArtifactYaml
             BugId = GetRequiredScalar(values, "bug_id"),
             IntentStartRef = GetRequiredScalar(values, "intent_start_ref"),
             SubmittedExecutionUnit = GetNullableScalar(values, "submitted_execution_unit"),
-            LinkedPr = GetNullableScalar(values, "linked_pr"),
+            LinkedPrUrl = GetNullableScalar(values, "linked_pr_url"),
+            LinkedPrNumber = GetNullableInteger(values, "linked_pr_number"),
             ReadyToSubmit = GetRequiredBoolean(values, "ready_to_submit")
         };
     }
@@ -83,6 +88,7 @@ internal static class BugIntentSubmitArtifactYaml
                 "null" => null,
                 "true" => true,
                 "false" => false,
+                _ when int.TryParse(value, out var integerValue) => integerValue,
                 _ => ParseScalar(value)
             };
         }
@@ -136,9 +142,29 @@ internal static class BugIntentSubmitArtifactYaml
         return booleanValue;
     }
 
+    private static int? GetNullableInteger(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            throw new InvalidOperationException($"Bug intent-submit YAML field '{key}' must be present.");
+        }
+
+        return value switch
+        {
+            null => null,
+            int integerValue => integerValue,
+            _ => throw new InvalidOperationException($"Bug intent-submit YAML field '{key}' must be an integer or null.")
+        };
+    }
+
     private static string FormatNullableScalar(string? value)
     {
         return value is null ? "null" : Quote(value);
+    }
+
+    private static string FormatNullableInteger(int? value)
+    {
+        return value?.ToString() ?? "null";
     }
 
     private static string ParseScalar(string value)
