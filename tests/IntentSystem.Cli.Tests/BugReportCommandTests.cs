@@ -81,10 +81,13 @@ public sealed class BugReportCommandTests
     {
         using var writer = new StringWriter();
 
-        var exitCode = BugReportCommand.Execute(CreateContext("/tmp/intent-system"), ["auth", "BUG-123"], writer);
+        var exitCode = BugReportCommand.Execute(CreateContext("/tmp/intent-system"), ["auth"], writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("requires '<domain> <bug-id> --title <text> --from-file <path>'", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "requires '<domain> [<bug-id>] --title <text> [--text <text> | --from-file <path>]'",
+            writer.ToString(),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -111,6 +114,60 @@ public sealed class BugReportCommandTests
         var artifact = BugReportArtifactYaml.Deserialize(
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "bugs", "BUG-123.report.yaml")));
         Assert.Equal("explicit fallback locus", artifact.SuspectedFailureLocus);
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenInlineTextWithoutBugId_GeneratesDeterministicBugId()
+    {
+        using var firstTempDirectory = new TemporaryDirectory();
+        using var secondTempDirectory = new TemporaryDirectory();
+        var firstRepoRoot = firstTempDirectory.CreateDirectory("repo");
+        var secondRepoRoot = secondTempDirectory.CreateDirectory("repo");
+        string[] args =
+        [
+            "auth",
+            "--title", "OAuth callback loop",
+            "--text", "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path."
+        ];
+
+        var firstResult = BugReportCommand.ExecuteCore(CreateContext(firstRepoRoot), args);
+        var secondResult = BugReportCommand.ExecuteCore(CreateContext(secondRepoRoot), args);
+
+        Assert.StartsWith("BUG-", firstResult.Artifact.BugId, StringComparison.Ordinal);
+        Assert.Equal(firstResult.Artifact.BugId, secondResult.Artifact.BugId);
+        Assert.Equal(firstResult.ArtifactPath, secondResult.ArtifactPath);
+        Assert.Equal("inline-text", firstResult.Artifact.ReportSource);
+        Assert.Equal(
+            "Observed callback loop after login." + Environment.NewLine + "Affects GitHub provider path.",
+            firstResult.Artifact.ProblemStatement);
+        Assert.True(
+            File.Exists(
+                Path.Combine(firstRepoRoot, ".intent-cli", "bugs", $"{firstResult.Artifact.BugId}.report.yaml")));
+    }
+
+    [Fact]
+    public void Execute_GivenInlineTextAndPreparedFileTogether_ReturnsExitCodeOne()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(Path.Combine("repo", "prepared", "bug.md"), "Observed callback loop after login.");
+        using var writer = new StringWriter();
+
+        var exitCode = BugReportCommand.Execute(
+            CreateContext(repoRoot),
+            [
+                "auth",
+                "--title", "OAuth callback loop",
+                "--text", "Observed callback loop after login.",
+                "--from-file", "prepared/bug.md"
+            ],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(
+            "requires exactly one of '--text <text>' or '--from-file <path>'",
+            writer.ToString(),
+            StringComparison.Ordinal);
     }
 
     private static CliContext CreateContext(string repoRoot)
