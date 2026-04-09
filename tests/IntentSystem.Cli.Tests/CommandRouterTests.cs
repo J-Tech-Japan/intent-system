@@ -2813,6 +2813,46 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugIntentSubmitCommand_DispatchesToBugIntentSubmitRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-start.yaml"),
+            BugIntentStartArtifactYaml.Serialize(
+                new BugIntentStartArtifact
+                {
+                    BugId = "BUG-123",
+                    IntentEnqueueRef = ".intent-cli/bugs/BUG-123.intent-enqueue.yaml",
+                    StartedExecutionUnit = "G41",
+                    WorktreePath = "/tmp/worktrees/G41",
+                    BranchName = "issue-53-g41",
+                    ReadyToStart = true
+                }));
+        using var writer = new StringWriter();
+        var originalExecutor = BugIntentSubmitCommand.RunSubmitExecutor;
+
+        try
+        {
+            BugIntentSubmitCommand.RunSubmitExecutor = (_, executionUnit) => new RunSubmitResult
+            {
+                ExecutionUnit = executionUnit,
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/58"
+            };
+
+            var exitCode = CommandRouter.Execute(["bug", "intent-submit", "BUG-123"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Bug intent-submit artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Ready to submit: true", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            BugIntentSubmitCommand.RunSubmitExecutor = originalExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenRunSubmitCommand_DispatchesToRunSubmitRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();

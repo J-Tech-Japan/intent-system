@@ -85,6 +85,7 @@ internal static class CommandRouter
                 ["intent-issue"] = BugIntentIssueCommand.Execute,
                 ["intent-enqueue"] = BugIntentEnqueueCommand.Execute,
                 ["intent-start"] = BugIntentStartCommand.Execute,
+                ["intent-submit"] = BugIntentSubmitCommand.Execute,
                 ["implementation-repair"] = BugImplementationRepairCommand.Execute,
                 ["implementation-issue"] = BugImplementationIssueCommand.Execute
             },
