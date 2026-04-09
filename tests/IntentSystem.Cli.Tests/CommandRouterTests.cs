@@ -2853,6 +2853,101 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenBugIntentReviewCommand_DispatchesToBugIntentReviewRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-submit.yaml"),
+            BugIntentSubmitArtifactYaml.Serialize(
+                new BugIntentSubmitArtifact
+                {
+                    BugId = "BUG-123",
+                    IntentStartRef = ".intent-cli/bugs/BUG-123.intent-start.yaml",
+                    SubmittedExecutionUnit = "G41",
+                    LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/58",
+                    LinkedPrNumber = 58,
+                    ReadyToSubmit = true
+                }));
+        using var writer = new StringWriter();
+        var originalExecutor = BugIntentReviewCommand.ReviewRunExecutor;
+
+        try
+        {
+            BugIntentReviewCommand.ReviewRunExecutor = (_, executionUnit) => new ReviewRunResult
+            {
+                ExecutionUnit = executionUnit,
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+            };
+
+            var exitCode = CommandRouter.Execute(["bug", "intent-review", "BUG-123"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Bug intent-review artifact generated for 'BUG-123'.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Ready to review: true", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            BugIntentReviewCommand.ReviewRunExecutor = originalExecutor;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenBugIntentCommentCommand_DispatchesToBugIntentCommentRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.intent-submit.yaml"),
+            BugIntentSubmitArtifactYaml.Serialize(
+                new BugIntentSubmitArtifact
+                {
+                    BugId = "BUG-123",
+                    IntentStartRef = ".intent-cli/bugs/BUG-123.intent-start.yaml",
+                    SubmittedExecutionUnit = "G41",
+                    LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/58",
+                    LinkedPrNumber = 58,
+                    ReadyToSubmit = true
+                }));
+        tempDirectory.CreateFile(Path.Combine("repo", "prepared-comment.md"), "repair in place");
+        using var reviewWriter = new StringWriter();
+        using var commentWriter = new StringWriter();
+        var originalReviewExecutor = BugIntentReviewCommand.ReviewRunExecutor;
+        var originalCommentExecutor = BugIntentCommentCommand.ReviewCommentExecutor;
+
+        try
+        {
+            BugIntentReviewCommand.ReviewRunExecutor = (_, executionUnit) => new ReviewRunResult
+            {
+                ExecutionUnit = executionUnit,
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+            };
+            BugIntentCommentCommand.ReviewCommentExecutor = (_, executionUnit, _) => new ReviewCommentResult
+            {
+                ExecutionUnit = executionUnit,
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.comment.json",
+                CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/58#issuecomment-1"
+            };
+
+            var reviewExitCode = CommandRouter.Execute(["bug", "intent-review", "BUG-123"], CreateContext(repoRoot), reviewWriter);
+            var commentExitCode = CommandRouter.Execute(
+                ["bug", "intent-comment", "BUG-123", "--from-file", "prepared-comment.md"],
+                CreateContext(repoRoot),
+                commentWriter);
+
+            Assert.Equal(0, reviewExitCode);
+            Assert.Equal(0, commentExitCode);
+            Assert.Contains("Bug intent-comment artifact generated for 'BUG-123'.", commentWriter.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Ready to comment: true", commentWriter.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            BugIntentReviewCommand.ReviewRunExecutor = originalReviewExecutor;
+            BugIntentCommentCommand.ReviewCommentExecutor = originalCommentExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenRunSubmitCommand_DispatchesToRunSubmitRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
