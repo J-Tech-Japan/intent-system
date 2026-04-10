@@ -8,32 +8,14 @@ internal sealed record DirectRunProviderEvent
     [JsonPropertyName("ts")]
     public required string Timestamp { get; init; }
 
-    [JsonPropertyName("execution_unit")]
-    public required string ExecutionUnit { get; init; }
+    [JsonPropertyName("session_id")]
+    public required string SessionId { get; init; }
 
-    [JsonPropertyName("entry_kind")]
-    public required string EntryKind { get; init; }
+    [JsonPropertyName("kind")]
+    public required string Kind { get; init; }
 
-    [JsonPropertyName("provider")]
-    public required string Provider { get; init; }
-
-    [JsonPropertyName("provider_session_id")]
-    public required string ProviderSessionId { get; init; }
-
-    [JsonPropertyName("event_kind")]
-    public required string EventKind { get; init; }
-
-    [JsonPropertyName("model")]
-    public string? Model { get; init; }
-
-    [JsonPropertyName("transport")]
-    public string? Transport { get; init; }
-
-    [JsonPropertyName("command")]
-    public string? Command { get; init; }
-
-    [JsonPropertyName("raw")]
-    public string? Raw { get; init; }
+    [JsonPropertyName("payload")]
+    public required JsonElement Payload { get; init; }
 }
 
 internal static class DirectRunProviderEventJsonl

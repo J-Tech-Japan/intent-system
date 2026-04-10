@@ -11,8 +11,8 @@ public sealed class DirectRunLauncherTests
         var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G19.provider.jsonl");
         var runner = new FakeDirectRunProcessRunner
         {
-            StdOutLines = ["event:ready"],
-            StdErrLines = ["warn:slow-start"],
+            StdOutLines = ["""{"type":"ready","step":"bootstrap"}"""],
+            StdErrLines = ["""{"level":"warn","message":"slow-start"}"""],
             Result = new DirectRunProcessLaunchResult
             {
                 ProcessId = 4321,
@@ -65,25 +65,26 @@ public sealed class DirectRunLauncherTests
             providerEvent =>
             {
                 Assert.Equal("2026-04-09T10:15:00.0000000+00:00", providerEvent.Timestamp);
-                Assert.Equal("G19", providerEvent.ExecutionUnit);
-                Assert.Equal("implement", providerEvent.EntryKind);
-                Assert.Equal("ReviewBot", providerEvent.Provider);
-                Assert.Equal("pid:4321", providerEvent.ProviderSessionId);
-                Assert.Equal("session-started", providerEvent.EventKind);
-                Assert.Equal("gpt-5.4", providerEvent.Model);
-                Assert.Equal("grpc", providerEvent.Transport);
-                Assert.Equal("review-runner", providerEvent.Command);
-                Assert.Null(providerEvent.Raw);
+                Assert.Equal("pid:4321", providerEvent.SessionId);
+                Assert.Equal("session-metadata", providerEvent.Kind);
+                Assert.Equal("ReviewBot", providerEvent.Payload.GetProperty("provider").GetString());
+                Assert.Equal("gpt-5.4", providerEvent.Payload.GetProperty("model").GetString());
+                Assert.Equal("grpc", providerEvent.Payload.GetProperty("transport").GetString());
+                Assert.Equal("review-runner", providerEvent.Payload.GetProperty("command").GetString());
             },
             providerEvent =>
             {
-                Assert.Equal("stdout", providerEvent.EventKind);
-                Assert.Equal("event:ready", providerEvent.Raw);
+                Assert.Equal("pid:4321", providerEvent.SessionId);
+                Assert.Equal("provider-event", providerEvent.Kind);
+                Assert.Equal("ready", providerEvent.Payload.GetProperty("type").GetString());
+                Assert.Equal("bootstrap", providerEvent.Payload.GetProperty("step").GetString());
             },
             providerEvent =>
             {
-                Assert.Equal("stderr", providerEvent.EventKind);
-                Assert.Equal("warn:slow-start", providerEvent.Raw);
+                Assert.Equal("pid:4321", providerEvent.SessionId);
+                Assert.Equal("provider-event", providerEvent.Kind);
+                Assert.Equal("warn", providerEvent.Payload.GetProperty("level").GetString());
+                Assert.Equal("slow-start", providerEvent.Payload.GetProperty("message").GetString());
             });
     }
 
