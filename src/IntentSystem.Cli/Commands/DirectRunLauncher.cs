@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace IntentSystem.Cli.Commands;
 
 internal sealed class DirectRunLauncher : IDirectRunLauncher
@@ -19,6 +21,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string executionUnit,
         string entryKind,
         string requestArtifactPath,
+        string providerEventLogPath,
         string provider,
         string model,
         string transport,
@@ -26,11 +29,13 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         IReadOnlyList<string> argsTemplate,
         DateTimeOffset launchedAt,
         string workingDirectory,
-        string absoluteRequestArtifactPath)
+        string absoluteRequestArtifactPath,
+        string absoluteProviderEventLogPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
         ArgumentException.ThrowIfNullOrWhiteSpace(requestArtifactPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(transport);
@@ -38,6 +43,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         ArgumentNullException.ThrowIfNull(argsTemplate);
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(absoluteRequestArtifactPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(absoluteProviderEventLogPath);
 
         var arguments = ResolveArguments(
             executionUnit,
@@ -48,11 +54,28 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             transport,
             absoluteRequestArtifactPath,
             argsTemplate);
+        var eventWriter = new DirectRunProviderEventWriter(absoluteProviderEventLogPath);
+        var providerSessionId = string.Empty;
         var process = processRunner.Start(
             workingDirectory,
             command,
             arguments,
-            DefaultEarlyExitWindow);
+            DefaultEarlyExitWindow,
+            processId =>
+            {
+                providerSessionId = $"pid:{processId}";
+                eventWriter.Append(CreateSessionMetadataEvent(
+                    launchedAt,
+                    executionUnit,
+                    entryKind,
+                    provider,
+                    providerSessionId,
+                    model,
+                    transport,
+                    command));
+            },
+            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)),
+            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)));
 
         if (process.ExitedEarly && process.ExitCode != 0)
         {
@@ -63,10 +86,11 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         return new DirectRunLaunchResult
         {
             RequestArtifactPath = requestArtifactPath,
+            ProviderEventLogPath = providerEventLogPath,
             Provider = provider,
             Model = model,
             Transport = transport,
-            ProviderSessionId = $"pid:{process.ProcessId}",
+            ProviderSessionId = providerSessionId,
             TransportSummary =
                 $"{transport} transport launched via '{command}' in '{workingDirectory}' for provider '{provider}'."
         };
@@ -97,5 +121,65 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 .Replace("{direct_run_artifact_path}", requestArtifactPath, StringComparison.Ordinal)
                 .Replace("{prompt}", prompt, StringComparison.Ordinal))
             .ToArray();
+    }
+
+    private static DirectRunProviderEvent CreateSessionMetadataEvent(
+        DateTimeOffset launchedAt,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        string model,
+        string transport,
+        string command)
+    {
+        return new DirectRunProviderEvent
+        {
+            Timestamp = launchedAt.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
+            SessionId = providerSessionId,
+            Kind = "session-metadata",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                model,
+                transport,
+                command
+            })
+        };
+    }
+
+    private static DirectRunProviderEvent CreateProviderEvent(
+        DateTimeOffset timestamp,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        string raw)
+    {
+        return new DirectRunProviderEvent
+        {
+            Timestamp = timestamp.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
+            SessionId = providerSessionId,
+            Kind = "provider-event",
+            Payload = ParsePayload(raw)
+        };
+    }
+
+    private static JsonElement ParsePayload(string raw)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return JsonSerializer.SerializeToElement(raw);
+        }
     }
 }

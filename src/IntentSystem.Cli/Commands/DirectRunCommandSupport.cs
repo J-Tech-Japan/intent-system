@@ -40,14 +40,18 @@ internal static class DirectRunCommandSupport
         var policy = ResolvePolicy(context, entryKind);
         var entryKindValue = FormatEntryKind(entryKind);
         var relativeArtifactPath = ResolveArtifactPath(context, executionUnit);
+        var relativeProviderEventLogPath = ResolveProviderEventLogPath(context, executionUnit);
         var absoluteArtifactPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeArtifactPath.Replace('/', Path.DirectorySeparatorChar)));
+        var absoluteProviderEventLogPath = Path.GetFullPath(
+            Path.Combine(context.RepoRoot, relativeProviderEventLogPath.Replace('/', Path.DirectorySeparatorChar)));
         var absoluteUpstreamRequestPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, upstreamRequestRef.Replace('/', Path.DirectorySeparatorChar)));
         var launchResult = launcher.Launch(
             executionUnit,
             entryKindValue,
             relativeArtifactPath,
+            relativeProviderEventLogPath,
             policy.Provider,
             policy.Model,
             policy.Transport,
@@ -55,7 +59,8 @@ internal static class DirectRunCommandSupport
             policy.ArgsTemplate,
             launchedAt,
             workingDirectory,
-            absoluteUpstreamRequestPath);
+            absoluteUpstreamRequestPath,
+            absoluteProviderEventLogPath);
 
         var artifact = new DirectRunRequestArtifact
         {
@@ -126,6 +131,12 @@ internal static class DirectRunCommandSupport
     {
         var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
         return $"{root}/{executionUnit.Trim()}.request.json";
+    }
+
+    private static string ResolveProviderEventLogPath(CliContext context, string executionUnit)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{root}/{executionUnit.Trim()}.provider.jsonl";
     }
 
     private static string FormatEntryKind(DirectRunEntryKind entryKind)

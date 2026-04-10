@@ -4,6 +4,8 @@ internal sealed record DirectRunLaunchResult
 {
     public required string RequestArtifactPath { get; init; }
 
+    public required string ProviderEventLogPath { get; init; }
+
     public required string Provider { get; init; }
 
     public required string Model { get; init; }

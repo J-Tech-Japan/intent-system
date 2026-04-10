@@ -3130,6 +3130,7 @@ public sealed class CommandRouterTests
             Assert.Equal(0, exitCode);
             Assert.Contains("Implementation handoff artifact generated for G19", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("Implement role: Claude", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Provider raw event log: .intent-cli/runs/G19.provider.jsonl", writer.ToString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -3171,6 +3172,7 @@ public sealed class CommandRouterTests
             Assert.Equal(0, exitCode);
             Assert.Contains("Repair handoff artifact generated for G20", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("Latest comment ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Provider raw event log: .intent-cli/runs/G20.provider.jsonl", writer.ToString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -3304,6 +3306,7 @@ public sealed class CommandRouterTests
 
             Assert.Equal(0, exitCode);
             Assert.Contains("Review request artifact generated for G9", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Provider raw event log: .intent-cli/runs/G9.provider.jsonl", writer.ToString(), StringComparison.Ordinal);
 
             var artifact = ReviewRequestSerializer.Deserialize(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.request.json")));
@@ -5231,6 +5234,7 @@ recommended_updates:
             string executionUnit,
             string entryKind,
             string requestArtifactPathArg,
+            string providerEventLogPath,
             string provider,
             string model,
             string transport,
@@ -5238,11 +5242,13 @@ recommended_updates:
             IReadOnlyList<string> argsTemplate,
             DateTimeOffset launchedAt,
             string workingDirectory,
-            string absoluteRequestArtifactPath)
+            string absoluteRequestArtifactPath,
+            string absoluteProviderEventLogPath)
         {
             return new DirectRunLaunchResult
             {
                 RequestArtifactPath = requestArtifactPath,
+                ProviderEventLogPath = providerEventLogPath,
                 Provider = provider,
                 Model = model,
                 Transport = transport,
