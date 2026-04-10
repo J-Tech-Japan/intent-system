@@ -19,6 +19,12 @@ public sealed class IntakeIssueCommandTests
             Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
             CreateExecutionArtifactMarkdown("auth"));
         tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
+        tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
             "# Auth Concept");
         tempDirectory.CreateFile(
@@ -62,6 +68,50 @@ public sealed class IntakeIssueCommandTests
     }
 
     [Fact]
+    public void Execute_GivenGenericIntentNamespace_DerivesParentRefsFromSourceFiles()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "payments", "execution", "05-post-mvp-sub-slices.md"),
+            CreateExecutionBaselineMarkdown("payments"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "payments.execution.md"),
+            CreateSingleExecutionArtifactMarkdown(
+                "payments",
+                "PAY-01",
+                "intents/payments/concepts/checkout.md",
+                "concepts",
+                "Checkout"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "payments", "intent-tree", "00-map.md"),
+            "# Payments Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "payments", "clarifications", "open.md"),
+            "# Payments Clarifications");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "payments", "concepts", "checkout.md"),
+            "# Checkout");
+        using var writer = new StringWriter();
+
+        var exitCode = IntakeIssueCommand.Execute(CreateContext(repoRoot), ["payments"], writer);
+
+        Assert.Equal(0, exitCode);
+        var reviewMarkdown = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "PAY-01", "review-context.md"));
+        Assert.Contains("intents/payments/intent-tree/00-map.md", reviewMarkdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("intents/intent-cli/intent-tree/00-map.md", reviewMarkdown, StringComparison.Ordinal);
+
+        var packet = ProjectionPacketSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "PAY-01", "packet.yaml")));
+        Assert.Equal("intents/payments/intent-tree/00-map.md", packet.ReviewContextPacket.ParentIntentRoot);
+        Assert.Equal("intents/payments/clarifications/open.md", packet.ReviewContextPacket.ClarificationReturnPath);
+        Assert.DoesNotContain(
+            "intents/intent-cli/specs/04-concept-intake-and-interview.md",
+            packet.ImplementationIssuePacket.RulesAndSpecs,
+            StringComparer.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenExistingArtifacts_SkipsExecutionUnit()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -72,6 +122,12 @@ public sealed class IntakeIssueCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
             CreateExecutionArtifactMarkdown("auth"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
             "# Auth Concept");
@@ -148,9 +204,9 @@ public sealed class IntakeIssueCommandTests
         Assert.Contains("requires a domain", writer.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string CreateExecutionBaselineMarkdown()
+    private static string CreateExecutionBaselineMarkdown(string namespaceSegment = "intent-cli")
     {
-        return """
+        return $$"""
             # Post-MVP Sub-Slices
 
             | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
@@ -165,7 +221,12 @@ public sealed class IntakeIssueCommandTests
             """;
     }
 
-    private static string CreateExecutionArtifactMarkdown(string domain)
+    private static string CreateExecutionArtifactMarkdown(
+        string domain,
+        string firstExecutionUnit = "AUTH-01",
+        string firstSourceFilePath = "intents/intent-cli/concepts/oauth2.md",
+        string firstTargetPart = "concepts",
+        string firstHeading = "Auth Concept")
     {
         return $$"""
             # Intake Execution Draft
@@ -175,13 +236,13 @@ public sealed class IntakeIssueCommandTests
 
             ## Proposed Execution Units
 
-            ### `AUTH-01`
-            source_file_path: intents/intent-cli/concepts/oauth2.md
-            target_part: concepts
+            ### `{{firstExecutionUnit}}`
+            source_file_path: {{firstSourceFilePath}}
+            target_part: {{firstTargetPart}}
             dependencies:
             - none
             readiness_notes:
-            - Current heading: # Auth Concept
+            - Current heading: # {{firstHeading}}
             verification_hints:
             - dotnet test IntentSystem.sln
 
@@ -192,6 +253,34 @@ public sealed class IntakeIssueCommandTests
             - AUTH-01
             readiness_notes:
             - Current heading: # Device Code
+            verification_hints:
+            - dotnet test IntentSystem.sln
+
+            """;
+    }
+
+    private static string CreateSingleExecutionArtifactMarkdown(
+        string domain,
+        string executionUnit,
+        string sourceFilePath,
+        string targetPart,
+        string heading)
+    {
+        return $$"""
+            # Intake Execution Draft
+
+            ## Domain
+            `{{domain}}`
+
+            ## Proposed Execution Units
+
+            ### `{{executionUnit}}`
+            source_file_path: {{sourceFilePath}}
+            target_part: {{targetPart}}
+            dependencies:
+            - none
+            readiness_notes:
+            - Current heading: # {{heading}}
             verification_hints:
             - dotnet test IntentSystem.sln
 

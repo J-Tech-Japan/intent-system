@@ -32,6 +32,12 @@ public sealed class IntakeActivateCommandTests
             Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
             "# Auth Means" + Environment.NewLine + Environment.NewLine + "- Existing rule" + Environment.NewLine);
         tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
+        tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
             CreateExecutionBaselineMarkdown());
         tempDirectory.CreateFile(
