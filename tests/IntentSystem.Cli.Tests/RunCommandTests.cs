@@ -508,6 +508,51 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenLegacyReviewResultWithoutUpstreamRequestRef_WaitsForCurrentBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:current");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs", "G226.result.json"),
+            """
+            {
+              "schema_version": "1",
+              "execution_unit": "G226",
+              "entry_kind": "review",
+              "provider": "ReviewBot",
+              "model": "gpt-5.4-mini",
+              "session_id": "pid:current",
+              "run_status": "accepted",
+              "raw_log_ref": ".intent-cli/runs/G226.provider.jsonl",
+              "packet_ref": ".intent-cli/issues/G226/packet.yaml",
+              "review_context_ref": ".intent-cli/issues/G226/review-context.md",
+              "linked_pr": {
+                "repo": "J-Tech-Japan/intent-system",
+                "number": 226,
+                "url": "https://github.com/J-Tech-Japan/intent-system/pull/226"
+              },
+              "worktree": {
+                "path": "/repo/.intent-cli/worktrees/G226"
+              }
+            }
+            """);
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("no-actionable-item", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("does not match the current launched request boundary", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExecuteCore_GivenClarifyBlockedItem_StopsWithClarificationRequired()
     {
         using var tempDirectory = new TemporaryDirectory();

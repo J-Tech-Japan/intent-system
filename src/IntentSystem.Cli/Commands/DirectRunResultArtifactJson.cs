@@ -15,7 +15,7 @@ internal sealed record DirectRunResultArtifact
     public required string EntryKind { get; init; }
 
     [JsonPropertyName("upstream_request_ref")]
-    public required string UpstreamRequestRef { get; init; }
+    public string UpstreamRequestRef { get; init; } = string.Empty;
 
     [JsonPropertyName("provider")]
     public required string Provider { get; init; }

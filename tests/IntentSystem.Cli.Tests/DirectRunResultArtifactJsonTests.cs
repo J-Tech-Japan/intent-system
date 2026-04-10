@@ -59,4 +59,33 @@ public sealed class DirectRunResultArtifactJsonTests
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/67", roundTripped.LinkedPr?.Url);
         Assert.Equal("/repo/.intent-cli/worktrees/G19", roundTripped.Worktree.Path);
     }
+
+    [Fact]
+    public void Deserialize_GivenLegacyArtifactWithoutUpstreamRequestRef_PreservesBackwardCompatibility()
+    {
+        var json = """
+        {
+          "schema_version": "1",
+          "execution_unit": "G19",
+          "entry_kind": "review",
+          "provider": "ReviewBot",
+          "model": "gpt-5.4-mini",
+          "session_id": "pid:legacy",
+          "run_status": "running",
+          "raw_log_ref": ".intent-cli/runs/G19.provider.jsonl",
+          "packet_ref": ".intent-cli/issues/G19/packet.yaml",
+          "review_context_ref": ".intent-cli/issues/G19/review-context.md",
+          "worktree": {
+            "path": "/repo/.intent-cli/worktrees/G19"
+          }
+        }
+        """;
+
+        var artifact = DirectRunResultArtifactJson.Deserialize(json);
+
+        Assert.Equal("G19", artifact.ExecutionUnit);
+        Assert.Equal("review", artifact.EntryKind);
+        Assert.Equal(string.Empty, artifact.UpstreamRequestRef);
+        Assert.Equal("pid:legacy", artifact.SessionId);
+    }
 }
