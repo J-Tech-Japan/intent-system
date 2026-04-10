@@ -2,6 +2,19 @@ namespace IntentSystem.Cli.Commands;
 
 internal sealed class DirectRunLauncher : IDirectRunLauncher
 {
+    private static readonly TimeSpan DefaultEarlyExitWindow = TimeSpan.FromMilliseconds(500);
+    private readonly IDirectRunProcessRunner processRunner;
+
+    public DirectRunLauncher()
+        : this(new DirectRunProcessRunner())
+    {
+    }
+
+    internal DirectRunLauncher(IDirectRunProcessRunner processRunner)
+    {
+        this.processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+    }
+
     public DirectRunLaunchResult Launch(
         string executionUnit,
         string entryKind,
@@ -9,7 +22,9 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string provider,
         string model,
         string transport,
-        DateTimeOffset launchedAt)
+        DateTimeOffset launchedAt,
+        string workingDirectory,
+        string absoluteRequestArtifactPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
@@ -17,6 +32,21 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(transport);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(absoluteRequestArtifactPath);
+
+        var command = ResolveCommand(provider, model, absoluteRequestArtifactPath);
+        var process = processRunner.Start(
+            workingDirectory,
+            command.FileName,
+            command.Arguments,
+            DefaultEarlyExitWindow);
+
+        if (process.ExitedEarly && process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Direct run launch failed for provider '{provider}' using command '{command.FileName}' with exit code {process.ExitCode}.");
+        }
 
         return new DirectRunLaunchResult
         {
@@ -24,35 +54,25 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             Provider = provider,
             Model = model,
             Transport = transport,
-            ProviderSessionId = $"{Normalize(provider)}-{Normalize(entryKind)}-{Normalize(executionUnit)}-{launchedAt:yyyyMMddHHmmss}",
-            TransportSummary = $"{transport} transport selected for provider '{provider}' with model '{model}'."
+            ProviderSessionId = $"pid:{process.ProcessId}",
+            TransportSummary =
+                $"{transport} transport launched via '{command.FileName}' in '{workingDirectory}' for provider '{provider}'."
         };
     }
 
-    private static string Normalize(string value)
+    private static (string FileName, IReadOnlyList<string> Arguments) ResolveCommand(
+        string provider,
+        string model,
+        string absoluteRequestArtifactPath)
     {
-        var builder = new List<char>(value.Length);
-        foreach (var character in value)
+        var prompt =
+            $"Use the request artifact at '{absoluteRequestArtifactPath}' as the bounded source of truth for this direct run.";
+
+        return provider.Trim().ToLowerInvariant() switch
         {
-            if (char.IsLetterOrDigit(character))
-            {
-                builder.Add(char.ToLowerInvariant(character));
-                continue;
-            }
-
-            if (builder.Count == 0 || builder[^1] == '-')
-            {
-                continue;
-            }
-
-            builder.Add('-');
-        }
-
-        while (builder.Count > 0 && builder[^1] == '-')
-        {
-            builder.RemoveAt(builder.Count - 1);
-        }
-
-        return builder.Count == 0 ? "session" : new string(builder.ToArray());
+            "codex" => ("codex", ["exec", "--model", model, prompt]),
+            "claude" => ("claude", ["--print", "--model", model, "--output-format", "json", prompt]),
+            _ => (provider, [prompt])
+        };
     }
 }

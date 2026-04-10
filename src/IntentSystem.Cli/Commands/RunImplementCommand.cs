@@ -123,6 +123,7 @@ internal static class RunImplementCommand
             DirectRunEntryKind.Implement,
             executionUnit,
             relativeArtifactPath,
+            worktreePath,
             DirectRunLauncherFactory(),
             TimestampFactory());
 

@@ -31,6 +31,7 @@ public sealed class RunFixCommandTests
             CreateReviewCommentArtifactJson());
         using var writer = new StringWriter();
         var originalTimestampFactory = RunFixCommand.TimestampFactory;
+        var originalLauncherFactory = RunFixCommand.DirectRunLauncherFactory;
 
         var originalQueueState = File.ReadAllText(queueStatePath);
         var originalRunLog = File.ReadAllText(runLogPath);
@@ -38,6 +39,12 @@ public sealed class RunFixCommandTests
         try
         {
             RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:25:00Z");
+            RunFixCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:8765",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G20' for provider 'Claude'.");
 
             var exitCode = RunFixCommand.Execute(CreateContext(repoRoot), ["G20"], writer);
 
@@ -52,7 +59,7 @@ public sealed class RunFixCommandTests
             Assert.Contains("Direct provider: Claude", output, StringComparison.Ordinal);
             Assert.Contains("Direct model: default", output, StringComparison.Ordinal);
             Assert.Contains("Direct transport: stdio", output, StringComparison.Ordinal);
-            Assert.Contains("Provider session: claude-fix-g20-20260409102500", output, StringComparison.Ordinal);
+            Assert.Contains("Provider session: pid:8765", output, StringComparison.Ordinal);
 
             var artifactPath = Path.Combine(repoRoot, ".intent-cli", "fix", "G20.request.md");
             Assert.True(File.Exists(artifactPath));
@@ -73,7 +80,7 @@ public sealed class RunFixCommandTests
             Assert.Equal("Claude", directRunArtifact.Provider);
             Assert.Equal("default", directRunArtifact.Model);
             Assert.Equal("stdio", directRunArtifact.Transport);
-            Assert.Equal("claude-fix-g20-20260409102500", directRunArtifact.ProviderSessionId);
+            Assert.Equal("pid:8765", directRunArtifact.ProviderSessionId);
 
             Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
             Assert.Equal(originalRunLog, File.ReadAllText(runLogPath));
@@ -81,6 +88,7 @@ public sealed class RunFixCommandTests
         finally
         {
             RunFixCommand.TimestampFactory = originalTimestampFactory;
+            RunFixCommand.DirectRunLauncherFactory = originalLauncherFactory;
         }
     }
 
@@ -93,6 +101,45 @@ public sealed class RunFixCommandTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("requires an execution unit", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class FakeDirectRunLauncher(
+        string providerSessionId,
+        string provider,
+        string model,
+        string transport,
+        string transportSummary) : IDirectRunLauncher
+    {
+        public DirectRunLaunchResult Launch(
+            string executionUnit,
+            string entryKind,
+            string requestArtifactPath,
+            string providerArg,
+            string modelArg,
+            string transportArg,
+            DateTimeOffset launchedAt,
+            string workingDirectory,
+            string absoluteRequestArtifactPath)
+        {
+            Assert.Equal("G20", executionUnit);
+            Assert.Equal("fix", entryKind);
+            Assert.Equal(".intent-cli/runs/G20.request.json", requestArtifactPath);
+            Assert.Equal(provider, providerArg);
+            Assert.Equal(model, modelArg);
+            Assert.Equal(transport, transportArg);
+            Assert.EndsWith("/.intent-cli/worktrees/G20", workingDirectory, StringComparison.Ordinal);
+            Assert.EndsWith("/.intent-cli/fix/G20.request.md", absoluteRequestArtifactPath, StringComparison.Ordinal);
+
+            return new DirectRunLaunchResult
+            {
+                RequestArtifactPath = ".intent-cli/runs/G20.request.json",
+                Provider = providerArg,
+                Model = modelArg,
+                Transport = transportArg,
+                ProviderSessionId = providerSessionId,
+                TransportSummary = transportSummary
+            };
+        }
     }
 
     [Fact]

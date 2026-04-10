@@ -9,5 +9,7 @@ internal interface IDirectRunLauncher
         string provider,
         string model,
         string transport,
-        DateTimeOffset launchedAt);
+        DateTimeOffset launchedAt,
+        string workingDirectory,
+        string absoluteRequestArtifactPath);
 }

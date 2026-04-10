@@ -28,6 +28,7 @@ public sealed class RunImplementCommandTests
             CreateReviewContextMarkdown());
         using var writer = new StringWriter();
         var originalTimestampFactory = RunImplementCommand.TimestampFactory;
+        var originalLauncherFactory = RunImplementCommand.DirectRunLauncherFactory;
 
         var originalQueueState = File.ReadAllText(queueStatePath);
         var originalRunLog = File.ReadAllText(runLogPath);
@@ -35,6 +36,12 @@ public sealed class RunImplementCommandTests
         try
         {
             RunImplementCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:15:00Z");
+            RunImplementCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:4321",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G19' for provider 'Claude'.");
 
             var exitCode = RunImplementCommand.Execute(CreateContext(repoRoot), ["G19"], writer);
 
@@ -48,7 +55,7 @@ public sealed class RunImplementCommandTests
             Assert.Contains("Direct provider: Claude", output, StringComparison.Ordinal);
             Assert.Contains("Direct model: default", output, StringComparison.Ordinal);
             Assert.Contains("Direct transport: stdio", output, StringComparison.Ordinal);
-            Assert.Contains("Provider session: claude-implement-g19-20260409101500", output, StringComparison.Ordinal);
+            Assert.Contains("Provider session: pid:4321", output, StringComparison.Ordinal);
 
             var artifactPath = Path.Combine(repoRoot, ".intent-cli", "implement", "G19.request.md");
             Assert.True(File.Exists(artifactPath));
@@ -67,7 +74,7 @@ public sealed class RunImplementCommandTests
             Assert.Equal("Claude", directRunArtifact.Provider);
             Assert.Equal("default", directRunArtifact.Model);
             Assert.Equal("stdio", directRunArtifact.Transport);
-            Assert.Equal("claude-implement-g19-20260409101500", directRunArtifact.ProviderSessionId);
+            Assert.Equal("pid:4321", directRunArtifact.ProviderSessionId);
 
             Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
             Assert.Equal(originalRunLog, File.ReadAllText(runLogPath));
@@ -75,6 +82,7 @@ public sealed class RunImplementCommandTests
         finally
         {
             RunImplementCommand.TimestampFactory = originalTimestampFactory;
+            RunImplementCommand.DirectRunLauncherFactory = originalLauncherFactory;
         }
     }
 
@@ -104,6 +112,45 @@ public sealed class RunImplementCommandTests
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("Latest linked PR:", writer.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("latest_linked_pr", File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "implement", "G19.request.md")), StringComparison.Ordinal);
+    }
+
+    private sealed class FakeDirectRunLauncher(
+        string providerSessionId,
+        string provider,
+        string model,
+        string transport,
+        string transportSummary) : IDirectRunLauncher
+    {
+        public DirectRunLaunchResult Launch(
+            string executionUnit,
+            string entryKind,
+            string requestArtifactPath,
+            string providerArg,
+            string modelArg,
+            string transportArg,
+            DateTimeOffset launchedAt,
+            string workingDirectory,
+            string absoluteRequestArtifactPath)
+        {
+            Assert.Equal("G19", executionUnit);
+            Assert.Equal("implement", entryKind);
+            Assert.Equal(".intent-cli/runs/G19.request.json", requestArtifactPath);
+            Assert.Equal(provider, providerArg);
+            Assert.Equal(model, modelArg);
+            Assert.Equal(transport, transportArg);
+            Assert.EndsWith("/.intent-cli/worktrees/G19", workingDirectory, StringComparison.Ordinal);
+            Assert.EndsWith("/.intent-cli/implement/G19.request.md", absoluteRequestArtifactPath, StringComparison.Ordinal);
+
+            return new DirectRunLaunchResult
+            {
+                RequestArtifactPath = ".intent-cli/runs/G19.request.json",
+                Provider = providerArg,
+                Model = modelArg,
+                Transport = transportArg,
+                ProviderSessionId = providerSessionId,
+                TransportSummary = transportSummary
+            };
+        }
     }
 
     [Fact]

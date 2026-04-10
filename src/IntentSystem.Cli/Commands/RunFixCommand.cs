@@ -147,6 +147,7 @@ internal static class RunFixCommand
             DirectRunEntryKind.Fix,
             executionUnit,
             relativeArtifactPath,
+            worktreePath,
             DirectRunLauncherFactory(),
             TimestampFactory());
 

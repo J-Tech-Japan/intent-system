@@ -94,6 +94,7 @@ internal static class ReviewRunCommand
             DirectRunEntryKind.Review,
             executionUnit,
             artifactPath,
+            context.RepoRoot,
             DirectRunLauncherFactory(),
             TimestampFactory());
 

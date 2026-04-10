@@ -14,12 +14,14 @@ internal static class DirectRunCommandSupport
         DirectRunEntryKind entryKind,
         string executionUnit,
         string upstreamRequestRef,
+        string workingDirectory,
         IDirectRunLauncher launcher,
         DateTimeOffset launchedAt)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(upstreamRequestRef);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
         ArgumentNullException.ThrowIfNull(launcher);
 
         var policy = ResolvePolicy(context, entryKind);
@@ -27,6 +29,8 @@ internal static class DirectRunCommandSupport
         var relativeArtifactPath = ResolveArtifactPath(context, executionUnit);
         var absoluteArtifactPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeArtifactPath.Replace('/', Path.DirectorySeparatorChar)));
+        var absoluteUpstreamRequestPath = Path.GetFullPath(
+            Path.Combine(context.RepoRoot, upstreamRequestRef.Replace('/', Path.DirectorySeparatorChar)));
         var launchResult = launcher.Launch(
             executionUnit,
             entryKindValue,
@@ -34,7 +38,9 @@ internal static class DirectRunCommandSupport
             policy.Provider,
             policy.Model,
             policy.Transport,
-            launchedAt);
+            launchedAt,
+            workingDirectory,
+            absoluteUpstreamRequestPath);
 
         var artifact = new DirectRunRequestArtifact
         {
