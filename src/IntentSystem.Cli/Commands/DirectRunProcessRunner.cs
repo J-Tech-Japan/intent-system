@@ -9,11 +9,17 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
         string workingDirectory,
         string fileName,
         IReadOnlyList<string> arguments,
-        TimeSpan earlyExitWindow)
+        TimeSpan earlyExitWindow,
+        Action<int> onStarted,
+        Action<string> onStdOutLine,
+        Action<string> onStdErrLine)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(onStarted);
+        ArgumentNullException.ThrowIfNull(onStdOutLine);
+        ArgumentNullException.ThrowIfNull(onStdErrLine);
 
         try
         {
@@ -23,8 +29,8 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
                 WorkingDirectory = workingDirectory,
                 UseShellExecute = false,
                 RedirectStandardInput = false,
-                RedirectStandardOutput = false,
-                RedirectStandardError = false
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
             };
 
             foreach (var argument in arguments)
@@ -35,12 +41,32 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
             var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start direct run process '{fileName}'.");
 
+            onStarted(process.Id);
+
+            process.OutputDataReceived += (_, eventArgs) =>
+            {
+                if (!string.IsNullOrEmpty(eventArgs.Data))
+                {
+                    onStdOutLine(eventArgs.Data);
+                }
+            };
+            process.ErrorDataReceived += (_, eventArgs) =>
+            {
+                if (!string.IsNullOrEmpty(eventArgs.Data))
+                {
+                    onStdErrLine(eventArgs.Data);
+                }
+            };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
             var exitedEarly = process.WaitForExit((int)earlyExitWindow.TotalMilliseconds);
             var exitCode = exitedEarly ? process.ExitCode : 0;
             var processId = process.Id;
 
             if (exitedEarly)
             {
+                process.WaitForExit();
                 process.Dispose();
             }
 

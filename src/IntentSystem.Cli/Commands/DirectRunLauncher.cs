@@ -19,6 +19,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string executionUnit,
         string entryKind,
         string requestArtifactPath,
+        string providerEventLogPath,
         string provider,
         string model,
         string transport,
@@ -26,11 +27,13 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         IReadOnlyList<string> argsTemplate,
         DateTimeOffset launchedAt,
         string workingDirectory,
-        string absoluteRequestArtifactPath)
+        string absoluteRequestArtifactPath,
+        string absoluteProviderEventLogPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
         ArgumentException.ThrowIfNullOrWhiteSpace(requestArtifactPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(transport);
@@ -38,6 +41,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         ArgumentNullException.ThrowIfNull(argsTemplate);
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(absoluteRequestArtifactPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(absoluteProviderEventLogPath);
 
         var arguments = ResolveArguments(
             executionUnit,
@@ -48,11 +52,49 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             transport,
             absoluteRequestArtifactPath,
             argsTemplate);
+        var eventWriter = new DirectRunProviderEventWriter(absoluteProviderEventLogPath);
+        var providerSessionId = string.Empty;
         var process = processRunner.Start(
             workingDirectory,
             command,
             arguments,
-            DefaultEarlyExitWindow);
+            DefaultEarlyExitWindow,
+            processId =>
+            {
+                providerSessionId = $"pid:{processId}";
+                eventWriter.Append(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.ToString("O"),
+                    ExecutionUnit = executionUnit,
+                    EntryKind = entryKind,
+                    Provider = provider,
+                    ProviderSessionId = providerSessionId,
+                    EventKind = "session-started",
+                    Model = model,
+                    Transport = transport,
+                    Command = command
+                });
+            },
+            raw => eventWriter.Append(new DirectRunProviderEvent
+            {
+                Timestamp = DateTimeOffset.UtcNow.ToString("O"),
+                ExecutionUnit = executionUnit,
+                EntryKind = entryKind,
+                Provider = provider,
+                ProviderSessionId = providerSessionId,
+                EventKind = "stdout",
+                Raw = raw
+            }),
+            raw => eventWriter.Append(new DirectRunProviderEvent
+            {
+                Timestamp = DateTimeOffset.UtcNow.ToString("O"),
+                ExecutionUnit = executionUnit,
+                EntryKind = entryKind,
+                Provider = provider,
+                ProviderSessionId = providerSessionId,
+                EventKind = "stderr",
+                Raw = raw
+            }));
 
         if (process.ExitedEarly && process.ExitCode != 0)
         {
@@ -63,10 +105,11 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         return new DirectRunLaunchResult
         {
             RequestArtifactPath = requestArtifactPath,
+            ProviderEventLogPath = providerEventLogPath,
             Provider = provider,
             Model = model,
             Transport = transport,
-            ProviderSessionId = $"pid:{process.ProcessId}",
+            ProviderSessionId = providerSessionId,
             TransportSummary =
                 $"{transport} transport launched via '{command}' in '{workingDirectory}' for provider '{provider}'."
         };

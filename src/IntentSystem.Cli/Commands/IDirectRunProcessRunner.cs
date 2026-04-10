@@ -6,5 +6,8 @@ internal interface IDirectRunProcessRunner
         string workingDirectory,
         string fileName,
         IReadOnlyList<string> arguments,
-        TimeSpan earlyExitWindow);
+        TimeSpan earlyExitWindow,
+        Action<int> onStarted,
+        Action<string> onStdOutLine,
+        Action<string> onStdErrLine);
 }

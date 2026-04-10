@@ -52,6 +52,7 @@ public sealed class RunImplementCommandTests
             Assert.Contains("Branch: issue-66-g19", output, StringComparison.Ordinal);
             Assert.Contains("Latest linked PR: https://github.com/J-Tech-Japan/intent-system/pull/67", output, StringComparison.Ordinal);
             Assert.Contains("Direct run request artifact: .intent-cli/runs/G19.request.json", output, StringComparison.Ordinal);
+            Assert.Contains("Provider raw event log: .intent-cli/runs/G19.provider.jsonl", output, StringComparison.Ordinal);
             Assert.Contains("Direct provider: Claude", output, StringComparison.Ordinal);
             Assert.Contains("Direct model: default", output, StringComparison.Ordinal);
             Assert.Contains("Direct transport: stdio", output, StringComparison.Ordinal);
@@ -125,6 +126,7 @@ public sealed class RunImplementCommandTests
             string executionUnit,
             string entryKind,
             string requestArtifactPath,
+            string providerEventLogPath,
             string providerArg,
             string modelArg,
             string transportArg,
@@ -132,11 +134,13 @@ public sealed class RunImplementCommandTests
             IReadOnlyList<string> argsTemplate,
             DateTimeOffset launchedAt,
             string workingDirectory,
-            string absoluteRequestArtifactPath)
+            string absoluteRequestArtifactPath,
+            string absoluteProviderEventLogPath)
         {
             Assert.Equal("G19", executionUnit);
             Assert.Equal("implement", entryKind);
             Assert.Equal(".intent-cli/runs/G19.request.json", requestArtifactPath);
+            Assert.Equal(".intent-cli/runs/G19.provider.jsonl", providerEventLogPath);
             Assert.Equal(provider, providerArg);
             Assert.Equal(model, modelArg);
             Assert.Equal(transport, transportArg);
@@ -144,10 +148,12 @@ public sealed class RunImplementCommandTests
             Assert.Equal(["--print", "--model", "{model}", "--output-format", "json", "{prompt}"], argsTemplate);
             Assert.EndsWith("/.intent-cli/worktrees/G19", workingDirectory, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/implement/G19.request.md", absoluteRequestArtifactPath, StringComparison.Ordinal);
+            Assert.EndsWith("/.intent-cli/runs/G19.provider.jsonl", absoluteProviderEventLogPath, StringComparison.Ordinal);
 
             return new DirectRunLaunchResult
             {
                 RequestArtifactPath = ".intent-cli/runs/G19.request.json",
+                ProviderEventLogPath = ".intent-cli/runs/G19.provider.jsonl",
                 Provider = providerArg,
                 Model = modelArg,
                 Transport = transportArg,

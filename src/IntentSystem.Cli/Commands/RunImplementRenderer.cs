@@ -95,6 +95,7 @@ internal static class RunImplementRenderer
         if (directRun is not null)
         {
             writer.WriteLine($"Direct run request artifact: {directRun.RequestArtifactPath}");
+            writer.WriteLine($"Provider raw event log: {directRun.ProviderEventLogPath}");
             writer.WriteLine($"Direct provider: {directRun.Provider}");
             writer.WriteLine($"Direct model: {directRun.Model}");
             writer.WriteLine($"Direct transport: {directRun.Transport}");

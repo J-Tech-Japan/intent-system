@@ -44,6 +44,7 @@ public sealed class ReviewRunCommandTests
             Assert.Equal(0, exitCode);
             Assert.Contains("Review request artifact generated for G9", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("Direct run request artifact: .intent-cli/runtime-runs/G9.request.json", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Provider raw event log: .intent-cli/runtime-runs/G9.provider.jsonl", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("Direct provider: ReviewBot", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("Direct model: gpt-5.4-mini", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("Direct transport: grpc", writer.ToString(), StringComparison.Ordinal);
@@ -317,6 +318,7 @@ public sealed class ReviewRunCommandTests
             string executionUnit,
             string entryKind,
             string requestArtifactPath,
+            string providerEventLogPath,
             string providerArg,
             string modelArg,
             string transportArg,
@@ -324,11 +326,13 @@ public sealed class ReviewRunCommandTests
             IReadOnlyList<string> argsTemplateArg,
             DateTimeOffset launchedAt,
             string workingDirectory,
-            string absoluteRequestArtifactPath)
+            string absoluteRequestArtifactPath,
+            string absoluteProviderEventLogPath)
         {
             Assert.Equal("G9", executionUnit);
             Assert.Equal("review", entryKind);
             Assert.Equal(".intent-cli/runtime-runs/G9.request.json", requestArtifactPath);
+            Assert.Equal(".intent-cli/runtime-runs/G9.provider.jsonl", providerEventLogPath);
             Assert.Equal(provider, providerArg);
             Assert.Equal(model, modelArg);
             Assert.Equal(transport, transportArg);
@@ -336,10 +340,12 @@ public sealed class ReviewRunCommandTests
             Assert.Equal(argsTemplate, argsTemplateArg);
             Assert.EndsWith("/repo", workingDirectory, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/reviews/G9.request.json", absoluteRequestArtifactPath, StringComparison.Ordinal);
+            Assert.EndsWith("/.intent-cli/runtime-runs/G9.provider.jsonl", absoluteProviderEventLogPath, StringComparison.Ordinal);
 
             return new DirectRunLaunchResult
             {
                 RequestArtifactPath = ".intent-cli/runtime-runs/G9.request.json",
+                ProviderEventLogPath = ".intent-cli/runtime-runs/G9.provider.jsonl",
                 Provider = providerArg,
                 Model = modelArg,
                 Transport = transportArg,

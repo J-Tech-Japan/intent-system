@@ -6,6 +6,7 @@ internal interface IDirectRunLauncher
         string executionUnit,
         string entryKind,
         string requestArtifactPath,
+        string providerEventLogPath,
         string provider,
         string model,
         string transport,
@@ -13,5 +14,6 @@ internal interface IDirectRunLauncher
         IReadOnlyList<string> argsTemplate,
         DateTimeOffset launchedAt,
         string workingDirectory,
-        string absoluteRequestArtifactPath);
+        string absoluteRequestArtifactPath,
+        string absoluteProviderEventLogPath);
 }
