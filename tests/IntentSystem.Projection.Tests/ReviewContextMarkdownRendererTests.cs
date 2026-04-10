@@ -6,19 +6,19 @@ namespace IntentSystem.Projection.Tests;
 public sealed class ReviewContextMarkdownRendererTests
 {
     [Fact]
-    public void Render_GivenPacket_StartsWithReviewContextH1()
+    public void Render_GivenPacket_StartsWithExecutionUnitSection()
     {
         var markdown = ReviewContextMarkdownRenderer.Render(CreatePacket());
 
-        Assert.StartsWith("# Review Context", markdown, StringComparison.Ordinal);
+        Assert.StartsWith("# Execution Unit", markdown, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Render_GivenPacket_IncludesExecutionUnitInHeader()
+    public void Render_GivenPacket_IncludesExecutionUnitSectionValue()
     {
         var markdown = ReviewContextMarkdownRenderer.Render(CreatePacket());
 
-        Assert.Contains("**execution-unit**: `A2`", markdown, StringComparison.Ordinal);
+        Assert.Contains("`A2`", markdown, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -26,12 +26,12 @@ public sealed class ReviewContextMarkdownRendererTests
     {
         var markdown = ReviewContextMarkdownRenderer.Render(CreatePacket());
 
-        Assert.Contains("## Parent Intent Root", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Intent References", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Rules And Specs", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Acceptance Criteria", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Deterministic Review Checks", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Clarification Return Path", markdown, StringComparison.Ordinal);
+        Assert.Contains("# Parent Intent Root", markdown, StringComparison.Ordinal);
+        Assert.Contains("# Intent References", markdown, StringComparison.Ordinal);
+        Assert.Contains("# Rules And Specs", markdown, StringComparison.Ordinal);
+        Assert.Contains("# Acceptance Criteria", markdown, StringComparison.Ordinal);
+        Assert.Contains("# Deterministic Review Checks", markdown, StringComparison.Ordinal);
+        Assert.Contains("# Clarification Return Path", markdown, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -52,6 +52,16 @@ public sealed class ReviewContextMarkdownRendererTests
         var second = ReviewContextMarkdownRenderer.Render(packet);
 
         Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void Render_GivenPacket_UsesParserCompatibleTopLevelSections()
+    {
+        var markdown = ReviewContextMarkdownRenderer.Render(CreatePacket());
+
+        Assert.Contains("# Execution Unit", markdown, StringComparison.Ordinal);
+        Assert.Contains("# Acceptance Criteria", markdown, StringComparison.Ordinal);
+        Assert.Contains("# Deterministic Review Checks", markdown, StringComparison.Ordinal);
     }
 
     private static ReviewContextPacket CreatePacket()

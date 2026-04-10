@@ -11,28 +11,28 @@ public static class ReviewContextMarkdownRenderer
 
         var sb = new StringBuilder();
 
-        AppendHeader(sb, packet);
-        AppendSection(sb, "Parent Intent Root", packet.ParentIntentRoot);
+        AppendExecutionUnitSection(sb, packet.SourceExecutionUnit);
+        AppendScalarSection(sb, "Parent Intent Root", packet.ParentIntentRoot);
         AppendListSection(sb, "Intent References", packet.IntentReferences);
         AppendListSection(sb, "Rules And Specs", packet.RulesAndSpecs);
         AppendListSection(sb, "Acceptance Criteria", packet.AcceptanceCriteria);
         AppendListSection(sb, "Deterministic Review Checks", packet.DeterministicReviewChecks);
-        AppendSection(sb, "Clarification Return Path", packet.ClarificationReturnPath);
+        AppendScalarSection(sb, "Clarification Return Path", packet.ClarificationReturnPath);
 
         return sb.ToString();
     }
 
-    private static void AppendHeader(StringBuilder sb, ReviewContextPacket packet)
+    private static void AppendExecutionUnitSection(StringBuilder sb, string executionUnit)
     {
-        sb.AppendLine("# Review Context");
+        sb.AppendLine("# Execution Unit");
         sb.AppendLine();
-        sb.AppendLine($"- **execution-unit**: `{packet.SourceExecutionUnit}`");
+        sb.AppendLine($"`{executionUnit}`");
         sb.AppendLine();
     }
 
-    private static void AppendSection(StringBuilder sb, string heading, string content)
+    private static void AppendScalarSection(StringBuilder sb, string heading, string content)
     {
-        sb.AppendLine($"## {heading}");
+        sb.AppendLine($"# {heading}");
         sb.AppendLine();
         sb.AppendLine(content);
         sb.AppendLine();
@@ -40,7 +40,7 @@ public static class ReviewContextMarkdownRenderer
 
     private static void AppendListSection(StringBuilder sb, string heading, IReadOnlyList<string> items)
     {
-        sb.AppendLine($"## {heading}");
+        sb.AppendLine($"# {heading}");
         sb.AppendLine();
 
         if (items.Count == 0)

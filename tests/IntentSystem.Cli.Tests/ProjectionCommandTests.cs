@@ -27,7 +27,7 @@ public sealed class ProjectionCommandTests
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "implementation.md")),
             StringComparison.Ordinal);
         Assert.Contains(
-            "# Review Context",
+            "# Execution Unit",
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "review-context.md")),
             StringComparison.Ordinal);
         Assert.Contains(
@@ -128,7 +128,7 @@ public sealed class ProjectionCommandTests
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "implementation.md")),
             StringComparison.Ordinal);
         Assert.Contains(
-            "## Deterministic Review Checks",
+            "# Deterministic Review Checks",
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G2", "review-context.md")),
             StringComparison.Ordinal);
         Assert.Contains(

@@ -1,6 +1,7 @@
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
 using IntentSystem.Projection.Serialization;
+using IntentSystem.Review;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -45,6 +46,9 @@ public sealed class IntakeIssueCommandTests
 
         var reviewMarkdown = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "AUTH-01", "review-context.md"));
         Assert.Contains("intents/intent-cli/intent-tree/00-map.md", reviewMarkdown, StringComparison.Ordinal);
+        var parsedReviewContext = ReviewContextMarkdownParser.Parse(reviewMarkdown);
+        Assert.Equal("AUTH-01", parsedReviewContext.SourceExecutionUnit);
+        Assert.NotEmpty(parsedReviewContext.DeterministicReviewChecks);
 
         var packet = ProjectionPacketSerializer.Deserialize(
             File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "AUTH-01", "packet.yaml")));

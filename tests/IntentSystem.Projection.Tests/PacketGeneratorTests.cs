@@ -24,10 +24,10 @@ public sealed class PacketGeneratorTests
     {
         var result = PacketGenerator.Generate(CreateRow(), CreateContext());
 
-        Assert.Contains("# Review Context", result.ReviewContextMarkdown, StringComparison.Ordinal);
-        Assert.Contains("## Parent Intent Root", result.ReviewContextMarkdown, StringComparison.Ordinal);
-        Assert.Contains("## Acceptance Criteria", result.ReviewContextMarkdown, StringComparison.Ordinal);
-        Assert.Contains("## Deterministic Review Checks", result.ReviewContextMarkdown, StringComparison.Ordinal);
+        Assert.Contains("# Execution Unit", result.ReviewContextMarkdown, StringComparison.Ordinal);
+        Assert.Contains("# Parent Intent Root", result.ReviewContextMarkdown, StringComparison.Ordinal);
+        Assert.Contains("# Acceptance Criteria", result.ReviewContextMarkdown, StringComparison.Ordinal);
+        Assert.Contains("# Deterministic Review Checks", result.ReviewContextMarkdown, StringComparison.Ordinal);
     }
 
     [Fact]
