@@ -7,6 +7,11 @@ Project-local best-practice and model-registry starter docs live under:
 - `.intent/best-practices/`
 - `.intent/model-registry/`
 
+The first starter set is intentionally explicit:
+
+- best practices: engineering, AI-assisted delivery, Azure, Sekiban
+- model registry: aggregate, read-model, API, auth-model
+
 Use these as the child-repo knowledge base for `generate-from-current best-practice`. They are bounded repo-local inputs, not a replacement for parent intent refs or runtime command logic.
 
 ## Packaged invocation
