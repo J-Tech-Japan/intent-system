@@ -10,6 +10,101 @@ namespace IntentSystem.Cli.Tests;
 public sealed class RunCommandTests
 {
     [Fact]
+    public void Execute_GivenNoActionableQueue_PersistsRootRunArtifactAndWritesSummary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        using var writer = new StringWriter();
+
+        var exitCode = RunCommand.Execute(CreateContext(repoRoot), [], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Run orchestration processed.", output, StringComparison.Ordinal);
+        Assert.Contains("Stop reason: no-actionable-item", output, StringComparison.Ordinal);
+        Assert.Contains("Touched execution units: none", output, StringComparison.Ordinal);
+        Assert.Contains("Reused child command refs: none", output, StringComparison.Ordinal);
+        Assert.Contains("Root run result artifact: .intent-cli/run.result.json", output, StringComparison.Ordinal);
+
+        var artifactPath = Path.Combine(repoRoot, ".intent-cli", "run.result.json");
+        Assert.True(File.Exists(artifactPath));
+        var artifact = RunRootResultArtifactJson.Deserialize(File.ReadAllText(artifactPath));
+        Assert.Equal("no-actionable-item", artifact.StopReason);
+        Assert.Empty(artifact.TouchedExecutionUnits);
+        Assert.Empty(artifact.ReusedChildCommandRefs);
+        Assert.Null(artifact.ExecutionUnit);
+    }
+
+    [Fact]
+    public void Execute_GivenReusedChildCommands_PersistsTouchedUnitsAndCommandRefs()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Active))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G226.request.md"),
+            "# Execution Worker Handoff");
+        WriteDirectRunResult(repoRoot, "G226", "implement", "succeeded");
+        var originalRunSubmitExecutor = RunCommand.RunSubmitExecutor;
+        var originalReviewRunExecutor = RunCommand.ReviewRunExecutor;
+        using var writer = new StringWriter();
+
+        try
+        {
+            RunCommand.RunSubmitExecutor = (context, executionUnit) =>
+            {
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => queueItem with
+                    {
+                        State = QueueItemState.Review
+                    });
+
+                return new RunSubmitResult
+                {
+                    ExecutionUnit = executionUnit,
+                    LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226"
+                };
+            };
+            RunCommand.ReviewRunExecutor = (_, executionUnit) =>
+            {
+                WriteDirectRunResult(repoRoot, executionUnit, "review", "running");
+
+                return new ReviewRunResult
+                {
+                    ExecutionUnit = executionUnit,
+                    ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+                };
+            };
+
+            var exitCode = RunCommand.Execute(CreateContext(repoRoot), [], writer);
+
+            Assert.Equal(0, exitCode);
+            var output = writer.ToString();
+            Assert.Contains("Touched execution units: G226", output, StringComparison.Ordinal);
+            Assert.Contains("Reused child command refs: run submit, review run", output, StringComparison.Ordinal);
+
+            var artifact = RunRootResultArtifactJson.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "run.result.json")));
+            Assert.Equal("no-actionable-item", artifact.StopReason);
+            Assert.Equal(["G226"], artifact.TouchedExecutionUnits);
+            Assert.Equal(["run submit", "review run"], artifact.ReusedChildCommandRefs);
+            Assert.Equal("G226", artifact.ExecutionUnit);
+            Assert.Contains("Review direct run for 'G226' is 'running'.", artifact.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunCommand.RunSubmitExecutor = originalRunSubmitExecutor;
+            RunCommand.ReviewRunExecutor = originalReviewRunExecutor;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenQueuedItem_ChainsDispatchStartImplementAndStopsAtWorkerMonitoring()
     {
         using var tempDirectory = new TemporaryDirectory();

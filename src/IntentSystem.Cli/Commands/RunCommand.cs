@@ -68,6 +68,7 @@ internal static class RunCommand
         try
         {
             var result = ExecuteCore(context);
+            result = PersistResultArtifact(context, result);
             RunCommandRenderer.WriteSummary(writer, result);
             return 0;
         }
@@ -619,12 +620,70 @@ internal static class RunCommand
         string? executionUnit = null,
         string? detail = null)
     {
+        var touchedExecutionUnits = new List<string>();
+        foreach (var action in actions)
+        {
+            if (!touchedExecutionUnits.Contains(action.ExecutionUnit, StringComparer.Ordinal))
+            {
+                touchedExecutionUnits.Add(action.ExecutionUnit);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(executionUnit)
+            && !touchedExecutionUnits.Contains(executionUnit, StringComparer.Ordinal))
+        {
+            touchedExecutionUnits.Add(executionUnit);
+        }
+
+        var reusedChildCommandRefs = new List<string>();
+        foreach (var action in actions)
+        {
+            if (!reusedChildCommandRefs.Contains(action.Name, StringComparer.Ordinal))
+            {
+                reusedChildCommandRefs.Add(action.Name);
+            }
+        }
+
         return new RunCommandResult
         {
             StopReason = stopReason,
             Actions = actions.ToArray(),
+            TouchedExecutionUnits = touchedExecutionUnits,
+            ReusedChildCommandRefs = reusedChildCommandRefs,
             ExecutionUnit = executionUnit,
             Detail = detail
+        };
+    }
+
+    private static RunCommandResult PersistResultArtifact(CliContext context, RunCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(result);
+
+        var artifactPath = RunRootResultArtifactPathResolver.Resolve(context);
+        var absoluteArtifactPath = Path.IsPathRooted(artifactPath)
+            ? artifactPath
+            : Path.GetFullPath(Path.Combine(context.RepoRoot, artifactPath.Replace('/', Path.DirectorySeparatorChar)));
+        var directoryPath = Path.GetDirectoryName(absoluteArtifactPath)
+            ?? throw new InvalidOperationException("Run root result artifact path did not contain a directory.");
+
+        Directory.CreateDirectory(directoryPath);
+        File.WriteAllText(
+            absoluteArtifactPath,
+            RunRootResultArtifactJson.Serialize(
+                new RunRootResultArtifact
+                {
+                    SchemaVersion = "1",
+                    StopReason = result.StopReason,
+                    TouchedExecutionUnits = result.TouchedExecutionUnits,
+                    ReusedChildCommandRefs = result.ReusedChildCommandRefs,
+                    ExecutionUnit = result.ExecutionUnit,
+                    Detail = result.Detail
+                }));
+
+        return result with
+        {
+            ArtifactPath = artifactPath
         };
     }
 

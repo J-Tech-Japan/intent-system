@@ -76,8 +76,11 @@ public sealed class CommandRouterTests
         var exitCode = CommandRouter.Execute(["run"], CreateContext(repoRoot), writer);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("Run orchestration processed.", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("no-actionable-item", writer.ToString(), StringComparison.Ordinal);
+        var output = writer.ToString();
+        Assert.Contains("Run orchestration processed.", output, StringComparison.Ordinal);
+        Assert.Contains("no-actionable-item", output, StringComparison.Ordinal);
+        Assert.Contains("Root run result artifact: .intent-cli/run.result.json", output, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "run.result.json")));
     }
 
     [Fact]
