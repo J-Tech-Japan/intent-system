@@ -73,12 +73,14 @@ public sealed class RunCommandTests
             };
             RunCommand.ReviewRunExecutor = (_, executionUnit) =>
             {
+                WriteDirectRunRequest(repoRoot, executionUnit, "review", "pid:226");
                 WriteDirectRunResult(repoRoot, executionUnit, "review", "running");
 
                 return new ReviewRunResult
                 {
                     ExecutionUnit = executionUnit,
-                    ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+                    ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json",
+                    DirectRun = CreateDirectRunLaunchResult(executionUnit, "pid:226")
                 };
             };
 
@@ -233,8 +235,10 @@ public sealed class RunCommandTests
             RunCommand.ReviewRunExecutor = (_, executionUnit) => new ReviewRunResult
             {
                 ExecutionUnit = executionUnit,
-                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json",
+                DirectRun = CreateDirectRunLaunchResult(executionUnit, "pid:226")
             };
+            WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
@@ -267,8 +271,10 @@ public sealed class RunCommandTests
             RunCommand.ReviewRunExecutor = (_, executionUnit) => new ReviewRunResult
             {
                 ExecutionUnit = executionUnit,
-                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json",
+                DirectRun = CreateDirectRunLaunchResult(executionUnit, "pid:226")
             };
+            WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
@@ -367,6 +373,7 @@ public sealed class RunCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
             "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
         WriteDirectRunResult(repoRoot, "G226", "review", "accepted");
         var originalReviewAcceptExecutor = RunCommand.ReviewAcceptExecutor;
 
@@ -414,6 +421,7 @@ public sealed class RunCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
             "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
         WriteDirectRunResult(
             repoRoot,
             "G226",
@@ -475,6 +483,28 @@ public sealed class RunCommandTests
         {
             RunCommand.ReviewCommentExecutor = originalReviewCommentExecutor;
         }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenStaleReviewResultForDifferentSession_WaitsForCurrentBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:current");
+        WriteDirectRunResult(repoRoot, "G226", "review", "accepted", sessionId: "pid:stale");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("no-actionable-item", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("does not match the current launched request boundary", result.Detail, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -677,7 +707,8 @@ public sealed class RunCommandTests
         string executionUnit,
         string entryKind,
         string runStatus,
-        IReadOnlyList<DirectRunProviderEvent>? providerEvents = null)
+        IReadOnlyList<DirectRunProviderEvent>? providerEvents = null,
+        string sessionId = "pid:226")
     {
         var runsDirectory = Path.Combine(repoRoot, ".intent-cli", "runs");
         Directory.CreateDirectory(runsDirectory);
@@ -693,7 +724,7 @@ public sealed class RunCommandTests
                     UpstreamRequestRef = ResolveUpstreamRequestRef(executionUnit, entryKind),
                     Provider = "ReviewBot",
                     Model = "gpt-5.4-mini",
-                    SessionId = "pid:226",
+                    SessionId = sessionId,
                     RunStatus = runStatus,
                     RawLogRef = $".intent-cli/runs/{executionUnit}.provider.jsonl",
                     PacketRef = $".intent-cli/issues/{executionUnit}/packet.yaml",
@@ -724,6 +755,49 @@ public sealed class RunCommandTests
         File.WriteAllText(
             Path.Combine(runsDirectory, $"{executionUnit}.provider.jsonl"),
             string.Join(Environment.NewLine, providerEvents.Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+    }
+
+    private static void WriteDirectRunRequest(
+        string repoRoot,
+        string executionUnit,
+        string entryKind,
+        string providerSessionId)
+    {
+        var runsDirectory = Path.Combine(repoRoot, ".intent-cli", "runs");
+        Directory.CreateDirectory(runsDirectory);
+
+        File.WriteAllText(
+            Path.Combine(runsDirectory, $"{executionUnit}.request.json"),
+            DirectRunRequestArtifactJson.Serialize(
+                new DirectRunRequestArtifact
+                {
+                    SchemaVersion = "1",
+                    ExecutionUnit = executionUnit,
+                    EntryKind = entryKind,
+                    UpstreamRequestRef = ResolveUpstreamRequestRef(executionUnit, entryKind),
+                    Provider = "ReviewBot",
+                    Model = "gpt-5.4-mini",
+                    Transport = "responses",
+                    LaunchedAt = "2026-04-10T12:00:00.0000000+00:00",
+                    ProviderSessionId = providerSessionId,
+                    TransportSummary = "launched"
+                }));
+    }
+
+    private static DirectRunLaunchResult CreateDirectRunLaunchResult(string executionUnit, string providerSessionId)
+    {
+        return new DirectRunLaunchResult
+        {
+            RequestArtifactPath = $".intent-cli/runs/{executionUnit}.request.json",
+            ProviderEventLogPath = $".intent-cli/runs/{executionUnit}.provider.jsonl",
+            ResultArtifactPath = $".intent-cli/runs/{executionUnit}.result.json",
+            Provider = "ReviewBot",
+            Model = "gpt-5.4-mini",
+            Transport = "responses",
+            ProviderSessionId = providerSessionId,
+            TransportSummary = "launched",
+            RunStatus = "running"
+        };
     }
 
     private static string ResolveUpstreamRequestRef(string executionUnit, string entryKind)
