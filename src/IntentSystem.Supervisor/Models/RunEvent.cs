@@ -17,4 +17,24 @@ public sealed record RunEvent
     public string? CommentRef { get; init; }
 
     public string? Reason { get; init; }
+
+    public string? EntryKind { get; init; }
+
+    public string? Provider { get; init; }
+
+    public string? Model { get; init; }
+
+    public string? SessionId { get; init; }
+
+    public string? RunStatus { get; init; }
+
+    public string? RawLogRef { get; init; }
+
+    public string? ResultRef { get; init; }
+
+    public string? PacketRef { get; init; }
+
+    public string? ReviewContextRef { get; init; }
+
+    public string? WorktreePath { get; init; }
 }

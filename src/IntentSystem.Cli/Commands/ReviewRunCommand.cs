@@ -29,10 +29,18 @@ internal static class ReviewRunCommand
             {
                 writer.WriteLine($"Direct run request artifact: {result.DirectRun.RequestArtifactPath}");
                 writer.WriteLine($"Provider raw event log: {result.DirectRun.ProviderEventLogPath}");
+                if (!string.IsNullOrWhiteSpace(result.DirectRun.ResultArtifactPath))
+                {
+                    writer.WriteLine($"Normalized run result: {result.DirectRun.ResultArtifactPath}");
+                }
                 writer.WriteLine($"Direct provider: {result.DirectRun.Provider}");
                 writer.WriteLine($"Direct model: {result.DirectRun.Model}");
                 writer.WriteLine($"Direct transport: {result.DirectRun.Transport}");
                 writer.WriteLine($"Provider session: {result.DirectRun.ProviderSessionId}");
+                if (!string.IsNullOrWhiteSpace(result.DirectRun.RunStatus))
+                {
+                    writer.WriteLine($"Run status: {result.DirectRun.RunStatus}");
+                }
             }
             return 0;
         }

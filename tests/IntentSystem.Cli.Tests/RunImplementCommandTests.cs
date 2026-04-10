@@ -8,7 +8,7 @@ namespace IntentSystem.Cli.Tests;
 public sealed class RunImplementCommandTests
 {
     [Fact]
-    public void Execute_GivenActiveItemWithInputs_GeneratesHandoffArtifactWithoutMutatingStateOrRunLog()
+    public void Execute_GivenActiveItemWithInputs_GeneratesHandoffArtifactAndNormalizedRunResult()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -31,7 +31,6 @@ public sealed class RunImplementCommandTests
         var originalLauncherFactory = RunImplementCommand.DirectRunLauncherFactory;
 
         var originalQueueState = File.ReadAllText(queueStatePath);
-        var originalRunLog = File.ReadAllText(runLogPath);
 
         try
         {
@@ -53,10 +52,12 @@ public sealed class RunImplementCommandTests
             Assert.Contains("Latest linked PR: https://github.com/J-Tech-Japan/intent-system/pull/67", output, StringComparison.Ordinal);
             Assert.Contains("Direct run request artifact: .intent-cli/runs/G19.request.json", output, StringComparison.Ordinal);
             Assert.Contains("Provider raw event log: .intent-cli/runs/G19.provider.jsonl", output, StringComparison.Ordinal);
+            Assert.Contains("Normalized run result: .intent-cli/runs/G19.result.json", output, StringComparison.Ordinal);
             Assert.Contains("Direct provider: Claude", output, StringComparison.Ordinal);
             Assert.Contains("Direct model: default", output, StringComparison.Ordinal);
             Assert.Contains("Direct transport: stdio", output, StringComparison.Ordinal);
             Assert.Contains("Provider session: pid:4321", output, StringComparison.Ordinal);
+            Assert.Contains("Run status: running", output, StringComparison.Ordinal);
 
             var artifactPath = Path.Combine(repoRoot, ".intent-cli", "implement", "G19.request.md");
             Assert.True(File.Exists(artifactPath));
@@ -77,8 +78,43 @@ public sealed class RunImplementCommandTests
             Assert.Equal("stdio", directRunArtifact.Transport);
             Assert.Equal("pid:4321", directRunArtifact.ProviderSessionId);
 
+            var resultArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G19.result.json");
+            Assert.True(File.Exists(resultArtifactPath));
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+            Assert.Equal("G19", resultArtifact.ExecutionUnit);
+            Assert.Equal("implement", resultArtifact.EntryKind);
+            Assert.Equal("Claude", resultArtifact.Provider);
+            Assert.Equal("default", resultArtifact.Model);
+            Assert.Equal("pid:4321", resultArtifact.SessionId);
+            Assert.Equal("running", resultArtifact.RunStatus);
+            Assert.Equal(".intent-cli/runs/G19.provider.jsonl", resultArtifact.RawLogRef);
+            Assert.Equal(".intent-cli/issues/G19/packet.yaml", resultArtifact.PacketRef);
+            Assert.Equal(".intent-cli/issues/G19/review-context.md", resultArtifact.ReviewContextRef);
+            Assert.Equal("J-Tech-Japan/intent-system", resultArtifact.LinkedIssue?.Repo);
+            Assert.Equal(66, resultArtifact.LinkedIssue?.Number);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/66", resultArtifact.LinkedIssue?.Url);
+            Assert.Equal("J-Tech-Japan/intent-system", resultArtifact.LinkedPr?.Repo);
+            Assert.Equal(67, resultArtifact.LinkedPr?.Number);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/67", resultArtifact.LinkedPr?.Url);
+            Assert.EndsWith("/.intent-cli/worktrees/G19", resultArtifact.Worktree.Path, StringComparison.Ordinal);
+
             Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
-            Assert.Equal(originalRunLog, File.ReadAllText(runLogPath));
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            var lifecycleEvent = Assert.Single(runEvents, runEvent => runEvent.Event == "provider-lifecycle");
+            Assert.Equal("G19", lifecycleEvent.ExecutionUnit);
+            Assert.Equal("intent-cli", lifecycleEvent.By);
+            Assert.Equal("implement", lifecycleEvent.EntryKind);
+            Assert.Equal("Claude", lifecycleEvent.Provider);
+            Assert.Equal("default", lifecycleEvent.Model);
+            Assert.Equal("pid:4321", lifecycleEvent.SessionId);
+            Assert.Equal("running", lifecycleEvent.RunStatus);
+            Assert.Equal(".intent-cli/runs/G19.provider.jsonl", lifecycleEvent.RawLogRef);
+            Assert.Equal(".intent-cli/runs/G19.result.json", lifecycleEvent.ResultRef);
+            Assert.Equal(".intent-cli/issues/G19/packet.yaml", lifecycleEvent.PacketRef);
+            Assert.Equal(".intent-cli/issues/G19/review-context.md", lifecycleEvent.ReviewContextRef);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/66", lifecycleEvent.LinkedIssue);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/67", lifecycleEvent.LinkedPr);
+            Assert.EndsWith("/.intent-cli/worktrees/G19", lifecycleEvent.WorktreePath, StringComparison.Ordinal);
         }
         finally
         {
@@ -149,6 +185,44 @@ public sealed class RunImplementCommandTests
             Assert.EndsWith("/.intent-cli/worktrees/G19", workingDirectory, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/implement/G19.request.md", absoluteRequestArtifactPath, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/runs/G19.provider.jsonl", absoluteProviderEventLogPath, StringComparison.Ordinal);
+
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(absoluteProviderEventLogPath)
+                ?? throw new InvalidOperationException("Provider event log path did not contain a directory."));
+            var providerEvents = string.Join(
+                                     Environment.NewLine,
+                                     new[]
+                                     {
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "session-metadata",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 model = modelArg,
+                                                 transport = transportArg,
+                                                 command
+                                             })
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(1).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "provider-event",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 type = "ready"
+                                             })
+                                         })
+                                     }) + Environment.NewLine;
+            File.WriteAllText(absoluteProviderEventLogPath, providerEvents);
 
             return new DirectRunLaunchResult
             {

@@ -96,10 +96,18 @@ internal static class RunImplementRenderer
         {
             writer.WriteLine($"Direct run request artifact: {directRun.RequestArtifactPath}");
             writer.WriteLine($"Provider raw event log: {directRun.ProviderEventLogPath}");
+            if (!string.IsNullOrWhiteSpace(directRun.ResultArtifactPath))
+            {
+                writer.WriteLine($"Normalized run result: {directRun.ResultArtifactPath}");
+            }
             writer.WriteLine($"Direct provider: {directRun.Provider}");
             writer.WriteLine($"Direct model: {directRun.Model}");
             writer.WriteLine($"Direct transport: {directRun.Transport}");
             writer.WriteLine($"Provider session: {directRun.ProviderSessionId}");
+            if (!string.IsNullOrWhiteSpace(directRun.RunStatus))
+            {
+                writer.WriteLine($"Run status: {directRun.RunStatus}");
+            }
         }
     }
 

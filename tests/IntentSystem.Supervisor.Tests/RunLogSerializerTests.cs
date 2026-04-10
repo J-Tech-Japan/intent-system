@@ -73,6 +73,26 @@ public sealed class RunLogSerializerTests
     }
 
     [Fact]
+    public void DeserializeLine_GivenProviderLifecycleFields_ReadsNormalizedProviderContext()
+    {
+        var line =
+            """{"ts":"2026-04-09T10:15:00Z","execution_unit":"G19","event":"provider-lifecycle","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/66","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/67","entry_kind":"implement","provider":"Claude","model":"default","session_id":"pid:4321","run_status":"running","raw_log_ref":".intent-cli/runs/G19.provider.jsonl","result_ref":".intent-cli/runs/G19.result.json","packet_ref":".intent-cli/issues/G19/packet.yaml","review_context_ref":".intent-cli/issues/G19/review-context.md","worktree_path":"/repo/.intent-cli/worktrees/G19"}""";
+
+        var runEvent = RunLogSerializer.DeserializeLine(line);
+
+        Assert.Equal("implement", runEvent.EntryKind);
+        Assert.Equal("Claude", runEvent.Provider);
+        Assert.Equal("default", runEvent.Model);
+        Assert.Equal("pid:4321", runEvent.SessionId);
+        Assert.Equal("running", runEvent.RunStatus);
+        Assert.Equal(".intent-cli/runs/G19.provider.jsonl", runEvent.RawLogRef);
+        Assert.Equal(".intent-cli/runs/G19.result.json", runEvent.ResultRef);
+        Assert.Equal(".intent-cli/issues/G19/packet.yaml", runEvent.PacketRef);
+        Assert.Equal(".intent-cli/issues/G19/review-context.md", runEvent.ReviewContextRef);
+        Assert.Equal("/repo/.intent-cli/worktrees/G19", runEvent.WorktreePath);
+    }
+
+    [Fact]
     public void SerializeLine_GivenNullOptionalFields_OmitsThemFromCompactJson()
     {
         var runEvent = new RunEvent
@@ -94,6 +114,16 @@ public sealed class RunLogSerializerTests
         Assert.False(document.RootElement.TryGetProperty("linked_pr", out _));
         Assert.False(document.RootElement.TryGetProperty("comment_ref", out _));
         Assert.False(document.RootElement.TryGetProperty("reason", out _));
+        Assert.False(document.RootElement.TryGetProperty("entry_kind", out _));
+        Assert.False(document.RootElement.TryGetProperty("provider", out _));
+        Assert.False(document.RootElement.TryGetProperty("model", out _));
+        Assert.False(document.RootElement.TryGetProperty("session_id", out _));
+        Assert.False(document.RootElement.TryGetProperty("run_status", out _));
+        Assert.False(document.RootElement.TryGetProperty("raw_log_ref", out _));
+        Assert.False(document.RootElement.TryGetProperty("result_ref", out _));
+        Assert.False(document.RootElement.TryGetProperty("packet_ref", out _));
+        Assert.False(document.RootElement.TryGetProperty("review_context_ref", out _));
+        Assert.False(document.RootElement.TryGetProperty("worktree_path", out _));
         Assert.DoesNotContain("\n", serialized, StringComparison.Ordinal);
     }
 }
