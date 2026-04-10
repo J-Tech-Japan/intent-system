@@ -96,9 +96,13 @@ public sealed class RunFixCommandTests
             Assert.Equal(".intent-cli/runs/G20.provider.jsonl", resultArtifact.RawLogRef);
             Assert.Equal(".intent-cli/issues/G20/packet.yaml", resultArtifact.PacketRef);
             Assert.Equal(".intent-cli/issues/G20/review-context.md", resultArtifact.ReviewContextRef);
-            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/68", resultArtifact.LinkedIssueUrl);
-            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/69", resultArtifact.LinkedPrUrl);
-            Assert.EndsWith("/.intent-cli/worktrees/G20", resultArtifact.WorktreePath, StringComparison.Ordinal);
+            Assert.Equal("J-Tech-Japan/intent-system", resultArtifact.LinkedIssue?.Repo);
+            Assert.Equal(68, resultArtifact.LinkedIssue?.Number);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/68", resultArtifact.LinkedIssue?.Url);
+            Assert.Equal("J-Tech-Japan/intent-system", resultArtifact.LinkedPr?.Repo);
+            Assert.Equal(69, resultArtifact.LinkedPr?.Number);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/69", resultArtifact.LinkedPr?.Url);
+            Assert.EndsWith("/.intent-cli/worktrees/G20", resultArtifact.Worktree.Path, StringComparison.Ordinal);
 
             Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
             var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));

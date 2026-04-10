@@ -89,9 +89,11 @@ public sealed class ReviewRunCommandTests
             Assert.Equal(".intent-cli/runtime-runs/G9.provider.jsonl", resultArtifact.RawLogRef);
             Assert.Equal(".intent-cli/issues/G9/review-context.md", resultArtifact.ReviewContextRef);
             Assert.Equal(".intent-cli/issues/G9/packet.yaml", resultArtifact.PacketRef);
-            Assert.Null(resultArtifact.LinkedIssueUrl);
-            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/45", resultArtifact.LinkedPrUrl);
-            Assert.EndsWith("/.intent-cli/worktrees/G9", resultArtifact.WorktreePath, StringComparison.Ordinal);
+            Assert.Null(resultArtifact.LinkedIssue);
+            Assert.Equal("J-Tech-Japan/intent-system", resultArtifact.LinkedPr?.Repo);
+            Assert.Equal(45, resultArtifact.LinkedPr?.Number);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/45", resultArtifact.LinkedPr?.Url);
+            Assert.EndsWith("/.intent-cli/worktrees/G9", resultArtifact.Worktree.Path, StringComparison.Ordinal);
 
             var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
             var lifecycleEvent = Assert.Single(runEvents, runEvent => runEvent.Event == "provider-lifecycle");

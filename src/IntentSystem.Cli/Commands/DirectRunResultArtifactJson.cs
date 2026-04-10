@@ -35,14 +35,44 @@ internal sealed record DirectRunResultArtifact
     [JsonPropertyName("review_context_ref")]
     public required string ReviewContextRef { get; init; }
 
-    [JsonPropertyName("linked_issue_url")]
-    public string? LinkedIssueUrl { get; init; }
+    [JsonPropertyName("linked_issue")]
+    public DirectRunLinkedIssueContext? LinkedIssue { get; init; }
 
-    [JsonPropertyName("linked_pr_url")]
-    public string? LinkedPrUrl { get; init; }
+    [JsonPropertyName("linked_pr")]
+    public DirectRunLinkedPullRequestContext? LinkedPr { get; init; }
 
-    [JsonPropertyName("worktree_path")]
-    public required string WorktreePath { get; init; }
+    [JsonPropertyName("worktree")]
+    public required DirectRunWorktreeContext Worktree { get; init; }
+}
+
+internal sealed record DirectRunLinkedIssueContext
+{
+    [JsonPropertyName("repo")]
+    public required string Repo { get; init; }
+
+    [JsonPropertyName("number")]
+    public required int Number { get; init; }
+
+    [JsonPropertyName("url")]
+    public required string Url { get; init; }
+}
+
+internal sealed record DirectRunLinkedPullRequestContext
+{
+    [JsonPropertyName("repo")]
+    public string? Repo { get; init; }
+
+    [JsonPropertyName("number")]
+    public int? Number { get; init; }
+
+    [JsonPropertyName("url")]
+    public required string Url { get; init; }
+}
+
+internal sealed record DirectRunWorktreeContext
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
 }
 
 internal static class DirectRunResultArtifactJson

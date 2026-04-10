@@ -277,9 +277,19 @@ internal static class DirectRunCommandSupport
             RawLogRef = launchResult.ProviderEventLogPath,
             PacketRef = queueItem.PacketPaths.Yaml,
             ReviewContextRef = queueItem.PacketPaths.ReviewContext,
-            LinkedIssueUrl = queueItem.LinkedIssue?.Url,
-            LinkedPrUrl = latestLinkedPr,
-            WorktreePath = worktreePath
+            LinkedIssue = queueItem.LinkedIssue is null
+                ? null
+                : new DirectRunLinkedIssueContext
+                {
+                    Repo = queueItem.LinkedIssue.Repo,
+                    Number = queueItem.LinkedIssue.Number,
+                    Url = queueItem.LinkedIssue.Url
+                },
+            LinkedPr = CreateLinkedPullRequestContext(latestLinkedPr),
+            Worktree = new DirectRunWorktreeContext
+            {
+                Path = worktreePath
+            }
         };
 
         var resultDirectoryPath = Path.GetDirectoryName(absoluteResultArtifactPath)
@@ -298,8 +308,8 @@ internal static class DirectRunCommandSupport
                 ExecutionUnit = executionUnit,
                 Event = LifecycleEventName,
                 By = LifecycleEventActor,
-                LinkedIssue = artifact.LinkedIssueUrl,
-                LinkedPr = artifact.LinkedPrUrl,
+                LinkedIssue = artifact.LinkedIssue?.Url,
+                LinkedPr = artifact.LinkedPr?.Url,
                 EntryKind = entryKind,
                 Provider = provider,
                 Model = model,
@@ -309,7 +319,7 @@ internal static class DirectRunCommandSupport
                 ResultRef = resultArtifactPath,
                 PacketRef = artifact.PacketRef,
                 ReviewContextRef = artifact.ReviewContextRef,
-                WorktreePath = artifact.WorktreePath
+                WorktreePath = artifact.Worktree.Path
             }) + Environment.NewLine);
 
         return new DirectRunSynthesisResult
@@ -441,6 +451,55 @@ internal static class DirectRunCommandSupport
             var normalized when !string.IsNullOrWhiteSpace(normalized) => normalized,
             _ => "running"
         };
+    }
+
+    private static DirectRunLinkedPullRequestContext? CreateLinkedPullRequestContext(string? linkedPrUrl)
+    {
+        if (string.IsNullOrWhiteSpace(linkedPrUrl))
+        {
+            return null;
+        }
+
+        var repo = default(string);
+        var number = default(int?);
+
+        if (TryParseGitHubPullRequestUrl(linkedPrUrl, out var parsedRepo, out var parsedNumber))
+        {
+            repo = parsedRepo;
+            number = parsedNumber;
+        }
+
+        return new DirectRunLinkedPullRequestContext
+        {
+            Repo = repo,
+            Number = number,
+            Url = linkedPrUrl
+        };
+    }
+
+    private static bool TryParseGitHubPullRequestUrl(
+        string pullRequestUrl,
+        out string repo,
+        out int number)
+    {
+        repo = string.Empty;
+        number = 0;
+
+        if (!Uri.TryCreate(pullRequestUrl, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 4
+            || !string.Equals(segments[2], "pull", StringComparison.Ordinal)
+            || !int.TryParse(segments[3], out number))
+        {
+            return false;
+        }
+
+        repo = $"{segments[0]}/{segments[1]}";
+        return true;
     }
 
     private sealed record DirectRunSynthesisResult

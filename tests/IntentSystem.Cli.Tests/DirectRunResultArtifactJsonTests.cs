@@ -19,9 +19,22 @@ public sealed class DirectRunResultArtifactJsonTests
             RawLogRef = ".intent-cli/runs/G19.provider.jsonl",
             PacketRef = ".intent-cli/issues/G19/packet.yaml",
             ReviewContextRef = ".intent-cli/issues/G19/review-context.md",
-            LinkedIssueUrl = "https://github.com/J-Tech-Japan/intent-system/issues/66",
-            LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/67",
-            WorktreePath = "/repo/.intent-cli/worktrees/G19"
+            LinkedIssue = new DirectRunLinkedIssueContext
+            {
+                Repo = "J-Tech-Japan/intent-system",
+                Number = 66,
+                Url = "https://github.com/J-Tech-Japan/intent-system/issues/66"
+            },
+            LinkedPr = new DirectRunLinkedPullRequestContext
+            {
+                Repo = "J-Tech-Japan/intent-system",
+                Number = 67,
+                Url = "https://github.com/J-Tech-Japan/intent-system/pull/67"
+            },
+            Worktree = new DirectRunWorktreeContext
+            {
+                Path = "/repo/.intent-cli/worktrees/G19"
+            }
         };
 
         var json = DirectRunResultArtifactJson.Serialize(artifact);
@@ -36,8 +49,12 @@ public sealed class DirectRunResultArtifactJsonTests
         Assert.Equal(".intent-cli/runs/G19.provider.jsonl", roundTripped.RawLogRef);
         Assert.Equal(".intent-cli/issues/G19/packet.yaml", roundTripped.PacketRef);
         Assert.Equal(".intent-cli/issues/G19/review-context.md", roundTripped.ReviewContextRef);
-        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/66", roundTripped.LinkedIssueUrl);
-        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/67", roundTripped.LinkedPrUrl);
-        Assert.Equal("/repo/.intent-cli/worktrees/G19", roundTripped.WorktreePath);
+        Assert.Equal("J-Tech-Japan/intent-system", roundTripped.LinkedIssue?.Repo);
+        Assert.Equal(66, roundTripped.LinkedIssue?.Number);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/66", roundTripped.LinkedIssue?.Url);
+        Assert.Equal("J-Tech-Japan/intent-system", roundTripped.LinkedPr?.Repo);
+        Assert.Equal(67, roundTripped.LinkedPr?.Number);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/67", roundTripped.LinkedPr?.Url);
+        Assert.Equal("/repo/.intent-cli/worktrees/G19", roundTripped.Worktree.Path);
     }
 }
