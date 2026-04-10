@@ -35,6 +35,8 @@ public sealed class ReviewRunCommandTests
                 "ReviewBot",
                 "gpt-5.4-mini",
                 "grpc",
+                "reviewbot",
+                ["launch", "--model", "{model}", "--artifact", "{request_artifact_path}"],
                 "grpc transport launched via 'reviewbot' in '/repo' for provider 'ReviewBot'.");
 
             var exitCode = ReviewRunCommand.Execute(CreateContext(repoRoot), ["G9"], writer);
@@ -188,11 +190,15 @@ public sealed class ReviewRunCommandTests
                 DirectRun = new DirectRunConfig
                 {
                     ArtifactRoot = ".intent-cli/runtime-runs",
+                    Command = "fallback-review-launcher",
+                    Args = ["--prompt", "{prompt}"],
                     Review = new DirectRunEntryConfig
                     {
                         Provider = "ReviewBot",
                         Model = "gpt-5.4-mini",
-                        Transport = "grpc"
+                        Transport = "grpc",
+                        Command = "reviewbot",
+                        Args = ["launch", "--model", "{model}", "--artifact", "{request_artifact_path}"]
                     }
                 }
             }
@@ -303,6 +309,8 @@ public sealed class ReviewRunCommandTests
         string provider,
         string model,
         string transport,
+        string command,
+        IReadOnlyList<string> argsTemplate,
         string transportSummary) : IDirectRunLauncher
     {
         public DirectRunLaunchResult Launch(
@@ -312,6 +320,8 @@ public sealed class ReviewRunCommandTests
             string providerArg,
             string modelArg,
             string transportArg,
+            string commandArg,
+            IReadOnlyList<string> argsTemplateArg,
             DateTimeOffset launchedAt,
             string workingDirectory,
             string absoluteRequestArtifactPath)
@@ -322,6 +332,8 @@ public sealed class ReviewRunCommandTests
             Assert.Equal(provider, providerArg);
             Assert.Equal(model, modelArg);
             Assert.Equal(transport, transportArg);
+            Assert.Equal(command, commandArg);
+            Assert.Equal(argsTemplate, argsTemplateArg);
             Assert.EndsWith("/repo", workingDirectory, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/reviews/G9.request.json", absoluteRequestArtifactPath, StringComparison.Ordinal);
 

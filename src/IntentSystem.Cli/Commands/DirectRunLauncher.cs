@@ -22,6 +22,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string provider,
         string model,
         string transport,
+        string command,
+        IReadOnlyList<string> argsTemplate,
         DateTimeOffset launchedAt,
         string workingDirectory,
         string absoluteRequestArtifactPath)
@@ -32,20 +34,30 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(transport);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentNullException.ThrowIfNull(argsTemplate);
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(absoluteRequestArtifactPath);
 
-        var command = ResolveCommand(provider, model, absoluteRequestArtifactPath);
+        var arguments = ResolveArguments(
+            executionUnit,
+            entryKind,
+            requestArtifactPath,
+            provider,
+            model,
+            transport,
+            absoluteRequestArtifactPath,
+            argsTemplate);
         var process = processRunner.Start(
             workingDirectory,
-            command.FileName,
-            command.Arguments,
+            command,
+            arguments,
             DefaultEarlyExitWindow);
 
         if (process.ExitedEarly && process.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"Direct run launch failed for provider '{provider}' using command '{command.FileName}' with exit code {process.ExitCode}.");
+                $"Direct run launch failed for provider '{provider}' using command '{command}' with exit code {process.ExitCode}.");
         }
 
         return new DirectRunLaunchResult
@@ -56,23 +68,34 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             Transport = transport,
             ProviderSessionId = $"pid:{process.ProcessId}",
             TransportSummary =
-                $"{transport} transport launched via '{command.FileName}' in '{workingDirectory}' for provider '{provider}'."
+                $"{transport} transport launched via '{command}' in '{workingDirectory}' for provider '{provider}'."
         };
     }
 
-    private static (string FileName, IReadOnlyList<string> Arguments) ResolveCommand(
+    private static IReadOnlyList<string> ResolveArguments(
+        string executionUnit,
+        string entryKind,
+        string requestArtifactPath,
         string provider,
         string model,
-        string absoluteRequestArtifactPath)
+        string transport,
+        string absoluteRequestArtifactPath,
+        IReadOnlyList<string> argsTemplate)
     {
         var prompt =
             $"Use the request artifact at '{absoluteRequestArtifactPath}' as the bounded source of truth for this direct run.";
 
-        return provider.Trim().ToLowerInvariant() switch
-        {
-            "codex" => ("codex", ["exec", "--model", model, prompt]),
-            "claude" => ("claude", ["--print", "--model", model, "--output-format", "json", prompt]),
-            _ => (provider, [prompt])
-        };
+        return argsTemplate
+            .Select(argument => argument
+                .Replace("{execution_unit}", executionUnit, StringComparison.Ordinal)
+                .Replace("{entry_kind}", entryKind, StringComparison.Ordinal)
+                .Replace("{provider}", provider, StringComparison.Ordinal)
+                .Replace("{model}", model, StringComparison.Ordinal)
+                .Replace("{transport}", transport, StringComparison.Ordinal)
+                .Replace("{request_artifact_path}", absoluteRequestArtifactPath, StringComparison.Ordinal)
+                .Replace("{upstream_request_artifact_path}", absoluteRequestArtifactPath, StringComparison.Ordinal)
+                .Replace("{direct_run_artifact_path}", requestArtifactPath, StringComparison.Ordinal)
+                .Replace("{prompt}", prompt, StringComparison.Ordinal))
+            .ToArray();
     }
 }

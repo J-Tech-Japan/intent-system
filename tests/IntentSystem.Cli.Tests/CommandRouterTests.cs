@@ -5234,6 +5234,8 @@ recommended_updates:
             string provider,
             string model,
             string transport,
+            string command,
+            IReadOnlyList<string> argsTemplate,
             DateTimeOffset launchedAt,
             string workingDirectory,
             string absoluteRequestArtifactPath)
@@ -5245,7 +5247,7 @@ recommended_updates:
                 Model = model,
                 Transport = transport,
                 ProviderSessionId = "pid:1234",
-                TransportSummary = $"{transport} transport launched via '{provider}' in '{workingDirectory}' for provider '{provider}'."
+                TransportSummary = $"{transport} transport launched via '{command}' in '{workingDirectory}' for provider '{provider}'."
             };
         }
     }

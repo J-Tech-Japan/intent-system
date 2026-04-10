@@ -32,6 +32,8 @@ public sealed class CliConfigLoaderTests
         Assert.Equal(string.Empty, config.DirectRun.Provider);
         Assert.Equal("default", config.DirectRun.Model);
         Assert.Equal("stdio", config.DirectRun.Transport);
+        Assert.Equal(string.Empty, config.DirectRun.Command);
+        Assert.Empty(config.DirectRun.Args);
     }
 
     [Fact]
@@ -139,18 +141,25 @@ public sealed class CliConfigLoaderTests
         provider = "Codex"
         model = "gpt-5.4"
         transport = "stdio"
+        command = "codex"
+        args = ["exec", "--model", "{model}", "{prompt}"]
 
         [direct_backend.implement]
         model = "gpt-5.4-codex"
+        command = "codex-experimental"
+        args = ["run", "--input", "{request_artifact_path}"]
 
         [direct_backend.fix]
         provider = "Claude"
         transport = "http"
+        command = "claude"
 
         [direct_backend.review]
         provider = "ReviewBot"
         model = "gpt-5.4-mini"
         transport = "grpc"
+        command = "reviewbot"
+        args = ["launch", "--model", "{model}", "--artifact", "{request_artifact_path}"]
         """;
 
         var config = CliConfigLoader.Load(toml);
@@ -159,15 +168,23 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("Codex", config.DirectRun.Provider);
         Assert.Equal("gpt-5.4", config.DirectRun.Model);
         Assert.Equal("stdio", config.DirectRun.Transport);
+        Assert.Equal("codex", config.DirectRun.Command);
+        Assert.Equal(["exec", "--model", "{model}", "{prompt}"], config.DirectRun.Args);
         Assert.Equal(string.Empty, config.DirectRun.Implement.Provider);
         Assert.Equal("gpt-5.4-codex", config.DirectRun.Implement.Model);
         Assert.Equal(string.Empty, config.DirectRun.Implement.Transport);
+        Assert.Equal("codex-experimental", config.DirectRun.Implement.Command);
+        Assert.Equal(["run", "--input", "{request_artifact_path}"], config.DirectRun.Implement.Args);
         Assert.Equal("Claude", config.DirectRun.Fix.Provider);
         Assert.Equal(string.Empty, config.DirectRun.Fix.Model);
         Assert.Equal("http", config.DirectRun.Fix.Transport);
+        Assert.Equal("claude", config.DirectRun.Fix.Command);
+        Assert.Empty(config.DirectRun.Fix.Args);
         Assert.Equal("ReviewBot", config.DirectRun.Review.Provider);
         Assert.Equal("gpt-5.4-mini", config.DirectRun.Review.Model);
         Assert.Equal("grpc", config.DirectRun.Review.Transport);
+        Assert.Equal("reviewbot", config.DirectRun.Review.Command);
+        Assert.Equal(["launch", "--model", "{model}", "--artifact", "{request_artifact_path}"], config.DirectRun.Review.Args);
     }
 
     [Fact]

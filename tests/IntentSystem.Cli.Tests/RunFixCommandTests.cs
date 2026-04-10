@@ -117,6 +117,8 @@ public sealed class RunFixCommandTests
             string providerArg,
             string modelArg,
             string transportArg,
+            string command,
+            IReadOnlyList<string> argsTemplate,
             DateTimeOffset launchedAt,
             string workingDirectory,
             string absoluteRequestArtifactPath)
@@ -127,6 +129,8 @@ public sealed class RunFixCommandTests
             Assert.Equal(provider, providerArg);
             Assert.Equal(model, modelArg);
             Assert.Equal(transport, transportArg);
+            Assert.Equal("claude", command);
+            Assert.Equal(["--print", "--model", "{model}", "--output-format", "json", "{prompt}"], argsTemplate);
             Assert.EndsWith("/.intent-cli/worktrees/G20", workingDirectory, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/fix/G20.request.md", absoluteRequestArtifactPath, StringComparison.Ordinal);
 

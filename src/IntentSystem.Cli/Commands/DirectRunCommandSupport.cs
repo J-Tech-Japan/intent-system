@@ -7,6 +7,19 @@ internal enum DirectRunEntryKind
     Review
 }
 
+internal sealed record DirectRunResolvedPolicy
+{
+    public required string Provider { get; init; }
+
+    public required string Model { get; init; }
+
+    public required string Transport { get; init; }
+
+    public required string Command { get; init; }
+
+    public required IReadOnlyList<string> ArgsTemplate { get; init; }
+}
+
 internal static class DirectRunCommandSupport
 {
     public static DirectRunLaunchResult CreateAndLaunch(
@@ -38,6 +51,8 @@ internal static class DirectRunCommandSupport
             policy.Provider,
             policy.Model,
             policy.Transport,
+            policy.Command,
+            policy.ArgsTemplate,
             launchedAt,
             workingDirectory,
             absoluteUpstreamRequestPath);
@@ -64,7 +79,7 @@ internal static class DirectRunCommandSupport
         return launchResult;
     }
 
-    private static (string Provider, string Model, string Transport) ResolvePolicy(
+    private static DirectRunResolvedPolicy ResolvePolicy(
         CliContext context,
         DirectRunEntryKind entryKind)
     {
@@ -91,8 +106,20 @@ internal static class DirectRunCommandSupport
             entryConfig.Transport,
             directRun.Transport,
             CliRuntimeContracts.DefaultDirectRunTransport);
+        var command = FirstNonEmpty(entryConfig.Command, directRun.Command, ResolveDefaultCommand(provider));
+        var argsTemplate = FirstNonEmptyList(
+            entryConfig.Args,
+            directRun.Args,
+            ResolveDefaultArgsTemplate(provider));
 
-        return (provider, model, transport);
+        return new DirectRunResolvedPolicy
+        {
+            Provider = provider,
+            Model = model,
+            Transport = transport,
+            Command = command,
+            ArgsTemplate = argsTemplate
+        };
     }
 
     private static string ResolveArtifactPath(CliContext context, string executionUnit)
@@ -123,5 +150,38 @@ internal static class DirectRunCommandSupport
         }
 
         throw new InvalidOperationException("Direct run policy resolution must produce a non-empty value.");
+    }
+
+    private static IReadOnlyList<string> FirstNonEmptyList(params IReadOnlyList<string>[] values)
+    {
+        foreach (var value in values)
+        {
+            if (value.Count > 0)
+            {
+                return value;
+            }
+        }
+
+        throw new InvalidOperationException("Direct run policy resolution must produce a non-empty args template.");
+    }
+
+    private static string ResolveDefaultCommand(string provider)
+    {
+        return provider.Trim().ToLowerInvariant() switch
+        {
+            "codex" => "codex",
+            "claude" => "claude",
+            _ => provider
+        };
+    }
+
+    private static IReadOnlyList<string> ResolveDefaultArgsTemplate(string provider)
+    {
+        return provider.Trim().ToLowerInvariant() switch
+        {
+            "codex" => ["exec", "--model", "{model}", "{prompt}"],
+            "claude" => ["--print", "--model", "{model}", "--output-format", "json", "{prompt}"],
+            _ => ["{prompt}"]
+        };
     }
 }

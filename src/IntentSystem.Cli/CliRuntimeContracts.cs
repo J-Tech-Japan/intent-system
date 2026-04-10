@@ -23,6 +23,8 @@ internal static class CliRuntimeContracts
     public const string ProviderKey = "provider";
     public const string ModelKey = "model";
     public const string TransportKey = "transport";
+    public const string CommandKey = "command";
+    public const string ArgsKey = "args";
     public const string StaleHeartbeatTimeoutMinutesKey = "stale_heartbeat_timeout_minutes";
     public const string RetryDelayMinutesKey = "retry_delay_minutes";
     public const string RetryBudgetKey = "retry_budget";

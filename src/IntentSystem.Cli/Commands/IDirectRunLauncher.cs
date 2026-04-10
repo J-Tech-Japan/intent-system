@@ -9,6 +9,8 @@ internal interface IDirectRunLauncher
         string provider,
         string model,
         string transport,
+        string command,
+        IReadOnlyList<string> argsTemplate,
         DateTimeOffset launchedAt,
         string workingDirectory,
         string absoluteRequestArtifactPath);

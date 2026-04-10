@@ -204,6 +204,10 @@ internal static class CliConfigLoader
                 ?? CliRuntimeContracts.DefaultDirectRunModel,
             Transport = TryGetOptionalString(directRunTable, CliRuntimeContracts.TransportKey)
                 ?? CliRuntimeContracts.DefaultDirectRunTransport,
+            Command = TryGetOptionalString(directRunTable, CliRuntimeContracts.CommandKey)
+                ?? string.Empty,
+            Args = TryGetOptionalStringArray(directRunTable, CliRuntimeContracts.ArgsKey)
+                ?? [],
             Implement = ReadDirectRunEntry(directRunTable, CliRuntimeContracts.ImplementRoleKey),
             Fix = ReadDirectRunEntry(directRunTable, "fix"),
             Review = ReadDirectRunEntry(directRunTable, CliRuntimeContracts.ReviewRoleKey)
@@ -225,7 +229,9 @@ internal static class CliConfigLoader
         {
             Provider = TryGetOptionalString(entryTable, CliRuntimeContracts.ProviderKey) ?? string.Empty,
             Model = TryGetOptionalString(entryTable, CliRuntimeContracts.ModelKey) ?? string.Empty,
-            Transport = TryGetOptionalString(entryTable, CliRuntimeContracts.TransportKey) ?? string.Empty
+            Transport = TryGetOptionalString(entryTable, CliRuntimeContracts.TransportKey) ?? string.Empty,
+            Command = TryGetOptionalString(entryTable, CliRuntimeContracts.CommandKey) ?? string.Empty,
+            Args = TryGetOptionalStringArray(entryTable, CliRuntimeContracts.ArgsKey) ?? []
         };
     }
 
@@ -290,5 +296,36 @@ internal static class CliConfigLoader
 
         throw new InvalidOperationException(
             $"CLI config value '{key}' must be a positive integer.");
+    }
+
+    private static IReadOnlyList<string>? TryGetOptionalStringArray(TomlTable table, string key)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        if (!table.TryGetValue(key, out var rawValue))
+        {
+            return null;
+        }
+
+        if (rawValue is not TomlArray arrayValue)
+        {
+            throw new InvalidOperationException(
+                $"CLI config value '{key}' must be an array of non-empty strings.");
+        }
+
+        var values = new List<string>(arrayValue.Count);
+        foreach (var item in arrayValue)
+        {
+            if (item is not string textValue || string.IsNullOrWhiteSpace(textValue))
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value '{key}' must be an array of non-empty strings.");
+            }
+
+            values.Add(textValue);
+        }
+
+        return values;
     }
 }

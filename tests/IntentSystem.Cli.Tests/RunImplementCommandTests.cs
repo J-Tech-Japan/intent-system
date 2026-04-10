@@ -128,6 +128,8 @@ public sealed class RunImplementCommandTests
             string providerArg,
             string modelArg,
             string transportArg,
+            string command,
+            IReadOnlyList<string> argsTemplate,
             DateTimeOffset launchedAt,
             string workingDirectory,
             string absoluteRequestArtifactPath)
@@ -138,6 +140,8 @@ public sealed class RunImplementCommandTests
             Assert.Equal(provider, providerArg);
             Assert.Equal(model, modelArg);
             Assert.Equal(transport, transportArg);
+            Assert.Equal("claude", command);
+            Assert.Equal(["--print", "--model", "{model}", "--output-format", "json", "{prompt}"], argsTemplate);
             Assert.EndsWith("/.intent-cli/worktrees/G19", workingDirectory, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/implement/G19.request.md", absoluteRequestArtifactPath, StringComparison.Ordinal);
 

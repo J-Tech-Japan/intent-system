@@ -57,6 +57,10 @@ internal sealed record DirectRunConfig
 
     public string Transport { get; init; } = CliRuntimeContracts.DefaultDirectRunTransport;
 
+    public string Command { get; init; } = string.Empty;
+
+    public IReadOnlyList<string> Args { get; init; } = [];
+
     public DirectRunEntryConfig Implement { get; init; } = new();
 
     public DirectRunEntryConfig Fix { get; init; } = new();
@@ -71,4 +75,8 @@ internal sealed record DirectRunEntryConfig
     public string Model { get; init; } = string.Empty;
 
     public string Transport { get; init; } = string.Empty;
+
+    public string Command { get; init; } = string.Empty;
+
+    public IReadOnlyList<string> Args { get; init; } = [];
 }

@@ -5,7 +5,7 @@ namespace IntentSystem.Cli.Tests;
 public sealed class DirectRunLauncherTests
 {
     [Fact]
-    public void Launch_GivenCodexProvider_StartsCodexExecWithPromptAgainstArtifact()
+    public void Launch_GivenConfiguredCommandPolicy_StartsConfiguredExecutableWithExpandedArguments()
     {
         var runner = new FakeDirectRunProcessRunner
         {
@@ -22,22 +22,39 @@ public sealed class DirectRunLauncherTests
             "G19",
             "implement",
             ".intent-cli/runs/G19.request.json",
-            "Codex",
+            "ReviewBot",
             "gpt-5.4",
-            "stdio",
+            "grpc",
+            "review-runner",
+            ["launch", "--entry", "{entry_kind}", "--unit", "{execution_unit}", "--model", "{model}", "--artifact", "{request_artifact_path}", "--run-artifact", "{direct_run_artifact_path}", "{prompt}"],
             DateTimeOffset.Parse("2026-04-09T10:15:00Z"),
             "/repo/.intent-cli/worktrees/G19",
             "/repo/.intent-cli/implement/G19.request.md");
 
-        Assert.Equal("codex", runner.FileName);
+        Assert.Equal("review-runner", runner.FileName);
         Assert.Equal("/repo/.intent-cli/worktrees/G19", runner.WorkingDirectory);
-        Assert.Equal(["exec", "--model", "gpt-5.4", "Use the request artifact at '/repo/.intent-cli/implement/G19.request.md' as the bounded source of truth for this direct run."], runner.Arguments);
+        Assert.Equal(
+            [
+                "launch",
+                "--entry",
+                "implement",
+                "--unit",
+                "G19",
+                "--model",
+                "gpt-5.4",
+                "--artifact",
+                "/repo/.intent-cli/implement/G19.request.md",
+                "--run-artifact",
+                ".intent-cli/runs/G19.request.json",
+                "Use the request artifact at '/repo/.intent-cli/implement/G19.request.md' as the bounded source of truth for this direct run."
+            ],
+            runner.Arguments);
         Assert.Equal("pid:4321", result.ProviderSessionId);
-        Assert.Contains("stdio transport launched via 'codex'", result.TransportSummary, StringComparison.Ordinal);
+        Assert.Contains("grpc transport launched via 'review-runner'", result.TransportSummary, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Launch_GivenClaudeProvider_StartsClaudePrintWithPromptAgainstArtifact()
+    public void Launch_GivenUpstreamRequestArtifactPlaceholder_ExpandsAlias()
     {
         var runner = new FakeDirectRunProcessRunner
         {
@@ -57,13 +74,15 @@ public sealed class DirectRunLauncherTests
             "Claude",
             "sonnet",
             "stdio",
+            "claude",
+            ["--artifact", "{upstream_request_artifact_path}", "--model", "{model}"],
             DateTimeOffset.Parse("2026-04-09T10:25:00Z"),
             "/repo/.intent-cli/worktrees/G20",
             "/repo/.intent-cli/fix/G20.request.md");
 
         Assert.Equal("claude", runner.FileName);
         Assert.Equal(
-            ["--print", "--model", "sonnet", "--output-format", "json", "Use the request artifact at '/repo/.intent-cli/fix/G20.request.md' as the bounded source of truth for this direct run."],
+            ["--artifact", "/repo/.intent-cli/fix/G20.request.md", "--model", "sonnet"],
             runner.Arguments);
         Assert.Equal("pid:8765", result.ProviderSessionId);
     }
@@ -89,6 +108,8 @@ public sealed class DirectRunLauncherTests
             "Codex",
             "gpt-5.4-mini",
             "grpc",
+            "codex",
+            ["exec", "{prompt}"],
             DateTimeOffset.Parse("2026-04-09T10:35:00Z"),
             "/repo",
             "/repo/.intent-cli/reviews/G9.request.json"));
