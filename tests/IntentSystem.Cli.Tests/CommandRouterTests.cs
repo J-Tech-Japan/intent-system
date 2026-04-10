@@ -8,7 +8,6 @@ using IntentSystem.Review;
 using IntentSystem.Review.Serialization;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
-using IntentSystem.WorkerAdapter.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -31,7 +30,6 @@ public sealed class CommandRouterTests
         Assert.Contains("review", output, StringComparison.Ordinal);
         Assert.Contains("interview", output, StringComparison.Ordinal);
         Assert.Contains("clarify", output, StringComparison.Ordinal);
-        Assert.Contains("workflow", output, StringComparison.Ordinal);
         Assert.Contains("intake", output, StringComparison.Ordinal);
         Assert.Contains("generate-from-current", output, StringComparison.Ordinal);
     }
@@ -3209,63 +3207,6 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
-    public void Execute_GivenWorkflowRenderCommand_DispatchesToWorkflowRenderer()
-    {
-        using var tempDirectory = new TemporaryDirectory();
-        var repoRoot = tempDirectory.CreateDirectory("repo");
-        tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "queue-state.json"),
-            QueueStateSerializer.Serialize(CreateWorkflowQueueState()));
-        tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "issues", "C2", "packet.yaml"),
-            CreateWorkflowPacketYaml());
-        using var writer = new StringWriter();
-
-        var exitCode = CommandRouter.Execute(["workflow", "render", "C2"], CreateContext(repoRoot), writer);
-
-        Assert.Equal(0, exitCode);
-        Assert.Contains("Workflow definition rendered for C2", writer.ToString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Execute_GivenWorkflowRunCommand_DispatchesToWorkflowRunRenderer()
-    {
-        using var tempDirectory = new TemporaryDirectory();
-        var repoRoot = tempDirectory.CreateDirectory("repo");
-        tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "queue-state.json"),
-            QueueStateSerializer.Serialize(CreateWorkflowQueueState()));
-        tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "workflows", "C2.yaml"),
-            CreateWorkflowDefinitionJson());
-        using var writer = new StringWriter();
-
-        var exitCode = CommandRouter.Execute(["workflow", "run", "C2"], CreateContext(repoRoot), writer);
-
-        Assert.Equal(0, exitCode);
-        Assert.Contains("Workflow run artifact generated for C2", writer.ToString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Execute_GivenWorkflowStatusCommand_DispatchesToWorkflowStatusRenderer()
-    {
-        using var tempDirectory = new TemporaryDirectory();
-        var repoRoot = tempDirectory.CreateDirectory("repo");
-        tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "workflows", "C2.yaml"),
-            CreateWorkflowDefinitionJson());
-        tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "workflows", "C2.run.json"),
-            CreateWorkflowRunArtifactJson());
-        using var writer = new StringWriter();
-
-        var exitCode = CommandRouter.Execute(["workflow", "status", "C2"], CreateContext(repoRoot), writer);
-
-        Assert.Equal(0, exitCode);
-        Assert.Contains("Run status: Running", writer.ToString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void Execute_GivenQueueTransitionCommand_DispatchesToQueueTransitionRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -3462,7 +3403,6 @@ public sealed class CommandRouterTests
                 Project = new ProjectConfig
                 {
                     Domain = "intent-cli",
-                    WorkflowEngine = "takt",
                     ArtifactRoot = ".intent-cli",
                     ParentIntentRepoRoot = parentIntentRepoRoot ?? string.Empty
                 }
@@ -3513,36 +3453,6 @@ public sealed class CommandRouterTests
                     WorkerRole = "coder",
                     ReviewRole = "reviewer",
                     Priority = "normal"
-                }
-            ]
-        };
-    }
-
-    private static QueueState CreateWorkflowQueueState()
-    {
-        return new QueueState
-        {
-            SchemaVersion = "1",
-            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
-            Items =
-            [
-                new QueueItem
-                {
-                    ExecutionUnit = "C2",
-                    Title = "Workflow render command",
-                    State = QueueItemState.Queued,
-                    Dependencies = ["A1"],
-                    BlockedBy = [],
-                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
-                    PacketPaths = new PacketPaths
-                    {
-                        Implementation = ".intent-cli/issues/C2/implementation.md",
-                        ReviewContext = ".intent-cli/issues/C2/review-context.md",
-                        Yaml = ".intent-cli/issues/C2/packet.yaml"
-                    },
-                    WorkerRole = "coder",
-                    ReviewRole = "reviewer",
-                    Priority = "high"
                 }
             ]
         };
@@ -4053,61 +3963,6 @@ public sealed class CommandRouterTests
                 }
             ]
         };
-    }
-
-    private static string CreateWorkflowPacketYaml()
-    {
-        return """
-        implementation_issue_packet:
-          issue_title: "[C2] Workflow Render Command"
-          issue_kind: "feature"
-          source_execution_unit: "C2"
-          goal: "Render workflow definition artifact from queue and packet sources."
-          in_scope:
-            - "cli workflow render command"
-          out_of_scope:
-            - "workflow execution"
-          target_repo: "submodules/intent-system"
-          target_path: "."
-          target_part: "cli workflow render command"
-          dependencies:
-            - "G1"
-            - "B2"
-            - "C1"
-            - "C2"
-          technical_baseline:
-            - "C# / .NET"
-          project_local_guide:
-            - "AGENTS.md"
-          intent_baseline:
-            - "C1 and C2 are fixed baselines"
-          intent_references:
-            - "ICL.E.SLICES"
-          rules_and_specs:
-            - "intents/intent-cli/specs/07-workflow-definition-and-takt-adapter.md"
-          acceptance_criteria:
-            - "workflow render writes workflow artifact"
-          verification_evidence:
-            - "contract-reviewed"
-            - "tests-passing"
-            - "acceptance-criteria-checked"
-          review_mode: "deterministic-review"
-          completion_action: "wait-for-deterministic-review"
-          landing_policy: "merge-after-review"
-        
-        review_context_packet:
-          source_execution_unit: "C2"
-          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
-          intent_references:
-            - "ICL.E.SLICES"
-          rules_and_specs:
-            - "intents/intent-cli/specs/07-workflow-definition-and-takt-adapter.md"
-          acceptance_criteria:
-            - "workflow render writes workflow artifact"
-          deterministic_review_checks:
-            - "definition shape stays canonical"
-          clarification_return_path: "intents/intent-cli/clarifications/open.md"
-        """;
     }
 
     private static string CreateRunSubmitPacketYaml()
@@ -4809,73 +4664,6 @@ recommended_updates:
         {"ts":"2026-04-10T07:00:00Z","execution_unit":"G21","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/71"}
         {"ts":"2026-04-10T07:10:00Z","execution_unit":"G21","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/71#issuecomment-3"}
         """ + Environment.NewLine;
-    }
-
-    private static string CreateWorkflowDefinitionJson()
-    {
-        return """
-        {
-          "execution_unit": "C2",
-          "packet_paths": {
-            "implementation": ".intent-cli/issues/C2/implementation.md",
-            "review_context": ".intent-cli/issues/C2/review-context.md",
-            "yaml": ".intent-cli/issues/C2/packet.yaml"
-          },
-          "worker_roles": {
-            "worker": "coder",
-            "reviewer": "reviewer"
-          },
-          "dependency_snapshot": ["A1"],
-          "entry_conditions": ["A1 completed"],
-          "steps": [
-            {
-              "kind": "implement",
-              "role": "coder",
-              "on_success": ["review"],
-              "on_failure": []
-            },
-            {
-              "kind": "review",
-              "role": "reviewer",
-              "on_success": ["complete"],
-              "on_failure": ["comment-findings"]
-            }
-          ],
-          "success_signal": "workflow render writes workflow artifact",
-          "review_mode": "deterministic-review",
-          "completion_action": "wait-for-deterministic-review"
-        }
-        """;
-    }
-
-    private static string CreateWorkflowRunArtifactJson()
-    {
-        return WorkerAdapterSerializer.SerializeResult(
-            new WorkerAdapter.Models.WorkerAdapterResult
-            {
-                RunStatus = WorkerAdapter.Models.WorkerAdapterRunStatus.Running,
-                StepStatuses =
-                [
-                    new WorkerAdapter.Models.WorkerAdapterStepStatus
-                    {
-                        Step = Workflow.Models.WorkflowStepKind.Implement,
-                        Status = WorkerAdapter.Models.WorkerAdapterStepState.Running
-                    },
-                    new WorkerAdapter.Models.WorkerAdapterStepStatus
-                    {
-                        Step = Workflow.Models.WorkflowStepKind.Review,
-                        Status = WorkerAdapter.Models.WorkerAdapterStepState.Pending
-                    }
-                ],
-                ReviewResult = new WorkerAdapter.Models.WorkerReviewResult
-                {
-                    Disposition = WorkerAdapter.Models.WorkerReviewDisposition.Pending
-                },
-                ReviewCommentRefs = [],
-                ClarificationRequests = [],
-                ResultSummary = "Workflow run artifact initialized for C2.",
-                RunLogRefs = [".intent-cli/workflows/C2.run.json"]
-            });
     }
 
     private static string CreateReviewContextMarkdown()

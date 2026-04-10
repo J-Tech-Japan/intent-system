@@ -139,7 +139,6 @@ public sealed class GenerateFromCurrentSubmitCommandTests
                 Project = new ProjectConfig
                 {
                     Domain = "intent-system",
-                    WorkflowEngine = "intent-cli",
                     ArtifactRoot = ".intent-cli",
                     WorktreeRoot = ".intent-cli/worktrees"
                 }

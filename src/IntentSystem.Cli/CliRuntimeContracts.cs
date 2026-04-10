@@ -9,7 +9,6 @@ internal static class CliRuntimeContracts
     public const string ProjectSectionName = "project";
     public const string DefaultDomainKey = "default_domain";
     public const string DomainKey = "domain";
-    public const string WorkflowEngineKey = "workflow_engine";
     public const string ArtifactRootKey = "artifact_root";
     public const string WorktreeRootKey = "worktree_root";
     public const string ParentIntentRepoRootKey = "parent_intent_repo_root";

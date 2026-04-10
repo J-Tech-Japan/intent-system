@@ -28,7 +28,7 @@ internal static class CliConfigLoader
 
         throw new InvalidOperationException(
             $"CLI config must contain root keys '{CliRuntimeContracts.DefaultDomainKey}', " +
-            $"'{CliRuntimeContracts.WorkflowEngineKey}', and '{CliRuntimeContracts.ArtifactRootKey}'.");
+            $"and '{CliRuntimeContracts.ArtifactRootKey}'.");
     }
 
     public static CliConfig LoadFromFile(string filePath)
@@ -43,11 +43,12 @@ internal static class CliConfigLoader
         config = default!;
 
         if (!TryGetRequiredString(rootTable, CliRuntimeContracts.DefaultDomainKey, out var domain)
-            || !TryGetRequiredString(rootTable, CliRuntimeContracts.WorkflowEngineKey, out var workflowEngine)
             || !TryGetRequiredString(rootTable, CliRuntimeContracts.ArtifactRootKey, out var artifactRoot))
         {
             return false;
         }
+
+        RejectObsoleteWorkflowEngineKey(rootTable, "CLI config root");
 
         var worktreeRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.WorktreeRootKey)
             ?? CliRuntimeContracts.DefaultWorktreeRoot;
@@ -59,7 +60,6 @@ internal static class CliConfigLoader
 
         config = CreateConfig(
             domain,
-            workflowEngine,
             artifactRoot,
             worktreeRoot,
             parentIntentRepoRoot,
@@ -80,13 +80,14 @@ internal static class CliConfigLoader
         }
 
         if (!TryGetRequiredString(projectTable, CliRuntimeContracts.DomainKey, out var domain)
-            || !TryGetRequiredString(projectTable, CliRuntimeContracts.WorkflowEngineKey, out var workflowEngine)
             || !TryGetRequiredString(projectTable, CliRuntimeContracts.ArtifactRootKey, out var artifactRoot))
         {
             throw new InvalidOperationException(
                 $"CLI config [project] section must contain '{CliRuntimeContracts.DomainKey}', " +
-                $"'{CliRuntimeContracts.WorkflowEngineKey}', and '{CliRuntimeContracts.ArtifactRootKey}'.");
+                $"and '{CliRuntimeContracts.ArtifactRootKey}'.");
         }
+
+        RejectObsoleteWorkflowEngineKey(projectTable, "CLI config [project] section");
 
         var worktreeRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.WorktreeRootKey)
             ?? CliRuntimeContracts.DefaultWorktreeRoot;
@@ -98,7 +99,6 @@ internal static class CliConfigLoader
 
         config = CreateConfig(
             domain,
-            workflowEngine,
             artifactRoot,
             worktreeRoot,
             parentIntentRepoRoot,
@@ -110,7 +110,6 @@ internal static class CliConfigLoader
 
     private static CliConfig CreateConfig(
         string domain,
-        string workflowEngine,
         string artifactRoot,
         string worktreeRoot,
         string parentIntentRepoRoot,
@@ -123,7 +122,6 @@ internal static class CliConfigLoader
             Project = new ProjectConfig
             {
                 Domain = domain,
-                WorkflowEngine = workflowEngine,
                 ArtifactRoot = artifactRoot,
                 WorktreeRoot = worktreeRoot,
                 ParentIntentRepoRoot = parentIntentRepoRoot
@@ -132,6 +130,18 @@ internal static class CliConfigLoader
             Supervision = supervision,
             DirectRun = directRun
         };
+    }
+
+    private static void RejectObsoleteWorkflowEngineKey(TomlTable table, string contractName)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contractName);
+
+        if (table.ContainsKey("workflow_engine"))
+        {
+            throw new InvalidOperationException(
+                $"{contractName} must not contain obsolete key 'workflow_engine'.");
+        }
     }
 
     private static RoleMappings ReadRoles(TomlTable rootTable)

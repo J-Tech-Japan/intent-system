@@ -15,7 +15,6 @@ internal static class CommandRouter
         "review",
         "interview",
         "clarify",
-        "workflow",
         "intake"
     ];
 
@@ -42,12 +41,6 @@ internal static class CommandRouter
                 ["log"] = RunLogCommand.Execute,
                 ["implement"] = RunImplementCommand.Execute,
                 ["fix"] = RunFixCommand.Execute
-            },
-            ["workflow"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
-            {
-                ["render"] = WorkflowRenderCommand.Execute,
-                ["run"] = WorkflowRunCommand.Execute,
-                ["status"] = WorkflowStatusCommand.Execute
             },
             ["review"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

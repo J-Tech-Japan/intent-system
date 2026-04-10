@@ -9,7 +9,6 @@ public sealed class CliConfigLoaderTests
     {
         var toml = """
         default_domain = "intent-cli"
-        workflow_engine = "takt"
         artifact_root = ".intent-cli"
         worktree_root = ".intent-cli/worktrees"
         parent_intent_repo_root = "../MyIntentHost"
@@ -18,7 +17,6 @@ public sealed class CliConfigLoaderTests
         var config = CliConfigLoader.Load(toml);
 
         Assert.Equal("intent-cli", config.Project.Domain);
-        Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
@@ -44,7 +42,6 @@ public sealed class CliConfigLoaderTests
             ".intent-cli/config.toml",
             """
             default_domain = "intent-cli"
-            workflow_engine = "takt"
             artifact_root = ".intent-cli"
             worktree_root = ".intent-cli/worktrees"
             parent_intent_repo_root = "../MyIntentHost"
@@ -53,7 +50,6 @@ public sealed class CliConfigLoaderTests
         var config = CliConfigLoader.LoadFromFile(configPath);
 
         Assert.Equal("intent-cli", config.Project.Domain);
-        Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
@@ -66,7 +62,6 @@ public sealed class CliConfigLoaderTests
         var toml = """
         [project]
         domain = "intent-cli"
-        workflow_engine = "takt"
         artifact_root = ".intent-cli"
         worktree_root = ".intent-cli/worktrees"
         parent_intent_repo_root = "../MyIntentHost"
@@ -75,7 +70,6 @@ public sealed class CliConfigLoaderTests
         var config = CliConfigLoader.Load(toml);
 
         Assert.Equal("intent-cli", config.Project.Domain);
-        Assert.Equal("takt", config.Project.WorkflowEngine);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
@@ -87,7 +81,6 @@ public sealed class CliConfigLoaderTests
     {
         var toml = """
         default_domain = "intent-cli"
-        workflow_engine = "takt"
         artifact_root = ".intent-cli"
 
         [roles]
@@ -110,7 +103,6 @@ public sealed class CliConfigLoaderTests
     {
         var toml = """
         default_domain = "intent-cli"
-        workflow_engine = "takt"
         artifact_root = ".intent-cli"
 
         [supervision]
@@ -133,7 +125,6 @@ public sealed class CliConfigLoaderTests
     {
         var toml = """
         default_domain = "intent-cli"
-        workflow_engine = "takt"
         artifact_root = ".intent-cli"
 
         [direct_backend]
@@ -203,10 +194,23 @@ public sealed class CliConfigLoaderTests
     {
         var toml = """
         default_domain = "intent-cli"
-        artifact_root = ".intent-cli"
         """;
 
         Assert.Throws<InvalidOperationException>(() => CliConfigLoader.Load(toml));
+    }
+
+    [Fact]
+    public void Load_GivenObsoleteWorkflowEngineKey_ThrowsInvalidOperationException()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        workflow_engine = "takt"
+        """;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => CliConfigLoader.Load(toml));
+
+        Assert.Contains("workflow_engine", exception.Message, StringComparison.Ordinal);
     }
 
     private sealed class TemporaryDirectory : IDisposable
