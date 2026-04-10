@@ -58,6 +58,32 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRootRunCommand_DispatchesToRunRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(
+                new QueueState
+                {
+                    SchemaVersion = "intent-cli/queue-state/v1",
+                    UpdatedAt = DateTimeOffset.Parse("2026-04-10T12:00:00Z"),
+                    Items = []
+                }));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["run"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Run orchestration processed.", output, StringComparison.Ordinal);
+        Assert.Contains("no-actionable-item", output, StringComparison.Ordinal);
+        Assert.Contains("Root run result artifact: .intent-cli/run.result.json", output, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "run.result.json")));
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentCommand_DispatchesToTopLevelRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
