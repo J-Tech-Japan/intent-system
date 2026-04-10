@@ -120,6 +120,11 @@ internal static class CommandRouter
             return GenerateFromCurrentCommand.Execute(context, args[1..], writer);
         }
 
+        if (args.Length == 1 && string.Equals(args[0], "run", StringComparison.Ordinal))
+        {
+            return RunCommand.Execute(context, [], writer);
+        }
+
         if (args.Length < 2)
         {
             writer.WriteLine("A command group and subcommand are required.");

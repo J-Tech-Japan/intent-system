@@ -25,20 +25,45 @@ internal static class QueueDispatchCommand
             return 1;
         }
 
-        var queueState = QueueCommandSupport.LoadQueueState(context, writer);
-        if (queueState is null)
+        try
         {
+            var result = ExecuteCore(context, args[0].Trim());
+            if (result.ReusedExistingIssue)
+            {
+                writer.WriteLine($"Queue item {result.ExecutionUnit} reused existing linked issue {result.LinkedIssueUrl}.");
+            }
+            else
+            {
+                writer.WriteLine($"Queue item {result.ExecutionUnit} dispatched to {result.LinkedIssueUrl}.");
+            }
+
+            return 0;
+        }
+        catch (InvalidOperationException exception)
+        {
+            writer.WriteLine(exception.Message);
             return 1;
         }
+    }
 
-        var executionUnit = args[0];
+    internal static QueueDispatchCommandResult ExecuteCore(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = QueueCommandSupport.LoadQueueState(context, TextWriter.Null);
+        if (queueState is null)
+        {
+            throw new InvalidOperationException($"No queue state found at {queueStatePath}");
+        }
+
         var queueItem = queueState.Items.FirstOrDefault(item =>
             string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
 
         if (queueItem is null)
         {
-            writer.WriteLine($"Execution unit '{executionUnit}' was not found in queue state.");
-            return 1;
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
         }
 
         if (queueItem.LinkedIssue is not null)
@@ -54,62 +79,60 @@ internal static class QueueDispatchCommand
                     LinkedIssue = queueItem.LinkedIssue.Url
                 });
 
-            writer.WriteLine($"Queue item {executionUnit} reused existing linked issue {queueItem.LinkedIssue.Url}.");
-            return 0;
+            return new QueueDispatchCommandResult
+            {
+                ExecutionUnit = executionUnit,
+                LinkedIssueUrl = queueItem.LinkedIssue.Url,
+                ReusedExistingIssue = true
+            };
         }
 
         var packetPath = ResolveArtifactPath(context.RepoRoot, queueItem.PacketPaths.Yaml);
         if (!File.Exists(packetPath))
         {
-            writer.WriteLine($"Projection packet artifact was not found at {packetPath}");
-            return 1;
+            throw new InvalidOperationException($"Projection packet artifact was not found at {packetPath}");
         }
 
         var githubBodyPath = ResolveGitHubBodyPath(context.RepoRoot, queueItem.PacketPaths.Yaml);
         if (!File.Exists(githubBodyPath))
         {
-            writer.WriteLine($"GitHub issue body artifact was not found at {githubBodyPath}");
-            return 1;
+            throw new InvalidOperationException($"GitHub issue body artifact was not found at {githubBodyPath}");
         }
 
-        try
+        var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
+        var packetTargetRepo = packet.TargetRepo;
+        if (string.IsNullOrWhiteSpace(packetTargetRepo))
         {
-            var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
-            var packetTargetRepo = packet.TargetRepo;
-            if (string.IsNullOrWhiteSpace(packetTargetRepo))
-            {
-                throw new InvalidOperationException("Projection packet must contain a target repo.");
-            }
-
-            var issueTitle = packet.IssueTitle;
-            if (string.IsNullOrWhiteSpace(issueTitle))
-            {
-                throw new InvalidOperationException("Projection packet must contain a non-empty issue title.");
-            }
-
-            var body = File.ReadAllText(githubBodyPath);
-            var githubTargetRepo = GitHubRepositoryTargetResolver.Resolve(
-                context.RepoRoot,
-                packetTargetRepo,
-                GitCommandRunnerFactory());
-            var linkedIssue = PublisherFactory().CreateIssue(githubTargetRepo, issueTitle, body);
-            var result = QueueManager.LinkIssue(
-                queueState,
-                executionUnit,
-                linkedIssue,
-                TransitionActor,
-                TimestampFactory());
-
-            PersistDispatch(context, result);
-
-            writer.WriteLine($"Queue item {executionUnit} dispatched to {linkedIssue.Url}.");
-            return 0;
+            throw new InvalidOperationException("Projection packet must contain a target repo.");
         }
-        catch (InvalidOperationException exception)
+
+        var issueTitle = packet.IssueTitle;
+        if (string.IsNullOrWhiteSpace(issueTitle))
         {
-            writer.WriteLine(exception.Message);
-            return 1;
+            throw new InvalidOperationException("Projection packet must contain a non-empty issue title.");
         }
+
+        var body = File.ReadAllText(githubBodyPath);
+        var githubTargetRepo = GitHubRepositoryTargetResolver.Resolve(
+            context.RepoRoot,
+            packetTargetRepo,
+            GitCommandRunnerFactory());
+        var linkedIssue = PublisherFactory().CreateIssue(githubTargetRepo, issueTitle, body);
+        var result = QueueManager.LinkIssue(
+            queueState,
+            executionUnit,
+            linkedIssue,
+            TransitionActor,
+            TimestampFactory());
+
+        PersistDispatch(context, result);
+
+        return new QueueDispatchCommandResult
+        {
+            ExecutionUnit = executionUnit,
+            LinkedIssueUrl = linkedIssue.Url,
+            ReusedExistingIssue = false
+        };
     }
 
     private static string ResolveArtifactPath(string repoRoot, string artifactRef)

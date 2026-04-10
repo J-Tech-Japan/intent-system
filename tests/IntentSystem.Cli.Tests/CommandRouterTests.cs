@@ -58,6 +58,29 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenRootRunCommand_DispatchesToRunRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(
+                new QueueState
+                {
+                    SchemaVersion = "intent-cli/queue-state/v1",
+                    UpdatedAt = DateTimeOffset.Parse("2026-04-10T12:00:00Z"),
+                    Items = []
+                }));
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["run"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Run orchestration processed.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("no-actionable-work", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenGenerateFromCurrentCommand_DispatchesToTopLevelRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
