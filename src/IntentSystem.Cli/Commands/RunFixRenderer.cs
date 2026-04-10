@@ -71,7 +71,11 @@ internal static class RunFixRenderer
         return string.Join(Environment.NewLine, lines);
     }
 
-    public static void WriteSummary(TextWriter writer, RunFixRequest request, string artifactPath)
+    public static void WriteSummary(
+        TextWriter writer,
+        RunFixRequest request,
+        string artifactPath,
+        DirectRunLaunchResult? directRun = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(request);
@@ -84,6 +88,15 @@ internal static class RunFixRenderer
         writer.WriteLine($"Branch: {request.Branch}");
         writer.WriteLine($"Latest linked PR: {request.LatestLinkedPr}");
         writer.WriteLine($"Latest comment ref: {request.LatestCommentRef}");
+
+        if (directRun is not null)
+        {
+            writer.WriteLine($"Direct run request artifact: {directRun.RequestArtifactPath}");
+            writer.WriteLine($"Direct provider: {directRun.Provider}");
+            writer.WriteLine($"Direct model: {directRun.Model}");
+            writer.WriteLine($"Direct transport: {directRun.Transport}");
+            writer.WriteLine($"Provider session: {directRun.ProviderSessionId}");
+        }
     }
 
     private static IReadOnlyList<string> FormatList(IReadOnlyList<string> values)

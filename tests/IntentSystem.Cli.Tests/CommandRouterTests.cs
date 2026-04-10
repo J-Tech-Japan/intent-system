@@ -3119,12 +3119,22 @@ public sealed class CommandRouterTests
             Path.Combine("repo", ".intent-cli", "issues", "G19", "review-context.md"),
             CreateRunImplementReviewContextMarkdown());
         using var writer = new StringWriter();
+        var originalLauncherFactory = RunImplementCommand.DirectRunLauncherFactory;
 
-        var exitCode = CommandRouter.Execute(["run", "implement", "G19"], CreateContext(repoRoot), writer);
+        try
+        {
+            RunImplementCommand.DirectRunLauncherFactory = () => new FakeRouterDirectRunLauncher(".intent-cli/runs/G19.request.json");
 
-        Assert.Equal(0, exitCode);
-        Assert.Contains("Implementation handoff artifact generated for G19", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("Implement role: Claude", writer.ToString(), StringComparison.Ordinal);
+            var exitCode = CommandRouter.Execute(["run", "implement", "G19"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Implementation handoff artifact generated for G19", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Implement role: Claude", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunImplementCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
     }
 
     [Fact]
@@ -3150,12 +3160,22 @@ public sealed class CommandRouterTests
             Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
             CreateRunFixReviewCommentArtifactJson());
         using var writer = new StringWriter();
+        var originalLauncherFactory = RunFixCommand.DirectRunLauncherFactory;
 
-        var exitCode = CommandRouter.Execute(["run", "fix", "G20"], CreateContext(repoRoot), writer);
+        try
+        {
+            RunFixCommand.DirectRunLauncherFactory = () => new FakeRouterDirectRunLauncher(".intent-cli/runs/G20.request.json");
 
-        Assert.Equal(0, exitCode);
-        Assert.Contains("Repair handoff artifact generated for G20", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("Latest comment ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", writer.ToString(), StringComparison.Ordinal);
+            var exitCode = CommandRouter.Execute(["run", "fix", "G20"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Repair handoff artifact generated for G20", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Latest comment ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunFixCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
     }
 
     [Fact]
@@ -3274,15 +3294,25 @@ public sealed class CommandRouterTests
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             CreateReviewRunLog());
         using var writer = new StringWriter();
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
 
-        var exitCode = CommandRouter.Execute(["review", "run", "G9"], CreateContext(repoRoot), writer);
+        try
+        {
+            ReviewRunCommand.DirectRunLauncherFactory = () => new FakeRouterDirectRunLauncher(".intent-cli/runs/G9.request.json");
 
-        Assert.Equal(0, exitCode);
-        Assert.Contains("Review request artifact generated for G9", writer.ToString(), StringComparison.Ordinal);
+            var exitCode = CommandRouter.Execute(["review", "run", "G9"], CreateContext(repoRoot), writer);
 
-        var artifact = ReviewRequestSerializer.Deserialize(
-            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.request.json")));
-        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/45", artifact.LinkedPr);
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Review request artifact generated for G9", writer.ToString(), StringComparison.Ordinal);
+
+            var artifact = ReviewRequestSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.request.json")));
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/45", artifact.LinkedPr);
+        }
+        finally
+        {
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
     }
 
     [Fact]
@@ -5192,6 +5222,33 @@ recommended_updates:
             }
 
             throw new InvalidOperationException($"Unexpected gh arguments: {string.Join(' ', arguments)}");
+        }
+    }
+
+    private sealed class FakeRouterDirectRunLauncher(string requestArtifactPath) : IDirectRunLauncher
+    {
+        public DirectRunLaunchResult Launch(
+            string executionUnit,
+            string entryKind,
+            string requestArtifactPathArg,
+            string provider,
+            string model,
+            string transport,
+            string command,
+            IReadOnlyList<string> argsTemplate,
+            DateTimeOffset launchedAt,
+            string workingDirectory,
+            string absoluteRequestArtifactPath)
+        {
+            return new DirectRunLaunchResult
+            {
+                RequestArtifactPath = requestArtifactPath,
+                Provider = provider,
+                Model = model,
+                Transport = transport,
+                ProviderSessionId = "pid:1234",
+                TransportSummary = $"{transport} transport launched via '{command}' in '{workingDirectory}' for provider '{provider}'."
+            };
         }
     }
 

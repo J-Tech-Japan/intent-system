@@ -30,31 +30,66 @@ public sealed class RunFixCommandTests
             Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
             CreateReviewCommentArtifactJson());
         using var writer = new StringWriter();
+        var originalTimestampFactory = RunFixCommand.TimestampFactory;
+        var originalLauncherFactory = RunFixCommand.DirectRunLauncherFactory;
 
         var originalQueueState = File.ReadAllText(queueStatePath);
         var originalRunLog = File.ReadAllText(runLogPath);
 
-        var exitCode = RunFixCommand.Execute(CreateContext(repoRoot), ["G20"], writer);
+        try
+        {
+            RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:25:00Z");
+            RunFixCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:8765",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G20' for provider 'Claude'.");
 
-        Assert.Equal(0, exitCode);
-        var output = writer.ToString();
-        Assert.Contains("Repair handoff artifact generated for G20", output, StringComparison.Ordinal);
-        Assert.Contains("Implement role: Claude", output, StringComparison.Ordinal);
-        Assert.Contains("Branch: issue-68-g20", output, StringComparison.Ordinal);
-        Assert.Contains("Latest linked PR: https://github.com/J-Tech-Japan/intent-system/pull/69", output, StringComparison.Ordinal);
-        Assert.Contains("Latest comment ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", output, StringComparison.Ordinal);
+            var exitCode = RunFixCommand.Execute(CreateContext(repoRoot), ["G20"], writer);
 
-        var artifactPath = Path.Combine(repoRoot, ".intent-cli", "fix", "G20.request.md");
-        Assert.True(File.Exists(artifactPath));
-        var markdown = File.ReadAllText(artifactPath);
-        Assert.Contains("- packet_ref: .intent-cli/issues/G20/packet.yaml", markdown, StringComparison.Ordinal);
-        Assert.Contains("- review_context_ref: .intent-cli/issues/G20/review-context.md", markdown, StringComparison.Ordinal);
-        Assert.Contains("- review_comment_artifact_ref: .intent-cli/reviews/G20.comment.json", markdown, StringComparison.Ordinal);
-        Assert.Contains("- review_request_ref: .intent-cli/reviews/G20.request.json", markdown, StringComparison.Ordinal);
-        Assert.Contains("- latest_linked_pr: https://github.com/J-Tech-Japan/intent-system/pull/69", markdown, StringComparison.Ordinal);
-        Assert.Contains("- latest_comment_ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", markdown, StringComparison.Ordinal);
-        Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
-        Assert.Equal(originalRunLog, File.ReadAllText(runLogPath));
+            Assert.Equal(0, exitCode);
+            var output = writer.ToString();
+            Assert.Contains("Repair handoff artifact generated for G20", output, StringComparison.Ordinal);
+            Assert.Contains("Implement role: Claude", output, StringComparison.Ordinal);
+            Assert.Contains("Branch: issue-68-g20", output, StringComparison.Ordinal);
+            Assert.Contains("Latest linked PR: https://github.com/J-Tech-Japan/intent-system/pull/69", output, StringComparison.Ordinal);
+            Assert.Contains("Latest comment ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", output, StringComparison.Ordinal);
+            Assert.Contains("Direct run request artifact: .intent-cli/runs/G20.request.json", output, StringComparison.Ordinal);
+            Assert.Contains("Direct provider: Claude", output, StringComparison.Ordinal);
+            Assert.Contains("Direct model: default", output, StringComparison.Ordinal);
+            Assert.Contains("Direct transport: stdio", output, StringComparison.Ordinal);
+            Assert.Contains("Provider session: pid:8765", output, StringComparison.Ordinal);
+
+            var artifactPath = Path.Combine(repoRoot, ".intent-cli", "fix", "G20.request.md");
+            Assert.True(File.Exists(artifactPath));
+            var markdown = File.ReadAllText(artifactPath);
+            Assert.Contains("- packet_ref: .intent-cli/issues/G20/packet.yaml", markdown, StringComparison.Ordinal);
+            Assert.Contains("- review_context_ref: .intent-cli/issues/G20/review-context.md", markdown, StringComparison.Ordinal);
+            Assert.Contains("- review_comment_artifact_ref: .intent-cli/reviews/G20.comment.json", markdown, StringComparison.Ordinal);
+            Assert.Contains("- review_request_ref: .intent-cli/reviews/G20.request.json", markdown, StringComparison.Ordinal);
+            Assert.Contains("- latest_linked_pr: https://github.com/J-Tech-Japan/intent-system/pull/69", markdown, StringComparison.Ordinal);
+            Assert.Contains("- latest_comment_ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", markdown, StringComparison.Ordinal);
+
+            var directRunArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.request.json");
+            Assert.True(File.Exists(directRunArtifactPath));
+            var directRunArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(directRunArtifactPath));
+            Assert.Equal("G20", directRunArtifact.ExecutionUnit);
+            Assert.Equal("fix", directRunArtifact.EntryKind);
+            Assert.Equal(".intent-cli/fix/G20.request.md", directRunArtifact.UpstreamRequestRef);
+            Assert.Equal("Claude", directRunArtifact.Provider);
+            Assert.Equal("default", directRunArtifact.Model);
+            Assert.Equal("stdio", directRunArtifact.Transport);
+            Assert.Equal("pid:8765", directRunArtifact.ProviderSessionId);
+
+            Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
+            Assert.Equal(originalRunLog, File.ReadAllText(runLogPath));
+        }
+        finally
+        {
+            RunFixCommand.TimestampFactory = originalTimestampFactory;
+            RunFixCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
     }
 
     [Fact]
@@ -66,6 +101,49 @@ public sealed class RunFixCommandTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("requires an execution unit", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class FakeDirectRunLauncher(
+        string providerSessionId,
+        string provider,
+        string model,
+        string transport,
+        string transportSummary) : IDirectRunLauncher
+    {
+        public DirectRunLaunchResult Launch(
+            string executionUnit,
+            string entryKind,
+            string requestArtifactPath,
+            string providerArg,
+            string modelArg,
+            string transportArg,
+            string command,
+            IReadOnlyList<string> argsTemplate,
+            DateTimeOffset launchedAt,
+            string workingDirectory,
+            string absoluteRequestArtifactPath)
+        {
+            Assert.Equal("G20", executionUnit);
+            Assert.Equal("fix", entryKind);
+            Assert.Equal(".intent-cli/runs/G20.request.json", requestArtifactPath);
+            Assert.Equal(provider, providerArg);
+            Assert.Equal(model, modelArg);
+            Assert.Equal(transport, transportArg);
+            Assert.Equal("claude", command);
+            Assert.Equal(["--print", "--model", "{model}", "--output-format", "json", "{prompt}"], argsTemplate);
+            Assert.EndsWith("/.intent-cli/worktrees/G20", workingDirectory, StringComparison.Ordinal);
+            Assert.EndsWith("/.intent-cli/fix/G20.request.md", absoluteRequestArtifactPath, StringComparison.Ordinal);
+
+            return new DirectRunLaunchResult
+            {
+                RequestArtifactPath = ".intent-cli/runs/G20.request.json",
+                Provider = providerArg,
+                Model = modelArg,
+                Transport = transportArg,
+                ProviderSessionId = providerSessionId,
+                TransportSummary = transportSummary
+            };
+        }
     }
 
     [Fact]

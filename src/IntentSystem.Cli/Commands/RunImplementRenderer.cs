@@ -71,7 +71,11 @@ internal static class RunImplementRenderer
         return string.Join(Environment.NewLine, lines);
     }
 
-    public static void WriteSummary(TextWriter writer, RunImplementRequest request, string artifactPath)
+    public static void WriteSummary(
+        TextWriter writer,
+        RunImplementRequest request,
+        string artifactPath,
+        DirectRunLaunchResult? directRun = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(request);
@@ -86,6 +90,15 @@ internal static class RunImplementRenderer
         if (!string.IsNullOrWhiteSpace(request.LatestLinkedPr))
         {
             writer.WriteLine($"Latest linked PR: {request.LatestLinkedPr}");
+        }
+
+        if (directRun is not null)
+        {
+            writer.WriteLine($"Direct run request artifact: {directRun.RequestArtifactPath}");
+            writer.WriteLine($"Direct provider: {directRun.Provider}");
+            writer.WriteLine($"Direct model: {directRun.Model}");
+            writer.WriteLine($"Direct transport: {directRun.Transport}");
+            writer.WriteLine($"Provider session: {directRun.ProviderSessionId}");
         }
     }
 

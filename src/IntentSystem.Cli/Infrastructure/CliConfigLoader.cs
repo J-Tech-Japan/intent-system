@@ -55,6 +55,7 @@ internal static class CliConfigLoader
             ?? string.Empty;
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
+        var directRun = ReadDirectRun(rootTable);
 
         config = CreateConfig(
             domain,
@@ -63,7 +64,8 @@ internal static class CliConfigLoader
             worktreeRoot,
             parentIntentRepoRoot,
             roles,
-            supervision);
+            supervision,
+            directRun);
         return true;
     }
 
@@ -92,6 +94,7 @@ internal static class CliConfigLoader
             ?? string.Empty;
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
+        var directRun = ReadDirectRun(rootTable);
 
         config = CreateConfig(
             domain,
@@ -100,7 +103,8 @@ internal static class CliConfigLoader
             worktreeRoot,
             parentIntentRepoRoot,
             roles,
-            supervision);
+            supervision,
+            directRun);
         return true;
     }
 
@@ -111,7 +115,8 @@ internal static class CliConfigLoader
         string worktreeRoot,
         string parentIntentRepoRoot,
         RoleMappings roles,
-        SupervisionConfig supervision)
+        SupervisionConfig supervision,
+        DirectRunConfig directRun)
     {
         return new CliConfig
         {
@@ -124,7 +129,8 @@ internal static class CliConfigLoader
                 ParentIntentRepoRoot = parentIntentRepoRoot
             },
             Roles = roles,
-            Supervision = supervision
+            Supervision = supervision,
+            DirectRun = directRun
         };
     }
 
@@ -175,6 +181,57 @@ internal static class CliConfigLoader
                 ?? CliRuntimeContracts.DefaultSupervisionRetryDelayMinutes,
             RetryBudget = TryGetOptionalInt32(supervisionTable, CliRuntimeContracts.RetryBudgetKey)
                 ?? CliRuntimeContracts.DefaultSupervisionRetryBudget
+        };
+    }
+
+    private static DirectRunConfig ReadDirectRun(TomlTable rootTable)
+    {
+        ArgumentNullException.ThrowIfNull(rootTable);
+
+        if (!rootTable.TryGetValue(CliRuntimeContracts.DirectRunSectionName, out var section)
+            || section is not TomlTable directRunTable)
+        {
+            return new DirectRunConfig();
+        }
+
+        return new DirectRunConfig
+        {
+            ArtifactRoot = TryGetOptionalString(directRunTable, CliRuntimeContracts.ArtifactRootKey)
+                ?? CliRuntimeContracts.DefaultDirectRunArtifactRoot,
+            Provider = TryGetOptionalString(directRunTable, CliRuntimeContracts.ProviderKey)
+                ?? string.Empty,
+            Model = TryGetOptionalString(directRunTable, CliRuntimeContracts.ModelKey)
+                ?? CliRuntimeContracts.DefaultDirectRunModel,
+            Transport = TryGetOptionalString(directRunTable, CliRuntimeContracts.TransportKey)
+                ?? CliRuntimeContracts.DefaultDirectRunTransport,
+            Command = TryGetOptionalString(directRunTable, CliRuntimeContracts.CommandKey)
+                ?? string.Empty,
+            Args = TryGetOptionalStringArray(directRunTable, CliRuntimeContracts.ArgsKey)
+                ?? [],
+            Implement = ReadDirectRunEntry(directRunTable, CliRuntimeContracts.ImplementRoleKey),
+            Fix = ReadDirectRunEntry(directRunTable, "fix"),
+            Review = ReadDirectRunEntry(directRunTable, CliRuntimeContracts.ReviewRoleKey)
+        };
+    }
+
+    private static DirectRunEntryConfig ReadDirectRunEntry(TomlTable parentTable, string sectionKey)
+    {
+        ArgumentNullException.ThrowIfNull(parentTable);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sectionKey);
+
+        if (!parentTable.TryGetValue(sectionKey, out var section)
+            || section is not TomlTable entryTable)
+        {
+            return new DirectRunEntryConfig();
+        }
+
+        return new DirectRunEntryConfig
+        {
+            Provider = TryGetOptionalString(entryTable, CliRuntimeContracts.ProviderKey) ?? string.Empty,
+            Model = TryGetOptionalString(entryTable, CliRuntimeContracts.ModelKey) ?? string.Empty,
+            Transport = TryGetOptionalString(entryTable, CliRuntimeContracts.TransportKey) ?? string.Empty,
+            Command = TryGetOptionalString(entryTable, CliRuntimeContracts.CommandKey) ?? string.Empty,
+            Args = TryGetOptionalStringArray(entryTable, CliRuntimeContracts.ArgsKey) ?? []
         };
     }
 
@@ -239,5 +296,36 @@ internal static class CliConfigLoader
 
         throw new InvalidOperationException(
             $"CLI config value '{key}' must be a positive integer.");
+    }
+
+    private static IReadOnlyList<string>? TryGetOptionalStringArray(TomlTable table, string key)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        if (!table.TryGetValue(key, out var rawValue))
+        {
+            return null;
+        }
+
+        if (rawValue is not TomlArray arrayValue)
+        {
+            throw new InvalidOperationException(
+                $"CLI config value '{key}' must be an array of non-empty strings.");
+        }
+
+        var values = new List<string>(arrayValue.Count);
+        foreach (var item in arrayValue)
+        {
+            if (item is not string textValue || string.IsNullOrWhiteSpace(textValue))
+            {
+                throw new InvalidOperationException(
+                    $"CLI config value '{key}' must be an array of non-empty strings.");
+            }
+
+            values.Add(textValue);
+        }
+
+        return values;
     }
 }

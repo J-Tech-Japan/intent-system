@@ -61,6 +61,17 @@ internal sealed record CliContext
         return Path.GetFullPath(Path.Combine(RepoRoot, supervisionArtifactRoot));
     }
 
+    public string ResolveDirectRunArtifactRootPath()
+    {
+        var directRunArtifactRoot = Config.DirectRun.ArtifactRoot;
+        if (Path.IsPathRooted(directRunArtifactRoot))
+        {
+            return directRunArtifactRoot;
+        }
+
+        return Path.GetFullPath(Path.Combine(RepoRoot, directRunArtifactRoot));
+    }
+
     public string? ResolveParentIntentRepoRootPath()
     {
         var parentIntentRepoRoot = Config.Project.ParentIntentRepoRoot;

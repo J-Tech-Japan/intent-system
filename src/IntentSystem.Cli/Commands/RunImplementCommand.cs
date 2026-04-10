@@ -7,6 +7,10 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class RunImplementCommand
 {
+    public static Func<IDirectRunLauncher> DirectRunLauncherFactory { get; set; } = () => new DirectRunLauncher();
+
+    public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -22,7 +26,7 @@ internal static class RunImplementCommand
         try
         {
             var result = ExecuteCore(context, args[0]);
-            RunImplementRenderer.WriteSummary(writer, result.Request, result.ArtifactPath);
+            RunImplementRenderer.WriteSummary(writer, result.Request, result.ArtifactPath, result.DirectRun);
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -113,11 +117,21 @@ internal static class RunImplementCommand
             latestLinkedPr);
         var markdown = RunImplementRenderer.RenderMarkdown(request);
         var artifactPath = RunImplementArtifactWriter.Write(markdown, executionUnit, context.RepoRoot, overwrite: true);
+        var relativeArtifactPath = ToRelativePath(context.RepoRoot, artifactPath);
+        var directRun = DirectRunCommandSupport.CreateAndLaunch(
+            context,
+            DirectRunEntryKind.Implement,
+            executionUnit,
+            relativeArtifactPath,
+            worktreePath,
+            DirectRunLauncherFactory(),
+            TimestampFactory());
 
         return new RunImplementResult
         {
             Request = request,
-            ArtifactPath = ToRelativePath(context.RepoRoot, artifactPath)
+            ArtifactPath = relativeArtifactPath,
+            DirectRun = directRun
         };
     }
 

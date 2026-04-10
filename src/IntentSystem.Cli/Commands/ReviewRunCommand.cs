@@ -5,6 +5,10 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class ReviewRunCommand
 {
+    public static Func<IDirectRunLauncher> DirectRunLauncherFactory { get; set; } = () => new DirectRunLauncher();
+
+    public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -21,6 +25,14 @@ internal static class ReviewRunCommand
         {
             var result = ExecuteCore(context, args[0]);
             writer.WriteLine($"Review request artifact generated for {result.ExecutionUnit}.");
+            if (result.DirectRun is not null)
+            {
+                writer.WriteLine($"Direct run request artifact: {result.DirectRun.RequestArtifactPath}");
+                writer.WriteLine($"Direct provider: {result.DirectRun.Provider}");
+                writer.WriteLine($"Direct model: {result.DirectRun.Model}");
+                writer.WriteLine($"Direct transport: {result.DirectRun.Transport}");
+                writer.WriteLine($"Provider session: {result.DirectRun.ProviderSessionId}");
+            }
             return 0;
         }
         catch (InvalidOperationException exception)
@@ -77,11 +89,20 @@ internal static class ReviewRunCommand
         var request = ReviewRequestFactory.Create(executionUnit, reviewContextRef, linkedPr, reviewContext);
         ReviewArtifactWriter.Write(request, executionUnit, context.RepoRoot, overwrite: true);
         var artifactPath = Review.ReviewArtifactPathResolver.Resolve(executionUnit);
+        var directRun = DirectRunCommandSupport.CreateAndLaunch(
+            context,
+            DirectRunEntryKind.Review,
+            executionUnit,
+            artifactPath,
+            context.RepoRoot,
+            DirectRunLauncherFactory(),
+            TimestampFactory());
 
         return new ReviewRunResult
         {
             ExecutionUnit = executionUnit,
-            ArtifactPath = artifactPath
+            ArtifactPath = artifactPath,
+            DirectRun = directRun
         };
     }
 }
