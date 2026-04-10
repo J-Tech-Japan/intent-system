@@ -216,50 +216,15 @@ internal static class GenerateFromCurrentBridgeCommand
                 RecommendedUpdates = recommendedUpdates
             };
 
-            var yamlPath = Path.Combine(interviewsRoot, $"{bridgeQuestion.QuestionId}.yaml");
-            var markdownPath = Path.Combine(interviewsRoot, $"{bridgeQuestion.QuestionId}.md");
-            File.WriteAllText(yamlPath, InterviewArtifactYaml.Serialize(item));
-            File.WriteAllText(
-                markdownPath,
-                RenderInterviewMarkdown(item, recommendedUpdates, reconstructedInterview.Gaps));
-
-            artifactPaths.Add(ToRelativePath(repoRoot, yamlPath));
-            artifactPaths.Add(ToRelativePath(repoRoot, markdownPath));
+            artifactPaths.AddRange(
+                InterviewArtifactFileWriter.Write(
+                    repoRoot,
+                    item,
+                    recommendedUpdates,
+                    reconstructedInterview.Gaps));
         }
 
         return artifactPaths;
-    }
-
-    private static string RenderInterviewMarkdown(
-        InterviewQueueItem item,
-        IReadOnlyList<string> recommendedUpdates,
-        IReadOnlyList<string> gaps)
-    {
-        var lines = new List<string>
-        {
-            "# Interview Question",
-            string.Empty,
-            "## Domain",
-            string.Empty,
-            $"`{item.DomainSlug}`",
-            string.Empty,
-            $"question_id: {item.QuestionId}",
-            $"question_text: {item.QuestionText}",
-            $"reason: {item.Reason}",
-            $"blocking_or_nonblocking: {item.BlockingOrNonblocking}",
-            string.Empty,
-            "return_to_intent_paths:"
-        };
-
-        AppendBullets(lines, item.ReturnToIntentPaths);
-        lines.Add(string.Empty);
-        lines.Add("recommended_updates:");
-        AppendBullets(lines, recommendedUpdates);
-        lines.Add(string.Empty);
-        lines.Add("gaps:");
-        AppendBullets(lines, gaps);
-
-        return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
 
     private static void AppendSection(List<string> lines, string title, IReadOnlyList<string> values)
@@ -275,17 +240,6 @@ internal static class GenerateFromCurrentBridgeCommand
         }
 
         lines.Add(string.Empty);
-    }
-
-    private static void AppendBullets(List<string> lines, IReadOnlyList<string> values)
-    {
-        if (values.Count == 0)
-        {
-            lines.Add("- none");
-            return;
-        }
-
-        lines.AddRange(values.Select(value => $"- {value}"));
     }
 
     internal static string ToRelativePath(string repoRoot, string absolutePath)
