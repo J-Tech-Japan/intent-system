@@ -18,7 +18,6 @@ public sealed class ProgramTests
                 Path.Combine("repo", ".intent-cli", "config.toml"),
                 """
                 default_domain = "intent-cli"
-                workflow_engine = "takt"
                 artifact_root = ".intent-cli"
                 worktree_root = ".intent-cli/worktrees"
                 """);
@@ -33,7 +32,6 @@ public sealed class ProgramTests
 
             Assert.Equal(0, exitCode);
             Assert.Contains("Domain: intent-cli", output, StringComparison.Ordinal);
-            Assert.Contains("Workflow engine: takt", output, StringComparison.Ordinal);
             Assert.True(Directory.Exists(repoRootLine), $"Expected repo root directory to exist, but got '{repoRootLine}'.");
             Assert.True(File.Exists(configPathLine), $"Expected config path to exist, but got '{configPathLine}'.");
             Assert.EndsWith(

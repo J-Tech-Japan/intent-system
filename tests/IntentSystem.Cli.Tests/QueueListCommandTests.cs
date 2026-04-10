@@ -57,7 +57,6 @@ public sealed class QueueListCommandTests
                 Project = new ProjectConfig
                 {
                     Domain = "intent-system",
-                    WorkflowEngine = "intent-cli",
                     ArtifactRoot = ".intent-cli"
                 }
             }

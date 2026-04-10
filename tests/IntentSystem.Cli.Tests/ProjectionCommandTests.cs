@@ -177,7 +177,6 @@ public sealed class ProjectionCommandTests
                 Project = new ProjectConfig
                 {
                     Domain = "intent-system",
-                    WorkflowEngine = "takt",
                     ArtifactRoot = ".intent-cli"
                 }
             }

@@ -127,7 +127,6 @@ public sealed class ClarifyListCommandTests
                 Project = new ProjectConfig
                 {
                     Domain = "intent-system",
-                    WorkflowEngine = "intent-cli",
                     ArtifactRoot = ".intent-cli"
                 }
             }

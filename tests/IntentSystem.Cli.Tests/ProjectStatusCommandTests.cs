@@ -18,7 +18,6 @@ public sealed class ProjectStatusCommandTests
         var output = writer.ToString();
         Assert.Equal(0, exitCode);
         Assert.Contains("intent-cli", output, StringComparison.Ordinal);
-        Assert.Contains("takt", output, StringComparison.Ordinal);
         Assert.Contains(repoRoot, output, StringComparison.Ordinal);
         Assert.Contains(Path.Combine(repoRoot, ".intent-cli"), output, StringComparison.Ordinal);
     }
@@ -48,7 +47,6 @@ public sealed class ProjectStatusCommandTests
                 Project = new ProjectConfig
                 {
                     Domain = "intent-cli",
-                    WorkflowEngine = "takt",
                     ArtifactRoot = artifactRoot
                 }
             }

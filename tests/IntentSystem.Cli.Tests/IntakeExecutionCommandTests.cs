@@ -157,7 +157,6 @@ public sealed class IntakeExecutionCommandTests
                 Project = new ProjectConfig
                 {
                     Domain = "intent-system",
-                    WorkflowEngine = "intent-cli",
                     ArtifactRoot = ".intent-cli"
                 }
             }

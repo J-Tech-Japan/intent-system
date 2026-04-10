@@ -9,7 +9,6 @@ internal static class ProjectStatusCommand
         ArgumentNullException.ThrowIfNull(writer);
 
         writer.WriteLine($"Domain: {context.Config.Project.Domain}");
-        writer.WriteLine($"Workflow engine: {context.Config.Project.WorkflowEngine}");
         writer.WriteLine($"Repo root: {context.RepoRoot}");
         writer.WriteLine($"Intent CLI root: {context.GetIntentCliDirectoryPath()}");
         writer.WriteLine($"Artifact root: {context.ResolveArtifactRootPath()}");
