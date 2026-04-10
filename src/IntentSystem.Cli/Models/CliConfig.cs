@@ -19,6 +19,8 @@ internal sealed record ProjectConfig
 
     public string WorktreeRoot { get; init; } = ".intent-cli/worktrees";
 
+    public string WorkRepoPath { get; init; } = string.Empty;
+
     public string ParentIntentRepoRoot { get; init; } = string.Empty;
 }
 

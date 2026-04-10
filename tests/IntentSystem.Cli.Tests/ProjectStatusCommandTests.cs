@@ -37,6 +37,33 @@ public sealed class ProjectStatusCommandTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_GivenRelativeWorkRepoPath_ResolvesAgainstRepoRoot()
+    {
+        var repoRoot = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "intent-system");
+        var context = new CliContext
+        {
+            RepoRoot = repoRoot,
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "intent-cli",
+                    ArtifactRoot = ".intent-cli",
+                    WorkRepoPath = "../Sekiban-dcb/dcb"
+                }
+            }
+        };
+        using var writer = new StringWriter();
+
+        _ = ProjectStatusCommand.Execute(context, [], writer);
+
+        Assert.Contains(
+            $"Work repo path: {Path.GetFullPath(Path.Combine(repoRoot, "..", "Sekiban-dcb", "dcb"))}",
+            writer.ToString(),
+            StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string repoRoot, string artifactRoot)
     {
         return new CliContext

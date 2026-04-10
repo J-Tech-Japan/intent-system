@@ -11,6 +11,7 @@ internal static class CliRuntimeContracts
     public const string DomainKey = "domain";
     public const string ArtifactRootKey = "artifact_root";
     public const string WorktreeRootKey = "worktree_root";
+    public const string WorkRepoPathKey = "work_repo_path";
     public const string ParentIntentRepoRootKey = "parent_intent_repo_root";
     public const string RolesSectionName = "roles";
     public const string SupervisionSectionName = "supervision";

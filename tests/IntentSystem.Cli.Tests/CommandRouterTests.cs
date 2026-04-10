@@ -58,6 +58,24 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeInitCommand_DispatchesToInitRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        _ = tempDirectory.CreateDirectory("work-repo");
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["intake", "init", "auth", "--text", "Bootstrap auth intake.", "--work-repo-path", "../work-repo"],
+            CreateContext(repoRoot),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake init processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "config.toml")));
+    }
+
+    [Fact]
     public void Execute_GivenRootRunCommand_DispatchesToRunRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
