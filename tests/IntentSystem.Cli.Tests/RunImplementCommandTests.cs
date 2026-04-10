@@ -5,6 +5,7 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(RunSubmitCommandCollection.Name)]
 public sealed class RunImplementCommandTests
 {
     [Fact]

@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Xml.Linq;
+using Xunit;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(RunSubmitCommandCollection.Name)]
 public sealed class PackagedInvocationSmokeTests
 {
     private static readonly Lock ProcessStateLock = new();
