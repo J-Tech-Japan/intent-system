@@ -66,14 +66,16 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 providerSessionId = $"pid:{processId}";
                 eventWriter.Append(CreateSessionMetadataEvent(
                     launchedAt,
-                    providerSessionId,
+                    executionUnit,
+                    entryKind,
                     provider,
+                    providerSessionId,
                     model,
                     transport,
                     command));
             },
-            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, providerSessionId, raw)),
-            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, providerSessionId, raw)));
+            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)),
+            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)));
 
         if (process.ExitedEarly && process.ExitCode != 0)
         {
@@ -123,8 +125,10 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
     private static DirectRunProviderEvent CreateSessionMetadataEvent(
         DateTimeOffset launchedAt,
-        string providerSessionId,
+        string executionUnit,
+        string entryKind,
         string provider,
+        string providerSessionId,
         string model,
         string transport,
         string command)
@@ -132,11 +136,13 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         return new DirectRunProviderEvent
         {
             Timestamp = launchedAt.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
             SessionId = providerSessionId,
             Kind = "session-metadata",
             Payload = JsonSerializer.SerializeToElement(new
             {
-                provider,
                 model,
                 transport,
                 command
@@ -146,12 +152,18 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
     private static DirectRunProviderEvent CreateProviderEvent(
         DateTimeOffset timestamp,
+        string executionUnit,
+        string entryKind,
+        string provider,
         string providerSessionId,
         string raw)
     {
         return new DirectRunProviderEvent
         {
             Timestamp = timestamp.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
             SessionId = providerSessionId,
             Kind = "provider-event",
             Payload = ParsePayload(raw)

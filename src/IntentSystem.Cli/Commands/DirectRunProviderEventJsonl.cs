@@ -8,6 +8,15 @@ internal sealed record DirectRunProviderEvent
     [JsonPropertyName("ts")]
     public required string Timestamp { get; init; }
 
+    [JsonPropertyName("execution_unit")]
+    public required string ExecutionUnit { get; init; }
+
+    [JsonPropertyName("provider")]
+    public required string Provider { get; init; }
+
+    [JsonPropertyName("entry_kind")]
+    public required string EntryKind { get; init; }
+
     [JsonPropertyName("session_id")]
     public required string SessionId { get; init; }
 
