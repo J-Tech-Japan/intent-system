@@ -23,6 +23,12 @@ public sealed class IntakeStartCommandTests
             Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
             CreateExecutionArtifactMarkdown("auth"));
         tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
+        tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
             "# Auth Concept");
         tempDirectory.CreateFile(
@@ -117,6 +123,12 @@ public sealed class IntakeStartCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
             CreateExecutionArtifactMarkdown("auth-single"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
             "# Auth Concept");

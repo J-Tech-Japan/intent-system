@@ -2337,6 +2337,12 @@ public sealed class CommandRouterTests
             - dotnet test IntentSystem.sln
             """);
         tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
+        tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
             "# Auth Concept");
         using var writer = new StringWriter();
@@ -2609,6 +2615,12 @@ public sealed class CommandRouterTests
             verification_hints:
             - dotnet test IntentSystem.sln
             """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
         tempDirectory.CreateFile(
             Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
             "# Auth Concept");

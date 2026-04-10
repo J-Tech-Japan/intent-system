@@ -8,17 +8,7 @@ internal static class IntakeIssueCommand
 {
     private const string IntakeIssueMarker = "`intake issue <domain>`";
     private const string IssueBaselineExecutionUnit = "G37";
-    private const string ParentIntentRoot = "intents/intent-cli/intent-tree/00-map.md";
-    private const string ClarificationReturnPath = "intents/intent-cli/clarifications/open.md";
-
-    private static readonly string[] RulesAndSpecs =
-    [
-        "intents/intent-cli/specs/04-concept-intake-and-interview.md",
-        "intents/intent-cli/specs/05-intent-cli-surface.md",
-        "intents/rules/feature-request-intake-and-autostart.md",
-        "intents/rules/issue-compilation-and-execution.md",
-        "intents/rules/issue-projection-format.md"
-    ];
+    private const string GenericClarificationReturnPath = "intents/rules/issue-template-and-review-context.md";
 
     private static readonly string[] TechnicalBaseline =
     [
@@ -154,7 +144,10 @@ internal static class IntakeIssueCommand
 
         foreach (var unit in units.OrderBy(item => item.ExecutionUnitId, StringComparer.Ordinal))
         {
-            var packet = PacketGenerator.Generate(CreateRow(unit, baseline), CreateContext(unit, baseline));
+            var parentRefs = ResolveParentRefs(repoRoot, unit, baseline);
+            var packet = PacketGenerator.Generate(
+                CreateRow(unit, baseline, parentRefs),
+                CreateContext(unit, baseline, parentRefs));
             var githubBodyPath = QueueDispatchCommand.ResolveGitHubBodyPath(repoRoot, packet.Paths.Yaml);
             var githubBodyRelativePath = Path.GetRelativePath(repoRoot, githubBodyPath).Replace(Path.DirectorySeparatorChar, '/');
 
@@ -319,7 +312,10 @@ internal static class IntakeIssueCommand
         };
     }
 
-    private static SubSliceRow CreateRow(IntakeOriginExecutionUnit unit, IntakeIssueBaseline baseline)
+    private static SubSliceRow CreateRow(
+        IntakeOriginExecutionUnit unit,
+        IntakeIssueBaseline baseline,
+        IntakeIssueParentRefs parentRefs)
     {
         return new SubSliceRow
         {
@@ -331,13 +327,12 @@ internal static class IntakeIssueCommand
             DependsOnSubslices = unit.Dependencies,
             RelatedIntents =
             [
-                ParentIntentRoot,
+                parentRefs.ParentIntentRoot,
                 baseline.ExecutionFilePath
             ],
             SourceConcepts =
             [
-                unit.SourceFilePath,
-                .. RulesAndSpecs
+                unit.SourceFilePath
             ],
             SuccessSignal = $"Updated intake-origin source `{unit.SourceFilePath}` is reflected within `{unit.TargetPart}`.",
             ReviewMode = "deterministic-review",
@@ -346,7 +341,10 @@ internal static class IntakeIssueCommand
         };
     }
 
-    private static ProjectionContext CreateContext(IntakeOriginExecutionUnit unit, IntakeIssueBaseline baseline)
+    private static ProjectionContext CreateContext(
+        IntakeOriginExecutionUnit unit,
+        IntakeIssueBaseline baseline,
+        IntakeIssueParentRefs parentRefs)
     {
         var title = ResolveTitle(unit);
 
@@ -354,8 +352,8 @@ internal static class IntakeIssueCommand
         {
             IssueTitle = $"[{unit.ExecutionUnitId}] {title}",
             IssueKind = IssueKind.Feature,
-            ParentIntentRoot = ParentIntentRoot,
-            ClarificationReturnPath = ClarificationReturnPath,
+            ParentIntentRoot = parentRefs.ParentIntentRoot,
+            ClarificationReturnPath = parentRefs.ClarificationReturnPath,
             AcceptanceCriteria =
             [
                 $"Updated intake-origin source `{unit.SourceFilePath}` is reflected within `{unit.TargetPart}`.",
@@ -399,6 +397,62 @@ internal static class IntakeIssueCommand
         return checks;
     }
 
+    private static IntakeIssueParentRefs ResolveParentRefs(
+        string repoRoot,
+        IntakeOriginExecutionUnit unit,
+        IntakeIssueBaseline baseline)
+    {
+        var namespaceRoot = ResolveIntentNamespaceRoot(unit.SourceFilePath)
+            ?? ResolveIntentNamespaceRoot(baseline.ExecutionFilePath)
+            ?? throw new InvalidOperationException(
+                $"Intake issue parent refs could not be derived from '{unit.SourceFilePath}' or '{baseline.ExecutionFilePath}'.");
+
+        var parentIntentRoot = $"{namespaceRoot}/intent-tree/00-map.md";
+        var absoluteParentIntentRoot = Path.Combine(repoRoot, parentIntentRoot.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(absoluteParentIntentRoot))
+        {
+            throw new InvalidOperationException(
+                $"Intake issue parent intent root was not found at {absoluteParentIntentRoot}");
+        }
+
+        var clarificationReturnPath = $"{namespaceRoot}/clarifications/open.md";
+        var absoluteClarificationReturnPath = Path.Combine(
+            repoRoot,
+            clarificationReturnPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(absoluteClarificationReturnPath))
+        {
+            var absoluteGenericClarificationPath = Path.Combine(
+                repoRoot,
+                GenericClarificationReturnPath.Replace('/', Path.DirectorySeparatorChar));
+            clarificationReturnPath = File.Exists(absoluteGenericClarificationPath)
+                ? GenericClarificationReturnPath
+                : clarificationReturnPath;
+        }
+
+        return new IntakeIssueParentRefs
+        {
+            ParentIntentRoot = parentIntentRoot,
+            ClarificationReturnPath = clarificationReturnPath
+        };
+    }
+
+    private static string? ResolveIntentNamespaceRoot(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var normalizedPath = path.Replace('\\', '/');
+        var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 2 || !string.Equals(segments[0], "intents", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return $"{segments[0]}/{segments[1]}";
+    }
+
     private static string ResolveTitle(IntakeOriginExecutionUnit unit)
     {
         var heading = unit.ReadinessNotes
@@ -427,6 +481,13 @@ internal static class IntakeIssueCommand
         public required string TargetPath { get; init; }
 
         public required IReadOnlyList<string> IntentBaseline { get; init; }
+    }
+
+    private readonly record struct IntakeIssueParentRefs
+    {
+        public required string ParentIntentRoot { get; init; }
+
+        public required string ClarificationReturnPath { get; init; }
     }
 
     private readonly record struct IssueBaselineRow
