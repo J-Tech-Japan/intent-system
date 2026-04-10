@@ -94,6 +94,7 @@ internal static class DirectRunProviderEventJsonl
 internal sealed class DirectRunProviderEventWriter
 {
     private readonly string artifactPath;
+    private readonly string directoryPath;
     private readonly object gate = new();
 
     public DirectRunProviderEventWriter(string artifactPath)
@@ -101,7 +102,7 @@ internal sealed class DirectRunProviderEventWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(artifactPath);
 
         this.artifactPath = artifactPath;
-        var directoryPath = Path.GetDirectoryName(artifactPath)
+        directoryPath = Path.GetDirectoryName(artifactPath)
             ?? throw new InvalidOperationException("Direct run provider event artifact path did not contain a directory.");
 
         Directory.CreateDirectory(directoryPath);
@@ -113,9 +114,23 @@ internal sealed class DirectRunProviderEventWriter
 
         lock (gate)
         {
-            File.AppendAllText(
-                artifactPath,
-                DirectRunProviderEventJsonl.SerializeLine(providerEvent) + Environment.NewLine);
+            var line = DirectRunProviderEventJsonl.SerializeLine(providerEvent) + Environment.NewLine;
+            AppendWithDirectoryRecovery(line);
+        }
+    }
+
+    private void AppendWithDirectoryRecovery(string line)
+    {
+        Directory.CreateDirectory(directoryPath);
+
+        try
+        {
+            File.AppendAllText(artifactPath, line);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            Directory.CreateDirectory(directoryPath);
+            File.AppendAllText(artifactPath, line);
         }
     }
 }

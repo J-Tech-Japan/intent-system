@@ -62,4 +62,55 @@ public sealed class DirectRunProviderEventJsonlTests
         Assert.Equal(events[1].Payload.GetProperty("type").GetString(), roundTripped[1].Payload.GetProperty("type").GetString());
         Assert.Equal(events[1].Payload.GetProperty("sequence").GetInt32(), roundTripped[1].Payload.GetProperty("sequence").GetInt32());
     }
+
+    [Fact]
+    public void Append_GivenDeletedArtifactDirectory_RecreatesDirectoryAndAppendsEvent()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var artifactPath = tempDirectory.GetPath(Path.Combine(".intent-cli", "runs", "G19.provider.jsonl"));
+        var writer = new DirectRunProviderEventWriter(artifactPath);
+
+        Directory.Delete(
+            Path.GetDirectoryName(artifactPath)
+            ?? throw new InvalidOperationException("Artifact path did not contain a directory."),
+            recursive: true);
+
+        writer.Append(new DirectRunProviderEvent
+        {
+            Timestamp = "2026-04-09T10:16:00.0000000+00:00",
+            ExecutionUnit = "G19",
+            Provider = "Claude",
+            EntryKind = "implement",
+            SessionId = "pid:4321",
+            Kind = "provider-event",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                type = "delta"
+            })
+        });
+
+        Assert.True(File.Exists(artifactPath));
+        var appendedEvent = Assert.Single(DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(artifactPath)));
+        Assert.Equal("G19", appendedEvent.ExecutionUnit);
+        Assert.Equal("provider-event", appendedEvent.Kind);
+        Assert.Equal("delta", appendedEvent.Payload.GetProperty("type").GetString());
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        private readonly string rootPath = Directory.CreateTempSubdirectory("intent-cli-provider-events-").FullName;
+
+        public string GetPath(string relativePath)
+        {
+            return Path.Combine(rootPath, relativePath);
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(rootPath))
+            {
+                Directory.Delete(rootPath, recursive: true);
+            }
+        }
+    }
 }

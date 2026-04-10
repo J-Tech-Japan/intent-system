@@ -2,6 +2,7 @@ using IntentSystem.Cli.Commands;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(RunSubmitCommandCollection.Name)]
 public sealed class DirectRunLauncherTests
 {
     [Fact]
