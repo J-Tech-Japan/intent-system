@@ -107,7 +107,10 @@ internal static class RunCommand
                     var inProgressItem = inProgressItems[0];
                     if (inProgressItem.State == QueueItemState.Active)
                     {
-                        var implementRunStatus = TryReadDirectRunStatus(context, inProgressItem.ExecutionUnit);
+                        var implementRunStatus = TryReadDirectRunStatus(
+                            context,
+                            inProgressItem.ExecutionUnit,
+                            "implement");
                         if (string.Equals(implementRunStatus, "succeeded", StringComparison.Ordinal))
                         {
                             ExecuteAction(
@@ -176,7 +179,10 @@ internal static class RunCommand
                             continue;
                         }
 
-                        var fixRunStatus = TryReadDirectRunStatus(context, inProgressItem.ExecutionUnit);
+                        var fixRunStatus = TryReadDirectRunStatus(
+                            context,
+                            inProgressItem.ExecutionUnit,
+                            "fix");
                         if (string.Equals(fixRunStatus, "succeeded", StringComparison.Ordinal))
                         {
                             ExecuteAction(
@@ -427,13 +433,19 @@ internal static class RunCommand
             DescribeSupervisionResult(superviseResult));
     }
 
-    private static string? TryReadDirectRunStatus(CliContext context, string executionUnit)
+    private static string? TryReadDirectRunStatus(
+        CliContext context,
+        string executionUnit,
+        string expectedEntryKind)
     {
-        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit);
+        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit, expectedEntryKind);
         return resultArtifact?.RunStatus;
     }
 
-    private static DirectRunResultArtifact? TryReadDirectRunResultArtifact(CliContext context, string executionUnit)
+    private static DirectRunResultArtifact? TryReadDirectRunResultArtifact(
+        CliContext context,
+        string executionUnit,
+        string expectedEntryKind)
     {
         var resultArtifactRef = ResolveDirectRunResultArtifactRef(context, executionUnit);
         var resultArtifactPath = Path.GetFullPath(Path.Combine(
@@ -444,7 +456,10 @@ internal static class RunCommand
             return null;
         }
 
-        return DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        var artifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        return string.Equals(artifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
+            ? artifact
+            : null;
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> TryReadDirectRunProviderEvents(CliContext context, string executionUnit)
@@ -475,7 +490,7 @@ internal static class RunCommand
 
     private static RunReviewDecision ResolveReviewDecision(CliContext context, string executionUnit)
     {
-        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit);
+        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit, "review");
         if (resultArtifact is null)
         {
             return new RunReviewDecision

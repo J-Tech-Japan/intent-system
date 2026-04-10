@@ -252,6 +252,39 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenReviewLaunchAndStaleImplementResult_IgnoresStaleArtifact()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        WriteDirectRunResult(repoRoot, "G226", "implement", "succeeded");
+        var originalReviewRunExecutor = RunCommand.ReviewRunExecutor;
+
+        try
+        {
+            RunCommand.ReviewRunExecutor = (_, executionUnit) => new ReviewRunResult
+            {
+                ExecutionUnit = executionUnit,
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("review run", action.Name);
+            Assert.Contains("no direct run result is available yet", result.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunCommand.ReviewRunExecutor = originalReviewRunExecutor;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenSucceededImplementRun_ReusesRunSubmitBoundary()
     {
         using var tempDirectory = new TemporaryDirectory();
