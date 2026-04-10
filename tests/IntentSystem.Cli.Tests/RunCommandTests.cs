@@ -89,7 +89,7 @@ public sealed class RunCommandTests
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("worker-monitoring", result.StopReason);
+            Assert.Equal("no-actionable-item", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
             Assert.Collection(
                 result.Actions,
@@ -143,15 +143,209 @@ public sealed class RunCommandTests
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("review-decision-required", result.StopReason);
+            Assert.Equal("no-actionable-item", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
             var action = Assert.Single(result.Actions);
             Assert.Equal("review run", action.Name);
             Assert.Equal("G226", action.ExecutionUnit);
+            Assert.Contains("no direct run result is available yet", result.Detail, StringComparison.Ordinal);
         }
         finally
         {
             RunCommand.ReviewRunExecutor = originalReviewRunExecutor;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenSucceededImplementRun_ReusesRunSubmitBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Active))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G226.request.md"),
+            "# Execution Worker Handoff");
+        WriteDirectRunResult(repoRoot, "G226", "implement", "succeeded");
+        var originalRunSubmitExecutor = RunCommand.RunSubmitExecutor;
+        var originalReviewRunExecutor = RunCommand.ReviewRunExecutor;
+
+        try
+        {
+            RunCommand.RunSubmitExecutor = (context, executionUnit) =>
+            {
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => queueItem with
+                    {
+                        State = QueueItemState.Review
+                    });
+
+                return new RunSubmitResult
+                {
+                    ExecutionUnit = executionUnit,
+                    LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226"
+                };
+            };
+            RunCommand.ReviewRunExecutor = (_, executionUnit) => new ReviewRunResult
+            {
+                ExecutionUnit = executionUnit,
+                ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+            };
+            RunCommand.ReviewRunExecutor = (_, executionUnit) =>
+            {
+                WriteDirectRunResult(repoRoot, executionUnit, "review", "running");
+
+                return new ReviewRunResult
+                {
+                    ExecutionUnit = executionUnit,
+                    ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Collection(
+                result.Actions,
+                action =>
+                {
+                    Assert.Equal("run submit", action.Name);
+                    Assert.Equal("G226", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("review run", action.Name);
+                    Assert.Equal("G226", action.ExecutionUnit);
+                });
+        }
+        finally
+        {
+            RunCommand.RunSubmitExecutor = originalRunSubmitExecutor;
+            RunCommand.ReviewRunExecutor = originalReviewRunExecutor;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenAcceptedReviewDecision_ReusesReviewAcceptBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunResult(repoRoot, "G226", "review", "accepted");
+        var originalReviewAcceptExecutor = RunCommand.ReviewAcceptExecutor;
+
+        try
+        {
+            RunCommand.ReviewAcceptExecutor = (context, executionUnit) =>
+            {
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => queueItem with
+                    {
+                        State = QueueItemState.Completed
+                    });
+
+                return new ReviewAcceptResult
+                {
+                    ExecutionUnit = executionUnit,
+                    MergedPrRef = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                    ClosedIssueRef = "https://github.com/J-Tech-Japan/intent-system/issues/226"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Null(result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("review accept", action.Name);
+            Assert.Equal("G226", action.ExecutionUnit);
+        }
+        finally
+        {
+            RunCommand.ReviewAcceptExecutor = originalReviewAcceptExecutor;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenCommentReviewDecisionWithCommentBody_ReusesReviewCommentBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "fix-requested",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:00.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "ReviewBot",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        disposition = "fix-requested",
+                        comment_body = "Please cover the deterministic submit path."
+                    })
+                }
+            ]);
+        var originalReviewCommentExecutor = RunCommand.ReviewCommentExecutor;
+
+        try
+        {
+            RunCommand.ReviewCommentExecutor = (context, executionUnit, bodyPath) =>
+            {
+                Assert.Equal(".intent-cli/reviews/G226.comment.md", bodyPath);
+                Assert.Equal(
+                    "Please cover the deterministic submit path.",
+                    File.ReadAllText(Path.Combine(context.RepoRoot, bodyPath.Replace('/', Path.DirectorySeparatorChar))));
+
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => queueItem with
+                    {
+                        State = QueueItemState.Fixing
+                    });
+
+                return new ReviewCommentResult
+                {
+                    ExecutionUnit = executionUnit,
+                    ArtifactPath = ".intent-cli/reviews/G226.comment.json",
+                    CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("deterministic-contract-gap", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("review comment", action.Name);
+            Assert.Equal("G226", action.ExecutionUnit);
+            Assert.Contains("requires .intent-cli/reviews/G226.comment.json", result.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunCommand.ReviewCommentExecutor = originalReviewCommentExecutor;
         }
     }
 
@@ -193,9 +387,25 @@ public sealed class RunCommandTests
 
         var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-        Assert.Equal("parallel-work-detected", result.StopReason);
+        Assert.Equal("deterministic-contract-gap", result.StopReason);
         Assert.Contains("G226", result.Detail, StringComparison.Ordinal);
         Assert.Contains("G227", result.Detail, StringComparison.Ordinal);
+        Assert.Empty(result.Actions);
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenBlockedItem_StopsWithParentIntentUpdateRequired()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Blocked))));
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("parent-intent-update-required", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
         Assert.Empty(result.Actions);
     }
 
@@ -332,6 +542,59 @@ public sealed class RunCommandTests
             DeterministicReviewChecks = [],
             ExpectedEvidence = []
         };
+    }
+
+    private static void WriteDirectRunResult(
+        string repoRoot,
+        string executionUnit,
+        string entryKind,
+        string runStatus,
+        IReadOnlyList<DirectRunProviderEvent>? providerEvents = null)
+    {
+        var runsDirectory = Path.Combine(repoRoot, ".intent-cli", "runs");
+        Directory.CreateDirectory(runsDirectory);
+
+        File.WriteAllText(
+            Path.Combine(runsDirectory, $"{executionUnit}.result.json"),
+            DirectRunResultArtifactJson.Serialize(
+                new DirectRunResultArtifact
+                {
+                    SchemaVersion = "1",
+                    ExecutionUnit = executionUnit,
+                    EntryKind = entryKind,
+                    Provider = "ReviewBot",
+                    Model = "gpt-5.4-mini",
+                    SessionId = "pid:226",
+                    RunStatus = runStatus,
+                    RawLogRef = $".intent-cli/runs/{executionUnit}.provider.jsonl",
+                    PacketRef = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                    ReviewContextRef = $".intent-cli/issues/{executionUnit}/review-context.md",
+                    LinkedIssue = new DirectRunLinkedIssueContext
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 226,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/issues/226"
+                    },
+                    LinkedPr = new DirectRunLinkedPullRequestContext
+                    {
+                        Repo = "J-Tech-Japan/intent-system",
+                        Number = 226,
+                        Url = "https://github.com/J-Tech-Japan/intent-system/pull/226"
+                    },
+                    Worktree = new DirectRunWorktreeContext
+                    {
+                        Path = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit)
+                    }
+                }));
+
+        if (providerEvents is null)
+        {
+            return;
+        }
+
+        File.WriteAllText(
+            Path.Combine(runsDirectory, $"{executionUnit}.provider.jsonl"),
+            string.Join(Environment.NewLine, providerEvents.Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
     }
 
     private sealed class TemporaryDirectory : IDisposable

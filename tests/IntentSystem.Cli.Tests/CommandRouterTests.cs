@@ -77,7 +77,7 @@ public sealed class CommandRouterTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Run orchestration processed.", writer.ToString(), StringComparison.Ordinal);
-        Assert.Contains("no-actionable-work", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("no-actionable-item", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using IntentSystem.Review;
 using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
@@ -13,14 +14,11 @@ internal static class RunCommand
     }
 
     private const int IterationBudget = 128;
-    private const string NoActionableWorkStopReason = "no-actionable-work";
+    private const string NoActionableItemStopReason = "no-actionable-item";
     private const string ClarificationRequiredStopReason = "clarification-required";
-    private const string ParentPlanningRequiredStopReason = "parent-planning-required";
-    private const string ReviewDecisionRequiredStopReason = "review-decision-required";
-    private const string WorkerMonitoringStopReason = "worker-monitoring";
-    private const string ParallelWorkDetectedStopReason = "parallel-work-detected";
-    private const string IterationBudgetExhaustedStopReason = "iteration-budget-exhausted";
+    private const string ParentIntentUpdateRequiredStopReason = "parent-intent-update-required";
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
+    private const string NonRetryableFailureStopReason = "non-retryable-failure";
 
     public static Func<CliContext, string, QueueDispatchCommandResult> QueueDispatchExecutor { get; set; } =
         QueueDispatchCommand.ExecuteCore;
@@ -34,11 +32,26 @@ internal static class RunCommand
     public static Func<CliContext, string, RunFixResult> RunFixExecutor { get; set; } =
         RunFixCommand.ExecuteCore;
 
+    public static Func<CliContext, string, RunSubmitResult> RunSubmitExecutor { get; set; } =
+        RunSubmitCommand.ExecuteCore;
+
+    public static Func<CliContext, string, RunResubmitResult> RunResubmitExecutor { get; set; } =
+        RunResubmitCommand.ExecuteCore;
+
+    public static Func<CliContext, string, RunRereviewResult> RunRereviewExecutor { get; set; } =
+        RunRereviewCommand.ExecuteCore;
+
     public static Func<CliContext, string, RunSuperviseResult> RunSuperviseExecutor { get; set; } =
         RunSuperviseCommand.ExecuteCore;
 
     public static Func<CliContext, string, ReviewRunResult> ReviewRunExecutor { get; set; } =
         ReviewRunCommand.ExecuteCore;
+
+    public static Func<CliContext, string, string, ReviewCommentResult> ReviewCommentExecutor { get; set; } =
+        ReviewCommentCommand.ExecuteCore;
+
+    public static Func<CliContext, string, ReviewAcceptResult> ReviewAcceptExecutor { get; set; } =
+        ReviewAcceptCommand.ExecuteCore;
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -83,7 +96,7 @@ internal static class RunCommand
                 if (inProgressItems.Count > 1)
                 {
                     return CreateStopResult(
-                        ParallelWorkDetectedStopReason,
+                        DeterministicContractGapStopReason,
                         actions,
                         detail: $"Multiple in-progress items detected: {string.Join(", ", inProgressItems.Select(item => item.ExecutionUnit))}.");
                 }
@@ -93,6 +106,27 @@ internal static class RunCommand
                     var inProgressItem = inProgressItems[0];
                     if (inProgressItem.State == QueueItemState.Active)
                     {
+                        var implementRunStatus = TryReadDirectRunStatus(context, inProgressItem.ExecutionUnit);
+                        if (string.Equals(implementRunStatus, "succeeded", StringComparison.Ordinal))
+                        {
+                            ExecuteAction(
+                                context,
+                                actions,
+                                "run submit",
+                                inProgressItem.ExecutionUnit,
+                                () => RunSubmitExecutor(context, inProgressItem.ExecutionUnit));
+                            continue;
+                        }
+
+                        if (string.Equals(implementRunStatus, "failed", StringComparison.Ordinal))
+                        {
+                            return CreateStopResult(
+                                NonRetryableFailureStopReason,
+                                actions,
+                                inProgressItem.ExecutionUnit,
+                                $"Implement direct run failed for '{inProgressItem.ExecutionUnit}'.");
+                        }
+
                         if (!ArtifactExists(context, RunImplementArtifactPathResolver.Resolve(inProgressItem.ExecutionUnit)))
                         {
                             ExecuteAction(
@@ -116,11 +150,7 @@ internal static class RunCommand
                             continue;
                         }
 
-                        return CreateStopResult(
-                            WorkerMonitoringStopReason,
-                            actions,
-                            inProgressItem.ExecutionUnit,
-                            DescribeSupervisionResult(superviseResult));
+                        return CreateMonitoringStopResult(actions, inProgressItem.ExecutionUnit, superviseResult);
                     }
 
                     if (inProgressItem.State == QueueItemState.Fixing)
@@ -145,6 +175,33 @@ internal static class RunCommand
                             continue;
                         }
 
+                        var fixRunStatus = TryReadDirectRunStatus(context, inProgressItem.ExecutionUnit);
+                        if (string.Equals(fixRunStatus, "succeeded", StringComparison.Ordinal))
+                        {
+                            ExecuteAction(
+                                context,
+                                actions,
+                                "run resubmit",
+                                inProgressItem.ExecutionUnit,
+                                () => RunResubmitExecutor(context, inProgressItem.ExecutionUnit));
+                            ExecuteAction(
+                                context,
+                                actions,
+                                "run rereview",
+                                inProgressItem.ExecutionUnit,
+                                () => RunRereviewExecutor(context, inProgressItem.ExecutionUnit));
+                            continue;
+                        }
+
+                        if (string.Equals(fixRunStatus, "failed", StringComparison.Ordinal))
+                        {
+                            return CreateStopResult(
+                                NonRetryableFailureStopReason,
+                                actions,
+                                inProgressItem.ExecutionUnit,
+                                $"Fix direct run failed for '{inProgressItem.ExecutionUnit}'.");
+                        }
+
                         var superviseResult = ExecuteAction(
                             context,
                             actions,
@@ -157,11 +214,7 @@ internal static class RunCommand
                             continue;
                         }
 
-                        return CreateStopResult(
-                            WorkerMonitoringStopReason,
-                            actions,
-                            inProgressItem.ExecutionUnit,
-                            DescribeSupervisionResult(superviseResult));
+                        return CreateMonitoringStopResult(actions, inProgressItem.ExecutionUnit, superviseResult);
                     }
 
                     if (!ArtifactExists(context, ReviewArtifactPathResolver.Resolve(inProgressItem.ExecutionUnit)))
@@ -174,11 +227,52 @@ internal static class RunCommand
                             () => ReviewRunExecutor(context, inProgressItem.ExecutionUnit));
                     }
 
+                    var reviewDecision = ResolveReviewDecision(context, inProgressItem.ExecutionUnit);
+                    if (reviewDecision.Kind == RunReviewDecisionKind.Accept)
+                    {
+                        ExecuteAction(
+                            context,
+                            actions,
+                            "review accept",
+                            inProgressItem.ExecutionUnit,
+                            () => ReviewAcceptExecutor(context, inProgressItem.ExecutionUnit));
+                        continue;
+                    }
+
+                    if (reviewDecision.Kind == RunReviewDecisionKind.Comment)
+                    {
+                        ExecuteAction(
+                            context,
+                            actions,
+                            "review comment",
+                            inProgressItem.ExecutionUnit,
+                            () => ReviewCommentExecutor(context, inProgressItem.ExecutionUnit, reviewDecision.CommentBodyPath!));
+                        continue;
+                    }
+
+                    if (reviewDecision.Kind == RunReviewDecisionKind.Failure)
+                    {
+                        return CreateStopResult(
+                            NonRetryableFailureStopReason,
+                            actions,
+                            inProgressItem.ExecutionUnit,
+                            reviewDecision.Detail);
+                    }
+
+                    if (reviewDecision.Kind == RunReviewDecisionKind.ContractGap)
+                    {
+                        return CreateStopResult(
+                            DeterministicContractGapStopReason,
+                            actions,
+                            inProgressItem.ExecutionUnit,
+                            reviewDecision.Detail);
+                    }
+
                     return CreateStopResult(
-                        ReviewDecisionRequiredStopReason,
+                        NoActionableItemStopReason,
                         actions,
                         inProgressItem.ExecutionUnit,
-                        "Review outcome requires an explicit accept/comment decision.");
+                        reviewDecision.Detail);
                 }
 
                 var nextQueuedItem = QueueSelection.SelectNext(queueState);
@@ -218,13 +312,13 @@ internal static class RunCommand
                 if (blockedItem is not null)
                 {
                     return CreateStopResult(
-                        ParentPlanningRequiredStopReason,
+                        ParentIntentUpdateRequiredStopReason,
                         actions,
                         blockedItem.ExecutionUnit,
                         $"Blocked item '{blockedItem.ExecutionUnit}' requires parent-side planning.");
                 }
 
-                return CreateStopResult(NoActionableWorkStopReason, actions);
+                return CreateStopResult(NoActionableItemStopReason, actions);
             }
             catch (RunDeterministicGapException exception)
             {
@@ -237,7 +331,7 @@ internal static class RunCommand
         }
 
         return CreateStopResult(
-            IterationBudgetExhaustedStopReason,
+            DeterministicContractGapStopReason,
             actions,
             detail: $"Run orchestration exceeded {IterationBudget} iterations.");
     }
@@ -311,6 +405,214 @@ internal static class RunCommand
         return "Worker remains under supervision.";
     }
 
+    private static RunCommandResult CreateMonitoringStopResult(
+        IReadOnlyList<RunCommandAction> actions,
+        string executionUnit,
+        RunSuperviseResult superviseResult)
+    {
+        if (superviseResult.Blocked)
+        {
+            return CreateStopResult(
+                NonRetryableFailureStopReason,
+                actions,
+                executionUnit,
+                $"Supervisor blocked '{executionUnit}' after non-retryable failure.");
+        }
+
+        return CreateStopResult(
+            NoActionableItemStopReason,
+            actions,
+            executionUnit,
+            DescribeSupervisionResult(superviseResult));
+    }
+
+    private static string? TryReadDirectRunStatus(CliContext context, string executionUnit)
+    {
+        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit);
+        return resultArtifact?.RunStatus;
+    }
+
+    private static DirectRunResultArtifact? TryReadDirectRunResultArtifact(CliContext context, string executionUnit)
+    {
+        var resultArtifactRef = ResolveDirectRunResultArtifactRef(context, executionUnit);
+        var resultArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            resultArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(resultArtifactPath))
+        {
+            return null;
+        }
+
+        return DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> TryReadDirectRunProviderEvents(CliContext context, string executionUnit)
+    {
+        var providerLogRef = ResolveDirectRunProviderLogRef(context, executionUnit);
+        var providerLogPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            providerLogRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(providerLogPath))
+        {
+            return [];
+        }
+
+        return DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath));
+    }
+
+    private static string ResolveDirectRunResultArtifactRef(CliContext context, string executionUnit)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{root}/{executionUnit.Trim()}.result.json";
+    }
+
+    private static string ResolveDirectRunProviderLogRef(CliContext context, string executionUnit)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{root}/{executionUnit.Trim()}.provider.jsonl";
+    }
+
+    private static RunReviewDecision ResolveReviewDecision(CliContext context, string executionUnit)
+    {
+        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit);
+        if (resultArtifact is null)
+        {
+            return new RunReviewDecision
+            {
+                Kind = RunReviewDecisionKind.Waiting,
+                Detail = $"Review request exists for '{executionUnit}' but no direct run result is available yet."
+            };
+        }
+
+        var runStatus = resultArtifact.RunStatus;
+        if (string.Equals(runStatus, "failed", StringComparison.Ordinal))
+        {
+            return new RunReviewDecision
+            {
+                Kind = RunReviewDecisionKind.Failure,
+                Detail = $"Review direct run failed for '{executionUnit}'."
+            };
+        }
+
+        if (string.Equals(runStatus, "accepted", StringComparison.Ordinal)
+            || string.Equals(runStatus, "approved", StringComparison.Ordinal)
+            || string.Equals(runStatus, "succeeded", StringComparison.Ordinal))
+        {
+            return new RunReviewDecision
+            {
+                Kind = RunReviewDecisionKind.Accept,
+                Detail = $"Review decision for '{executionUnit}' resolved to accept."
+            };
+        }
+
+        if (string.Equals(runStatus, "comment", StringComparison.Ordinal)
+            || string.Equals(runStatus, "commented", StringComparison.Ordinal)
+            || string.Equals(runStatus, "fix-requested", StringComparison.Ordinal)
+            || string.Equals(runStatus, "changes-requested", StringComparison.Ordinal))
+        {
+            var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
+            if (TryResolveReviewCommentBodyPath(context, executionUnit, providerEvents, out var commentBodyPath))
+            {
+                return new RunReviewDecision
+                {
+                    Kind = RunReviewDecisionKind.Comment,
+                    CommentBodyPath = commentBodyPath,
+                    Detail = $"Review decision for '{executionUnit}' resolved to comment."
+                };
+            }
+
+            return new RunReviewDecision
+            {
+                Kind = RunReviewDecisionKind.ContractGap,
+                Detail = $"Review decision for '{executionUnit}' requested comment but no deterministic comment body was found."
+            };
+        }
+
+        return new RunReviewDecision
+        {
+            Kind = RunReviewDecisionKind.Waiting,
+            Detail = $"Review direct run for '{executionUnit}' is '{runStatus}'."
+        };
+    }
+
+    private static bool TryResolveReviewCommentBodyPath(
+        CliContext context,
+        string executionUnit,
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        out string commentBodyPath)
+    {
+        commentBodyPath = string.Empty;
+
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            if (!TryResolveCommentBody(providerEvents[index].Payload, out var bodyOrPath, out var isPath))
+            {
+                continue;
+            }
+
+            if (isPath)
+            {
+                commentBodyPath = bodyOrPath;
+                return true;
+            }
+
+            var relativePath = $".intent-cli/reviews/{executionUnit}.comment.md";
+            var absolutePath = Path.GetFullPath(Path.Combine(
+                context.RepoRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+            var directoryPath = Path.GetDirectoryName(absolutePath)
+                ?? throw new InvalidOperationException("Review comment body path did not contain a directory.");
+            Directory.CreateDirectory(directoryPath);
+            File.WriteAllText(absolutePath, bodyOrPath);
+            commentBodyPath = relativePath;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryResolveCommentBody(JsonElement payload, out string bodyOrPath, out bool isPath)
+    {
+        bodyOrPath = string.Empty;
+        isPath = false;
+
+        if (payload.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (TryReadString(payload, "body_path", out var bodyPath))
+        {
+            bodyOrPath = bodyPath;
+            isPath = true;
+            return true;
+        }
+
+        if (TryReadString(payload, "comment_body", out var commentBody)
+            || TryReadString(payload, "body", out commentBody)
+            || TryReadString(payload, "markdown", out commentBody))
+        {
+            bodyOrPath = commentBody;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadString(JsonElement payload, string propertyName, out string value)
+    {
+        value = string.Empty;
+
+        if (!payload.TryGetProperty(propertyName, out var element)
+            || element.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = element.GetString() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(value);
+    }
+
     private static RunCommandResult CreateStopResult(
         string stopReason,
         IReadOnlyList<RunCommandAction> actions,
@@ -324,5 +626,23 @@ internal static class RunCommand
             ExecutionUnit = executionUnit,
             Detail = detail
         };
+    }
+
+    private enum RunReviewDecisionKind
+    {
+        Waiting,
+        Accept,
+        Comment,
+        Failure,
+        ContractGap
+    }
+
+    private sealed record RunReviewDecision
+    {
+        public required RunReviewDecisionKind Kind { get; init; }
+
+        public string? CommentBodyPath { get; init; }
+
+        public required string Detail { get; init; }
     }
 }
