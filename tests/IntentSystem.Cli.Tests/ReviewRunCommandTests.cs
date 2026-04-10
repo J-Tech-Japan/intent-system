@@ -83,6 +83,7 @@ public sealed class ReviewRunCommandTests
             var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
             Assert.Equal("G9", resultArtifact.ExecutionUnit);
             Assert.Equal("review", resultArtifact.EntryKind);
+            Assert.Equal(".intent-cli/reviews/G9.request.json", resultArtifact.UpstreamRequestRef);
             Assert.Equal("ReviewBot", resultArtifact.Provider);
             Assert.Equal("gpt-5.4-mini", resultArtifact.Model);
             Assert.Equal("pid:9999", resultArtifact.SessionId);

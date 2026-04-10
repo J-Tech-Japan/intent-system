@@ -12,6 +12,7 @@ public sealed class DirectRunResultArtifactJsonTests
             SchemaVersion = "1",
             ExecutionUnit = "G19",
             EntryKind = "implement",
+            UpstreamRequestRef = ".intent-cli/implement/G19.request.md",
             Provider = "Claude",
             Model = "default",
             SessionId = "pid:4321",
@@ -42,6 +43,7 @@ public sealed class DirectRunResultArtifactJsonTests
 
         Assert.Equal("G19", roundTripped.ExecutionUnit);
         Assert.Equal("implement", roundTripped.EntryKind);
+        Assert.Equal(".intent-cli/implement/G19.request.md", roundTripped.UpstreamRequestRef);
         Assert.Equal("Claude", roundTripped.Provider);
         Assert.Equal("default", roundTripped.Model);
         Assert.Equal("pid:4321", roundTripped.SessionId);

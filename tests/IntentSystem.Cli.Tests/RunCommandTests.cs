@@ -690,6 +690,7 @@ public sealed class RunCommandTests
                     SchemaVersion = "1",
                     ExecutionUnit = executionUnit,
                     EntryKind = entryKind,
+                    UpstreamRequestRef = ResolveUpstreamRequestRef(executionUnit, entryKind),
                     Provider = "ReviewBot",
                     Model = "gpt-5.4-mini",
                     SessionId = "pid:226",
@@ -723,6 +724,17 @@ public sealed class RunCommandTests
         File.WriteAllText(
             Path.Combine(runsDirectory, $"{executionUnit}.provider.jsonl"),
             string.Join(Environment.NewLine, providerEvents.Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+    }
+
+    private static string ResolveUpstreamRequestRef(string executionUnit, string entryKind)
+    {
+        return entryKind switch
+        {
+            "implement" => $".intent-cli/implement/{executionUnit}.request.md",
+            "fix" => $".intent-cli/fix/{executionUnit}.request.md",
+            "review" => $".intent-cli/reviews/{executionUnit}.request.json",
+            _ => throw new InvalidOperationException($"Unsupported entry kind '{entryKind}'.")
+        };
     }
 
     private sealed class TemporaryDirectory : IDisposable
