@@ -2020,6 +2020,34 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIntakeInterviewCommand_DispatchesToBootstrapRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
+            """
+            domain_slug: auth
+            concept_source: interactive
+            concept_text: "Add OAuth2 provider support."
+            upstream_paths:
+              - "README.md"
+            initial_goal: "Add OAuth2 provider support."
+            constraints:
+              - "Preserve packaged invocation."
+            known_unknowns:
+              - "Which auth flow is canonical?"
+            """);
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["intake", "interview", "auth"], CreateContext(repoRoot), writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Intake interview bootstrap processed for domain 'auth'.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("- iq-goal", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenIntakeCompileCommand_DispatchesToIntakeCompileRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
