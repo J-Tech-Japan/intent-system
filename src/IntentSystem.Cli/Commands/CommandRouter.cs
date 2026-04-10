@@ -86,6 +86,7 @@ internal static class CommandRouter
             },
             ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
+                ["init"] = IntakeInitCommand.Execute,
                 ["concept"] = IntakeConceptCommand.Execute,
                 ["interview"] = IntakeInterviewCommand.Execute,
                 ["compile"] = IntakeCompileCommand.Execute,

@@ -11,6 +11,7 @@ public sealed class CliConfigLoaderTests
         default_domain = "intent-cli"
         artifact_root = ".intent-cli"
         worktree_root = ".intent-cli/worktrees"
+        work_repo_path = "../Sekiban-dcb/dcb"
         parent_intent_repo_root = "../MyIntentHost"
         """;
 
@@ -19,6 +20,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("intent-cli", config.Project.Domain);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
+        Assert.Equal("../Sekiban-dcb/dcb", config.Project.WorkRepoPath);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
         Assert.Equal("Claude", config.Roles.Implement);
         Assert.Equal("Codex", config.Roles.Review);
@@ -44,6 +46,7 @@ public sealed class CliConfigLoaderTests
             default_domain = "intent-cli"
             artifact_root = ".intent-cli"
             worktree_root = ".intent-cli/worktrees"
+            work_repo_path = "../Sekiban-dcb/dcb"
             parent_intent_repo_root = "../MyIntentHost"
             """);
 
@@ -52,6 +55,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("intent-cli", config.Project.Domain);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
+        Assert.Equal("../Sekiban-dcb/dcb", config.Project.WorkRepoPath);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
         Assert.Equal("Claude", config.Roles.Implement);
     }
@@ -64,6 +68,7 @@ public sealed class CliConfigLoaderTests
         domain = "intent-cli"
         artifact_root = ".intent-cli"
         worktree_root = ".intent-cli/worktrees"
+        work_repo_path = "../Sekiban-dcb/dcb"
         parent_intent_repo_root = "../MyIntentHost"
         """;
 
@@ -72,6 +77,7 @@ public sealed class CliConfigLoaderTests
         Assert.Equal("intent-cli", config.Project.Domain);
         Assert.Equal(".intent-cli", config.Project.ArtifactRoot);
         Assert.Equal(".intent-cli/worktrees", config.Project.WorktreeRoot);
+        Assert.Equal("../Sekiban-dcb/dcb", config.Project.WorkRepoPath);
         Assert.Equal("../MyIntentHost", config.Project.ParentIntentRepoRoot);
         Assert.Equal("Claude", config.Roles.Implement);
     }

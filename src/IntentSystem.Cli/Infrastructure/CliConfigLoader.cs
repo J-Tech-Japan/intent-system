@@ -52,6 +52,8 @@ internal static class CliConfigLoader
 
         var worktreeRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.WorktreeRootKey)
             ?? CliRuntimeContracts.DefaultWorktreeRoot;
+        var workRepoPath = TryGetOptionalString(rootTable, CliRuntimeContracts.WorkRepoPathKey)
+            ?? string.Empty;
         var parentIntentRepoRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
         var roles = ReadRoles(rootTable);
@@ -62,6 +64,7 @@ internal static class CliConfigLoader
             domain,
             artifactRoot,
             worktreeRoot,
+            workRepoPath,
             parentIntentRepoRoot,
             roles,
             supervision,
@@ -91,6 +94,8 @@ internal static class CliConfigLoader
 
         var worktreeRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.WorktreeRootKey)
             ?? CliRuntimeContracts.DefaultWorktreeRoot;
+        var workRepoPath = TryGetOptionalString(projectTable, CliRuntimeContracts.WorkRepoPathKey)
+            ?? string.Empty;
         var parentIntentRepoRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
         var roles = ReadRoles(rootTable);
@@ -101,6 +106,7 @@ internal static class CliConfigLoader
             domain,
             artifactRoot,
             worktreeRoot,
+            workRepoPath,
             parentIntentRepoRoot,
             roles,
             supervision,
@@ -112,6 +118,7 @@ internal static class CliConfigLoader
         string domain,
         string artifactRoot,
         string worktreeRoot,
+        string workRepoPath,
         string parentIntentRepoRoot,
         RoleMappings roles,
         SupervisionConfig supervision,
@@ -124,6 +131,7 @@ internal static class CliConfigLoader
                 Domain = domain,
                 ArtifactRoot = artifactRoot,
                 WorktreeRoot = worktreeRoot,
+                WorkRepoPath = workRepoPath,
                 ParentIntentRepoRoot = parentIntentRepoRoot
             },
             Roles = roles,
