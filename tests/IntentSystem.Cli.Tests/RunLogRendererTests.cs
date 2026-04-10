@@ -21,6 +21,11 @@ public sealed class RunLogRendererTests
         Assert.Contains("linked_pr=https://github.com/J-Tech-Japan/intent-system/pull/65", output, StringComparison.Ordinal);
         Assert.Contains("comment_ref=https://github.com/J-Tech-Japan/intent-system/pull/65#issuecomment-1", output, StringComparison.Ordinal);
         Assert.Contains("reason=contract mismatch", output, StringComparison.Ordinal);
+        Assert.Contains("entry_kind=fix", output, StringComparison.Ordinal);
+        Assert.Contains("provider=Claude", output, StringComparison.Ordinal);
+        Assert.Contains("run_status=running", output, StringComparison.Ordinal);
+        Assert.Contains("raw_log_ref=.intent-cli/runs/G18.provider.jsonl", output, StringComparison.Ordinal);
+        Assert.Contains("result_ref=.intent-cli/runs/G18.result.json", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -97,6 +102,25 @@ public sealed class RunLogRendererTests
                 By = "intent-cli",
                 CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/65#issuecomment-1",
                 Reason = "contract mismatch"
+            },
+            new RunEvent
+            {
+                Ts = DateTimeOffset.Parse("2026-04-07T08:40:00Z"),
+                ExecutionUnit = "G18",
+                Event = "provider-lifecycle",
+                By = "intent-cli",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/64",
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/65",
+                EntryKind = "fix",
+                Provider = "Claude",
+                Model = "default",
+                SessionId = "pid:4321",
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G18.provider.jsonl",
+                ResultRef = ".intent-cli/runs/G18.result.json",
+                PacketRef = ".intent-cli/issues/G18/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G18/review-context.md",
+                WorktreePath = "/repo/.intent-cli/worktrees/G18"
             }
         ];
     }

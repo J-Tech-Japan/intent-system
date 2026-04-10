@@ -8,7 +8,7 @@ namespace IntentSystem.Cli.Tests;
 public sealed class RunFixCommandTests
 {
     [Fact]
-    public void Execute_GivenFixingItemWithInputs_GeneratesRepairHandoffArtifactWithoutMutatingStateOrRunLog()
+    public void Execute_GivenFixingItemWithInputs_GeneratesRepairHandoffArtifactAndNormalizedRunResult()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -34,7 +34,6 @@ public sealed class RunFixCommandTests
         var originalLauncherFactory = RunFixCommand.DirectRunLauncherFactory;
 
         var originalQueueState = File.ReadAllText(queueStatePath);
-        var originalRunLog = File.ReadAllText(runLogPath);
 
         try
         {
@@ -57,10 +56,12 @@ public sealed class RunFixCommandTests
             Assert.Contains("Latest comment ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", output, StringComparison.Ordinal);
             Assert.Contains("Direct run request artifact: .intent-cli/runs/G20.request.json", output, StringComparison.Ordinal);
             Assert.Contains("Provider raw event log: .intent-cli/runs/G20.provider.jsonl", output, StringComparison.Ordinal);
+            Assert.Contains("Normalized run result: .intent-cli/runs/G20.result.json", output, StringComparison.Ordinal);
             Assert.Contains("Direct provider: Claude", output, StringComparison.Ordinal);
             Assert.Contains("Direct model: default", output, StringComparison.Ordinal);
             Assert.Contains("Direct transport: stdio", output, StringComparison.Ordinal);
             Assert.Contains("Provider session: pid:8765", output, StringComparison.Ordinal);
+            Assert.Contains("Run status: running", output, StringComparison.Ordinal);
 
             var artifactPath = Path.Combine(repoRoot, ".intent-cli", "fix", "G20.request.md");
             Assert.True(File.Exists(artifactPath));
@@ -83,8 +84,39 @@ public sealed class RunFixCommandTests
             Assert.Equal("stdio", directRunArtifact.Transport);
             Assert.Equal("pid:8765", directRunArtifact.ProviderSessionId);
 
+            var resultArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.result.json");
+            Assert.True(File.Exists(resultArtifactPath));
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+            Assert.Equal("G20", resultArtifact.ExecutionUnit);
+            Assert.Equal("fix", resultArtifact.EntryKind);
+            Assert.Equal("Claude", resultArtifact.Provider);
+            Assert.Equal("default", resultArtifact.Model);
+            Assert.Equal("pid:8765", resultArtifact.SessionId);
+            Assert.Equal("running", resultArtifact.RunStatus);
+            Assert.Equal(".intent-cli/runs/G20.provider.jsonl", resultArtifact.RawLogRef);
+            Assert.Equal(".intent-cli/issues/G20/packet.yaml", resultArtifact.PacketRef);
+            Assert.Equal(".intent-cli/issues/G20/review-context.md", resultArtifact.ReviewContextRef);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/68", resultArtifact.LinkedIssueUrl);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/69", resultArtifact.LinkedPrUrl);
+            Assert.EndsWith("/.intent-cli/worktrees/G20", resultArtifact.WorktreePath, StringComparison.Ordinal);
+
             Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
-            Assert.Equal(originalRunLog, File.ReadAllText(runLogPath));
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            var lifecycleEvent = Assert.Single(runEvents, runEvent => runEvent.Event == "provider-lifecycle");
+            Assert.Equal("G20", lifecycleEvent.ExecutionUnit);
+            Assert.Equal("intent-cli", lifecycleEvent.By);
+            Assert.Equal("fix", lifecycleEvent.EntryKind);
+            Assert.Equal("Claude", lifecycleEvent.Provider);
+            Assert.Equal("default", lifecycleEvent.Model);
+            Assert.Equal("pid:8765", lifecycleEvent.SessionId);
+            Assert.Equal("running", lifecycleEvent.RunStatus);
+            Assert.Equal(".intent-cli/runs/G20.provider.jsonl", lifecycleEvent.RawLogRef);
+            Assert.Equal(".intent-cli/runs/G20.result.json", lifecycleEvent.ResultRef);
+            Assert.Equal(".intent-cli/issues/G20/packet.yaml", lifecycleEvent.PacketRef);
+            Assert.Equal(".intent-cli/issues/G20/review-context.md", lifecycleEvent.ReviewContextRef);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/68", lifecycleEvent.LinkedIssue);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/69", lifecycleEvent.LinkedPr);
+            Assert.EndsWith("/.intent-cli/worktrees/G20", lifecycleEvent.WorktreePath, StringComparison.Ordinal);
         }
         finally
         {
@@ -138,6 +170,44 @@ public sealed class RunFixCommandTests
             Assert.EndsWith("/.intent-cli/worktrees/G20", workingDirectory, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/fix/G20.request.md", absoluteRequestArtifactPath, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/runs/G20.provider.jsonl", absoluteProviderEventLogPath, StringComparison.Ordinal);
+
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(absoluteProviderEventLogPath)
+                ?? throw new InvalidOperationException("Provider event log path did not contain a directory."));
+            var providerEvents = string.Join(
+                                     Environment.NewLine,
+                                     new[]
+                                     {
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "session-metadata",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 model = modelArg,
+                                                 transport = transportArg,
+                                                 command
+                                             })
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(1).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "provider-event",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 type = "ready"
+                                             })
+                                         })
+                                     }) + Environment.NewLine;
+            File.WriteAllText(absoluteProviderEventLogPath, providerEvents);
 
             return new DirectRunLaunchResult
             {

@@ -34,6 +34,16 @@ internal static class RunLogRenderer
             AppendOptionalPart(parts, "linked_pr", runEvent.LinkedPr);
             AppendOptionalPart(parts, "comment_ref", runEvent.CommentRef);
             AppendOptionalPart(parts, "reason", runEvent.Reason);
+            AppendOptionalPart(parts, "entry_kind", runEvent.EntryKind);
+            AppendOptionalPart(parts, "provider", runEvent.Provider);
+            AppendOptionalPart(parts, "model", runEvent.Model);
+            AppendOptionalPart(parts, "session_id", runEvent.SessionId);
+            AppendOptionalPart(parts, "run_status", runEvent.RunStatus);
+            AppendOptionalPart(parts, "raw_log_ref", runEvent.RawLogRef);
+            AppendOptionalPart(parts, "result_ref", runEvent.ResultRef);
+            AppendOptionalPart(parts, "packet_ref", runEvent.PacketRef);
+            AppendOptionalPart(parts, "review_context_ref", runEvent.ReviewContextRef);
+            AppendOptionalPart(parts, "worktree_path", runEvent.WorktreePath);
 
             writer.WriteLine($"- {string.Join(" | ", parts)}");
         }

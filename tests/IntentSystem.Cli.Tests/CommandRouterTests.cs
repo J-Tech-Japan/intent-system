@@ -5245,6 +5245,44 @@ recommended_updates:
             string absoluteRequestArtifactPath,
             string absoluteProviderEventLogPath)
         {
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(absoluteProviderEventLogPath)
+                ?? throw new InvalidOperationException("Provider event log path did not contain a directory."));
+            var providerEvents = string.Join(
+                                     Environment.NewLine,
+                                     new[]
+                                     {
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = provider,
+                                             EntryKind = entryKind,
+                                             SessionId = "pid:1234",
+                                             Kind = "session-metadata",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 model,
+                                                 transport,
+                                                 command
+                                             })
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(1).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = provider,
+                                             EntryKind = entryKind,
+                                             SessionId = "pid:1234",
+                                             Kind = "provider-event",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 type = "ready"
+                                             })
+                                         })
+                                     }) + Environment.NewLine;
+            File.WriteAllText(absoluteProviderEventLogPath, providerEvents);
+
             return new DirectRunLaunchResult
             {
                 RequestArtifactPath = requestArtifactPath,
