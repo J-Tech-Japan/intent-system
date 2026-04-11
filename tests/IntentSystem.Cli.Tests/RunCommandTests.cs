@@ -411,6 +411,54 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenSucceededReviewDecision_ReusesReviewAcceptBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
+        WriteDirectRunResult(repoRoot, "G226", "review", "succeeded");
+        var originalReviewAcceptExecutor = RunCommand.ReviewAcceptExecutor;
+
+        try
+        {
+            RunCommand.ReviewAcceptExecutor = (context, executionUnit) =>
+            {
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => queueItem with
+                    {
+                        State = QueueItemState.Completed
+                    });
+
+                return new ReviewAcceptResult
+                {
+                    ExecutionUnit = executionUnit,
+                    MergedPrRef = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                    ClosedIssueRef = "https://github.com/J-Tech-Japan/intent-system/issues/226"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Null(result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("review accept", action.Name);
+            Assert.Equal("G226", action.ExecutionUnit);
+        }
+        finally
+        {
+            RunCommand.ReviewAcceptExecutor = originalReviewAcceptExecutor;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenCommentReviewDecisionWithCommentBody_ReusesReviewCommentBoundary()
     {
         using var tempDirectory = new TemporaryDirectory();
