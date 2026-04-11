@@ -252,15 +252,17 @@ internal static class DirectRunCommandSupport
                 $"Provider raw event log at {providerEventLogPath} did not contain any events.");
         }
 
+        var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, launchResult.ProviderSessionId);
+
         var runLogPath = context.GetRunLogPath();
         var existingRunEvents = File.Exists(runLogPath)
             ? RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath))
             : [];
         var latestLinkedPr = LatestLinkedPrResolver.TryResolve(existingRunEvents, executionUnit);
-        var model = ResolveModel(providerEvents, launchResult.Model);
-        var sessionId = ResolveSessionId(providerEvents, launchResult.ProviderSessionId);
-        var provider = ResolveProvider(providerEvents, launchResult.Provider);
-        var runStatus = ResolveRunStatus(providerEvents);
+        var model = ResolveModel(currentProviderEvents, launchResult.Model);
+        var sessionId = ResolveSessionId(currentProviderEvents, launchResult.ProviderSessionId);
+        var provider = ResolveProvider(currentProviderEvents, launchResult.Provider);
+        var runStatus = ResolveRunStatus(currentProviderEvents);
         var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
         var resultArtifactPath = ResolveResultArtifactPath(context, executionUnit);
         var absoluteResultArtifactPath = Path.GetFullPath(Path.Combine(
@@ -330,6 +332,26 @@ internal static class DirectRunCommandSupport
             ResultArtifactPath = resultArtifactPath,
             RunStatus = runStatus
         };
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> SelectCurrentSessionEvents(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string launchedSessionId)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        if (string.IsNullOrWhiteSpace(launchedSessionId))
+        {
+            return providerEvents;
+        }
+
+        var matchedEvents = providerEvents
+            .Where(providerEvent => string.Equals(providerEvent.SessionId, launchedSessionId, StringComparison.Ordinal))
+            .ToArray();
+
+        return matchedEvents.Length > 0
+            ? matchedEvents
+            : providerEvents;
     }
 
     private static string ResolveProvider(
