@@ -411,7 +411,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenSucceededReviewDecision_ReusesReviewAcceptBoundary()
+    public void ExecuteCore_GivenSucceededReviewDecisionWithoutExplicitOutcome_Waits()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -423,6 +423,62 @@ public sealed class RunCommandTests
             "{}");
         WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
         WriteDirectRunResult(repoRoot, "G226", "review", "succeeded");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("no-actionable-item", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("Review direct run for 'G226' is 'succeeded'.", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenSucceededReviewDecisionWithExplicitAcceptedOutcome_ReusesReviewAcceptBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "succeeded",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:00.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "ReviewBot",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        disposition = "accepted"
+                    })
+                },
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "ReviewBot",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 0
+                    })
+                }
+            ]);
         var originalReviewAcceptExecutor = RunCommand.ReviewAcceptExecutor;
 
         try

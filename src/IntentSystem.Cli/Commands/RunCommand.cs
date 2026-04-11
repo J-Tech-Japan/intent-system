@@ -550,14 +550,52 @@ internal static class RunCommand
         }
 
         if (string.Equals(runStatus, "accepted", StringComparison.Ordinal)
-            || string.Equals(runStatus, "approved", StringComparison.Ordinal)
-            || string.Equals(runStatus, "succeeded", StringComparison.Ordinal))
+            || string.Equals(runStatus, "approved", StringComparison.Ordinal))
         {
             return new RunReviewDecision
             {
                 Kind = RunReviewDecisionKind.Accept,
                 Detail = $"Review decision for '{executionUnit}' resolved to accept."
             };
+        }
+
+        if (string.Equals(runStatus, "succeeded", StringComparison.Ordinal))
+        {
+            var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
+            if (TryResolveExplicitReviewOutcome(providerEvents, out var explicitReviewOutcome))
+            {
+                if (string.Equals(explicitReviewOutcome, "accepted", StringComparison.Ordinal)
+                    || string.Equals(explicitReviewOutcome, "approved", StringComparison.Ordinal))
+                {
+                    return new RunReviewDecision
+                    {
+                        Kind = RunReviewDecisionKind.Accept,
+                        Detail = $"Review decision for '{executionUnit}' resolved to accept."
+                    };
+                }
+
+                if (string.Equals(explicitReviewOutcome, "comment", StringComparison.Ordinal)
+                    || string.Equals(explicitReviewOutcome, "commented", StringComparison.Ordinal)
+                    || string.Equals(explicitReviewOutcome, "fix-requested", StringComparison.Ordinal)
+                    || string.Equals(explicitReviewOutcome, "changes-requested", StringComparison.Ordinal))
+                {
+                    if (TryResolveReviewCommentBodyPath(context, executionUnit, providerEvents, out var commentBodyPath))
+                    {
+                        return new RunReviewDecision
+                        {
+                            Kind = RunReviewDecisionKind.Comment,
+                            CommentBodyPath = commentBodyPath,
+                            Detail = $"Review decision for '{executionUnit}' resolved to comment."
+                        };
+                    }
+
+                    return new RunReviewDecision
+                    {
+                        Kind = RunReviewDecisionKind.ContractGap,
+                        Detail = $"Review decision for '{executionUnit}' requested comment but no deterministic comment body was found."
+                    };
+                }
+            }
         }
 
         if (string.Equals(runStatus, "comment", StringComparison.Ordinal)
@@ -588,6 +626,27 @@ internal static class RunCommand
             Kind = RunReviewDecisionKind.Waiting,
             Detail = $"Review direct run for '{executionUnit}' is '{runStatus}'."
         };
+    }
+
+    private static bool TryResolveExplicitReviewOutcome(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        out string explicitReviewOutcome)
+    {
+        explicitReviewOutcome = string.Empty;
+
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            if (TryResolveRunStatus(providerEvents[index].Payload, out var runStatus)
+                && !string.Equals(runStatus, "succeeded", StringComparison.Ordinal)
+                && !string.Equals(runStatus, "failed", StringComparison.Ordinal)
+                && !string.Equals(runStatus, "running", StringComparison.Ordinal))
+            {
+                explicitReviewOutcome = runStatus;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool MatchesCurrentReviewRequestBoundary(
@@ -668,6 +727,36 @@ internal static class RunCommand
         return false;
     }
 
+    private static bool TryResolveRunStatus(JsonElement payload, out string runStatus)
+    {
+        runStatus = string.Empty;
+
+        if (payload.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (TryReadString(payload, "run_status", out var payloadRunStatus))
+        {
+            runStatus = NormalizeRunStatus(payloadRunStatus);
+            return true;
+        }
+
+        if (TryReadString(payload, "status", out var status))
+        {
+            runStatus = NormalizeRunStatus(status);
+            return true;
+        }
+
+        if (TryReadString(payload, "disposition", out var disposition))
+        {
+            runStatus = NormalizeRunStatus(disposition);
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool TryReadString(JsonElement payload, string propertyName, out string value)
     {
         value = string.Empty;
@@ -680,6 +769,17 @@ internal static class RunCommand
 
         value = element.GetString() ?? string.Empty;
         return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static string NormalizeRunStatus(string status)
+    {
+        return status.Trim().ToLowerInvariant() switch
+        {
+            "success" or "completed" => "succeeded",
+            "error" => "failed",
+            var normalized when !string.IsNullOrWhiteSpace(normalized) => normalized,
+            _ => "running"
+        };
     }
 
     private static RunCommandResult CreateStopResult(
