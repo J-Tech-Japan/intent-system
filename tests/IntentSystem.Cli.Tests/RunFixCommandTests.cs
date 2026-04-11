@@ -90,6 +90,7 @@ public sealed class RunFixCommandTests
             var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
             Assert.Equal("G20", resultArtifact.ExecutionUnit);
             Assert.Equal("fix", resultArtifact.EntryKind);
+            Assert.Equal(".intent-cli/fix/G20.request.md", resultArtifact.UpstreamRequestRef);
             Assert.Equal("Claude", resultArtifact.Provider);
             Assert.Equal("default", resultArtifact.Model);
             Assert.Equal("pid:8765", resultArtifact.SessionId);

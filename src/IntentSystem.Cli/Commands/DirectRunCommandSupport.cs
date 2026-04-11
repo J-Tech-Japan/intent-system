@@ -92,6 +92,7 @@ internal static class DirectRunCommandSupport
             context,
             executionUnit,
             entryKindValue,
+            upstreamRequestRef,
             launchedAt,
             launchResult);
 
@@ -224,6 +225,7 @@ internal static class DirectRunCommandSupport
         CliContext context,
         string executionUnit,
         string entryKind,
+        string upstreamRequestRef,
         DateTimeOffset launchedAt,
         DirectRunLaunchResult launchResult)
     {
@@ -270,6 +272,7 @@ internal static class DirectRunCommandSupport
             SchemaVersion = "1",
             ExecutionUnit = executionUnit,
             EntryKind = entryKind,
+            UpstreamRequestRef = upstreamRequestRef,
             Provider = provider,
             Model = model,
             SessionId = sessionId,

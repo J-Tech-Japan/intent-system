@@ -84,6 +84,7 @@ public sealed class RunImplementCommandTests
             var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
             Assert.Equal("G19", resultArtifact.ExecutionUnit);
             Assert.Equal("implement", resultArtifact.EntryKind);
+            Assert.Equal(".intent-cli/implement/G19.request.md", resultArtifact.UpstreamRequestRef);
             Assert.Equal("Claude", resultArtifact.Provider);
             Assert.Equal("default", resultArtifact.Model);
             Assert.Equal("pid:4321", resultArtifact.SessionId);

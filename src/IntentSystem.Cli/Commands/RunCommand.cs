@@ -476,6 +476,26 @@ internal static class RunCommand
         return DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath));
     }
 
+    private static DirectRunRequestArtifact? TryReadDirectRunRequestArtifact(CliContext context, string executionUnit)
+    {
+        var requestArtifactRef = ResolveDirectRunRequestArtifactRef(context, executionUnit);
+        var requestArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            requestArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(requestArtifactPath))
+        {
+            return null;
+        }
+
+        return DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+    }
+
+    private static string ResolveDirectRunRequestArtifactRef(CliContext context, string executionUnit)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{root}/{executionUnit.Trim()}.request.json";
+    }
+
     private static string ResolveDirectRunResultArtifactRef(CliContext context, string executionUnit)
     {
         var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
@@ -490,6 +510,16 @@ internal static class RunCommand
 
     private static RunReviewDecision ResolveReviewDecision(CliContext context, string executionUnit)
     {
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        if (requestArtifact is null)
+        {
+            return new RunReviewDecision
+            {
+                Kind = RunReviewDecisionKind.Waiting,
+                Detail = $"Review request exists for '{executionUnit}' but no direct run request boundary is available yet."
+            };
+        }
+
         var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit, "review");
         if (resultArtifact is null)
         {
@@ -497,6 +527,15 @@ internal static class RunCommand
             {
                 Kind = RunReviewDecisionKind.Waiting,
                 Detail = $"Review request exists for '{executionUnit}' but no direct run result is available yet."
+            };
+        }
+
+        if (!MatchesCurrentReviewRequestBoundary(requestArtifact, resultArtifact))
+        {
+            return new RunReviewDecision
+            {
+                Kind = RunReviewDecisionKind.Waiting,
+                Detail = $"Review direct run result for '{executionUnit}' does not match the current launched request boundary."
             };
         }
 
@@ -549,6 +588,20 @@ internal static class RunCommand
             Kind = RunReviewDecisionKind.Waiting,
             Detail = $"Review direct run for '{executionUnit}' is '{runStatus}'."
         };
+    }
+
+    private static bool MatchesCurrentReviewRequestBoundary(
+        DirectRunRequestArtifact requestArtifact,
+        DirectRunResultArtifact resultArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(requestArtifact);
+        ArgumentNullException.ThrowIfNull(resultArtifact);
+
+        return string.Equals(resultArtifact.EntryKind, requestArtifact.EntryKind, StringComparison.Ordinal)
+            && string.Equals(resultArtifact.UpstreamRequestRef, requestArtifact.UpstreamRequestRef, StringComparison.Ordinal)
+            && string.Equals(resultArtifact.Provider, requestArtifact.Provider, StringComparison.Ordinal)
+            && string.Equals(resultArtifact.Model, requestArtifact.Model, StringComparison.Ordinal)
+            && string.Equals(resultArtifact.SessionId, requestArtifact.ProviderSessionId, StringComparison.Ordinal);
     }
 
     private static bool TryResolveReviewCommentBodyPath(
