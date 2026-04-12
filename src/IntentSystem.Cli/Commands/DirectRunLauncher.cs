@@ -81,15 +81,14 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     transport,
                     command));
             },
-            processInvocation.SelfReportsBackendExit
-                ? static _ => { }
-                : exitCode => eventWriter.Append(CreateBackendExitEvent(
-                    DateTimeOffset.UtcNow,
+            exitCode => AppendBackendExitEventIfMissing(
+                    eventWriter,
+                    absoluteProviderEventLogPath,
                     executionUnit,
                     entryKind,
                     provider,
                     providerSessionId,
-                    exitCode)),
+                    exitCode),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)));
 
@@ -152,8 +151,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             return new ResolvedProcessInvocation
             {
                 FileName = command,
-                Arguments = arguments,
-                SelfReportsBackendExit = false
+                Arguments = arguments
             };
         }
 
@@ -185,8 +183,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 provider,
                 command,
                 .. arguments
-            ],
-            SelfReportsBackendExit = true
+            ]
         };
     }
 
@@ -195,6 +192,52 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         return !OperatingSystem.IsWindows()
             && (string.Equals(provider, "codex", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(command, "codex", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void AppendBackendExitEventIfMissing(
+        DirectRunProviderEventWriter eventWriter,
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(eventWriter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
+
+        if (string.IsNullOrWhiteSpace(providerSessionId) || HasBackendExitEvent(providerEventLogPath, providerSessionId))
+        {
+            return;
+        }
+
+        eventWriter.Append(CreateBackendExitEvent(
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            exitCode));
+    }
+
+    private static bool HasBackendExitEvent(string providerEventLogPath, string providerSessionId)
+    {
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        foreach (var line in File.ReadLines(providerEventLogPath))
+        {
+            if (line.Contains($"\"session_id\":\"{providerSessionId}\"", StringComparison.Ordinal)
+                && line.Contains("\"kind\":\"provider-event\"", StringComparison.Ordinal)
+                && line.Contains("\"type\":\"backend-exit\"", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static DirectRunProviderEvent CreateSessionMetadataEvent(
@@ -286,7 +329,5 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         public required string FileName { get; init; }
 
         public required IReadOnlyList<string> Arguments { get; init; }
-
-        public required bool SelfReportsBackendExit { get; init; }
     }
 }

@@ -109,6 +109,12 @@ public sealed class DirectRunLauncherTests
         var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G9.provider.jsonl");
         var worktreePath = tempDirectory.GetPath("repo");
         Directory.CreateDirectory(worktreePath);
+        var codexPath = tempDirectory.CreateExecutableFile(
+            "repo/codex",
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
+            """);
         var runner = new FakeDirectRunProcessRunner
         {
             ExecuteReceivedProcess = true
@@ -123,14 +129,16 @@ public sealed class DirectRunLauncherTests
             "Codex",
             "gpt-5.4-mini",
             "responses",
-            "/bin/sh",
-            ["-c", "printf '{\"type\":\"ready\"}\\n'"],
+            codexPath,
+            ["exec", "test prompt"],
             DateTimeOffset.Parse("2026-04-09T10:35:00Z"),
             worktreePath,
             tempDirectory.GetPath(".intent-cli/reviews/G9.request.json"),
             providerEventLogPath);
 
         Assert.Equal("pid:", result.ProviderSessionId[..4]);
+        Assert.Equal("/bin/sh", runner.FileName);
+        Assert.Contains(codexPath, runner.Arguments, StringComparer.Ordinal);
 
         var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
         Assert.Contains(events, providerEvent =>
@@ -151,6 +159,54 @@ public sealed class DirectRunLauncherTests
         Assert.Equal("Codex", backendExitEvent.Provider);
         Assert.Equal("review", backendExitEvent.EntryKind);
         Assert.Equal(result.ProviderSessionId, backendExitEvent.SessionId);
+        Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+    }
+
+    [Fact]
+    public void Launch_GivenWrappedCodexExitWithoutWrapperWrite_AppendsFallbackBackendExitProviderEvent()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G10.provider.jsonl");
+        var runner = new FakeDirectRunProcessRunner
+        {
+            ExitCodeEvent = 0,
+            Result = new DirectRunProcessLaunchResult
+            {
+                ProcessId = 2468,
+                ExitedEarly = false,
+                ExitCode = 0
+            }
+        };
+        var launcher = new DirectRunLauncher(runner);
+
+        var result = launcher.Launch(
+            "G10",
+            "review",
+            ".intent-cli/runs/G10.request.json",
+            ".intent-cli/runs/G10.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            "/tmp/fake-codex",
+            ["exec", "test prompt"],
+            DateTimeOffset.Parse("2026-04-09T10:45:00Z"),
+            "/repo",
+            "/repo/.intent-cli/reviews/G10.request.json",
+            providerEventLogPath);
+
+        Assert.Equal("/bin/sh", runner.FileName);
+        Assert.Equal("pid:2468", result.ProviderSessionId);
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        var backendExitEvent = Assert.Single(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+        Assert.Equal("G10", backendExitEvent.ExecutionUnit);
+        Assert.Equal("Codex", backendExitEvent.Provider);
+        Assert.Equal("review", backendExitEvent.EntryKind);
+        Assert.Equal("pid:2468", backendExitEvent.SessionId);
         Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
     }
 
@@ -338,6 +394,28 @@ public sealed class DirectRunLauncherTests
         public string GetPath(string relativePath)
         {
             return Path.Combine(rootPath, relativePath);
+        }
+
+        public string CreateExecutableFile(string relativePath, string content)
+        {
+            var path = GetPath(relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    path,
+                    UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead
+                    | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead
+                    | UnixFileMode.OtherExecute);
+            }
+
+            return path;
         }
 
         public void Dispose()
