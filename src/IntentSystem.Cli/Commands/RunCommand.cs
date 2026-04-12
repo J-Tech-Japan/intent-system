@@ -539,6 +539,9 @@ internal static class RunCommand
             };
         }
 
+        var providerEvents = SelectCurrentSessionEvents(
+            TryReadDirectRunProviderEvents(context, executionUnit),
+            requestArtifact.ProviderSessionId);
         var runStatus = resultArtifact.RunStatus;
         if (string.Equals(runStatus, "failed", StringComparison.Ordinal))
         {
@@ -561,7 +564,6 @@ internal static class RunCommand
 
         if (string.Equals(runStatus, "succeeded", StringComparison.Ordinal))
         {
-            var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
             if (TryResolveExplicitReviewOutcome(providerEvents, out var explicitReviewOutcome))
             {
                 if (string.Equals(explicitReviewOutcome, "accepted", StringComparison.Ordinal)
@@ -603,7 +605,6 @@ internal static class RunCommand
             || string.Equals(runStatus, "fix-requested", StringComparison.Ordinal)
             || string.Equals(runStatus, "changes-requested", StringComparison.Ordinal))
         {
-            var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
             if (TryResolveReviewCommentBodyPath(context, executionUnit, providerEvents, out var commentBodyPath))
             {
                 return new RunReviewDecision
@@ -647,6 +648,26 @@ internal static class RunCommand
         }
 
         return false;
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> SelectCurrentSessionEvents(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string launchedSessionId)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        if (string.IsNullOrWhiteSpace(launchedSessionId))
+        {
+            return providerEvents;
+        }
+
+        var matchedEvents = providerEvents
+            .Where(providerEvent => string.Equals(providerEvent.SessionId, launchedSessionId, StringComparison.Ordinal))
+            .ToArray();
+
+        return matchedEvents.Length > 0
+            ? matchedEvents
+            : providerEvents;
     }
 
     private static bool MatchesCurrentReviewRequestBoundary(
