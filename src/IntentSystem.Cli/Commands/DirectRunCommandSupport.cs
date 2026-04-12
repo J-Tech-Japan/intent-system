@@ -447,6 +447,12 @@ internal static class DirectRunCommandSupport
             return NormalizeRunStatus(disposition);
         }
 
+        if (TryReadInt32(payload, "exit_code", out var exitCode)
+            || TryReadInt32(payload, "exitCode", out exitCode))
+        {
+            return exitCode == 0 ? "succeeded" : "failed";
+        }
+
         return null;
     }
 
@@ -465,6 +471,35 @@ internal static class DirectRunCommandSupport
 
         value = element.GetString() ?? string.Empty;
         return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool TryReadInt32(
+        System.Text.Json.JsonElement payload,
+        string propertyName,
+        out int value)
+    {
+        value = 0;
+
+        if (!payload.TryGetProperty(propertyName, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Number)
+        {
+            return element.TryGetInt32(out value);
+        }
+
+        if (element.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            return int.TryParse(
+                element.GetString(),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value);
+        }
+
+        return false;
     }
 
     private static string NormalizeRunStatus(string status)
