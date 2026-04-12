@@ -100,20 +100,22 @@ public sealed class DirectRunLauncherTests
     [Fact]
     public void Launch_GivenProcessExit_AppendsBackendExitProviderEvent()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var tempDirectory = new TemporaryDirectory();
         var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G9.provider.jsonl");
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
         var runner = new FakeDirectRunProcessRunner
         {
-            Result = new DirectRunProcessLaunchResult
-            {
-                ProcessId = 4321,
-                ExitedEarly = false,
-                ExitCode = 0
-            }
+            ExecuteReceivedProcess = true
         };
         var launcher = new DirectRunLauncher(runner);
 
-        launcher.Launch(
+        var result = launcher.Launch(
             "G9",
             "review",
             ".intent-cli/runs/G9.request.json",
@@ -121,23 +123,25 @@ public sealed class DirectRunLauncherTests
             "Codex",
             "gpt-5.4-mini",
             "responses",
-            "codex",
-            ["exec", "{prompt}"],
+            "/bin/sh",
+            ["-c", "printf '{\"type\":\"ready\"}\\n'"],
             DateTimeOffset.Parse("2026-04-09T10:35:00Z"),
-            "/repo",
-            "/repo/.intent-cli/reviews/G9.request.json",
+            worktreePath,
+            tempDirectory.GetPath(".intent-cli/reviews/G9.request.json"),
             providerEventLogPath);
 
-        Assert.Equal("/bin/sh", runner.FileName);
-        Assert.Equal("-c", runner.Arguments[0]);
-        Assert.Equal("direct-run-wrapper", runner.Arguments[2]);
-        Assert.Equal(providerEventLogPath, runner.Arguments[3]);
-        Assert.Equal("G9", runner.Arguments[4]);
-        Assert.Equal("review", runner.Arguments[5]);
-        Assert.Equal("Codex", runner.Arguments[6]);
-        Assert.Equal("codex", runner.Arguments[7]);
+        Assert.Equal("pid:", result.ProviderSessionId[..4]);
 
         var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "session-metadata"
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "ready", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
         var backendExitEvent = Assert.Single(events, providerEvent =>
             providerEvent.Kind == "provider-event"
             && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
@@ -146,7 +150,7 @@ public sealed class DirectRunLauncherTests
         Assert.Equal("G9", backendExitEvent.ExecutionUnit);
         Assert.Equal("Codex", backendExitEvent.Provider);
         Assert.Equal("review", backendExitEvent.EntryKind);
-        Assert.Equal("pid:4321", backendExitEvent.SessionId);
+        Assert.Equal(result.ProviderSessionId, backendExitEvent.SessionId);
         Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
     }
 
@@ -234,6 +238,8 @@ public sealed class DirectRunLauncherTests
 
         public int? ExitCodeEvent { get; init; }
 
+        public bool ExecuteReceivedProcess { get; init; }
+
         public DirectRunProcessLaunchResult Result { get; set; } = new()
         {
             ProcessId = 1,
@@ -254,6 +260,49 @@ public sealed class DirectRunLauncherTests
             WorkingDirectory = workingDirectory;
             FileName = fileName;
             Arguments = arguments.ToArray();
+
+            if (ExecuteReceivedProcess)
+            {
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = fileName,
+                    WorkingDirectory = workingDirectory,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                foreach (var argument in arguments)
+                {
+                    startInfo.ArgumentList.Add(argument);
+                }
+
+                using var process = System.Diagnostics.Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("Failed to start wrapper process.");
+                onStarted(process.Id);
+                var stdout = process.StandardOutput.ReadToEnd();
+                var stderr = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+
+                foreach (var line in SplitLines(stdout))
+                {
+                    onStdOutLine(line);
+                }
+
+                foreach (var line in SplitLines(stderr))
+                {
+                    onStdErrLine(line);
+                }
+
+                onExited(process.ExitCode);
+                return new DirectRunProcessLaunchResult
+                {
+                    ProcessId = process.Id,
+                    ExitedEarly = true,
+                    ExitCode = process.ExitCode
+                };
+            }
+
             onStarted(Result.ProcessId);
             foreach (var line in StdOutLines)
             {
@@ -265,42 +314,20 @@ public sealed class DirectRunLauncherTests
                 onStdErrLine(line);
             }
 
-            if (string.Equals(fileName, "/bin/sh", StringComparison.Ordinal)
-                && arguments.Count >= 8)
-            {
-                var providerEventLogPath = arguments[3];
-                var executionUnit = arguments[4];
-                var entryKind = arguments[5];
-                var provider = arguments[6];
-                var exitCode = Result.ExitedEarly
-                    ? Result.ExitCode
-                    : ExitCodeEvent ?? 0;
-                var directoryPath = Path.GetDirectoryName(providerEventLogPath)
-                    ?? throw new InvalidOperationException("Provider event log path did not contain a directory.");
-                Directory.CreateDirectory(directoryPath);
-                File.AppendAllText(
-                    providerEventLogPath,
-                    DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
-                    {
-                        Timestamp = "2026-04-09T10:35:01Z",
-                        ExecutionUnit = executionUnit,
-                        Provider = provider,
-                        EntryKind = entryKind,
-                        SessionId = $"pid:{Result.ProcessId}",
-                        Kind = "provider-event",
-                        Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
-                        {
-                            type = "backend-exit",
-                            exit_code = exitCode
-                        })
-                    }) + Environment.NewLine);
-            }
-            else if (ExitCodeEvent is { } exitCode)
+            if (ExitCodeEvent is { } exitCode)
             {
                 onExited(exitCode);
             }
 
             return Result;
+        }
+
+        private static IReadOnlyList<string> SplitLines(string content)
+        {
+            return content
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace('\r', '\n')
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
         }
     }
 
