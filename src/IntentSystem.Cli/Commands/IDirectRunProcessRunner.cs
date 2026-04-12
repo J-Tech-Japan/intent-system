@@ -8,6 +8,7 @@ internal interface IDirectRunProcessRunner
         IReadOnlyList<string> arguments,
         TimeSpan earlyExitWindow,
         Action<int> onStarted,
+        Action<int> onExited,
         Action<string> onStdOutLine,
         Action<string> onStdErrLine);
 }

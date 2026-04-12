@@ -74,6 +74,13 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     transport,
                     command));
             },
+            exitCode => eventWriter.Append(CreateBackendExitEvent(
+                DateTimeOffset.UtcNow,
+                executionUnit,
+                entryKind,
+                provider,
+                providerSessionId,
+                exitCode)),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)));
 
@@ -167,6 +174,30 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             SessionId = providerSessionId,
             Kind = "provider-event",
             Payload = ParsePayload(raw)
+        };
+    }
+
+    private static DirectRunProviderEvent CreateBackendExitEvent(
+        DateTimeOffset timestamp,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        int exitCode)
+    {
+        return new DirectRunProviderEvent
+        {
+            Timestamp = timestamp.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
+            SessionId = providerSessionId,
+            Kind = "provider-event",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                type = "backend-exit",
+                exit_code = exitCode
+            })
         };
     }
 

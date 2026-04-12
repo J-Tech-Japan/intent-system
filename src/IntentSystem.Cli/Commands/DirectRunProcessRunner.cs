@@ -11,6 +11,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
         IReadOnlyList<string> arguments,
         TimeSpan earlyExitWindow,
         Action<int> onStarted,
+        Action<int> onExited,
         Action<string> onStdOutLine,
         Action<string> onStdErrLine)
     {
@@ -18,6 +19,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentNullException.ThrowIfNull(onStarted);
+        ArgumentNullException.ThrowIfNull(onExited);
         ArgumentNullException.ThrowIfNull(onStdOutLine);
         ArgumentNullException.ThrowIfNull(onStdErrLine);
 
@@ -43,6 +45,20 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
 
             onStarted(process.Id);
 
+            var exitReported = 0;
+            process.EnableRaisingEvents = true;
+            process.Exited += (_, _) =>
+            {
+                if (System.Threading.Interlocked.Exchange(ref exitReported, 1) != 0)
+                {
+                    return;
+                }
+
+                process.WaitForExit();
+                onExited(process.ExitCode);
+                process.Dispose();
+            };
+
             process.OutputDataReceived += (_, eventArgs) =>
             {
                 if (!string.IsNullOrEmpty(eventArgs.Data))
@@ -66,8 +82,12 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
 
             if (exitedEarly)
             {
-                process.WaitForExit();
-                process.Dispose();
+                if (System.Threading.Interlocked.Exchange(ref exitReported, 1) == 0)
+                {
+                    process.WaitForExit();
+                    onExited(exitCode);
+                    process.Dispose();
+                }
             }
 
             return new DirectRunProcessLaunchResult
