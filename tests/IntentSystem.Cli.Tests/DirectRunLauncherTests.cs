@@ -104,7 +104,6 @@ public sealed class DirectRunLauncherTests
         var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G9.provider.jsonl");
         var runner = new FakeDirectRunProcessRunner
         {
-            ExitCodeEvent = 0,
             Result = new DirectRunProcessLaunchResult
             {
                 ProcessId = 4321,
@@ -128,6 +127,15 @@ public sealed class DirectRunLauncherTests
             "/repo",
             "/repo/.intent-cli/reviews/G9.request.json",
             providerEventLogPath);
+
+        Assert.Equal("/bin/sh", runner.FileName);
+        Assert.Equal("-c", runner.Arguments[0]);
+        Assert.Equal("direct-run-wrapper", runner.Arguments[2]);
+        Assert.Equal(providerEventLogPath, runner.Arguments[3]);
+        Assert.Equal("G9", runner.Arguments[4]);
+        Assert.Equal("review", runner.Arguments[5]);
+        Assert.Equal("Codex", runner.Arguments[6]);
+        Assert.Equal("codex", runner.Arguments[7]);
 
         var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
         var backendExitEvent = Assert.Single(events, providerEvent =>
@@ -257,7 +265,37 @@ public sealed class DirectRunLauncherTests
                 onStdErrLine(line);
             }
 
-            if (ExitCodeEvent is { } exitCode)
+            if (string.Equals(fileName, "/bin/sh", StringComparison.Ordinal)
+                && arguments.Count >= 8)
+            {
+                var providerEventLogPath = arguments[3];
+                var executionUnit = arguments[4];
+                var entryKind = arguments[5];
+                var provider = arguments[6];
+                var exitCode = Result.ExitedEarly
+                    ? Result.ExitCode
+                    : ExitCodeEvent ?? 0;
+                var directoryPath = Path.GetDirectoryName(providerEventLogPath)
+                    ?? throw new InvalidOperationException("Provider event log path did not contain a directory.");
+                Directory.CreateDirectory(directoryPath);
+                File.AppendAllText(
+                    providerEventLogPath,
+                    DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                    {
+                        Timestamp = "2026-04-09T10:35:01Z",
+                        ExecutionUnit = executionUnit,
+                        Provider = provider,
+                        EntryKind = entryKind,
+                        SessionId = $"pid:{Result.ProcessId}",
+                        Kind = "provider-event",
+                        Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                        {
+                            type = "backend-exit",
+                            exit_code = exitCode
+                        })
+                    }) + Environment.NewLine);
+            }
+            else if (ExitCodeEvent is { } exitCode)
             {
                 onExited(exitCode);
             }
