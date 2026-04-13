@@ -63,7 +63,6 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             arguments,
             absoluteProviderEventLogPath);
         var eventWriter = new DirectRunProviderEventWriter(absoluteProviderEventLogPath);
-        var absoluteResultArtifactPath = ResolveResultArtifactPath(absoluteProviderEventLogPath);
         var providerSessionId = string.Empty;
         var process = processRunner.Start(
             workingDirectory,
@@ -86,7 +85,6 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     processInvocation.RequiresPersistentExitMonitor,
                     processId,
                     absoluteProviderEventLogPath,
-                    absoluteResultArtifactPath,
                     executionUnit,
                     entryKind,
                     provider,
@@ -180,32 +178,9 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 provider=$4
                 shift 4
                 session_id="pid:$$"
-                result_artifact_path="${provider_log_path%.provider.jsonl}.result.json"
                 child_pid=""
                 exit_code=0
                 backend_exit_written=0
-                update_result_artifact() {
-                    if [ ! -f "$result_artifact_path" ]; then
-                        attempts=0
-                        while [ "$attempts" -lt 50 ] && [ ! -f "$result_artifact_path" ]; do
-                            sleep 0.1
-                            attempts=$((attempts + 1))
-                        done
-                    fi
-                    if [ ! -f "$result_artifact_path" ]; then
-                        return
-                    fi
-                    run_status="failed"
-                    if [ "$exit_code" -eq 0 ]; then
-                        run_status="succeeded"
-                    fi
-                    temp_result_path="${result_artifact_path}.tmp.$$"
-                    if sed "s/\"run_status\": \"[^\"]*\"/\"run_status\": \"$run_status\"/" "$result_artifact_path" > "$temp_result_path"; then
-                        mv "$temp_result_path" "$result_artifact_path"
-                    else
-                        rm -f "$temp_result_path"
-                    fi
-                }
                 append_backend_exit() {
                     if [ "$backend_exit_written" -ne 0 ]; then
                         return
@@ -213,7 +188,6 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     backend_exit_written=1
                     timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
                     printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":$exit_code}}" >> "$provider_log_path"
-                    update_result_artifact
                 }
                 handle_signal() {
                     signal_name=$1
@@ -246,17 +220,6 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             ],
             RequiresPersistentExitMonitor = true
         };
-    }
-
-    private static string ResolveResultArtifactPath(string providerEventLogPath)
-    {
-        const string providerSuffix = ".provider.jsonl";
-        if (!providerEventLogPath.EndsWith(providerSuffix, StringComparison.Ordinal))
-        {
-            return providerEventLogPath + ".result.json";
-        }
-
-        return providerEventLogPath[..^providerSuffix.Length] + ".result.json";
     }
 
     private static bool ShouldShellWrapForPersistentExitLogging(string provider, string command)
@@ -312,7 +275,6 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         bool requiresPersistentExitMonitor,
         int processId,
         string providerEventLogPath,
-        string resultArtifactPath,
         string executionUnit,
         string entryKind,
         string provider,
@@ -335,11 +297,10 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             """
             pid=$1
             provider_log_path=$2
-            result_artifact_path=$3
-            execution_unit=$4
-            entry_kind=$5
-            provider=$6
-            session_id=$7
+            execution_unit=$3
+            entry_kind=$4
+            provider=$5
+            session_id=$6
             while kill -0 "$pid" 2>/dev/null; do
                 sleep 1
             done
@@ -348,19 +309,10 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             fi
             timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
             printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":1}}" >> "$provider_log_path"
-            if [ -f "$result_artifact_path" ]; then
-                temp_result_path="${result_artifact_path}.tmp.$$"
-                if sed "s/\"run_status\": \"[^\"]*\"/\"run_status\": \"failed\"/" "$result_artifact_path" > "$temp_result_path"; then
-                    mv "$temp_result_path" "$result_artifact_path"
-                else
-                    rm -f "$temp_result_path"
-                fi
-            fi
             """);
         startInfo.ArgumentList.Add("direct-run-exit-monitor");
         startInfo.ArgumentList.Add(processId.ToString());
         startInfo.ArgumentList.Add(providerEventLogPath);
-        startInfo.ArgumentList.Add(resultArtifactPath);
         startInfo.ArgumentList.Add(executionUnit);
         startInfo.ArgumentList.Add(entryKind);
         startInfo.ArgumentList.Add(provider);

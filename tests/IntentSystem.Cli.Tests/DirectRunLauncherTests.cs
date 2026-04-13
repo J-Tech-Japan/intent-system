@@ -221,13 +221,8 @@ public sealed class DirectRunLauncherTests
 
         using var tempDirectory = new TemporaryDirectory();
         var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G12.provider.jsonl");
-        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G12.result.json");
         var worktreePath = tempDirectory.GetPath("repo");
         Directory.CreateDirectory(worktreePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(resultArtifactPath)!);
-        File.WriteAllText(
-            resultArtifactPath,
-            DirectRunResultArtifactJson.Serialize(CreateResultArtifact("G12", "review", ".intent-cli/runs/G12.provider.jsonl", "running")));
         var codexPath = tempDirectory.CreateExecutableFile(
             "repo/codex-experimental",
             """
@@ -290,9 +285,6 @@ public sealed class DirectRunLauncherTests
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
             && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
         Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
-
-        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
-        Assert.Equal("succeeded", resultArtifact.RunStatus);
     }
 
     [Fact]
@@ -315,11 +307,6 @@ public sealed class DirectRunLauncherTests
 
         using var tempDirectory = new TemporaryDirectory();
         var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14.provider.jsonl");
-        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14.result.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(resultArtifactPath)!);
-        File.WriteAllText(
-            resultArtifactPath,
-            DirectRunResultArtifactJson.Serialize(CreateResultArtifact("G14", "review", ".intent-cli/runs/G14.provider.jsonl", "running")));
         var runner = new FakeDirectRunProcessRunner
         {
             Result = new DirectRunProcessLaunchResult
@@ -372,9 +359,6 @@ public sealed class DirectRunLauncherTests
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
             && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
         Assert.Equal(1, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
-
-        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
-        Assert.Equal("failed", resultArtifact.RunStatus);
     }
 
     [Fact]
@@ -527,39 +511,6 @@ public sealed class DirectRunLauncherTests
         });
 
         signalProcess?.WaitForExit();
-    }
-
-    private static DirectRunResultArtifact CreateResultArtifact(
-        string executionUnit,
-        string entryKind,
-        string rawLogRef,
-        string runStatus)
-    {
-        return new DirectRunResultArtifact
-        {
-            SchemaVersion = "1",
-            ExecutionUnit = executionUnit,
-            EntryKind = entryKind,
-            UpstreamRequestRef = $".intent-cli/{entryKind}s/{executionUnit}.request.json",
-            Provider = "OpenAI",
-            Model = "gpt-5.4-mini",
-            SessionId = "pid:placeholder",
-            RunStatus = runStatus,
-            RawLogRef = rawLogRef,
-            PacketRef = $".intent-cli/issues/{executionUnit}/packet.yaml",
-            ReviewContextRef = $".intent-cli/issues/{executionUnit}/review-context.md",
-            LinkedIssue = null,
-            LinkedPr = new DirectRunLinkedPullRequestContext
-            {
-                Repo = "J-Tech-Japan/intent-system",
-                Number = 248,
-                Url = "https://github.com/J-Tech-Japan/intent-system/pull/248"
-            },
-            Worktree = new DirectRunWorktreeContext
-            {
-                Path = $"/repo/.intent-cli/worktrees/{executionUnit}"
-            }
-        };
     }
 
     private sealed class FakeDirectRunProcessRunner : IDirectRunProcessRunner
