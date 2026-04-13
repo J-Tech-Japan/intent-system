@@ -187,9 +187,25 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
     private static bool ShouldShellWrapForPersistentExitLogging(string provider, string command)
     {
-        return !OperatingSystem.IsWindows()
-            && (string.Equals(provider, "codex", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(command, "codex", StringComparison.OrdinalIgnoreCase));
+        if (OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        return string.Equals(provider, "codex", StringComparison.OrdinalIgnoreCase)
+            || IsCodexLikeCommand(command);
+    }
+
+    private static bool IsCodexLikeCommand(string command)
+    {
+        var fileName = Path.GetFileName(command.Trim());
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        var commandStem = Path.GetFileNameWithoutExtension(fileName);
+        return commandStem.StartsWith("codex", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AppendBackendExitEventIfMissing(

@@ -184,10 +184,10 @@ public sealed class DirectRunLauncherTests
             "review",
             ".intent-cli/runs/G10.request.json",
             ".intent-cli/runs/G10.provider.jsonl",
-            "Codex",
+            "OpenAI",
             "gpt-5.4-mini",
             "responses",
-            "/tmp/fake-codex",
+            "/tmp/codex-experimental",
             ["exec", "test prompt"],
             DateTimeOffset.Parse("2026-04-09T10:45:00Z"),
             "/repo",
@@ -204,7 +204,7 @@ public sealed class DirectRunLauncherTests
             && providerEvent.Payload.TryGetProperty("type", out var typeElement)
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
         Assert.Equal("G10", backendExitEvent.ExecutionUnit);
-        Assert.Equal("Codex", backendExitEvent.Provider);
+        Assert.Equal("OpenAI", backendExitEvent.Provider);
         Assert.Equal("review", backendExitEvent.EntryKind);
         Assert.Equal("pid:2468", backendExitEvent.SessionId);
         Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
@@ -223,7 +223,7 @@ public sealed class DirectRunLauncherTests
         var worktreePath = tempDirectory.GetPath("repo");
         Directory.CreateDirectory(worktreePath);
         var codexPath = tempDirectory.CreateExecutableFile(
-            "repo/codex",
+            "repo/codex-experimental",
             """
             #!/bin/sh
             sleep 1
@@ -240,7 +240,7 @@ public sealed class DirectRunLauncherTests
             "review",
             ".intent-cli/runs/G11.request.json",
             ".intent-cli/runs/G11.provider.jsonl",
-            "Codex",
+            "OpenAI",
             "gpt-5.4-mini",
             "responses",
             codexPath,
