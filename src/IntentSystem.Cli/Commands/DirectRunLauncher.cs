@@ -54,12 +54,19 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             transport,
             absoluteRequestArtifactPath,
             argsTemplate);
+        var processInvocation = ResolveProcessInvocation(
+            executionUnit,
+            entryKind,
+            provider,
+            command,
+            arguments,
+            absoluteProviderEventLogPath);
         var eventWriter = new DirectRunProviderEventWriter(absoluteProviderEventLogPath);
         var providerSessionId = string.Empty;
         var process = processRunner.Start(
             workingDirectory,
-            command,
-            arguments,
+            processInvocation.FileName,
+            processInvocation.Arguments,
             DefaultEarlyExitWindow,
             processId =>
             {
@@ -74,13 +81,14 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     transport,
                     command));
             },
-            exitCode => eventWriter.Append(CreateBackendExitEvent(
-                DateTimeOffset.UtcNow,
-                executionUnit,
-                entryKind,
-                provider,
-                providerSessionId,
-                exitCode)),
+            exitCode => AppendBackendExitEventIfMissing(
+                    eventWriter,
+                    absoluteProviderEventLogPath,
+                    executionUnit,
+                    entryKind,
+                    provider,
+                    providerSessionId,
+                    exitCode),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)));
 
@@ -128,6 +136,106 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 .Replace("{direct_run_artifact_path}", requestArtifactPath, StringComparison.Ordinal)
                 .Replace("{prompt}", prompt, StringComparison.Ordinal))
             .ToArray();
+    }
+
+    private static ResolvedProcessInvocation ResolveProcessInvocation(
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string command,
+        IReadOnlyList<string> arguments,
+        string absoluteProviderEventLogPath)
+    {
+        if (!ShouldShellWrapForPersistentExitLogging(provider, command))
+        {
+            return new ResolvedProcessInvocation
+            {
+                FileName = command,
+                Arguments = arguments
+            };
+        }
+
+        return new ResolvedProcessInvocation
+        {
+            FileName = "/bin/sh",
+            Arguments =
+            [
+                "-c",
+                """
+                provider_log_path=$1
+                execution_unit=$2
+                entry_kind=$3
+                provider=$4
+                shift 4
+                session_id="pid:$$"
+                "$@"
+                exit_code=$?
+                timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+                printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":$exit_code}}" >> "$provider_log_path"
+                exit "$exit_code"
+                """,
+                "direct-run-wrapper",
+                absoluteProviderEventLogPath,
+                executionUnit,
+                entryKind,
+                provider,
+                command,
+                .. arguments
+            ]
+        };
+    }
+
+    private static bool ShouldShellWrapForPersistentExitLogging(string provider, string command)
+    {
+        return !OperatingSystem.IsWindows()
+            && (string.Equals(provider, "codex", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(command, "codex", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void AppendBackendExitEventIfMissing(
+        DirectRunProviderEventWriter eventWriter,
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(eventWriter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
+
+        if (string.IsNullOrWhiteSpace(providerSessionId) || HasBackendExitEvent(providerEventLogPath, providerSessionId))
+        {
+            return;
+        }
+
+        eventWriter.Append(CreateBackendExitEvent(
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            exitCode));
+    }
+
+    private static bool HasBackendExitEvent(string providerEventLogPath, string providerSessionId)
+    {
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        foreach (var line in File.ReadLines(providerEventLogPath))
+        {
+            if (line.Contains($"\"session_id\":\"{providerSessionId}\"", StringComparison.Ordinal)
+                && line.Contains("\"kind\":\"provider-event\"", StringComparison.Ordinal)
+                && line.Contains("\"type\":\"backend-exit\"", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static DirectRunProviderEvent CreateSessionMetadataEvent(
@@ -212,5 +320,12 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         {
             return JsonSerializer.SerializeToElement(raw);
         }
+    }
+
+    private sealed record ResolvedProcessInvocation
+    {
+        public required string FileName { get; init; }
+
+        public required IReadOnlyList<string> Arguments { get; init; }
     }
 }

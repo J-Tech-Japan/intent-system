@@ -100,21 +100,28 @@ public sealed class DirectRunLauncherTests
     [Fact]
     public void Launch_GivenProcessExit_AppendsBackendExitProviderEvent()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var tempDirectory = new TemporaryDirectory();
         var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G9.provider.jsonl");
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
+        var codexPath = tempDirectory.CreateExecutableFile(
+            "repo/codex",
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
+            """);
         var runner = new FakeDirectRunProcessRunner
         {
-            ExitCodeEvent = 0,
-            Result = new DirectRunProcessLaunchResult
-            {
-                ProcessId = 4321,
-                ExitedEarly = false,
-                ExitCode = 0
-            }
+            ExecuteReceivedProcess = true
         };
         var launcher = new DirectRunLauncher(runner);
 
-        launcher.Launch(
+        var result = launcher.Launch(
             "G9",
             "review",
             ".intent-cli/runs/G9.request.json",
@@ -122,14 +129,27 @@ public sealed class DirectRunLauncherTests
             "Codex",
             "gpt-5.4-mini",
             "responses",
-            "codex",
-            ["exec", "{prompt}"],
+            codexPath,
+            ["exec", "test prompt"],
             DateTimeOffset.Parse("2026-04-09T10:35:00Z"),
-            "/repo",
-            "/repo/.intent-cli/reviews/G9.request.json",
+            worktreePath,
+            tempDirectory.GetPath(".intent-cli/reviews/G9.request.json"),
             providerEventLogPath);
 
+        Assert.Equal("pid:", result.ProviderSessionId[..4]);
+        Assert.Equal("/bin/sh", runner.FileName);
+        Assert.Contains(codexPath, runner.Arguments, StringComparer.Ordinal);
+
         var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "session-metadata"
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "ready", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
         var backendExitEvent = Assert.Single(events, providerEvent =>
             providerEvent.Kind == "provider-event"
             && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
@@ -138,7 +158,129 @@ public sealed class DirectRunLauncherTests
         Assert.Equal("G9", backendExitEvent.ExecutionUnit);
         Assert.Equal("Codex", backendExitEvent.Provider);
         Assert.Equal("review", backendExitEvent.EntryKind);
-        Assert.Equal("pid:4321", backendExitEvent.SessionId);
+        Assert.Equal(result.ProviderSessionId, backendExitEvent.SessionId);
+        Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+    }
+
+    [Fact]
+    public void Launch_GivenWrappedCodexExitWithoutWrapperWrite_AppendsFallbackBackendExitProviderEvent()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G10.provider.jsonl");
+        var runner = new FakeDirectRunProcessRunner
+        {
+            ExitCodeEvent = 0,
+            Result = new DirectRunProcessLaunchResult
+            {
+                ProcessId = 2468,
+                ExitedEarly = false,
+                ExitCode = 0
+            }
+        };
+        var launcher = new DirectRunLauncher(runner);
+
+        var result = launcher.Launch(
+            "G10",
+            "review",
+            ".intent-cli/runs/G10.request.json",
+            ".intent-cli/runs/G10.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            "/tmp/fake-codex",
+            ["exec", "test prompt"],
+            DateTimeOffset.Parse("2026-04-09T10:45:00Z"),
+            "/repo",
+            "/repo/.intent-cli/reviews/G10.request.json",
+            providerEventLogPath);
+
+        Assert.Equal("/bin/sh", runner.FileName);
+        Assert.Equal("pid:2468", result.ProviderSessionId);
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        var backendExitEvent = Assert.Single(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+        Assert.Equal("G10", backendExitEvent.ExecutionUnit);
+        Assert.Equal("Codex", backendExitEvent.Provider);
+        Assert.Equal("review", backendExitEvent.EntryKind);
+        Assert.Equal("pid:2468", backendExitEvent.SessionId);
+        Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+    }
+
+    [Fact]
+    public async Task Launch_GivenWrappedCodexProcessThatEndsAfterLaunch_AppendsBackendExitProviderEvent()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G11.provider.jsonl");
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
+        var codexPath = tempDirectory.CreateExecutableFile(
+            "repo/codex",
+            """
+            #!/bin/sh
+            sleep 1
+            """);
+        var runner = new FakeDirectRunProcessRunner
+        {
+            ExecuteReceivedProcess = true,
+            ReturnBeforeExitCallback = true
+        };
+        var launcher = new DirectRunLauncher(runner);
+
+        var result = launcher.Launch(
+            "G11",
+            "review",
+            ".intent-cli/runs/G11.request.json",
+            ".intent-cli/runs/G11.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            codexPath,
+            ["exec", "test prompt"],
+            DateTimeOffset.Parse("2026-04-09T10:55:00Z"),
+            worktreePath,
+            tempDirectory.GetPath(".intent-cli/reviews/G11.request.json"),
+            providerEventLogPath);
+
+        var initialEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Single(initialEvents, providerEvent =>
+            providerEvent.Kind == "session-metadata"
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.DoesNotContain(initialEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                return events.Any(providerEvent =>
+                    providerEvent.Kind == "provider-event"
+                    && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                    && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                    && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            },
+            TimeSpan.FromSeconds(5));
+
+        var finalEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        var backendExitEvent = Assert.Single(finalEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
         Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
     }
 
@@ -226,6 +368,10 @@ public sealed class DirectRunLauncherTests
 
         public int? ExitCodeEvent { get; init; }
 
+        public bool ExecuteReceivedProcess { get; init; }
+
+        public bool ReturnBeforeExitCallback { get; init; }
+
         public DirectRunProcessLaunchResult Result { get; set; } = new()
         {
             ProcessId = 1,
@@ -246,6 +392,65 @@ public sealed class DirectRunLauncherTests
             WorkingDirectory = workingDirectory;
             FileName = fileName;
             Arguments = arguments.ToArray();
+
+            if (ExecuteReceivedProcess)
+            {
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = fileName,
+                    WorkingDirectory = workingDirectory,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                foreach (var argument in arguments)
+                {
+                    startInfo.ArgumentList.Add(argument);
+                }
+
+                var process = System.Diagnostics.Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("Failed to start wrapper process.");
+                onStarted(process.Id);
+
+                if (ReturnBeforeExitCallback)
+                {
+                    process.EnableRaisingEvents = true;
+                    process.Exited += (_, _) => process.Dispose();
+                    return new DirectRunProcessLaunchResult
+                    {
+                        ProcessId = process.Id,
+                        ExitedEarly = false,
+                        ExitCode = 0
+                    };
+                }
+
+                using (process)
+                {
+                    var stdout = process.StandardOutput.ReadToEnd();
+                    var stderr = process.StandardError.ReadToEnd();
+                    process.WaitForExit();
+
+                    foreach (var line in SplitLines(stdout))
+                    {
+                        onStdOutLine(line);
+                    }
+
+                    foreach (var line in SplitLines(stderr))
+                    {
+                        onStdErrLine(line);
+                    }
+
+                    onExited(process.ExitCode);
+                    return new DirectRunProcessLaunchResult
+                    {
+                        ProcessId = process.Id,
+                        ExitedEarly = true,
+                        ExitCode = process.ExitCode
+                    };
+                }
+            }
+
             onStarted(Result.ProcessId);
             foreach (var line in StdOutLines)
             {
@@ -264,6 +469,14 @@ public sealed class DirectRunLauncherTests
 
             return Result;
         }
+
+        private static IReadOnlyList<string> SplitLines(string content)
+        {
+            return content
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace('\r', '\n')
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        }
     }
 
     private sealed class TemporaryDirectory : IDisposable
@@ -273,6 +486,44 @@ public sealed class DirectRunLauncherTests
         public string GetPath(string relativePath)
         {
             return Path.Combine(rootPath, relativePath);
+        }
+
+        public string CreateExecutableFile(string relativePath, string content)
+        {
+            var path = GetPath(relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    path,
+                    UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead
+                    | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead
+                    | UnixFileMode.OtherExecute);
+            }
+
+            return path;
+        }
+
+        public static async Task WaitForConditionAsync(Func<bool> predicate, TimeSpan timeout)
+        {
+            var startedAt = DateTimeOffset.UtcNow;
+            while (DateTimeOffset.UtcNow - startedAt < timeout)
+            {
+                if (predicate())
+                {
+                    return;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100));
+            }
+
+            Assert.True(predicate(), $"Condition was not satisfied within {timeout}.");
         }
 
         public void Dispose()
