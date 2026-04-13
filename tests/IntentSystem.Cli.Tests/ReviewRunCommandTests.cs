@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
@@ -345,6 +346,80 @@ public sealed class ReviewRunCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenCliProcessExitsBeforeAbsoluteCodexReviewCompletes_PersistsBackendExitToRawLog()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var codexPath = tempDirectory.CreateExecutableFile(
+            Path.Combine("bin", "codex-experimental"),
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
+            sleep 1
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "config.toml"),
+            $$"""
+            default_domain = "intent-system"
+            artifact_root = ".intent-cli"
+            worktree_root = ".intent-cli/worktrees"
+
+            [direct_backend]
+            artifact_root = ".intent-cli/runtime-runs"
+
+            [direct_backend.review]
+            provider = "OpenAI"
+            model = "gpt-5.4-mini"
+            transport = "responses"
+            command = "{{codexPath.Replace("\\", "\\\\", StringComparison.Ordinal)}}"
+            args = ["exec", "{prompt}"]
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "packet.yaml"),
+            "execution_unit: G9" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+
+        var process = StartCliProcess(repoRoot, "review run G9");
+        Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+        Assert.Equal(0, process.ExitCode);
+
+        var providerEventLogPath = Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl");
+        TemporaryDirectory.WaitForCondition(
+            () => File.Exists(providerEventLogPath)
+                && DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath)).Any(providerEvent =>
+                    providerEvent.Kind == "provider-event"
+                    && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                    && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)),
+            TimeSpan.FromSeconds(5));
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "ready", StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -443,6 +518,34 @@ public sealed class ReviewRunCommandTests
         """ + Environment.NewLine;
     }
 
+    private static Process StartCliProcess(string workingDirectory, string arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "/bin/zsh",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add("-lc");
+        startInfo.ArgumentList.Add(
+            $"dotnet run --project {QuoteForShell(Path.Combine(GetSolutionRoot(), "src", "IntentSystem.Cli", "IntentSystem.Cli.csproj"))} -- {arguments}");
+
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start CLI process.");
+    }
+
+    private static string GetSolutionRoot()
+    {
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    }
+
+    private static string QuoteForShell(string value)
+    {
+        return $"'{value.Replace("'", "'\"'\"'")}'";
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         private readonly string rootPath = Directory.CreateTempSubdirectory("intent-cli-review-run-tests-").FullName;
@@ -463,6 +566,42 @@ public sealed class ReviewRunCommandTests
             Directory.CreateDirectory(directoryPath);
             File.WriteAllText(fullPath, contents);
             return fullPath;
+        }
+
+        public string CreateExecutableFile(string relativePath, string contents)
+        {
+            var fullPath = CreateFile(relativePath, contents);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    fullPath,
+                    UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead
+                    | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead
+                    | UnixFileMode.OtherExecute);
+            }
+
+            return fullPath;
+        }
+
+        public static void WaitForCondition(Func<bool> predicate, TimeSpan timeout)
+        {
+            var startedAt = DateTimeOffset.UtcNow;
+            while (DateTimeOffset.UtcNow - startedAt < timeout)
+            {
+                if (predicate())
+                {
+                    return;
+                }
+
+                Thread.Sleep(TimeSpan.FromMilliseconds(100));
+            }
+
+            Assert.True(predicate(), $"Condition was not satisfied within {timeout}.");
         }
 
         public void Dispose()
