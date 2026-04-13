@@ -168,13 +168,11 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 provider=$4
                 shift 4
                 session_id="pid:$$"
-                append_backend_exit() {
-                  exit_code=$?
-                  timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-                  printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":$exit_code}}" >> "$provider_log_path"
-                }
-                trap append_backend_exit EXIT
                 "$@"
+                exit_code=$?
+                timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+                printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":$exit_code}}" >> "$provider_log_path"
+                exit "$exit_code"
                 """,
                 "direct-run-wrapper",
                 absoluteProviderEventLogPath,
