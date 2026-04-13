@@ -296,6 +296,88 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task Launch_GivenWrappedCodexProcessEndsWithoutExitCallback_MonitorAppendsBackendExitProviderEvent()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var externalProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 1" }
+        });
+        Assert.NotNull(externalProcess);
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14.provider.jsonl");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(resultArtifactPath)!);
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(CreateResultArtifact("G14", "review", ".intent-cli/runs/G14.provider.jsonl", "running")));
+        var runner = new FakeDirectRunProcessRunner
+        {
+            Result = new DirectRunProcessLaunchResult
+            {
+                ProcessId = externalProcess!.Id,
+                ExitedEarly = false,
+                ExitCode = 0
+            }
+        };
+        var launcher = new DirectRunLauncher(runner);
+
+        var result = launcher.Launch(
+            "G14",
+            "review",
+            ".intent-cli/runs/G14.request.json",
+            ".intent-cli/runs/G14.provider.jsonl",
+            "OpenAI",
+            "gpt-5.4-mini",
+            "responses",
+            "/opt/homebrew/bin/codex",
+            ["exec", "test prompt"],
+            DateTimeOffset.Parse("2026-04-09T11:15:00Z"),
+            "/repo",
+            "/repo/.intent-cli/reviews/G14.request.json",
+            providerEventLogPath);
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(providerEventLogPath))
+                {
+                    return false;
+                }
+
+                var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                return events.Any(providerEvent =>
+                    providerEvent.Kind == "provider-event"
+                    && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                    && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                    && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            },
+            TimeSpan.FromSeconds(5));
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        var backendExitEvent = Assert.Single(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Equal(1, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal("failed", resultArtifact.RunStatus);
+    }
+
+    [Fact]
     public void Launch_GivenWrappedCodexProcessReceivesTerminationSignal_AppendsBackendExitProviderEvent()
     {
         if (OperatingSystem.IsWindows())
@@ -322,7 +404,7 @@ public sealed class DirectRunLauncherTests
             {
                 Task.Run(async () =>
                 {
-                    await Task.Delay(TimeSpan.FromMilliseconds(200));
+                    await Task.Delay(TimeSpan.FromMilliseconds(800));
                     SignalProcess(processId, "TERM");
                 });
             }
