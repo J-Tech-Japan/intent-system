@@ -55,12 +55,9 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             absoluteRequestArtifactPath,
             argsTemplate);
         var processInvocation = ResolveProcessInvocation(
-            executionUnit,
-            entryKind,
             provider,
             command,
-            arguments,
-            absoluteProviderEventLogPath);
+            arguments);
         var eventWriter = new DirectRunProviderEventWriter(absoluteProviderEventLogPath);
         var providerSessionId = string.Empty;
         var process = processRunner.Start(
@@ -89,8 +86,22 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     provider,
                     providerSessionId,
                     exitCode),
-            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)),
-            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)));
+            raw => AppendProviderOutput(
+                eventWriter,
+                absoluteProviderEventLogPath,
+                executionUnit,
+                entryKind,
+                provider,
+                providerSessionId,
+                raw),
+            raw => AppendProviderOutput(
+                eventWriter,
+                absoluteProviderEventLogPath,
+                executionUnit,
+                entryKind,
+                provider,
+                providerSessionId,
+                raw));
 
         if (process.ExitedEarly && process.ExitCode != 0)
         {
@@ -139,12 +150,9 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
     }
 
     private static ResolvedProcessInvocation ResolveProcessInvocation(
-        string executionUnit,
-        string entryKind,
         string provider,
         string command,
-        IReadOnlyList<string> arguments,
-        string absoluteProviderEventLogPath)
+        IReadOnlyList<string> arguments)
     {
         if (!ShouldShellWrapForPersistentExitLogging(provider, command))
         {
@@ -162,23 +170,12 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             [
                 "-c",
                 """
-                provider_log_path=$1
-                execution_unit=$2
-                entry_kind=$3
-                provider=$4
-                shift 4
-                session_id="pid:$$"
                 "$@"
                 exit_code=$?
-                timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-                printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":$exit_code}}" >> "$provider_log_path"
+                printf '%s\n' "{\"type\":\"backend-exit\",\"exit_code\":$exit_code}"
                 exit "$exit_code"
                 """,
                 "direct-run-wrapper",
-                absoluteProviderEventLogPath,
-                executionUnit,
-                entryKind,
-                provider,
                 command,
                 .. arguments
             ]
@@ -234,6 +231,40 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             exitCode));
     }
 
+    private static void AppendProviderOutput(
+        DirectRunProviderEventWriter eventWriter,
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        string raw)
+    {
+        ArgumentNullException.ThrowIfNull(eventWriter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(raw);
+
+        if (TryParseBackendExitPayload(raw, out var exitCode))
+        {
+            AppendBackendExitEventIfMissing(
+                eventWriter,
+                providerEventLogPath,
+                executionUnit,
+                entryKind,
+                provider,
+                providerSessionId,
+                exitCode);
+            return;
+        }
+
+        eventWriter.Append(CreateProviderEvent(
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            raw));
+    }
+
     private static bool HasBackendExitEvent(string providerEventLogPath, string providerSessionId)
     {
         if (!File.Exists(providerEventLogPath))
@@ -249,6 +280,66 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             {
                 return true;
             }
+        }
+
+        return false;
+    }
+
+    private static bool TryParseBackendExitPayload(string raw, out int exitCode)
+    {
+        exitCode = 0;
+
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            var payload = document.RootElement;
+            return payload.ValueKind == JsonValueKind.Object
+                && TryReadString(payload, "type", out var eventType)
+                && string.Equals(eventType, "backend-exit", StringComparison.Ordinal)
+                && (TryReadInt32(payload, "exit_code", out exitCode)
+                    || TryReadInt32(payload, "exitCode", out exitCode));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadString(JsonElement payload, string propertyName, out string value)
+    {
+        value = string.Empty;
+
+        if (!payload.TryGetProperty(propertyName, out var element)
+            || element.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = element.GetString() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool TryReadInt32(JsonElement payload, string propertyName, out int value)
+    {
+        value = 0;
+
+        if (!payload.TryGetProperty(propertyName, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            return element.TryGetInt32(out value);
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            return int.TryParse(
+                element.GetString(),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value);
         }
 
         return false;

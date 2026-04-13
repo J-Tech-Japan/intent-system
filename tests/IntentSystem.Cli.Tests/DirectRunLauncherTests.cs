@@ -211,7 +211,7 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
-    public async Task Launch_GivenWrappedCodexProcessThatEndsAfterLaunch_AppendsBackendExitProviderEvent()
+    public async Task Launch_GivenRealProcessRunnerAndAbsoluteCodexCommand_AppendsBackendExitProviderEvent()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -219,39 +219,35 @@ public sealed class DirectRunLauncherTests
         }
 
         using var tempDirectory = new TemporaryDirectory();
-        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G11.provider.jsonl");
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G12.provider.jsonl");
         var worktreePath = tempDirectory.GetPath("repo");
         Directory.CreateDirectory(worktreePath);
         var codexPath = tempDirectory.CreateExecutableFile(
             "repo/codex-experimental",
             """
             #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
             sleep 1
             """);
-        var runner = new FakeDirectRunProcessRunner
-        {
-            ExecuteReceivedProcess = true,
-            ReturnBeforeExitCallback = true
-        };
-        var launcher = new DirectRunLauncher(runner);
+        var launcher = new DirectRunLauncher();
 
         var result = launcher.Launch(
-            "G11",
+            "G12",
             "review",
-            ".intent-cli/runs/G11.request.json",
-            ".intent-cli/runs/G11.provider.jsonl",
+            ".intent-cli/runs/G12.request.json",
+            ".intent-cli/runs/G12.provider.jsonl",
             "OpenAI",
             "gpt-5.4-mini",
             "responses",
             codexPath,
             ["exec", "test prompt"],
-            DateTimeOffset.Parse("2026-04-09T10:55:00Z"),
+            DateTimeOffset.Parse("2026-04-09T11:05:00Z"),
             worktreePath,
-            tempDirectory.GetPath(".intent-cli/reviews/G11.request.json"),
+            tempDirectory.GetPath(".intent-cli/reviews/G12.request.json"),
             providerEventLogPath);
 
         var initialEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
-        Assert.Single(initialEvents, providerEvent =>
+        Assert.Contains(initialEvents, providerEvent =>
             providerEvent.Kind == "session-metadata"
             && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
         Assert.DoesNotContain(initialEvents, providerEvent =>
@@ -275,6 +271,12 @@ public sealed class DirectRunLauncherTests
             TimeSpan.FromSeconds(5));
 
         var finalEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Contains(finalEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "ready", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
         var backendExitEvent = Assert.Single(finalEvents, providerEvent =>
             providerEvent.Kind == "provider-event"
             && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
@@ -370,8 +372,6 @@ public sealed class DirectRunLauncherTests
 
         public bool ExecuteReceivedProcess { get; init; }
 
-        public bool ReturnBeforeExitCallback { get; init; }
-
         public DirectRunProcessLaunchResult Result { get; set; } = new()
         {
             ProcessId = 1,
@@ -412,18 +412,6 @@ public sealed class DirectRunLauncherTests
                 var process = System.Diagnostics.Process.Start(startInfo)
                     ?? throw new InvalidOperationException("Failed to start wrapper process.");
                 onStarted(process.Id);
-
-                if (ReturnBeforeExitCallback)
-                {
-                    process.EnableRaisingEvents = true;
-                    process.Exited += (_, _) => process.Dispose();
-                    return new DirectRunProcessLaunchResult
-                    {
-                        ProcessId = process.Id,
-                        ExitedEarly = false,
-                        ExitCode = 0
-                    };
-                }
 
                 using (process)
                 {
