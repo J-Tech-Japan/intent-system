@@ -168,10 +168,60 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 provider=$4
                 shift 4
                 session_id="pid:$$"
-                "$@"
+                result_artifact_path="${provider_log_path%.provider.jsonl}.result.json"
+                child_pid=""
+                exit_code=0
+                backend_exit_written=0
+                update_result_artifact() {
+                    if [ ! -f "$result_artifact_path" ]; then
+                        attempts=0
+                        while [ "$attempts" -lt 50 ] && [ ! -f "$result_artifact_path" ]; do
+                            sleep 0.1
+                            attempts=$((attempts + 1))
+                        done
+                    fi
+                    if [ ! -f "$result_artifact_path" ]; then
+                        return
+                    fi
+                    run_status="failed"
+                    if [ "$exit_code" -eq 0 ]; then
+                        run_status="succeeded"
+                    fi
+                    temp_result_path="${result_artifact_path}.tmp.$$"
+                    if sed "s/\"run_status\": \"[^\"]*\"/\"run_status\": \"$run_status\"/" "$result_artifact_path" > "$temp_result_path"; then
+                        mv "$temp_result_path" "$result_artifact_path"
+                    else
+                        rm -f "$temp_result_path"
+                    fi
+                }
+                append_backend_exit() {
+                    if [ "$backend_exit_written" -ne 0 ]; then
+                        return
+                    fi
+                    backend_exit_written=1
+                    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+                    printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":$exit_code}}" >> "$provider_log_path"
+                    update_result_artifact
+                }
+                handle_signal() {
+                    signal_name=$1
+                    if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+                        kill -s "$signal_name" "$child_pid" 2>/dev/null || true
+                        wait "$child_pid"
+                        exit_code=$?
+                    fi
+                    append_backend_exit
+                    trap - EXIT HUP INT TERM
+                    exit "$exit_code"
+                }
+                trap 'append_backend_exit' EXIT
+                trap 'handle_signal HUP' HUP
+                trap 'handle_signal INT' INT
+                trap 'handle_signal TERM' TERM
+                "$@" &
+                child_pid=$!
+                wait "$child_pid"
                 exit_code=$?
-                timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-                printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":$exit_code}}" >> "$provider_log_path"
                 exit "$exit_code"
                 """,
                 "direct-run-wrapper",
