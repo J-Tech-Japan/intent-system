@@ -514,6 +514,103 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task Launch_GivenWrappedCodexProcess_DetachedCaptureClosesProviderStandardInput()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14stdin.provider.jsonl");
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
+        var codexPath = tempDirectory.CreateExecutableFile(
+            "repo/codex-experimental",
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
+            if IFS= read -r _; then
+                printf '%s\n' '{"type":"stdin-open"}'
+            else
+                printf '%s\n' '{"type":"stdin-eof"}'
+            fi
+            """);
+        var launcher = new DirectRunLauncher();
+
+        var result = launcher.Launch(
+            "G14stdin",
+            "review",
+            ".intent-cli/runs/G14stdin.request.json",
+            ".intent-cli/runs/G14stdin.provider.jsonl",
+            "OpenAI",
+            "gpt-5.4-mini",
+            "responses",
+            codexPath,
+            ["exec", "test prompt"],
+            DateTimeOffset.Parse("2026-04-09T11:16:00Z"),
+            worktreePath,
+            tempDirectory.GetPath(".intent-cli/reviews/G14stdin.request.json"),
+            providerEventLogPath);
+
+        try
+        {
+            await TemporaryDirectory.WaitForConditionAsync(
+                () =>
+                {
+                    if (!File.Exists(providerEventLogPath))
+                    {
+                        return false;
+                    }
+
+                    var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                    return events.Any(providerEvent =>
+                               providerEvent.Kind == "provider-event"
+                               && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                               && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                               && string.Equals(typeElement.GetString(), "stdin-eof", StringComparison.Ordinal)
+                               && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal))
+                           && events.Any(providerEvent =>
+                               providerEvent.Kind == "provider-event"
+                               && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                               && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                               && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                               && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+                },
+                TimeSpan.FromSeconds(5));
+
+            var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            Assert.DoesNotContain(events, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "stdin-open", StringComparison.Ordinal)
+                && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            Assert.Contains(events, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "stdin-eof", StringComparison.Ordinal)
+                && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            var backendExitEvent = Assert.Single(events, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            if (TryParseProcessId(result.ProviderSessionId, out var processId) && IsProcessAlive(processId))
+            {
+                SignalProcess(processId, "TERM");
+                TemporaryDirectory.WaitForCondition(() => !IsProcessAlive(processId), TimeSpan.FromSeconds(5));
+            }
+        }
+    }
+
+    [Fact]
     public async Task DirectRunExitMonitorCommand_GivenDetachedProcess_AppendsBackendExitForCurrentSession()
     {
         if (OperatingSystem.IsWindows())
@@ -834,6 +931,31 @@ public sealed class DirectRunLauncherTests
         });
 
         signalProcess?.WaitForExit();
+    }
+
+    private static bool TryParseProcessId(string providerSessionId, out int processId)
+    {
+        processId = default;
+        const string prefix = "pid:";
+        return providerSessionId.StartsWith(prefix, StringComparison.Ordinal)
+            && int.TryParse(providerSessionId[prefix.Length..], out processId);
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private sealed class FakeDirectRunProcessRunner : IDirectRunProcessRunner

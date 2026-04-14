@@ -10,6 +10,9 @@ internal static class DirectRunDetachedCaptureCommand
 {
     internal const string CommandName = "__direct-run-detached-capture";
     private static readonly TimeSpan StartupSuccessWindow = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan ExitPollInterval = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan OutputDrainGracePeriod = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan ExitCodeResolutionGracePeriod = TimeSpan.FromSeconds(3);
 
     public static bool TryExecute(string[] args, out int exitCode)
     {
@@ -92,14 +95,19 @@ internal static class DirectRunDetachedCaptureCommand
     private static int Execute(DirectRunDetachedCaptureOptions options)
     {
         var writer = new DirectRunProviderEventWriter(options.ProviderEventLogPath);
+        Process? process = null;
+        Task? stdoutPump = null;
+        Task? stderrPump = null;
+        var providerSessionId = string.Empty;
+        var exitedEarly = false;
 
         try
         {
             var startInfo = CreateProviderStartInfo(options);
 
-            using var process = Process.Start(startInfo)
+            process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start detached direct run process '{options.Command}'.");
-            var providerSessionId = $"pid:{process.Id}";
+            providerSessionId = $"pid:{process.Id}";
             TryWriteSessionId(providerSessionId);
             Console.SetOut(TextWriter.Null);
             Console.SetError(TextWriter.Null);
@@ -112,42 +120,34 @@ internal static class DirectRunDetachedCaptureCommand
                 options.Model,
                 options.Transport,
                 options.Command));
+            StartProviderExitMonitorIfPossible(
+                process.Id,
+                options.ProviderEventLogPath,
+                options.ExecutionUnit,
+                options.EntryKind,
+                options.Provider,
+                providerSessionId,
+                options.LaunchedAt);
 
-            process.OutputDataReceived += (_, eventArgs) =>
-            {
-                if (!string.IsNullOrEmpty(eventArgs.Data))
-                {
-                    writer.Append(DirectRunProviderEventFactory.CreateProviderEvent(
-                        DateTimeOffset.UtcNow,
-                        options.ExecutionUnit,
-                        options.EntryKind,
-                        options.Provider,
-                        providerSessionId,
-                        NormalizeCapturedLine(eventArgs.Data)));
-                }
-            };
-            process.ErrorDataReceived += (_, eventArgs) =>
-            {
-                if (!string.IsNullOrEmpty(eventArgs.Data))
-                {
-                    writer.Append(DirectRunProviderEventFactory.CreateProviderEvent(
-                        DateTimeOffset.UtcNow,
-                        options.ExecutionUnit,
-                        options.EntryKind,
-                        options.Provider,
-                        providerSessionId,
-                        NormalizeCapturedLine(eventArgs.Data)));
-                }
-            };
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+            stdoutPump = StartOutputPump(
+                process.StandardOutput,
+                writer,
+                options,
+                providerSessionId);
+            stderrPump = StartOutputPump(
+                process.StandardError,
+                writer,
+                options,
+                providerSessionId);
 
-            var exitedEarly = process.WaitForExit((int)StartupSuccessWindow.TotalMilliseconds);
-            process.WaitForExit();
-            AppendBackendExitIfMissing(writer, options, providerSessionId, process.ExitCode);
+            exitedEarly = process.WaitForExit((int)StartupSuccessWindow.TotalMilliseconds);
+            WaitForProcessExit(process);
+            var exitCode = ResolveExitCode(process, exitedEarly);
+            AppendBackendExitIfMissing(writer, options, providerSessionId, exitCode);
+            TryCompleteOutputPumps(stdoutPump, stderrPump);
 
-            return exitedEarly && process.ExitCode != 0
-                ? process.ExitCode
+            return exitedEarly && exitCode != 0
+                ? exitCode
                 : 0;
         }
         catch (Win32Exception)
@@ -157,6 +157,33 @@ internal static class DirectRunDetachedCaptureCommand
         catch (InvalidOperationException)
         {
             return 1;
+        }
+        finally
+        {
+            if (process is not null)
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(providerSessionId))
+                    {
+                        AppendBackendExitIfMissing(
+                            writer,
+                            options,
+                            providerSessionId,
+                            ResolveExitCode(process, exitedEarly));
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                if (stdoutPump is not null && stderrPump is not null)
+                {
+                    TryCompleteOutputPumps(stdoutPump, stderrPump);
+                }
+
+                process.Dispose();
+            }
         }
     }
 
@@ -178,6 +205,202 @@ internal static class DirectRunDetachedCaptureCommand
             options.Provider,
             providerSessionId,
             exitCode));
+    }
+
+    private static void StartProviderExitMonitorIfPossible(
+        int processId,
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var monitorStartInfo = DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            processId,
+            providerEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            launchedAt);
+
+        var launcherStartInfo = new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false
+        };
+        launcherStartInfo.ArgumentList.Add("-c");
+        launcherStartInfo.ArgumentList.Add(
+            """
+            if command -v nohup >/dev/null 2>&1; then
+                nohup "$@" >/dev/null 2>&1 </dev/null &
+            else
+                "$@" >/dev/null 2>&1 </dev/null &
+            fi
+            """);
+        launcherStartInfo.ArgumentList.Add("direct-run-exit-monitor-launcher");
+        launcherStartInfo.ArgumentList.Add(monitorStartInfo.FileName);
+        foreach (var argument in monitorStartInfo.ArgumentList)
+        {
+            launcherStartInfo.ArgumentList.Add(argument);
+        }
+
+        using var launcher = Process.Start(launcherStartInfo);
+    }
+
+    private static void WaitForProcessExit(Process process)
+    {
+        while (IsProcessAlive(process))
+        {
+            Thread.Sleep(ExitPollInterval);
+        }
+    }
+
+    private static int ResolveExitCode(Process process, bool exitedEarly)
+    {
+        try
+        {
+            process.WaitForExit((int)ExitCodeResolutionGracePeriod.TotalMilliseconds);
+            process.Refresh();
+            return process.ExitCode;
+        }
+        catch (InvalidOperationException)
+        {
+            return exitedEarly ? 1 : 0;
+        }
+    }
+
+    private static Task StartOutputPump(
+        StreamReader reader,
+        DirectRunProviderEventWriter writer,
+        DirectRunDetachedCaptureOptions options,
+        string providerSessionId)
+    {
+        return Task.Run(() =>
+        {
+            while (true)
+            {
+                string? line;
+                try
+                {
+                    line = reader.ReadLine();
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+                catch (InvalidOperationException)
+                {
+                    break;
+                }
+
+                if (line is null)
+                {
+                    break;
+                }
+
+                var normalizedLine = NormalizeCapturedLine(line);
+                if (string.IsNullOrEmpty(normalizedLine))
+                {
+                    continue;
+                }
+
+                writer.Append(DirectRunProviderEventFactory.CreateProviderEvent(
+                    DateTimeOffset.UtcNow,
+                    options.ExecutionUnit,
+                    options.EntryKind,
+                    options.Provider,
+                    providerSessionId,
+                    normalizedLine));
+            }
+        });
+    }
+
+    private static void TryCompleteOutputPumps(params Task[] pumps)
+    {
+        try
+        {
+            Task.WaitAll(pumps, OutputDrainGracePeriod);
+        }
+        catch (AggregateException)
+        {
+        }
+    }
+
+    private static bool IsProcessAlive(Process process)
+    {
+        try
+        {
+            process.Refresh();
+            if (process.HasExited)
+            {
+                return false;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return true;
+        }
+
+        var processState = TryReadUnixProcessState(process.Id);
+        if (string.IsNullOrWhiteSpace(processState))
+        {
+            return false;
+        }
+
+        return processState.IndexOf('Z') < 0;
+    }
+
+    private static string? TryReadUnixProcessState(int processId)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "/bin/ps",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                ArgumentList =
+                {
+                    "-o",
+                    "stat=",
+                    "-p",
+                    processId.ToString(CultureInfo.InvariantCulture)
+                }
+            });
+
+            if (process is null)
+            {
+                return null;
+            }
+
+            using (process)
+            {
+                var output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                return output.Trim();
+            }
+        }
+        catch (Exception exception) when (
+            exception is Win32Exception
+            or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     private static void TryWriteSessionId(string providerSessionId)

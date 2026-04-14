@@ -664,7 +664,21 @@ internal static class RunCommand
             return providerEvents;
         }
 
-        return providerEvents;
+        var backendExitEvent = DirectRunProviderEventFactory.CreateBackendExitEvent(
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            requestArtifact.EntryKind,
+            requestArtifact.Provider,
+            requestArtifact.ProviderSessionId,
+            exitCode: 0);
+        var providerLogRef = ResolveDirectRunProviderLogRef(context, executionUnit);
+        var providerLogPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            providerLogRef.Replace('/', Path.DirectorySeparatorChar)));
+        var writer = new DirectRunProviderEventWriter(providerLogPath);
+        writer.Append(backendExitEvent);
+
+        return [.. providerEvents, backendExitEvent];
     }
 
     private static string ResolveEffectiveRunStatus(
