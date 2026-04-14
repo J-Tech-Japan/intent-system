@@ -497,6 +497,18 @@ public sealed class ReviewRunCommandTests
             && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
             && providerEvent.Payload.TryGetProperty("type", out var typeElement)
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+
+        var rootRunProcess = StartCliProcess(repoRoot, "run");
+        Assert.True(rootRunProcess.WaitForExit(120000), "Root run process did not exit within the timeout.");
+        Assert.Equal(0, rootRunProcess.ExitCode);
+        var rootRunOutput = rootRunProcess.StandardOutput.ReadToEnd();
+        var rootRunError = rootRunProcess.StandardError.ReadToEnd();
+        Assert.DoesNotContain("is 'running'", rootRunOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("is 'running'", rootRunError, StringComparison.Ordinal);
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+        Assert.NotEqual("running", resultArtifact.RunStatus);
     }
 
     [Fact]

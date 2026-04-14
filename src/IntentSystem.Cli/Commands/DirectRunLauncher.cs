@@ -287,11 +287,12 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = "/bin/sh",
+            FileName = ResolveNohupCommand(),
             UseShellExecute = false,
             RedirectStandardOutput = false,
             RedirectStandardError = false
         };
+        startInfo.ArgumentList.Add("/bin/sh");
         startInfo.ArgumentList.Add("-c");
         startInfo.ArgumentList.Add(
             """
@@ -320,6 +321,13 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
         var monitor = Process.Start(startInfo);
         monitor?.Dispose();
+    }
+
+    private static string ResolveNohupCommand()
+    {
+        return File.Exists("/usr/bin/nohup")
+            ? "/usr/bin/nohup"
+            : "nohup";
     }
 
     private static bool HasBackendExitEvent(string providerEventLogPath, string providerSessionId)
