@@ -494,6 +494,32 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public void CreateDetachedStartInfo_UsesExecutableHostPath()
+    {
+        var startInfo = DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            1234,
+            "/tmp/provider.jsonl",
+            "G14c",
+            "review",
+            "Codex",
+            "pid:1234");
+
+        Assert.True(Path.IsPathRooted(startInfo.FileName));
+        Assert.True(File.Exists(startInfo.FileName));
+
+        if (string.Equals(Path.GetFileNameWithoutExtension(startInfo.FileName), "dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            Assert.True(Path.IsPathRooted(startInfo.ArgumentList[0]));
+            Assert.EndsWith("IntentSystem.Cli.dll", startInfo.ArgumentList[0], StringComparison.Ordinal);
+            Assert.Equal("__direct-run-exit-monitor", startInfo.ArgumentList[1]);
+        }
+        else
+        {
+            Assert.Equal("__direct-run-exit-monitor", startInfo.ArgumentList[0]);
+        }
+    }
+
+    [Fact]
     public void Launch_GivenWrappedCodexProcessExitsShortlyAfterLaunch_PersistsBackendExitBeforeReturning()
     {
         if (OperatingSystem.IsWindows())
