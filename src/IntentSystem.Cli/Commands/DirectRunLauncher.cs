@@ -6,6 +6,7 @@ namespace IntentSystem.Cli.Commands;
 internal sealed class DirectRunLauncher : IDirectRunLauncher
 {
     private static readonly TimeSpan DefaultEarlyExitWindow = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan PersistentExitObservationWindow = TimeSpan.FromSeconds(3);
     private readonly IDirectRunProcessRunner processRunner;
 
     public DirectRunLauncher()
@@ -88,7 +89,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     executionUnit,
                     entryKind,
                     provider,
-                    providerSessionId);
+                    providerSessionId,
+                    launchedAt);
             },
             exitCode => AppendBackendExitEventIfMissing(
                     eventWriter,
@@ -97,9 +99,21 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     entryKind,
                     provider,
                     providerSessionId,
-                    exitCode),
+                    exitCode,
+                    launchedAt),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)));
+
+        BestEffortAppendBackendExitIfProcessExitedSoon(
+            processInvocation.RequiresPersistentExitMonitor,
+            process.ProcessId,
+            eventWriter,
+            absoluteProviderEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            launchedAt);
 
         if (process.ExitedEarly && process.ExitCode != 0)
         {
@@ -172,43 +186,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             [
                 "-c",
                 """
-                provider_log_path=$1
-                execution_unit=$2
-                entry_kind=$3
-                provider=$4
                 shift 4
-                session_id="pid:$$"
-                child_pid=""
-                exit_code=0
-                backend_exit_written=0
-                append_backend_exit() {
-                    if [ "$backend_exit_written" -ne 0 ]; then
-                        return
-                    fi
-                    backend_exit_written=1
-                    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-                    printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":$exit_code}}" >> "$provider_log_path"
-                }
-                handle_signal() {
-                    signal_name=$1
-                    if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
-                        kill -s "$signal_name" "$child_pid" 2>/dev/null || true
-                        wait "$child_pid"
-                        exit_code=$?
-                    fi
-                    append_backend_exit
-                    trap - EXIT HUP INT TERM
-                    exit "$exit_code"
-                }
-                trap 'append_backend_exit' EXIT
-                trap 'handle_signal HUP' HUP
-                trap 'handle_signal INT' INT
-                trap 'handle_signal TERM' TERM
-                "$@" &
-                child_pid=$!
-                wait "$child_pid"
-                exit_code=$?
-                exit "$exit_code"
+                exec "$@"
                 """,
                 "direct-run-wrapper",
                 absoluteProviderEventLogPath,
@@ -252,12 +231,14 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string entryKind,
         string provider,
         string providerSessionId,
-        int exitCode)
+        int exitCode,
+        DateTimeOffset launchedAt)
     {
         ArgumentNullException.ThrowIfNull(eventWriter);
         ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
 
-        if (string.IsNullOrWhiteSpace(providerSessionId) || HasBackendExitEvent(providerEventLogPath, providerSessionId))
+        if (string.IsNullOrWhiteSpace(providerSessionId)
+            || DirectRunSessionBoundary.HasBackendExitEvent(providerEventLogPath, providerSessionId, launchedAt))
         {
             return;
         }
@@ -278,74 +259,110 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string executionUnit,
         string entryKind,
         string provider,
-        string providerSessionId)
+        string providerSessionId,
+        DateTimeOffset launchedAt)
     {
         if (!requiresPersistentExitMonitor || OperatingSystem.IsWindows())
         {
             return;
         }
 
-        var startInfo = new ProcessStartInfo
+        var monitorStartInfo = DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            processId,
+            providerEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            launchedAt);
+
+        var launcherStartInfo = new ProcessStartInfo
         {
             FileName = "/bin/sh",
             UseShellExecute = false,
             RedirectStandardOutput = false,
             RedirectStandardError = false
         };
-        startInfo.ArgumentList.Add("-c");
-        startInfo.ArgumentList.Add(
+        launcherStartInfo.ArgumentList.Add("-c");
+        launcherStartInfo.ArgumentList.Add(
             """
-            monitor_script=$1
-            shift
-            nohup /bin/sh -c "$monitor_script" direct-run-exit-monitor "$@" >/dev/null 2>&1 </dev/null &
-            """);
-        startInfo.ArgumentList.Add("direct-run-exit-monitor-launcher");
-        startInfo.ArgumentList.Add(
-            """
-            pid=$1
-            provider_log_path=$2
-            execution_unit=$3
-            entry_kind=$4
-            provider=$5
-            session_id=$6
-            while kill -0 "$pid" 2>/dev/null; do
-                sleep 1
-            done
-            if [ -f "$provider_log_path" ] && grep -F "\"session_id\":\"$session_id\"" "$provider_log_path" | grep -F "\"type\":\"backend-exit\"" >/dev/null 2>&1; then
-                exit 0
+            if command -v nohup >/dev/null 2>&1; then
+                nohup "$@" >/dev/null 2>&1 </dev/null &
+            else
+                "$@" >/dev/null 2>&1 </dev/null &
             fi
-            timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-            printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":1}}" >> "$provider_log_path"
             """);
-        startInfo.ArgumentList.Add(processId.ToString());
-        startInfo.ArgumentList.Add(providerEventLogPath);
-        startInfo.ArgumentList.Add(executionUnit);
-        startInfo.ArgumentList.Add(entryKind);
-        startInfo.ArgumentList.Add(provider);
-        startInfo.ArgumentList.Add(providerSessionId);
+        launcherStartInfo.ArgumentList.Add("direct-run-exit-monitor-launcher");
+        launcherStartInfo.ArgumentList.Add(monitorStartInfo.FileName);
+        foreach (var argument in monitorStartInfo.ArgumentList)
+        {
+            launcherStartInfo.ArgumentList.Add(argument);
+        }
 
-        var monitor = Process.Start(startInfo);
-        monitor?.Dispose();
+        using var launcher = Process.Start(launcherStartInfo);
     }
 
-    private static bool HasBackendExitEvent(string providerEventLogPath, string providerSessionId)
+    private static void BestEffortAppendBackendExitIfProcessExitedSoon(
+        bool requiresPersistentExitMonitor,
+        int processId,
+        DirectRunProviderEventWriter eventWriter,
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
     {
-        if (!File.Exists(providerEventLogPath))
+        if (!requiresPersistentExitMonitor
+            || OperatingSystem.IsWindows()
+            || processId <= 0
+            || string.IsNullOrWhiteSpace(providerSessionId)
+            || DirectRunSessionBoundary.HasBackendExitEvent(providerEventLogPath, providerSessionId, launchedAt))
+        {
+            return;
+        }
+
+        var deadline = DateTimeOffset.UtcNow + PersistentExitObservationWindow;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (DirectRunSessionBoundary.HasBackendExitEvent(providerEventLogPath, providerSessionId, launchedAt))
+            {
+                return;
+            }
+
+            if (!IsProcessAlive(processId))
+            {
+                AppendBackendExitEventIfMissing(
+                    eventWriter,
+                    providerEventLogPath,
+                    executionUnit,
+                    entryKind,
+                    provider,
+                    providerSessionId,
+                    1,
+                    launchedAt);
+                return;
+            }
+
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
+        }
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
         {
             return false;
         }
-
-        foreach (var line in File.ReadLines(providerEventLogPath))
+        catch (InvalidOperationException)
         {
-            if (line.Contains($"\"session_id\":\"{providerSessionId}\"", StringComparison.Ordinal)
-                && line.Contains("\"kind\":\"provider-event\"", StringComparison.Ordinal)
-                && line.Contains("\"type\":\"backend-exit\"", StringComparison.Ordinal))
-            {
-                return true;
-            }
+            return false;
         }
-
-        return false;
     }
 
     private static DirectRunProviderEvent CreateSessionMetadataEvent(

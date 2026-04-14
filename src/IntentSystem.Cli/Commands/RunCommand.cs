@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using IntentSystem.Review;
 using IntentSystem.Supervisor;
@@ -539,9 +540,12 @@ internal static class RunCommand
             };
         }
 
-        var providerEvents = SelectCurrentSessionEvents(
-            TryReadDirectRunProviderEvents(context, executionUnit),
-            requestArtifact.ProviderSessionId);
+        var providerEvents = EnsureCurrentSessionTerminalProviderEvent(
+            context,
+            executionUnit,
+            requestArtifact,
+            TryReadDirectRunProviderEvents(context, executionUnit));
+        providerEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId, requestArtifact.LaunchedAt);
         var runStatus = ResolveEffectiveRunStatus(resultArtifact.RunStatus, providerEvents);
         if (!string.Equals(runStatus, resultArtifact.RunStatus, StringComparison.Ordinal))
         {
@@ -640,6 +644,48 @@ internal static class RunCommand
         };
     }
 
+    private static IReadOnlyList<DirectRunProviderEvent> EnsureCurrentSessionTerminalProviderEvent(
+        CliContext context,
+        string executionUnit,
+        DirectRunRequestArtifact requestArtifact,
+        IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(requestArtifact);
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId, requestArtifact.LaunchedAt);
+        if (!string.Equals(requestArtifact.Provider, "Codex", StringComparison.OrdinalIgnoreCase)
+            || currentProviderEvents.Any(HasBackendExitType)
+            || !TryParseSessionProcessId(requestArtifact.ProviderSessionId, out var processId)
+            || IsProcessAlive(processId))
+        {
+            return providerEvents;
+        }
+
+        var providerEventLogPath = Path.Combine(
+            context.RepoRoot,
+            ResolveDirectRunProviderLogRef(context, executionUnit).Replace('/', Path.DirectorySeparatorChar));
+        var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+        writer.Append(new DirectRunProviderEvent
+        {
+            Timestamp = DateTimeOffset.UtcNow.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = requestArtifact.Provider,
+            EntryKind = requestArtifact.EntryKind,
+            SessionId = requestArtifact.ProviderSessionId,
+            Kind = "provider-event",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                type = "backend-exit",
+                exit_code = 1
+            })
+        });
+
+        return TryReadDirectRunProviderEvents(context, executionUnit);
+    }
+
     private static string ResolveEffectiveRunStatus(
         string currentRunStatus,
         IReadOnlyList<DirectRunProviderEvent> providerEvents)
@@ -658,6 +704,50 @@ internal static class RunCommand
         }
 
         return currentRunStatus;
+    }
+
+    private static bool TryParseSessionProcessId(string providerSessionId, out int processId)
+    {
+        processId = default;
+
+        const string prefix = "pid:";
+        if (!providerSessionId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(
+            providerSessionId[prefix.Length..],
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out processId);
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasBackendExitType(DirectRunProviderEvent providerEvent)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvent);
+
+        return providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal);
     }
 
     private static bool TryResolveExplicitReviewOutcome(
@@ -683,22 +773,19 @@ internal static class RunCommand
 
     private static IReadOnlyList<DirectRunProviderEvent> SelectCurrentSessionEvents(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
-        string launchedSessionId)
+        string launchedSessionId,
+        string launchedAt)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
-
-        if (string.IsNullOrWhiteSpace(launchedSessionId))
+        if (!DirectRunSessionBoundary.TryParseLaunchedAt(launchedAt, out var parsedLaunchedAt))
         {
-            return providerEvents;
+            parsedLaunchedAt = default;
         }
 
-        var matchedEvents = providerEvents
-            .Where(providerEvent => string.Equals(providerEvent.SessionId, launchedSessionId, StringComparison.Ordinal))
-            .ToArray();
-
-        return matchedEvents.Length > 0
-            ? matchedEvents
-            : providerEvents;
+        return DirectRunSessionBoundary.SelectEvents(
+            providerEvents,
+            launchedSessionId,
+            parsedLaunchedAt == default ? null : parsedLaunchedAt);
     }
 
     private static bool MatchesCurrentReviewRequestBoundary(

@@ -265,7 +265,7 @@ internal static class DirectRunCommandSupport
                 $"Provider raw event log at {providerEventLogPath} did not contain any events.");
         }
 
-        var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, launchResult.ProviderSessionId);
+        var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, launchResult.ProviderSessionId, launchedAt);
 
         var runLogPath = context.GetRunLogPath();
         var existingRunEvents = File.Exists(runLogPath)
@@ -349,22 +349,10 @@ internal static class DirectRunCommandSupport
 
     private static IReadOnlyList<DirectRunProviderEvent> SelectCurrentSessionEvents(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
-        string launchedSessionId)
+        string launchedSessionId,
+        DateTimeOffset launchedAt)
     {
-        ArgumentNullException.ThrowIfNull(providerEvents);
-
-        if (string.IsNullOrWhiteSpace(launchedSessionId))
-        {
-            return providerEvents;
-        }
-
-        var matchedEvents = providerEvents
-            .Where(providerEvent => string.Equals(providerEvent.SessionId, launchedSessionId, StringComparison.Ordinal))
-            .ToArray();
-
-        return matchedEvents.Length > 0
-            ? matchedEvents
-            : providerEvents;
+        return DirectRunSessionBoundary.SelectEvents(providerEvents, launchedSessionId, launchedAt);
     }
 
     private static string ResolveProvider(
