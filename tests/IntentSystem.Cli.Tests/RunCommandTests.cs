@@ -571,6 +571,53 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenRunningReviewDecisionWithBackendExitFailure_FailsAndPersistsNormalizedResult()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "running",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "ReviewBot",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 1
+                    })
+                }
+            ]);
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("non-retryable-failure", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("Review direct run failed for 'G226'.", result.Detail, StringComparison.Ordinal);
+
+        var artifact = DirectRunResultArtifactJson.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+        Assert.Equal("failed", artifact.RunStatus);
+    }
+
+    [Fact]
     public void ExecuteCore_GivenCommentReviewDecisionWithCommentBody_ReusesReviewCommentBoundary()
     {
         using var tempDirectory = new TemporaryDirectory();
