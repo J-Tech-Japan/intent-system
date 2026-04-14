@@ -618,7 +618,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenRunningReviewDecisionWithExitedCurrentSession_BackfillsBackendExitAndFails()
+    public void ExecuteCore_GivenRunningReviewDecisionWithExitedCurrentSession_KeepsWaitingWithoutSynthesizingFailure()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -655,13 +655,13 @@ public sealed class RunCommandTests
 
         var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-        Assert.Equal("non-retryable-failure", result.StopReason);
+        Assert.Equal("no-actionable-item", result.StopReason);
         Assert.Equal("G226", result.ExecutionUnit);
-        Assert.Contains("Review direct run failed for 'G226'.", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("Review direct run for 'G226' is 'running'.", result.Detail, StringComparison.Ordinal);
 
         var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
             Path.Combine(repoRoot, ".intent-cli", "runs", "G226.provider.jsonl")));
-        Assert.Contains(events, providerEvent =>
+        Assert.DoesNotContain(events, providerEvent =>
             providerEvent.Kind == "provider-event"
             && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
             && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object

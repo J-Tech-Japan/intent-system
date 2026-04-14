@@ -92,13 +92,17 @@ internal static class DirectRunDetachedCaptureCommand
     private static int Execute(DirectRunDetachedCaptureOptions options)
     {
         var writer = new DirectRunProviderEventWriter(options.ProviderEventLogPath);
+
         try
         {
             var startInfo = CreateProviderStartInfo(options);
 
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start detached direct run process '{options.Command}'.");
-            var providerSessionId = $"pid:{Environment.ProcessId}";
+            var providerSessionId = $"pid:{process.Id}";
+            TryWriteSessionId(providerSessionId);
+            Console.SetOut(TextWriter.Null);
+            Console.SetError(TextWriter.Null);
             writer.Append(DirectRunProviderEventFactory.CreateSessionMetadataEvent(
                 options.LaunchedAt,
                 options.ExecutionUnit,
@@ -138,9 +142,6 @@ internal static class DirectRunDetachedCaptureCommand
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
-            Console.Out.WriteLine(providerSessionId);
-            Console.Out.Flush();
-
             var exitedEarly = process.WaitForExit((int)StartupSuccessWindow.TotalMilliseconds);
             process.WaitForExit();
             AppendBackendExitIfMissing(writer, options, providerSessionId, process.ExitCode);
@@ -149,14 +150,12 @@ internal static class DirectRunDetachedCaptureCommand
                 ? process.ExitCode
                 : 0;
         }
-        catch (Win32Exception exception)
+        catch (Win32Exception)
         {
-            TryWriteStartupError(exception.Message);
             return 1;
         }
-        catch (InvalidOperationException exception)
+        catch (InvalidOperationException)
         {
-            TryWriteStartupError(exception.Message);
             return 1;
         }
     }
@@ -181,11 +180,11 @@ internal static class DirectRunDetachedCaptureCommand
             exitCode));
     }
 
-    private static void TryWriteStartupError(string message)
+    private static void TryWriteSessionId(string providerSessionId)
     {
         try
         {
-            Console.Out.WriteLine($"error:{message}");
+            Console.Out.WriteLine(providerSessionId);
             Console.Out.Flush();
         }
         catch
@@ -204,17 +203,7 @@ internal static class DirectRunDetachedCaptureCommand
             RedirectStandardError = true
         };
 
-        if (ShouldWrapWithPseudoTerminal(options.Provider, options.Command))
-        {
-            startInfo.FileName = "/usr/bin/script";
-            startInfo.ArgumentList.Add("-q");
-            startInfo.ArgumentList.Add("/dev/null");
-            startInfo.ArgumentList.Add(options.Command);
-        }
-        else
-        {
-            startInfo.FileName = options.Command;
-        }
+        startInfo.FileName = options.Command;
 
         foreach (var argument in options.Arguments)
         {
@@ -222,29 +211,6 @@ internal static class DirectRunDetachedCaptureCommand
         }
 
         return startInfo;
-    }
-
-    private static bool ShouldWrapWithPseudoTerminal(string provider, string command)
-    {
-        if (OperatingSystem.IsWindows() || !File.Exists("/usr/bin/script"))
-        {
-            return false;
-        }
-
-        return string.Equals(provider, "codex", StringComparison.OrdinalIgnoreCase)
-            || IsCodexLikeCommand(command);
-    }
-
-    private static bool IsCodexLikeCommand(string command)
-    {
-        var fileName = Path.GetFileName(command.Trim());
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            return false;
-        }
-
-        var commandStem = Path.GetFileNameWithoutExtension(fileName);
-        return commandStem.StartsWith("codex", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizeCapturedLine(string line)

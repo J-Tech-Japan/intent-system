@@ -140,7 +140,7 @@ public sealed class DirectRunLauncherTests
 
         Assert.Equal("pid:", result.ProviderSessionId[..4]);
         Assert.True(Path.IsPathRooted(runner.FileName));
-        Assert.True(runner.InheritStandardInput);
+        Assert.False(runner.InheritStandardInput);
         Assert.Contains(DirectRunDetachedCaptureCommand.CommandName, runner.Arguments);
         Assert.Contains(codexPath, runner.Arguments, StringComparer.Ordinal);
 
@@ -222,7 +222,7 @@ public sealed class DirectRunLauncherTests
             providerEventLogPath);
 
         Assert.True(Path.IsPathRooted(runner.FileName));
-        Assert.True(runner.InheritStandardInput);
+        Assert.False(runner.InheritStandardInput);
         Assert.Contains(DirectRunDetachedCaptureCommand.CommandName, runner.Arguments);
         Assert.Equal("pid:2468", result.ProviderSessionId);
 

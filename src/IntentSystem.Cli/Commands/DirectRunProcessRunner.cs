@@ -87,9 +87,9 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
-            var exitedEarly = process.WaitForExit((int)earlyExitWindow.TotalMilliseconds);
-            var exitCode = exitedEarly ? process.ExitCode : 0;
             var processId = process.Id;
+            var exitedEarly = process.WaitForExit((int)earlyExitWindow.TotalMilliseconds);
+            var exitCode = exitedEarly ? TryGetExitCode(process) : 0;
 
             if (exitedEarly)
             {
@@ -120,5 +120,17 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
     {
         ActiveProcesses.TryRemove(process.Id, out _);
         process.Dispose();
+    }
+
+    private static int TryGetExitCode(Process process)
+    {
+        try
+        {
+            return process.ExitCode;
+        }
+        catch (InvalidOperationException)
+        {
+            return 0;
+        }
     }
 }

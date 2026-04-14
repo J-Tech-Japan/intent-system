@@ -6,6 +6,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 {
     private static readonly TimeSpan DefaultEarlyExitWindow = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan PersistentExitObservationWindow = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan DetachedCaptureSessionIdWaitWindow = TimeSpan.FromSeconds(10);
     private readonly IDirectRunProcessRunner processRunner;
 
     public DirectRunLauncher()
@@ -65,7 +66,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             arguments,
             launchedAt,
             workingDirectory,
-            absoluteProviderEventLogPath);
+            absoluteProviderEventLogPath,
+            processRunner is DirectRunProcessRunner);
         var eventWriter = new DirectRunProviderEventWriter(absoluteProviderEventLogPath);
         var providerSessionId = string.Empty;
         string? detachedLaunchError = null;
@@ -77,9 +79,13 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             DefaultEarlyExitWindow,
             processId =>
             {
-                if (processInvocation.UsesDetachedCaptureHelper)
+                if (processInvocation.UsesDetachedCaptureHelper && processInvocation.StartedProcessCarriesProviderSession)
                 {
                     providerSessionId = $"pid:{processId}";
+                    return;
+                }
+                if (processInvocation.UsesDetachedCaptureHelper)
+                {
                     return;
                 }
 
@@ -167,6 +173,14 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             providerSessionId,
             launchedAt);
 
+        if (processInvocation.UsesDetachedCaptureHelper)
+        {
+            providerSessionId = ResolveDetachedProviderSessionId(
+                absoluteProviderEventLogPath,
+                launchedAt,
+                providerSessionId);
+        }
+
         if (process.ExitedEarly && process.ExitCode != 0)
         {
             if (processInvocation.UsesDetachedCaptureHelper && !string.IsNullOrWhiteSpace(detachedLaunchError))
@@ -196,6 +210,66 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             TransportSummary =
                 $"{transport} transport launched via '{command}' in '{workingDirectory}' for provider '{provider}'."
         };
+    }
+
+    private static string ResolveDetachedProviderSessionId(
+        string providerEventLogPath,
+        DateTimeOffset launchedAt,
+        string fallbackSessionId)
+    {
+        var deadline = DateTimeOffset.UtcNow + DetachedCaptureSessionIdWaitWindow;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var resolvedSessionId = TryReadDetachedProviderSessionId(providerEventLogPath, launchedAt);
+            if (!string.IsNullOrWhiteSpace(resolvedSessionId))
+            {
+                return resolvedSessionId;
+            }
+
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
+        }
+
+        return fallbackSessionId;
+    }
+
+    private static string? TryReadDetachedProviderSessionId(string providerEventLogPath, DateTimeOffset launchedAt)
+    {
+        if (!File.Exists(providerEventLogPath))
+        {
+            return null;
+        }
+
+        string? resolvedSessionId = null;
+        foreach (var line in File.ReadLines(providerEventLogPath))
+        {
+            DirectRunProviderEvent providerEvent;
+            try
+            {
+                providerEvent = DirectRunProviderEventJsonl.DeserializeLine(line);
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException
+                or ArgumentException
+                or System.Text.Json.JsonException)
+            {
+                continue;
+            }
+
+            if (!string.Equals(providerEvent.Kind, "session-metadata", StringComparison.Ordinal)
+                || !DateTimeOffset.TryParse(
+                    providerEvent.Timestamp,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out var providerEventTimestamp)
+                || providerEventTimestamp < launchedAt)
+            {
+                continue;
+            }
+
+            resolvedSessionId = providerEvent.SessionId;
+        }
+
+        return resolvedSessionId;
     }
 
     private static IReadOnlyList<string> ResolveArguments(
@@ -235,7 +309,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         IReadOnlyList<string> arguments,
         DateTimeOffset launchedAt,
         string workingDirectory,
-        string absoluteProviderEventLogPath)
+        string absoluteProviderEventLogPath,
+        bool detachHelperFromLauncherSession)
     {
         if (!ShouldShellWrapForPersistentExitLogging(provider, command))
         {
@@ -245,7 +320,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 Arguments = arguments,
                 RequiresPersistentExitMonitor = false,
                 InheritStandardInput = false,
-                UsesDetachedCaptureHelper = false
+                UsesDetachedCaptureHelper = false,
+                StartedProcessCarriesProviderSession = true
             };
         }
 
@@ -261,14 +337,58 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             command,
             arguments);
 
+        if (detachHelperFromLauncherSession && !OperatingSystem.IsWindows())
+        {
+            var detachedLauncherStartInfo = CreateDetachedHelperLauncherStartInfo(helperStartInfo);
+            return new ResolvedProcessInvocation
+            {
+                FileName = detachedLauncherStartInfo.FileName,
+                Arguments = detachedLauncherStartInfo.ArgumentList.ToArray(),
+                RequiresPersistentExitMonitor = false,
+                InheritStandardInput = false,
+                UsesDetachedCaptureHelper = true,
+                StartedProcessCarriesProviderSession = false
+            };
+        }
+
         return new ResolvedProcessInvocation
         {
             FileName = helperStartInfo.FileName,
             Arguments = helperStartInfo.ArgumentList.ToArray(),
             RequiresPersistentExitMonitor = false,
-            InheritStandardInput = true,
-            UsesDetachedCaptureHelper = true
+            InheritStandardInput = false,
+            UsesDetachedCaptureHelper = true,
+            StartedProcessCarriesProviderSession = true
         };
+    }
+
+    private static ProcessStartInfo CreateDetachedHelperLauncherStartInfo(ProcessStartInfo helperStartInfo)
+    {
+        var launcherStartInfo = new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        launcherStartInfo.ArgumentList.Add("-c");
+        launcherStartInfo.ArgumentList.Add(
+            """
+            if command -v nohup >/dev/null 2>&1; then
+                nohup "$@" >/dev/null 2>&1 </dev/null &
+            else
+                "$@" >/dev/null 2>&1 </dev/null &
+            fi
+            """);
+        launcherStartInfo.ArgumentList.Add("direct-run-detached-capture-launcher");
+        launcherStartInfo.ArgumentList.Add(helperStartInfo.FileName);
+        foreach (var argument in helperStartInfo.ArgumentList)
+        {
+            launcherStartInfo.ArgumentList.Add(argument);
+        }
+
+        return launcherStartInfo;
     }
 
     private static bool ShouldShellWrapForPersistentExitLogging(string provider, string command)
@@ -450,11 +570,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
     {
         if (raw.StartsWith("pid:", StringComparison.Ordinal))
         {
-            if (string.IsNullOrWhiteSpace(providerSessionId))
-            {
-                providerSessionId = raw;
-            }
-
+            providerSessionId = raw;
             return true;
         }
 
@@ -478,5 +594,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         public required bool InheritStandardInput { get; init; }
 
         public required bool UsesDetachedCaptureHelper { get; init; }
+
+        public required bool StartedProcessCarriesProviderSession { get; init; }
     }
 }
