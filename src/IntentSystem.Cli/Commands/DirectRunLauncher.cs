@@ -6,6 +6,7 @@ namespace IntentSystem.Cli.Commands;
 internal sealed class DirectRunLauncher : IDirectRunLauncher
 {
     private static readonly TimeSpan DefaultEarlyExitWindow = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan PersistentExitObservationWindow = TimeSpan.FromSeconds(3);
     private readonly IDirectRunProcessRunner processRunner;
 
     public DirectRunLauncher()
@@ -100,6 +101,16 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     exitCode),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)),
             raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)));
+
+        BestEffortAppendBackendExitIfProcessExitedSoon(
+            processInvocation.RequiresPersistentExitMonitor,
+            process.ProcessId,
+            eventWriter,
+            absoluteProviderEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId);
 
         if (process.ExitedEarly && process.ExitCode != 0)
         {
@@ -348,6 +359,67 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
         var monitor = Process.Start(startInfo);
         monitor?.Dispose();
+    }
+
+    private static void BestEffortAppendBackendExitIfProcessExitedSoon(
+        bool requiresPersistentExitMonitor,
+        int processId,
+        DirectRunProviderEventWriter eventWriter,
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId)
+    {
+        if (!requiresPersistentExitMonitor
+            || OperatingSystem.IsWindows()
+            || processId <= 0
+            || string.IsNullOrWhiteSpace(providerSessionId)
+            || HasBackendExitEvent(providerEventLogPath, providerSessionId))
+        {
+            return;
+        }
+
+        var deadline = DateTimeOffset.UtcNow + PersistentExitObservationWindow;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (HasBackendExitEvent(providerEventLogPath, providerSessionId))
+            {
+                return;
+            }
+
+            if (!IsProcessAlive(processId))
+            {
+                AppendBackendExitEventIfMissing(
+                    eventWriter,
+                    providerEventLogPath,
+                    executionUnit,
+                    entryKind,
+                    provider,
+                    providerSessionId,
+                    1);
+                return;
+            }
+
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
+        }
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static bool HasBackendExitEvent(string providerEventLogPath, string providerSessionId)
