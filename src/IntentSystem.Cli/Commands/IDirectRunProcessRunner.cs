@@ -6,6 +6,7 @@ internal interface IDirectRunProcessRunner
         string workingDirectory,
         string fileName,
         IReadOnlyList<string> arguments,
+        bool inheritStandardInput,
         TimeSpan earlyExitWindow,
         Action<int> onStarted,
         Action<int> onExited,

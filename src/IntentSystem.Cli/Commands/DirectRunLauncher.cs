@@ -69,6 +69,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             workingDirectory,
             processInvocation.FileName,
             processInvocation.Arguments,
+            processInvocation.InheritStandardInput,
             DefaultEarlyExitWindow,
             processId =>
             {
@@ -175,7 +176,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             {
                 FileName = command,
                 Arguments = arguments,
-                RequiresPersistentExitMonitor = false
+                RequiresPersistentExitMonitor = false,
+                InheritStandardInput = false
             };
         }
 
@@ -197,7 +199,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 command,
                 .. arguments
             ],
-            RequiresPersistentExitMonitor = true
+            RequiresPersistentExitMonitor = true,
+            InheritStandardInput = true
         };
     }
 
@@ -456,5 +459,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         public required IReadOnlyList<string> Arguments { get; init; }
 
         public required bool RequiresPersistentExitMonitor { get; init; }
+
+        public required bool InheritStandardInput { get; init; }
     }
 }

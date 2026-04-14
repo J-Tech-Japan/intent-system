@@ -41,6 +41,7 @@ public sealed class DirectRunLauncherTests
 
         Assert.Equal("review-runner", runner.FileName);
         Assert.Equal("/repo/.intent-cli/worktrees/G19", runner.WorkingDirectory);
+        Assert.False(runner.InheritStandardInput);
         Assert.Equal(
             [
                 "launch",
@@ -139,6 +140,7 @@ public sealed class DirectRunLauncherTests
 
         Assert.Equal("pid:", result.ProviderSessionId[..4]);
         Assert.Equal("/bin/sh", runner.FileName);
+        Assert.True(runner.InheritStandardInput);
         Assert.Equal("-c", runner.Arguments[0]);
         Assert.Contains("exec \"$@\"", runner.Arguments[1], StringComparison.Ordinal);
         Assert.Contains(codexPath, runner.Arguments, StringComparer.Ordinal);
@@ -220,6 +222,7 @@ public sealed class DirectRunLauncherTests
             providerEventLogPath);
 
         Assert.Equal("/bin/sh", runner.FileName);
+        Assert.True(runner.InheritStandardInput);
         Assert.Equal("pid:2468", result.ProviderSessionId);
 
         var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
@@ -905,6 +908,8 @@ public sealed class DirectRunLauncherTests
 
         public IReadOnlyList<string> Arguments { get; private set; } = [];
 
+        public bool InheritStandardInput { get; private set; }
+
         public IReadOnlyList<string> StdOutLines { get; init; } = [];
 
         public IReadOnlyList<string> StdErrLines { get; init; } = [];
@@ -926,6 +931,7 @@ public sealed class DirectRunLauncherTests
             string workingDirectory,
             string fileName,
             IReadOnlyList<string> arguments,
+            bool inheritStandardInput,
             TimeSpan earlyExitWindow,
             Action<int> onStarted,
             Action<int> onExited,
@@ -935,6 +941,7 @@ public sealed class DirectRunLauncherTests
             WorkingDirectory = workingDirectory;
             FileName = fileName;
             Arguments = arguments.ToArray();
+            InheritStandardInput = inheritStandardInput;
 
             if (ExecuteReceivedProcess)
             {
@@ -943,6 +950,7 @@ public sealed class DirectRunLauncherTests
                     FileName = fileName,
                     WorkingDirectory = workingDirectory,
                     UseShellExecute = false,
+                    RedirectStandardInput = !inheritStandardInput,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
@@ -954,6 +962,12 @@ public sealed class DirectRunLauncherTests
 
                 var process = System.Diagnostics.Process.Start(startInfo)
                     ?? throw new InvalidOperationException("Failed to start wrapper process.");
+
+                if (!inheritStandardInput)
+                {
+                    process.StandardInput.Close();
+                }
+
                 onStarted(process.Id);
                 OnStartedProcess?.Invoke(process.Id);
 
