@@ -542,7 +542,18 @@ internal static class RunCommand
         var providerEvents = SelectCurrentSessionEvents(
             TryReadDirectRunProviderEvents(context, executionUnit),
             requestArtifact.ProviderSessionId);
-        var runStatus = resultArtifact.RunStatus;
+        var runStatus = ResolveEffectiveRunStatus(resultArtifact.RunStatus, providerEvents);
+        if (!string.Equals(runStatus, resultArtifact.RunStatus, StringComparison.Ordinal))
+        {
+            PersistDirectRunResultArtifact(
+                context,
+                executionUnit,
+                resultArtifact with
+                {
+                    RunStatus = runStatus
+                });
+        }
+
         if (string.Equals(runStatus, "failed", StringComparison.Ordinal))
         {
             return new RunReviewDecision
@@ -627,6 +638,26 @@ internal static class RunCommand
             Kind = RunReviewDecisionKind.Waiting,
             Detail = $"Review direct run for '{executionUnit}' is '{runStatus}'."
         };
+    }
+
+    private static string ResolveEffectiveRunStatus(
+        string currentRunStatus,
+        IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        if (!string.Equals(currentRunStatus, "running", StringComparison.Ordinal))
+        {
+            return currentRunStatus;
+        }
+
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            if (TryResolveRunStatus(providerEvents[index].Payload, out var runStatus))
+            {
+                return runStatus;
+            }
+        }
+
+        return currentRunStatus;
     }
 
     private static bool TryResolveExplicitReviewOutcome(
@@ -775,6 +806,37 @@ internal static class RunCommand
             return true;
         }
 
+        if (TryReadInt32(payload, "exit_code", out var exitCode)
+            || TryReadInt32(payload, "exitCode", out exitCode))
+        {
+            runStatus = exitCode == 0 ? "succeeded" : "failed";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadInt32(JsonElement payload, string propertyName, out int value)
+    {
+        value = default;
+
+        if (!payload.TryGetProperty(propertyName, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            return element.TryGetInt32(out value);
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var raw = element.GetString();
+            return !string.IsNullOrWhiteSpace(raw)
+                && int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out value);
+        }
+
         return false;
     }
 
@@ -801,6 +863,23 @@ internal static class RunCommand
             var normalized when !string.IsNullOrWhiteSpace(normalized) => normalized,
             _ => "running"
         };
+    }
+
+    private static void PersistDirectRunResultArtifact(
+        CliContext context,
+        string executionUnit,
+        DirectRunResultArtifact artifact)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(artifact);
+
+        var resultArtifactPath = Path.Combine(
+            context.RepoRoot,
+            ResolveDirectRunResultArtifactRef(context, executionUnit).Replace('/', Path.DirectorySeparatorChar));
+        var directoryPath = Path.GetDirectoryName(resultArtifactPath)
+            ?? throw new InvalidOperationException("Direct run result artifact path did not contain a directory.");
+        Directory.CreateDirectory(directoryPath);
+        File.WriteAllText(resultArtifactPath, DirectRunResultArtifactJson.Serialize(artifact));
     }
 
     private static RunCommandResult CreateStopResult(
