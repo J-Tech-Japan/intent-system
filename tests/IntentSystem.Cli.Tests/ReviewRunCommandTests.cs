@@ -334,17 +334,16 @@ public sealed class ReviewRunCommandTests
             var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
                 Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
             Assert.Equal("succeeded", resultArtifact.RunStatus);
-            Assert.Equal("accepted", resultArtifact.ReviewOutcome);
+            Assert.Null(resultArtifact.ReviewOutcome);
             Assert.Null(resultArtifact.ReviewCommentBodyPath);
 
             var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
                 Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
-            Assert.Contains(providerEvents, providerEvent =>
+            Assert.DoesNotContain(providerEvents, providerEvent =>
                 providerEvent.Kind == "provider-event"
                 && string.Equals(providerEvent.SessionId, "pid:9999", StringComparison.Ordinal)
                 && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
-                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
-                && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
+                && providerEvent.Payload.TryGetProperty("disposition", out _));
 
             var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
             var lifecycleEvent = Assert.Single(runEvents, runEvent => runEvent.Event == "provider-lifecycle");

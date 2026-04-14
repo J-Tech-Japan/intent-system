@@ -37,12 +37,6 @@ internal static class DirectRunReviewOutcomeSupport
             return true;
         }
 
-        if (string.Equals(runStatus, "succeeded", StringComparison.Ordinal))
-        {
-            reviewOutcome = "accepted";
-            return true;
-        }
-
         if (IsAcceptOutcome(runStatus) || IsCommentOutcome(runStatus))
         {
             reviewOutcome = runStatus;

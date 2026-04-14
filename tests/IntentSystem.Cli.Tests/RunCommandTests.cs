@@ -411,7 +411,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenSucceededReviewDecisionWithoutExplicitOutcome_SynthesizesAcceptedOutcomeAndReusesReviewAcceptBoundary()
+    public void ExecuteCore_GivenSucceededReviewDecisionWithoutExplicitOutcome_Waits()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -444,43 +444,17 @@ public sealed class RunCommandTests
                     })
                 }
             ]);
-        var originalReviewAcceptExecutor = RunCommand.ReviewAcceptExecutor;
 
-        try
-        {
-            RunCommand.ReviewAcceptExecutor = (context, executionUnit) =>
-            {
-                PersistQueueState(
-                    context.RepoRoot,
-                    queueItem => queueItem with
-                    {
-                        State = QueueItemState.Completed
-                    });
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-                return new ReviewAcceptResult
-                {
-                    ExecutionUnit = executionUnit,
-                    MergedPrRef = "https://github.com/J-Tech-Japan/intent-system/pull/226",
-                    ClosedIssueRef = "https://github.com/J-Tech-Japan/intent-system/issues/226"
-                };
-            };
+        Assert.Equal("no-actionable-item", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("Review direct run for 'G226' is 'succeeded'.", result.Detail, StringComparison.Ordinal);
 
-            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
-
-            Assert.Equal("no-actionable-item", result.StopReason);
-            Assert.Null(result.ExecutionUnit);
-            var action = Assert.Single(result.Actions);
-            Assert.Equal("review accept", action.Name);
-            Assert.Equal("G226", action.ExecutionUnit);
-
-            var artifact = DirectRunResultArtifactJson.Deserialize(
-                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
-            Assert.Equal("accepted", artifact.ReviewOutcome);
-        }
-        finally
-        {
-            RunCommand.ReviewAcceptExecutor = originalReviewAcceptExecutor;
-        }
+        var artifact = DirectRunResultArtifactJson.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+        Assert.Null(artifact.ReviewOutcome);
     }
 
     [Fact]
@@ -566,7 +540,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenSucceededReviewDecisionWithOnlyStaleAcceptedOutcome_SynthesizesCurrentSessionAcceptedOutcome()
+    public void ExecuteCore_GivenSucceededReviewDecisionWithOnlyStaleAcceptedOutcome_Waits()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -612,47 +586,20 @@ public sealed class RunCommandTests
                     })
                 }
             ]);
-        var originalReviewAcceptExecutor = RunCommand.ReviewAcceptExecutor;
 
-        try
-        {
-            RunCommand.ReviewAcceptExecutor = (context, executionUnit) =>
-            {
-                PersistQueueState(
-                    context.RepoRoot,
-                    queueItem => queueItem with
-                    {
-                        State = QueueItemState.Completed
-                    });
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-                return new ReviewAcceptResult
-                {
-                    ExecutionUnit = executionUnit,
-                    MergedPrRef = "https://github.com/J-Tech-Japan/intent-system/pull/226",
-                    ClosedIssueRef = "https://github.com/J-Tech-Japan/intent-system/issues/226"
-                };
-            };
+        Assert.Equal("no-actionable-item", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("Review direct run for 'G226' is 'succeeded'.", result.Detail, StringComparison.Ordinal);
 
-            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
-
-            Assert.Equal("no-actionable-item", result.StopReason);
-            Assert.Null(result.ExecutionUnit);
-            var action = Assert.Single(result.Actions);
-            Assert.Equal("review accept", action.Name);
-            Assert.Equal("G226", action.ExecutionUnit);
-
-            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
-                Path.Combine(repoRoot, ".intent-cli", "runs", "G226.provider.jsonl")));
-            Assert.Contains(providerEvents, providerEvent =>
-                string.Equals(providerEvent.SessionId, "pid:226", StringComparison.Ordinal)
-                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
-                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
-                && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
-        }
-        finally
-        {
-            RunCommand.ReviewAcceptExecutor = originalReviewAcceptExecutor;
-        }
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G226.provider.jsonl")));
+        Assert.DoesNotContain(providerEvents, providerEvent =>
+            string.Equals(providerEvent.SessionId, "pid:226", StringComparison.Ordinal)
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("disposition", out _));
     }
 
     [Fact]
@@ -703,7 +650,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenRunningReviewDecisionWithExitedCurrentSession_AppendsBackendExitAndSynthesizesAcceptedOutcome()
+    public void ExecuteCore_GivenRunningReviewDecisionWithExitedCurrentSession_AppendsBackendExitAndWaits()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -737,58 +684,31 @@ public sealed class RunCommandTests
             ],
             sessionId: "pid:999999",
             provider: "Codex");
-        var originalReviewAcceptExecutor = RunCommand.ReviewAcceptExecutor;
 
-        try
-        {
-            RunCommand.ReviewAcceptExecutor = (context, executionUnit) =>
-            {
-                PersistQueueState(
-                    context.RepoRoot,
-                    queueItem => queueItem with
-                    {
-                        State = QueueItemState.Completed
-                    });
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-                return new ReviewAcceptResult
-                {
-                    ExecutionUnit = executionUnit,
-                    MergedPrRef = "https://github.com/J-Tech-Japan/intent-system/pull/226",
-                    ClosedIssueRef = "https://github.com/J-Tech-Japan/intent-system/issues/226"
-                };
-            };
+        Assert.Equal("no-actionable-item", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("Review direct run for 'G226' is 'succeeded'.", result.Detail, StringComparison.Ordinal);
 
-            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
-
-            Assert.Equal("no-actionable-item", result.StopReason);
-            Assert.Null(result.ExecutionUnit);
-            var action = Assert.Single(result.Actions);
-            Assert.Equal("review accept", action.Name);
-            Assert.Equal("G226", action.ExecutionUnit);
-
-            var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
-                Path.Combine(repoRoot, ".intent-cli", "runs", "G226.provider.jsonl")));
-            Assert.Contains(events, providerEvent =>
-                providerEvent.Kind == "provider-event"
-                && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
-                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
-                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
-                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
-            Assert.Contains(events, providerEvent =>
-                providerEvent.Kind == "provider-event"
-                && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
-                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
-                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
-                && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
-            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
-                Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
-            Assert.Equal("succeeded", resultArtifact.RunStatus);
-            Assert.Equal("accepted", resultArtifact.ReviewOutcome);
-        }
-        finally
-        {
-            RunCommand.ReviewAcceptExecutor = originalReviewAcceptExecutor;
-        }
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G226.provider.jsonl")));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("disposition", out _));
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+        Assert.Equal("succeeded", resultArtifact.RunStatus);
+        Assert.Null(resultArtifact.ReviewOutcome);
     }
 
     [Fact]
