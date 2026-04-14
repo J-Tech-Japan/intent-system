@@ -560,7 +560,16 @@ internal static class RunCommand
             providerEvents,
             Path.GetFullPath(Path.Combine(
                 context.RepoRoot,
-                DirectRunCommandSupport.ResolveCapturedMessagePath(context, executionUnit).Replace('/', Path.DirectorySeparatorChar))),
+                DirectRunCommandSupport.ResolveCapturedMessagePath(
+                    context,
+                    executionUnit,
+                    DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var capturedLaunchedAt)
+                        ? capturedLaunchedAt
+                        : DateTimeOffset.Parse(
+                            requestArtifact.LaunchedAt,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.RoundtripKind))
+                .Replace('/', Path.DirectorySeparatorChar))),
             DateTimeOffset.UtcNow,
             executionUnit,
             requestArtifact.EntryKind,

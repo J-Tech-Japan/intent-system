@@ -796,6 +796,7 @@ public sealed class RunCommandTests
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
+        var launchedAt = DateTimeOffset.Parse("2026-04-10T12:00:00.0000000+00:00");
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "queue-state.json"),
             QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
@@ -803,7 +804,7 @@ public sealed class RunCommandTests
             Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
             "{}");
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "runs", "G226.last-message.json"),
+            Path.Combine("repo", ".intent-cli", "runs", CreateCapturedLastMessageFileName("G226", launchedAt)),
             """{"disposition":"accepted"}""");
         WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226", provider: "Codex");
         WriteDirectRunResult(
@@ -872,6 +873,7 @@ public sealed class RunCommandTests
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
+        var launchedAt = DateTimeOffset.Parse("2026-04-10T12:00:00.0000000+00:00");
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "queue-state.json"),
             QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
@@ -879,7 +881,7 @@ public sealed class RunCommandTests
             Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
             "{}");
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "runs", "G226.last-message.json"),
+            Path.Combine("repo", ".intent-cli", "runs", CreateCapturedLastMessageFileName("G226", launchedAt)),
             """{"disposition":"fix-requested","comment_body":"Please cover the deterministic submit path."}""");
         WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226", provider: "Codex");
         WriteDirectRunResult(
@@ -942,6 +944,58 @@ public sealed class RunCommandTests
         {
             RunCommand.ReviewCommentExecutor = originalReviewCommentExecutor;
         }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenSucceededReviewDecisionWithOnlyStaleCapturedAcceptedLastMessage_Waits()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var staleLaunchedAt = DateTimeOffset.Parse("2026-04-10T11:59:00.0000000+00:00");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs", CreateCapturedLastMessageFileName("G226", staleLaunchedAt)),
+            """{"disposition":"accepted"}""");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226", provider: "Codex");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "succeeded",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Codex",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 0
+                    })
+                }
+            ],
+            provider: "Codex");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("no-actionable-item", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("Review direct run for 'G226' is 'succeeded'.", result.Detail, StringComparison.Ordinal);
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+        Assert.Null(resultArtifact.ReviewOutcome);
     }
 
     [Fact]
@@ -1394,6 +1448,11 @@ public sealed class RunCommandTests
             "review" => $".intent-cli/reviews/{executionUnit}.request.json",
             _ => throw new InvalidOperationException($"Unsupported entry kind '{entryKind}'.")
         };
+    }
+
+    private static string CreateCapturedLastMessageFileName(string executionUnit, DateTimeOffset launchedAt)
+    {
+        return $"{executionUnit}.{DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt)}.last-message.json";
     }
 
     private sealed class TemporaryDirectory : IDisposable

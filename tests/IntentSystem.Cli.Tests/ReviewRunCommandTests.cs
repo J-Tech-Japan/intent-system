@@ -1448,7 +1448,7 @@ public sealed class ReviewRunCommandTests
                 workingDirectory,
                 ".intent-cli",
                 "runtime-runs",
-                $"{executionUnit}.last-message.json");
+                $"{executionUnit}.{DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt)}.last-message.json");
             Directory.CreateDirectory(
                 Path.GetDirectoryName(capturedMessagePath)
                 ?? throw new InvalidOperationException("Captured last message path did not contain a directory."));

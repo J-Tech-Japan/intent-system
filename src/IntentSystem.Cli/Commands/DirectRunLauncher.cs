@@ -54,6 +54,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             provider,
             model,
             transport,
+            launchedAt,
             absoluteRequestArtifactPath,
             argsTemplate);
         var processInvocation = ResolveProcessInvocation(
@@ -279,11 +280,12 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string provider,
         string model,
         string transport,
+        DateTimeOffset launchedAt,
         string absoluteRequestArtifactPath,
         IReadOnlyList<string> argsTemplate)
     {
         var prompt = CreatePrompt(entryKind, absoluteRequestArtifactPath);
-        var outputLastMessagePath = ResolveOutputLastMessagePath(requestArtifactPath, executionUnit);
+        var outputLastMessagePath = ResolveOutputLastMessagePath(requestArtifactPath, executionUnit, launchedAt);
 
         return argsTemplate
             .Select(argument => argument
@@ -317,14 +319,17 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             + " Do not wrap the JSON in markdown fences.";
     }
 
-    private static string ResolveOutputLastMessagePath(string requestArtifactPath, string executionUnit)
+    private static string ResolveOutputLastMessagePath(
+        string requestArtifactPath,
+        string executionUnit,
+        DateTimeOffset launchedAt)
     {
         var normalizedPath = requestArtifactPath.Replace('\\', '/');
         var directory = Path.GetDirectoryName(normalizedPath.Replace('/', Path.DirectorySeparatorChar))
             ?.Replace(Path.DirectorySeparatorChar, '/')
             ?.TrimEnd('/')
             ?? ".";
-        return $"{directory}/{executionUnit.Trim()}.last-message.json";
+        return $"{directory}/{executionUnit.Trim()}.{DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt)}.last-message.json";
     }
 
     private static ResolvedProcessInvocation ResolveProcessInvocation(

@@ -48,7 +48,7 @@ internal static class DirectRunCommandSupport
         var entryKindValue = FormatEntryKind(entryKind);
         var relativeArtifactPath = ResolveArtifactPath(context, executionUnit);
         var relativeProviderEventLogPath = ResolveProviderEventLogPath(context, executionUnit);
-        var relativeCapturedMessagePath = ResolveCapturedMessagePath(context, executionUnit);
+        var relativeCapturedMessagePath = ResolveCapturedMessagePath(context, executionUnit, launchedAt);
         var absoluteArtifactPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeArtifactPath.Replace('/', Path.DirectorySeparatorChar)));
         var absoluteProviderEventLogPath = Path.GetFullPath(
@@ -185,10 +185,18 @@ internal static class DirectRunCommandSupport
         return $"{root}/{executionUnit.Trim()}.result.json";
     }
 
-    internal static string ResolveCapturedMessagePath(CliContext context, string executionUnit)
+    internal static string ResolveCapturedMessagePath(
+        CliContext context,
+        string executionUnit,
+        DateTimeOffset launchedAt)
     {
         var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
-        return $"{root}/{executionUnit.Trim()}.last-message.json";
+        return $"{root}/{executionUnit.Trim()}.{CreateCapturedMessageSuffix(launchedAt)}.last-message.json";
+    }
+
+    internal static string CreateCapturedMessageSuffix(DateTimeOffset launchedAt)
+    {
+        return launchedAt.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static string FormatEntryKind(DirectRunEntryKind entryKind)
@@ -295,7 +303,7 @@ internal static class DirectRunCommandSupport
         {
             var capturedMessagePath = Path.GetFullPath(Path.Combine(
                 context.RepoRoot,
-                ResolveCapturedMessagePath(context, executionUnit).Replace('/', Path.DirectorySeparatorChar)));
+                ResolveCapturedMessagePath(context, executionUnit, launchedAt).Replace('/', Path.DirectorySeparatorChar)));
             var capturedOutcomeEvent = DirectRunReviewOutcomeSupport.TryCreateReviewOutcomeEventFromCapturedMessage(
                 currentProviderEvents,
                 capturedMessagePath,
