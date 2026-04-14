@@ -276,6 +276,49 @@ internal static class DirectRunCommandSupport
         var sessionId = ResolveSessionId(currentProviderEvents, launchResult.ProviderSessionId);
         var provider = ResolveProvider(currentProviderEvents, launchResult.Provider);
         var runStatus = ResolveRunStatus(currentProviderEvents);
+        string? reviewOutcome = null;
+        string? reviewCommentBodyPath = null;
+        if (string.Equals(entryKind, "review", StringComparison.Ordinal)
+            && DirectRunReviewOutcomeSupport.TryResolveCanonicalReviewOutcome(
+                runStatus,
+                existingReviewOutcome: null,
+                currentProviderEvents,
+                out var resolvedReviewOutcome))
+        {
+            reviewOutcome = resolvedReviewOutcome;
+            if (DirectRunReviewOutcomeSupport.IsCommentOutcome(reviewOutcome))
+            {
+                if (!DirectRunReviewOutcomeSupport.TryResolveReviewCommentBodyPath(
+                        context,
+                        executionUnit,
+                        currentProviderEvents,
+                        out var resolvedCommentBodyPath))
+                {
+                    throw new InvalidOperationException(
+                        $"Review direct run for '{executionUnit}' requested comment but no deterministic comment body was found.");
+                }
+
+                reviewCommentBodyPath = resolvedCommentBodyPath;
+            }
+
+            var outcomeEvent = DirectRunReviewOutcomeSupport.CreateCanonicalReviewOutcomeEventIfNeeded(
+                currentProviderEvents,
+                DateTimeOffset.UtcNow,
+                executionUnit,
+                entryKind,
+                provider,
+                sessionId,
+                reviewOutcome,
+                reviewCommentBodyPath);
+            if (outcomeEvent is not null)
+            {
+                var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+                writer.Append(outcomeEvent);
+                providerEvents = [.. providerEvents, outcomeEvent];
+                currentProviderEvents = [.. currentProviderEvents, outcomeEvent];
+            }
+        }
+
         var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
         var resultArtifactPath = ResolveResultArtifactPath(context, executionUnit);
         var absoluteResultArtifactPath = Path.GetFullPath(Path.Combine(
@@ -292,6 +335,8 @@ internal static class DirectRunCommandSupport
             Model = model,
             SessionId = sessionId,
             RunStatus = runStatus,
+            ReviewOutcome = reviewOutcome,
+            ReviewCommentBodyPath = reviewCommentBodyPath,
             RawLogRef = launchResult.ProviderEventLogPath,
             PacketRef = queueItem.PacketPaths.Yaml,
             ReviewContextRef = queueItem.PacketPaths.ReviewContext,

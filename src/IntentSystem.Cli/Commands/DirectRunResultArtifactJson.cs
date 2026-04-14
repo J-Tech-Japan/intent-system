@@ -29,6 +29,12 @@ internal sealed record DirectRunResultArtifact
     [JsonPropertyName("run_status")]
     public required string RunStatus { get; init; }
 
+    [JsonPropertyName("review_outcome")]
+    public string? ReviewOutcome { get; init; }
+
+    [JsonPropertyName("review_comment_body_path")]
+    public string? ReviewCommentBodyPath { get; init; }
+
     [JsonPropertyName("raw_log_ref")]
     public required string RawLogRef { get; init; }
 
