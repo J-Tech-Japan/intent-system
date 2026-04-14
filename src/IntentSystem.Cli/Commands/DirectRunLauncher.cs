@@ -295,13 +295,6 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         startInfo.ArgumentList.Add("-c");
         startInfo.ArgumentList.Add(
             """
-            monitor_script=$1
-            shift
-            nohup /bin/sh -c "$monitor_script" direct-run-exit-monitor "$@" >/dev/null 2>&1 </dev/null &
-            """);
-        startInfo.ArgumentList.Add("direct-run-exit-monitor-launcher");
-        startInfo.ArgumentList.Add(
-            """
             pid=$1
             provider_log_path=$2
             execution_unit=$3
@@ -317,6 +310,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
             printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":1}}" >> "$provider_log_path"
             """);
+        startInfo.ArgumentList.Add("direct-run-exit-monitor");
         startInfo.ArgumentList.Add(processId.ToString());
         startInfo.ArgumentList.Add(providerEventLogPath);
         startInfo.ArgumentList.Add(executionUnit);
