@@ -48,12 +48,20 @@ internal static class DirectRunCommandSupport
         var entryKindValue = FormatEntryKind(entryKind);
         var relativeArtifactPath = ResolveArtifactPath(context, executionUnit);
         var relativeProviderEventLogPath = ResolveProviderEventLogPath(context, executionUnit);
+        var relativeCapturedMessagePath = ResolveCapturedMessagePath(context, executionUnit);
         var absoluteArtifactPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeArtifactPath.Replace('/', Path.DirectorySeparatorChar)));
         var absoluteProviderEventLogPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeProviderEventLogPath.Replace('/', Path.DirectorySeparatorChar)));
+        var absoluteCapturedMessagePath = Path.GetFullPath(
+            Path.Combine(context.RepoRoot, relativeCapturedMessagePath.Replace('/', Path.DirectorySeparatorChar)));
         var absoluteUpstreamRequestPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, upstreamRequestRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (entryKind == DirectRunEntryKind.Review && File.Exists(absoluteCapturedMessagePath))
+        {
+            File.Delete(absoluteCapturedMessagePath);
+        }
+
         var launchResult = launcher.Launch(
             executionUnit,
             entryKindValue,
@@ -136,7 +144,7 @@ internal static class DirectRunCommandSupport
         var argsTemplate = FirstNonEmptyList(
             entryConfig.Args,
             directRun.Args,
-            ResolveDefaultArgsTemplate(provider));
+            ResolveDefaultArgsTemplate(provider, entryKind));
 
         return new DirectRunResolvedPolicy
         {
@@ -175,6 +183,12 @@ internal static class DirectRunCommandSupport
     {
         var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
         return $"{root}/{executionUnit.Trim()}.result.json";
+    }
+
+    internal static string ResolveCapturedMessagePath(CliContext context, string executionUnit)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{root}/{executionUnit.Trim()}.last-message.json";
     }
 
     private static string FormatEntryKind(DirectRunEntryKind entryKind)
@@ -224,10 +238,11 @@ internal static class DirectRunCommandSupport
         };
     }
 
-    private static IReadOnlyList<string> ResolveDefaultArgsTemplate(string provider)
+    private static IReadOnlyList<string> ResolveDefaultArgsTemplate(string provider, DirectRunEntryKind entryKind)
     {
         return provider.Trim().ToLowerInvariant() switch
         {
+            "codex" when entryKind == DirectRunEntryKind.Review => ["exec", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
             "codex" => ["exec", "--model", "{model}", "{prompt}"],
             "claude" => ["--print", "--model", "{model}", "--output-format", "json", "{prompt}"],
             _ => ["{prompt}"]
@@ -276,6 +291,28 @@ internal static class DirectRunCommandSupport
         var sessionId = ResolveSessionId(currentProviderEvents, launchResult.ProviderSessionId);
         var provider = ResolveProvider(currentProviderEvents, launchResult.Provider);
         var runStatus = ResolveRunStatus(currentProviderEvents);
+        if (string.Equals(entryKind, "review", StringComparison.Ordinal))
+        {
+            var capturedMessagePath = Path.GetFullPath(Path.Combine(
+                context.RepoRoot,
+                ResolveCapturedMessagePath(context, executionUnit).Replace('/', Path.DirectorySeparatorChar)));
+            var capturedOutcomeEvent = DirectRunReviewOutcomeSupport.TryCreateReviewOutcomeEventFromCapturedMessage(
+                currentProviderEvents,
+                capturedMessagePath,
+                DateTimeOffset.UtcNow,
+                executionUnit,
+                entryKind,
+                provider,
+                sessionId);
+            if (capturedOutcomeEvent is not null)
+            {
+                var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+                writer.Append(capturedOutcomeEvent);
+                providerEvents = [.. providerEvents, capturedOutcomeEvent];
+                currentProviderEvents = [.. currentProviderEvents, capturedOutcomeEvent];
+            }
+        }
+
         string? reviewOutcome = null;
         string? reviewCommentBodyPath = null;
         if (string.Equals(entryKind, "review", StringComparison.Ordinal)

@@ -556,6 +556,26 @@ internal static class RunCommand
             PersistDirectRunResultArtifact(context, executionUnit, resultArtifact);
         }
 
+        var capturedOutcomeEvent = DirectRunReviewOutcomeSupport.TryCreateReviewOutcomeEventFromCapturedMessage(
+            providerEvents,
+            Path.GetFullPath(Path.Combine(
+                context.RepoRoot,
+                DirectRunCommandSupport.ResolveCapturedMessagePath(context, executionUnit).Replace('/', Path.DirectorySeparatorChar))),
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            requestArtifact.EntryKind,
+            requestArtifact.Provider,
+            requestArtifact.ProviderSessionId);
+        if (capturedOutcomeEvent is not null)
+        {
+            var providerLogPath = Path.GetFullPath(Path.Combine(
+                context.RepoRoot,
+                resultArtifact.RawLogRef.Replace('/', Path.DirectorySeparatorChar)));
+            var writer = new DirectRunProviderEventWriter(providerLogPath);
+            writer.Append(capturedOutcomeEvent);
+            providerEvents = [.. providerEvents, capturedOutcomeEvent];
+        }
+
         if (string.Equals(runStatus, "failed", StringComparison.Ordinal))
         {
             return new RunReviewDecision

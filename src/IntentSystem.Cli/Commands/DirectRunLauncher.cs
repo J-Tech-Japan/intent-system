@@ -282,8 +282,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string absoluteRequestArtifactPath,
         IReadOnlyList<string> argsTemplate)
     {
-        var prompt =
-            $"Use the request artifact at '{absoluteRequestArtifactPath}' as the bounded source of truth for this direct run.";
+        var prompt = CreatePrompt(entryKind, absoluteRequestArtifactPath);
+        var outputLastMessagePath = ResolveOutputLastMessagePath(requestArtifactPath, executionUnit);
 
         return argsTemplate
             .Select(argument => argument
@@ -295,8 +295,36 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 .Replace("{request_artifact_path}", absoluteRequestArtifactPath, StringComparison.Ordinal)
                 .Replace("{upstream_request_artifact_path}", absoluteRequestArtifactPath, StringComparison.Ordinal)
                 .Replace("{direct_run_artifact_path}", requestArtifactPath, StringComparison.Ordinal)
+                .Replace("{output_last_message_path}", outputLastMessagePath, StringComparison.Ordinal)
                 .Replace("{prompt}", prompt, StringComparison.Ordinal))
             .ToArray();
+    }
+
+    private static string CreatePrompt(string entryKind, string absoluteRequestArtifactPath)
+    {
+        var prompt =
+            $"Use the request artifact at '{absoluteRequestArtifactPath}' as the bounded source of truth for this direct run.";
+        if (!string.Equals(entryKind, "review", StringComparison.Ordinal))
+        {
+            return prompt;
+        }
+
+        return prompt
+            + " Your final response must be a single JSON object with a required string field 'disposition'"
+            + " and an optional string field 'comment_body'."
+            + " Use 'accepted' or 'approved' only when no review comment is required."
+            + " Use 'comment', 'commented', 'fix-requested', or 'changes-requested' only when a deterministic review comment is required."
+            + " Do not wrap the JSON in markdown fences.";
+    }
+
+    private static string ResolveOutputLastMessagePath(string requestArtifactPath, string executionUnit)
+    {
+        var normalizedPath = requestArtifactPath.Replace('\\', '/');
+        var directory = Path.GetDirectoryName(normalizedPath.Replace('/', Path.DirectorySeparatorChar))
+            ?.Replace(Path.DirectorySeparatorChar, '/')
+            ?.TrimEnd('/')
+            ?? ".";
+        return $"{directory}/{executionUnit.Trim()}.last-message.json";
     }
 
     private static ResolvedProcessInvocation ResolveProcessInvocation(

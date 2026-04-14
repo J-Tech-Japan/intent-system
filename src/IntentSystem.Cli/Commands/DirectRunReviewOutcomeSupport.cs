@@ -141,6 +141,46 @@ internal static class DirectRunReviewOutcomeSupport
         };
     }
 
+    public static DirectRunProviderEvent? TryCreateReviewOutcomeEventFromCapturedMessage(
+        IReadOnlyList<DirectRunProviderEvent> currentProviderEvents,
+        string capturedMessagePath,
+        DateTimeOffset timestamp,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId)
+    {
+        ArgumentNullException.ThrowIfNull(currentProviderEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(capturedMessagePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+
+        if (TryResolveExplicitReviewOutcome(currentProviderEvents, out _)
+            || !File.Exists(capturedMessagePath)
+            || !TryParseCapturedReviewOutcomePayload(
+                File.ReadAllText(capturedMessagePath),
+                out var payload,
+                out var reviewOutcome,
+                out var reviewCommentBodyPath)
+            || HasCanonicalReviewOutcomeEvent(currentProviderEvents, reviewOutcome, reviewCommentBodyPath))
+        {
+            return null;
+        }
+
+        return new DirectRunProviderEvent
+        {
+            Timestamp = timestamp.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
+            SessionId = providerSessionId,
+            Kind = "provider-event",
+            Payload = payload
+        };
+    }
+
     private static bool HasCanonicalReviewOutcomeEvent(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string reviewOutcome,
@@ -168,6 +208,106 @@ internal static class DirectRunReviewOutcomeSupport
         }
 
         return false;
+    }
+
+    private static bool TryParseCapturedReviewOutcomePayload(
+        string capturedMessage,
+        out JsonElement payload,
+        out string reviewOutcome,
+        out string? reviewCommentBodyPath)
+    {
+        payload = default;
+        reviewOutcome = string.Empty;
+        reviewCommentBodyPath = null;
+
+        if (string.IsNullOrWhiteSpace(capturedMessage))
+        {
+            return false;
+        }
+
+        var normalizedMessage = StripMarkdownCodeFence(capturedMessage);
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(normalizedMessage);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        using (document)
+        {
+            var source = document.RootElement;
+            if (source.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            if (source.TryGetProperty("review_result", out var reviewResult)
+                && reviewResult.ValueKind == JsonValueKind.Object)
+            {
+                source = reviewResult;
+            }
+
+            if (!TryReadString(source, "disposition", out var disposition)
+                && !TryReadString(source, "status", out disposition)
+                && !TryReadString(source, "run_status", out disposition))
+            {
+                return false;
+            }
+
+            reviewOutcome = NormalizeRunStatus(disposition);
+            if (!IsAcceptOutcome(reviewOutcome) && !IsCommentOutcome(reviewOutcome))
+            {
+                return false;
+            }
+
+            var normalizedPayload = new Dictionary<string, object?>
+            {
+                ["disposition"] = reviewOutcome
+            };
+
+            if (TryReadString(source, "body_path", out var bodyPath)
+                || TryReadString(source, "review_comment_body_path", out bodyPath))
+            {
+                normalizedPayload["body_path"] = bodyPath;
+                reviewCommentBodyPath = bodyPath;
+            }
+            else if (TryReadString(source, "comment_body", out var commentBody)
+                     || TryReadString(source, "body", out commentBody)
+                     || TryReadString(source, "markdown", out commentBody))
+            {
+                normalizedPayload["comment_body"] = commentBody;
+            }
+
+            payload = JsonSerializer.SerializeToElement(normalizedPayload);
+            return true;
+        }
+    }
+
+    private static string StripMarkdownCodeFence(string capturedMessage)
+    {
+        var normalized = capturedMessage.Trim();
+        if (!normalized.StartsWith("```", StringComparison.Ordinal))
+        {
+            return normalized;
+        }
+
+        var firstLineBreak = normalized.IndexOf('\n');
+        if (firstLineBreak < 0)
+        {
+            return normalized;
+        }
+
+        normalized = normalized[(firstLineBreak + 1)..];
+        var closingFence = normalized.LastIndexOf("```", StringComparison.Ordinal);
+        if (closingFence >= 0)
+        {
+            normalized = normalized[..closingFence];
+        }
+
+        return normalized.Trim();
     }
 
     private static bool TryResolveCommentBody(JsonElement payload, out string bodyOrPath, out bool isPath)
