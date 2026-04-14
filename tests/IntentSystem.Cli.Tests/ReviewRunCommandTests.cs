@@ -584,6 +584,88 @@ public sealed class ReviewRunCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRealCodexStyleReviewCommand_WaitsForCurrentSessionOutcomeBeforeReturning()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var codexPath = tempDirectory.CreateExecutableFile(
+            Path.Combine("bin", "codex-experimental"),
+            """
+            #!/bin/sh
+            output_last_message=""
+            while [ $# -gt 0 ]; do
+              if [ "$1" = "--output-last-message" ]; then
+                output_last_message="$2"
+                shift 2
+                continue
+              fi
+              shift
+            done
+            printf '%s\n' '{"type":"ready"}'
+            sleep 2
+            if [ -n "$output_last_message" ]; then
+              mkdir -p "$(dirname "$output_last_message")"
+              printf '%s\n' '{"disposition":"accepted"}' > "$output_last_message"
+            fi
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "config.toml"),
+            $$"""
+            default_domain = "intent-system"
+            artifact_root = ".intent-cli"
+            worktree_root = ".intent-cli/worktrees"
+
+            [direct_backend]
+            artifact_root = ".intent-cli/runtime-runs"
+
+            [direct_backend.review]
+            provider = "Codex"
+            model = "gpt-5.4-mini"
+            transport = "responses"
+            command = "{{codexPath.Replace("\\", "\\\\", StringComparison.Ordinal)}}"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "packet.yaml"),
+            "execution_unit: G9" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+
+        var process = StartCliProcess(repoRoot, "review run G9");
+        Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+        Assert.Equal(0, process.ExitCode);
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+        Assert.Equal("succeeded", resultArtifact.RunStatus);
+        Assert.Equal("accepted", resultArtifact.ReviewOutcome);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+        Assert.Contains(providerEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+        Assert.Contains(providerEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
+            && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_GivenCodexReviewCommandWithoutModelOverride_UsesRunnableCodexDefaultModel()
     {
         using var tempDirectory = new TemporaryDirectory();
