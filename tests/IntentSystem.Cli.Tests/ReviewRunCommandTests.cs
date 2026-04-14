@@ -420,6 +420,78 @@ public sealed class ReviewRunCommandTests
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Execute_GivenCodexReviewCommandWithoutModelOverride_UsesRunnableCodexDefaultModel()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "packet.yaml"),
+            "execution_unit: G9" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ReviewRunCommand.TimestampFactory;
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            ReviewRunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:35:00Z");
+            ReviewRunCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:9999",
+                "Codex",
+                CliRuntimeContracts.DefaultCodexDirectRunModel,
+                "stdio",
+                "/opt/homebrew/bin/codex",
+                ["exec", "--model", "{model}", "{prompt}"],
+                "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.");
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Claude",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        ArtifactRoot = ".intent-cli/runtime-runs",
+                        Review = new DirectRunEntryConfig
+                        {
+                            Command = "/opt/homebrew/bin/codex"
+                        }
+                    }
+                }
+            };
+
+            var exitCode = ReviewRunCommand.Execute(context, ["G9"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains($"Direct model: {CliRuntimeContracts.DefaultCodexDirectRunModel}", writer.ToString(), StringComparison.Ordinal);
+
+            var directRunArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.request.json")));
+            Assert.Equal(CliRuntimeContracts.DefaultCodexDirectRunModel, directRunArtifact.Model);
+            Assert.Equal("Codex", directRunArtifact.Provider);
+        }
+        finally
+        {
+            ReviewRunCommand.TimestampFactory = originalTimestampFactory;
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext

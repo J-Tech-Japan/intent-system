@@ -39,6 +39,7 @@ internal static class CliRuntimeContracts
     public const string DefaultInterviewRole = "Claude";
     public const string DefaultClarifyRole = "Codex";
     public const string DefaultDirectRunModel = "default";
+    public const string DefaultCodexDirectRunModel = "gpt-5.4-mini";
     public const string DefaultDirectRunTransport = "stdio";
 
     public static string GetIntentCliDirectoryPath(string repoRoot)
