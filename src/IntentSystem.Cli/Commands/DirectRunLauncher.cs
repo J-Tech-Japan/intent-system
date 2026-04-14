@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.Json;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -60,11 +59,16 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             executionUnit,
             entryKind,
             provider,
+            model,
+            transport,
             command,
             arguments,
+            launchedAt,
+            workingDirectory,
             absoluteProviderEventLogPath);
         var eventWriter = new DirectRunProviderEventWriter(absoluteProviderEventLogPath);
         var providerSessionId = string.Empty;
+        string? detachedLaunchError = null;
         var process = processRunner.Start(
             workingDirectory,
             processInvocation.FileName,
@@ -73,8 +77,14 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             DefaultEarlyExitWindow,
             processId =>
             {
+                if (processInvocation.UsesDetachedCaptureHelper)
+                {
+                    providerSessionId = $"pid:{processId}";
+                    return;
+                }
+
                 providerSessionId = $"pid:{processId}";
-                eventWriter.Append(CreateSessionMetadataEvent(
+                eventWriter.Append(DirectRunProviderEventFactory.CreateSessionMetadataEvent(
                     launchedAt,
                     executionUnit,
                     entryKind,
@@ -102,8 +112,49 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                     providerSessionId,
                     exitCode,
                     launchedAt),
-            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)),
-            raw => eventWriter.Append(CreateProviderEvent(DateTimeOffset.UtcNow, executionUnit, entryKind, provider, providerSessionId, raw)));
+            raw =>
+            {
+                if (processInvocation.UsesDetachedCaptureHelper
+                    && TryHandleDetachedCaptureHandshake(
+                        raw,
+                        eventWriter,
+                        launchedAt,
+                        executionUnit,
+                        entryKind,
+                        provider,
+                        model,
+                        transport,
+                        command,
+                        ref providerSessionId,
+                        ref detachedLaunchError))
+                {
+                    return;
+                }
+
+                eventWriter.Append(DirectRunProviderEventFactory.CreateProviderEvent(
+                    DateTimeOffset.UtcNow,
+                    executionUnit,
+                    entryKind,
+                    provider,
+                    providerSessionId,
+                    raw));
+            },
+            raw =>
+            {
+                if (processInvocation.UsesDetachedCaptureHelper && detachedLaunchError is null)
+                {
+                    detachedLaunchError = raw;
+                    return;
+                }
+
+                eventWriter.Append(DirectRunProviderEventFactory.CreateProviderEvent(
+                    DateTimeOffset.UtcNow,
+                    executionUnit,
+                    entryKind,
+                    provider,
+                    providerSessionId,
+                    raw));
+            });
 
         BestEffortAppendBackendExitIfProcessExitedSoon(
             processInvocation.RequiresPersistentExitMonitor,
@@ -118,8 +169,20 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
         if (process.ExitedEarly && process.ExitCode != 0)
         {
+            if (processInvocation.UsesDetachedCaptureHelper && !string.IsNullOrWhiteSpace(detachedLaunchError))
+            {
+                throw new InvalidOperationException(
+                    $"Direct run launch failed for provider '{provider}' using command '{command}': {detachedLaunchError}");
+            }
+
             throw new InvalidOperationException(
                 $"Direct run launch failed for provider '{provider}' using command '{command}' with exit code {process.ExitCode}.");
+        }
+
+        if (processInvocation.UsesDetachedCaptureHelper && string.IsNullOrWhiteSpace(providerSessionId))
+        {
+            throw new InvalidOperationException(
+                $"Direct run launch failed for provider '{provider}' using command '{command}': detached capture helper did not report a provider session.");
         }
 
         return new DirectRunLaunchResult
@@ -166,8 +229,12 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string executionUnit,
         string entryKind,
         string provider,
+        string model,
+        string transport,
         string command,
         IReadOnlyList<string> arguments,
+        DateTimeOffset launchedAt,
+        string workingDirectory,
         string absoluteProviderEventLogPath)
     {
         if (!ShouldShellWrapForPersistentExitLogging(provider, command))
@@ -177,30 +244,30 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 FileName = command,
                 Arguments = arguments,
                 RequiresPersistentExitMonitor = false,
-                InheritStandardInput = false
+                InheritStandardInput = false,
+                UsesDetachedCaptureHelper = false
             };
         }
 
+        var helperStartInfo = DirectRunDetachedCaptureCommand.CreateStartInfo(
+            absoluteProviderEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            model,
+            transport,
+            launchedAt,
+            workingDirectory,
+            command,
+            arguments);
+
         return new ResolvedProcessInvocation
         {
-            FileName = "/bin/sh",
-            Arguments =
-            [
-                "-c",
-                """
-                shift 4
-                exec "$@"
-                """,
-                "direct-run-wrapper",
-                absoluteProviderEventLogPath,
-                executionUnit,
-                entryKind,
-                provider,
-                command,
-                .. arguments
-            ],
-            RequiresPersistentExitMonitor = true,
-            InheritStandardInput = true
+            FileName = helperStartInfo.FileName,
+            Arguments = helperStartInfo.ArgumentList.ToArray(),
+            RequiresPersistentExitMonitor = false,
+            InheritStandardInput = true,
+            UsesDetachedCaptureHelper = true
         };
     }
 
@@ -246,7 +313,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             return;
         }
 
-        eventWriter.Append(CreateBackendExitEvent(
+        eventWriter.Append(DirectRunProviderEventFactory.CreateBackendExitEvent(
             DateTimeOffset.UtcNow,
             executionUnit,
             entryKind,
@@ -368,88 +435,36 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         }
     }
 
-    private static DirectRunProviderEvent CreateSessionMetadataEvent(
+    private static bool TryHandleDetachedCaptureHandshake(
+        string raw,
+        DirectRunProviderEventWriter eventWriter,
         DateTimeOffset launchedAt,
         string executionUnit,
         string entryKind,
         string provider,
-        string providerSessionId,
         string model,
         string transport,
-        string command)
+        string command,
+        ref string providerSessionId,
+        ref string? detachedLaunchError)
     {
-        return new DirectRunProviderEvent
+        if (raw.StartsWith("pid:", StringComparison.Ordinal))
         {
-            Timestamp = launchedAt.ToString("O"),
-            ExecutionUnit = executionUnit,
-            Provider = provider,
-            EntryKind = entryKind,
-            SessionId = providerSessionId,
-            Kind = "session-metadata",
-            Payload = JsonSerializer.SerializeToElement(new
+            if (string.IsNullOrWhiteSpace(providerSessionId))
             {
-                model,
-                transport,
-                command
-            })
-        };
-    }
+                providerSessionId = raw;
+            }
 
-    private static DirectRunProviderEvent CreateProviderEvent(
-        DateTimeOffset timestamp,
-        string executionUnit,
-        string entryKind,
-        string provider,
-        string providerSessionId,
-        string raw)
-    {
-        return new DirectRunProviderEvent
-        {
-            Timestamp = timestamp.ToString("O"),
-            ExecutionUnit = executionUnit,
-            Provider = provider,
-            EntryKind = entryKind,
-            SessionId = providerSessionId,
-            Kind = "provider-event",
-            Payload = ParsePayload(raw)
-        };
-    }
-
-    private static DirectRunProviderEvent CreateBackendExitEvent(
-        DateTimeOffset timestamp,
-        string executionUnit,
-        string entryKind,
-        string provider,
-        string providerSessionId,
-        int exitCode)
-    {
-        return new DirectRunProviderEvent
-        {
-            Timestamp = timestamp.ToString("O"),
-            ExecutionUnit = executionUnit,
-            Provider = provider,
-            EntryKind = entryKind,
-            SessionId = providerSessionId,
-            Kind = "provider-event",
-            Payload = JsonSerializer.SerializeToElement(new
-            {
-                type = "backend-exit",
-                exit_code = exitCode
-            })
-        };
-    }
-
-    private static JsonElement ParsePayload(string raw)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(raw);
-            return document.RootElement.Clone();
+            return true;
         }
-        catch (JsonException)
+
+        if (raw.StartsWith("error:", StringComparison.Ordinal))
         {
-            return JsonSerializer.SerializeToElement(raw);
+            detachedLaunchError = raw["error:".Length..].Trim();
+            return true;
         }
+
+        return false;
     }
 
     private sealed record ResolvedProcessInvocation
@@ -461,5 +476,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         public required bool RequiresPersistentExitMonitor { get; init; }
 
         public required bool InheritStandardInput { get; init; }
+
+        public required bool UsesDetachedCaptureHelper { get; init; }
     }
 }

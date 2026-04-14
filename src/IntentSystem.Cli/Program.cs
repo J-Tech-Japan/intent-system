@@ -10,6 +10,11 @@ internal static class Program
     {
         try
         {
+            if (DirectRunDetachedCaptureCommand.TryExecute(args, out var directRunDetachedCaptureExitCode))
+            {
+                return directRunDetachedCaptureExitCode;
+            }
+
             if (DirectRunExitMonitorCommand.TryExecute(args, out var directRunExitMonitorExitCode))
             {
                 return directRunExitMonitorExitCode;
