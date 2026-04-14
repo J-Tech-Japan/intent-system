@@ -302,7 +302,25 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             entry_kind=$4
             provider=$5
             session_id=$6
-            while kill -0 "$pid" 2>/dev/null; do
+            is_process_alive() {
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    return 1
+                fi
+
+                process_state=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+                if [ -z "$process_state" ]; then
+                    return 1
+                fi
+
+                case "$process_state" in
+                    Z*|*Z*)
+                        return 1
+                        ;;
+                esac
+
+                return 0
+            }
+            while is_process_alive; do
                 sleep 1
             done
             if [ -f "$provider_log_path" ] && grep -F "\"session_id\":\"$session_id\"" "$provider_log_path" | grep -F "\"type\":\"backend-exit\"" >/dev/null 2>&1; then
