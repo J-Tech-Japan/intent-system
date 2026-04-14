@@ -33,7 +33,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
                 FileName = fileName,
                 WorkingDirectory = workingDirectory,
                 UseShellExecute = false,
-                RedirectStandardInput = false,
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
@@ -45,6 +45,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
 
             var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start direct run process '{fileName}'.");
+            process.StandardInput.Close();
             ActiveProcesses[process.Id] = process;
 
             onStarted(process.Id);

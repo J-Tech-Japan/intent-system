@@ -139,6 +139,8 @@ public sealed class DirectRunLauncherTests
 
         Assert.Equal("pid:", result.ProviderSessionId[..4]);
         Assert.Equal("/bin/sh", runner.FileName);
+        Assert.Equal("-c", runner.Arguments[0]);
+        Assert.Contains("exec \"$@\"", runner.Arguments[1], StringComparison.Ordinal);
         Assert.Contains(codexPath, runner.Arguments, StringComparer.Ordinal);
 
         var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
@@ -415,6 +417,79 @@ public sealed class DirectRunLauncherTests
             && providerEvent.Payload.TryGetProperty("type", out var typeElement)
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
             && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Equal(1, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+    }
+
+    [Fact]
+    public async Task DirectRunExitMonitorCommand_GivenDetachedProcess_AppendsBackendExitForCurrentSession()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var externalProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 1" }
+        });
+        Assert.NotNull(externalProcess);
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b.provider.jsonl");
+        var providerSessionId = $"pid:{externalProcess!.Id}";
+        var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+        writer.Append(new DirectRunProviderEvent
+        {
+            Timestamp = DateTimeOffset.UtcNow.ToString("O"),
+            ExecutionUnit = "G14b",
+            Provider = "OpenAI",
+            EntryKind = "review",
+            SessionId = providerSessionId,
+            Kind = "provider-event",
+            Payload = System.Text.Json.JsonSerializer.SerializeToElement(new { type = "ready" })
+        });
+
+        using var monitor = Process.Start(DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            externalProcess.Id,
+            providerEventLogPath,
+            "G14b",
+            "review",
+            "OpenAI",
+            providerSessionId));
+        Assert.NotNull(monitor);
+        monitor!.StandardInput.Close();
+        monitor.StandardOutput.Dispose();
+        monitor.StandardError.Dispose();
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(providerEventLogPath))
+                {
+                    return false;
+                }
+
+                var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                return events.Any(providerEvent =>
+                    providerEvent.Kind == "provider-event"
+                    && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                    && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                    && string.Equals(providerEvent.SessionId, providerSessionId, StringComparison.Ordinal));
+            },
+            TimeSpan.FromSeconds(5));
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        var backendExitEvent = Assert.Single(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, providerSessionId, StringComparison.Ordinal));
         Assert.Equal(1, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
     }
 

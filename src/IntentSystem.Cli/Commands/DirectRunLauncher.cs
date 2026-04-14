@@ -183,43 +183,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             [
                 "-c",
                 """
-                provider_log_path=$1
-                execution_unit=$2
-                entry_kind=$3
-                provider=$4
                 shift 4
-                session_id="pid:$$"
-                child_pid=""
-                exit_code=0
-                backend_exit_written=0
-                append_backend_exit() {
-                    if [ "$backend_exit_written" -ne 0 ]; then
-                        return
-                    fi
-                    backend_exit_written=1
-                    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-                    printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":$exit_code}}" >> "$provider_log_path"
-                }
-                handle_signal() {
-                    signal_name=$1
-                    if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
-                        kill -s "$signal_name" "$child_pid" 2>/dev/null || true
-                        wait "$child_pid"
-                        exit_code=$?
-                    fi
-                    append_backend_exit
-                    trap - EXIT HUP INT TERM
-                    exit "$exit_code"
-                }
-                trap 'append_backend_exit' EXIT
-                trap 'handle_signal HUP' HUP
-                trap 'handle_signal INT' INT
-                trap 'handle_signal TERM' TERM
-                "$@" &
-                child_pid=$!
-                wait "$child_pid"
-                exit_code=$?
-                exit "$exit_code"
+                exec "$@"
                 """,
                 "direct-run-wrapper",
                 absoluteProviderEventLogPath,
@@ -296,69 +261,38 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             return;
         }
 
-        var startInfo = new ProcessStartInfo
+        var monitorStartInfo = DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            processId,
+            providerEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId);
+
+        var launcherStartInfo = new ProcessStartInfo
         {
             FileName = "/bin/sh",
             UseShellExecute = false,
             RedirectStandardOutput = false,
             RedirectStandardError = false
         };
-        startInfo.ArgumentList.Add("-c");
-        startInfo.ArgumentList.Add(
+        launcherStartInfo.ArgumentList.Add("-c");
+        launcherStartInfo.ArgumentList.Add(
             """
-            monitor_script=$1
-            shift
             if command -v nohup >/dev/null 2>&1; then
-                nohup /bin/sh -c "$monitor_script" direct-run-exit-monitor "$@" >/dev/null 2>&1 </dev/null &
+                nohup "$@" >/dev/null 2>&1 </dev/null &
             else
-                /bin/sh -c "$monitor_script" direct-run-exit-monitor "$@" >/dev/null 2>&1 </dev/null &
+                "$@" >/dev/null 2>&1 </dev/null &
             fi
             """);
-        startInfo.ArgumentList.Add("direct-run-exit-monitor-launcher");
-        startInfo.ArgumentList.Add(
-            """
-            pid=$1
-            provider_log_path=$2
-            execution_unit=$3
-            entry_kind=$4
-            provider=$5
-            session_id=$6
-            is_process_alive() {
-                if ! kill -0 "$pid" 2>/dev/null; then
-                    return 1
-                fi
+        launcherStartInfo.ArgumentList.Add("direct-run-exit-monitor-launcher");
+        launcherStartInfo.ArgumentList.Add(monitorStartInfo.FileName);
+        foreach (var argument in monitorStartInfo.ArgumentList)
+        {
+            launcherStartInfo.ArgumentList.Add(argument);
+        }
 
-                process_state=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')
-                if [ -z "$process_state" ]; then
-                    return 1
-                fi
-
-                case "$process_state" in
-                    Z*|*Z*)
-                        return 1
-                        ;;
-                esac
-
-                return 0
-            }
-            while is_process_alive; do
-                sleep 1
-            done
-            if [ -f "$provider_log_path" ] && grep -F "\"session_id\":\"$session_id\"" "$provider_log_path" | grep -F "\"type\":\"backend-exit\"" >/dev/null 2>&1; then
-                exit 0
-            fi
-            timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-            printf '%s\n' "{\"ts\":\"$timestamp\",\"execution_unit\":\"$execution_unit\",\"provider\":\"$provider\",\"entry_kind\":\"$entry_kind\",\"session_id\":\"$session_id\",\"kind\":\"provider-event\",\"payload\":{\"type\":\"backend-exit\",\"exit_code\":1}}" >> "$provider_log_path"
-            """);
-        startInfo.ArgumentList.Add(processId.ToString());
-        startInfo.ArgumentList.Add(providerEventLogPath);
-        startInfo.ArgumentList.Add(executionUnit);
-        startInfo.ArgumentList.Add(entryKind);
-        startInfo.ArgumentList.Add(provider);
-        startInfo.ArgumentList.Add(providerSessionId);
-
-        var monitor = Process.Start(startInfo);
-        monitor?.Dispose();
+        using var launcher = Process.Start(launcherStartInfo);
     }
 
     private static void BestEffortAppendBackendExitIfProcessExitedSoon(

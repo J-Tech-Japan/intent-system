@@ -10,6 +10,11 @@ internal static class Program
     {
         try
         {
+            if (DirectRunExitMonitorCommand.TryExecute(args, out var directRunExitMonitorExitCode))
+            {
+                return directRunExitMonitorExitCode;
+            }
+
             var currentDirectory = Directory.GetCurrentDirectory();
             if (IsIntakeInitCommand(args))
             {
