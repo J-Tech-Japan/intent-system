@@ -282,6 +282,69 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task Launch_GivenRealProcessRunnerAndNonWrappedCommand_PreservesExitCallbackAfterGarbageCollection()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G12a.provider.jsonl");
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
+        var runnerPath = tempDirectory.CreateExecutableFile(
+            "repo/review-runner",
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
+            sleep 1
+            """);
+        var launcher = new DirectRunLauncher();
+
+        var result = launcher.Launch(
+            "G12a",
+            "review",
+            ".intent-cli/runs/G12a.request.json",
+            ".intent-cli/runs/G12a.provider.jsonl",
+            "ReviewBot",
+            "gpt-5.4-mini",
+            "responses",
+            runnerPath,
+            ["test prompt"],
+            DateTimeOffset.Parse("2026-04-09T11:06:00Z"),
+            worktreePath,
+            tempDirectory.GetPath(".intent-cli/reviews/G12a.request.json"),
+            providerEventLogPath);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                return events.Any(providerEvent =>
+                    providerEvent.Kind == "provider-event"
+                    && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                    && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                    && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            },
+            TimeSpan.FromSeconds(5));
+
+        var finalEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        var backendExitEvent = Assert.Single(finalEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+    }
+
+    [Fact]
     public async Task Launch_GivenWrappedCodexProcessEndsWithoutExitCallback_MonitorAppendsBackendExitProviderEvent()
     {
         if (OperatingSystem.IsWindows())

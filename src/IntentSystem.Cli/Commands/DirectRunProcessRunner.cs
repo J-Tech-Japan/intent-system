@@ -1,10 +1,13 @@
 using System.ComponentModel;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace IntentSystem.Cli.Commands;
 
 internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
 {
+    private static readonly ConcurrentDictionary<int, Process> ActiveProcesses = new();
+
     public DirectRunProcessLaunchResult Start(
         string workingDirectory,
         string fileName,
@@ -42,6 +45,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
 
             var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start direct run process '{fileName}'.");
+            ActiveProcesses[process.Id] = process;
 
             onStarted(process.Id);
 
@@ -56,7 +60,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
 
                 process.WaitForExit();
                 onExited(process.ExitCode);
-                process.Dispose();
+                ReleaseProcess(process);
             };
 
             process.OutputDataReceived += (_, eventArgs) =>
@@ -86,7 +90,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
                 {
                     process.WaitForExit();
                     onExited(exitCode);
-                    process.Dispose();
+                    ReleaseProcess(process);
                 }
             }
 
@@ -103,5 +107,11 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
                 $"Failed to start direct run process '{fileName}': {exception.Message}",
                 exception);
         }
+    }
+
+    private static void ReleaseProcess(Process process)
+    {
+        ActiveProcesses.TryRemove(process.Id, out _);
+        process.Dispose();
     }
 }
