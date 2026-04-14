@@ -25,7 +25,7 @@ internal static class DirectRunExitMonitorCommand
         if (!TryParseArguments(args, out var options))
         {
             Console.Error.WriteLine(
-                $"Usage: {CommandName} <pid> <provider_log_path> <execution_unit> <entry_kind> <provider> <session_id>");
+                $"Usage: {CommandName} <pid> <provider_log_path> <execution_unit> <entry_kind> <provider> <session_id> <launched_at>");
             exitCode = 1;
             return true;
         }
@@ -40,7 +40,8 @@ internal static class DirectRunExitMonitorCommand
         string executionUnit,
         string entryKind,
         string provider,
-        string providerSessionId)
+        string providerSessionId,
+        DateTimeOffset launchedAt)
     {
         if (processId <= 0)
         {
@@ -81,6 +82,7 @@ internal static class DirectRunExitMonitorCommand
         startInfo.ArgumentList.Add(entryKind);
         startInfo.ArgumentList.Add(provider);
         startInfo.ArgumentList.Add(providerSessionId);
+        startInfo.ArgumentList.Add(launchedAt.ToString("O"));
 
         return startInfo;
     }
@@ -90,7 +92,7 @@ internal static class DirectRunExitMonitorCommand
         WaitForProcessExit(options.ProcessId);
         Thread.Sleep(ExitGracePeriod);
 
-        if (HasBackendExitEvent(options.ProviderEventLogPath, options.ProviderSessionId))
+        if (DirectRunSessionBoundary.HasBackendExitEvent(options.ProviderEventLogPath, options.ProviderSessionId, options.LaunchedAt))
         {
             return 0;
         }
@@ -187,30 +189,10 @@ internal static class DirectRunExitMonitorCommand
         }
     }
 
-    private static bool HasBackendExitEvent(string providerEventLogPath, string providerSessionId)
-    {
-        if (!File.Exists(providerEventLogPath))
-        {
-            return false;
-        }
-
-        foreach (var line in File.ReadLines(providerEventLogPath))
-        {
-            if (line.Contains($"\"session_id\":\"{providerSessionId}\"", StringComparison.Ordinal)
-                && line.Contains("\"kind\":\"provider-event\"", StringComparison.Ordinal)
-                && line.Contains("\"type\":\"backend-exit\"", StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static bool TryParseArguments(string[] args, out DirectRunExitMonitorOptions options)
     {
         options = null!;
-        if (args.Length != 7 || !int.TryParse(args[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var processId))
+        if (args.Length != 8 || !int.TryParse(args[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var processId))
         {
             return false;
         }
@@ -220,7 +202,8 @@ internal static class DirectRunExitMonitorCommand
             || string.IsNullOrWhiteSpace(args[3])
             || string.IsNullOrWhiteSpace(args[4])
             || string.IsNullOrWhiteSpace(args[5])
-            || string.IsNullOrWhiteSpace(args[6]))
+            || string.IsNullOrWhiteSpace(args[6])
+            || !DirectRunSessionBoundary.TryParseLaunchedAt(args[7], out var launchedAt))
         {
             return false;
         }
@@ -231,7 +214,8 @@ internal static class DirectRunExitMonitorCommand
             args[3],
             args[4],
             args[5],
-            args[6]);
+            args[6],
+            launchedAt);
         return true;
     }
 
@@ -311,5 +295,6 @@ internal static class DirectRunExitMonitorCommand
         string ExecutionUnit,
         string EntryKind,
         string Provider,
-        string ProviderSessionId);
+        string ProviderSessionId,
+        DateTimeOffset LaunchedAt);
 }

@@ -545,7 +545,7 @@ internal static class RunCommand
             executionUnit,
             requestArtifact,
             TryReadDirectRunProviderEvents(context, executionUnit));
-        providerEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId);
+        providerEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId, requestArtifact.LaunchedAt);
         var runStatus = ResolveEffectiveRunStatus(resultArtifact.RunStatus, providerEvents);
         if (!string.Equals(runStatus, resultArtifact.RunStatus, StringComparison.Ordinal))
         {
@@ -655,7 +655,7 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(requestArtifact);
         ArgumentNullException.ThrowIfNull(providerEvents);
 
-        var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId);
+        var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId, requestArtifact.LaunchedAt);
         if (!string.Equals(requestArtifact.Provider, "Codex", StringComparison.OrdinalIgnoreCase)
             || currentProviderEvents.Any(HasBackendExitType)
             || !TryParseSessionProcessId(requestArtifact.ProviderSessionId, out var processId)
@@ -773,22 +773,19 @@ internal static class RunCommand
 
     private static IReadOnlyList<DirectRunProviderEvent> SelectCurrentSessionEvents(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
-        string launchedSessionId)
+        string launchedSessionId,
+        string launchedAt)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
-
-        if (string.IsNullOrWhiteSpace(launchedSessionId))
+        if (!DirectRunSessionBoundary.TryParseLaunchedAt(launchedAt, out var parsedLaunchedAt))
         {
-            return providerEvents;
+            parsedLaunchedAt = default;
         }
 
-        var matchedEvents = providerEvents
-            .Where(providerEvent => string.Equals(providerEvent.SessionId, launchedSessionId, StringComparison.Ordinal))
-            .ToArray();
-
-        return matchedEvents.Length > 0
-            ? matchedEvents
-            : providerEvents;
+        return DirectRunSessionBoundary.SelectEvents(
+            providerEvents,
+            launchedSessionId,
+            parsedLaunchedAt == default ? null : parsedLaunchedAt);
     }
 
     private static bool MatchesCurrentReviewRequestBoundary(
