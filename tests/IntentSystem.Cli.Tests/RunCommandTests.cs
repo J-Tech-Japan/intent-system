@@ -618,6 +618,58 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenRunningReviewDecisionWithExitedCurrentSession_BackfillsBackendExitAndFails()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:999999", provider: "Codex");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "running",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:00.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Codex",
+                    EntryKind = "review",
+                    SessionId = "pid:999999",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "ready"
+                    })
+                }
+            ],
+            sessionId: "pid:999999",
+            provider: "Codex");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("non-retryable-failure", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Contains("Review direct run failed for 'G226'.", result.Detail, StringComparison.Ordinal);
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G226.provider.jsonl")));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ExecuteCore_GivenCommentReviewDecisionWithCommentBody_ReusesReviewCommentBoundary()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -960,7 +1012,8 @@ public sealed class RunCommandTests
         string entryKind,
         string runStatus,
         IReadOnlyList<DirectRunProviderEvent>? providerEvents = null,
-        string sessionId = "pid:226")
+        string sessionId = "pid:226",
+        string provider = "ReviewBot")
     {
         var runsDirectory = Path.Combine(repoRoot, ".intent-cli", "runs");
         Directory.CreateDirectory(runsDirectory);
@@ -974,7 +1027,7 @@ public sealed class RunCommandTests
                     ExecutionUnit = executionUnit,
                     EntryKind = entryKind,
                     UpstreamRequestRef = ResolveUpstreamRequestRef(executionUnit, entryKind),
-                    Provider = "ReviewBot",
+                    Provider = provider,
                     Model = "gpt-5.4-mini",
                     SessionId = sessionId,
                     RunStatus = runStatus,
@@ -1013,7 +1066,8 @@ public sealed class RunCommandTests
         string repoRoot,
         string executionUnit,
         string entryKind,
-        string providerSessionId)
+        string providerSessionId,
+        string provider = "ReviewBot")
     {
         var runsDirectory = Path.Combine(repoRoot, ".intent-cli", "runs");
         Directory.CreateDirectory(runsDirectory);
@@ -1027,7 +1081,7 @@ public sealed class RunCommandTests
                     ExecutionUnit = executionUnit,
                     EntryKind = entryKind,
                     UpstreamRequestRef = ResolveUpstreamRequestRef(executionUnit, entryKind),
-                    Provider = "ReviewBot",
+                    Provider = provider,
                     Model = "gpt-5.4-mini",
                     Transport = "responses",
                     LaunchedAt = "2026-04-10T12:00:00.0000000+00:00",
