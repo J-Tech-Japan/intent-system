@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
-using System.Reflection;
 using System.Text.Json;
 
 namespace IntentSystem.Cli.Commands;
@@ -54,13 +53,7 @@ internal static class DirectRunExitMonitorCommand
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
         ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
 
-        var assemblyPath = Assembly.GetExecutingAssembly().Location;
-        if (string.IsNullOrWhiteSpace(assemblyPath) || !File.Exists(assemblyPath))
-        {
-            throw new InvalidOperationException("Could not resolve the IntentSystem CLI assembly path for the exit monitor.");
-        }
-
-        var executablePath = ResolveMonitorExecutablePath(assemblyPath);
+        var executablePath = DirectRunHelperHostResolver.ResolveExecutablePath();
         var startInfo = new ProcessStartInfo
         {
             FileName = executablePath,
@@ -72,7 +65,7 @@ internal static class DirectRunExitMonitorCommand
 
         if (string.Equals(Path.GetFileNameWithoutExtension(executablePath), "dotnet", StringComparison.OrdinalIgnoreCase))
         {
-            startInfo.ArgumentList.Add(assemblyPath);
+            startInfo.ArgumentList.Add(System.Reflection.Assembly.GetExecutingAssembly().Location);
         }
 
         startInfo.ArgumentList.Add(CommandName);
@@ -217,52 +210,6 @@ internal static class DirectRunExitMonitorCommand
             args[6],
             launchedAt);
         return true;
-    }
-
-    private static string ResolveMonitorExecutablePath(string assemblyPath)
-    {
-        var appHostPath = Path.Combine(
-            Path.GetDirectoryName(assemblyPath)
-                ?? throw new InvalidOperationException("IntentSystem CLI assembly path did not contain a directory."),
-            Path.GetFileNameWithoutExtension(assemblyPath) + (OperatingSystem.IsWindows() ? ".exe" : string.Empty));
-
-        if (File.Exists(appHostPath))
-        {
-            return appHostPath;
-        }
-
-        var processPath = Environment.ProcessPath;
-        if (!string.IsNullOrWhiteSpace(processPath)
-            && Path.IsPathRooted(processPath)
-            && File.Exists(processPath)
-            && string.Equals(Path.GetFileNameWithoutExtension(processPath), "dotnet", StringComparison.OrdinalIgnoreCase))
-        {
-            return processPath;
-        }
-
-        var dotnetHostPath = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
-        if (!string.IsNullOrWhiteSpace(dotnetHostPath)
-            && Path.IsPathRooted(dotnetHostPath)
-            && File.Exists(dotnetHostPath)
-            && string.Equals(Path.GetFileNameWithoutExtension(dotnetHostPath), "dotnet", StringComparison.OrdinalIgnoreCase))
-        {
-            return dotnetHostPath;
-        }
-
-        var pathValue = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrWhiteSpace(pathValue))
-        {
-            foreach (var directory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                var candidate = Path.Combine(directory, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
-                if (Path.IsPathRooted(candidate) && File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-        }
-
-        throw new InvalidOperationException("Could not resolve an executable host for the detached exit monitor.");
     }
 
     private static DirectRunProviderEvent CreateBackendExitEvent(
