@@ -422,7 +422,28 @@ public sealed class RunCommandTests
             Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
             "{}");
         WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
-        WriteDirectRunResult(repoRoot, "G226", "review", "succeeded");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "succeeded",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "ReviewBot",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 0
+                    })
+                }
+            ]);
 
         var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
@@ -430,6 +451,10 @@ public sealed class RunCommandTests
         Assert.Equal("G226", result.ExecutionUnit);
         Assert.Empty(result.Actions);
         Assert.Contains("Review direct run for 'G226' is 'succeeded'.", result.Detail, StringComparison.Ordinal);
+
+        var artifact = DirectRunResultArtifactJson.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+        Assert.Null(artifact.ReviewOutcome);
     }
 
     [Fact]
@@ -568,6 +593,13 @@ public sealed class RunCommandTests
         Assert.Equal("G226", result.ExecutionUnit);
         Assert.Empty(result.Actions);
         Assert.Contains("Review direct run for 'G226' is 'succeeded'.", result.Detail, StringComparison.Ordinal);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G226.provider.jsonl")));
+        Assert.DoesNotContain(providerEvents, providerEvent =>
+            string.Equals(providerEvent.SessionId, "pid:226", StringComparison.Ordinal)
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("disposition", out _));
     }
 
     [Fact]
@@ -618,7 +650,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenRunningReviewDecisionWithExitedCurrentSession_AppendsBackendExitAndAdvancesBoundary()
+    public void ExecuteCore_GivenRunningReviewDecisionWithExitedCurrentSession_AppendsBackendExitAndWaits()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -657,6 +689,7 @@ public sealed class RunCommandTests
 
         Assert.Equal("no-actionable-item", result.StopReason);
         Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
         Assert.Contains("Review direct run for 'G226' is 'succeeded'.", result.Detail, StringComparison.Ordinal);
 
         var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
@@ -667,9 +700,95 @@ public sealed class RunCommandTests
             && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
             && providerEvent.Payload.TryGetProperty("type", out var typeElement)
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("disposition", out _));
         var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
             Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
         Assert.Equal("succeeded", resultArtifact.RunStatus);
+        Assert.Null(resultArtifact.ReviewOutcome);
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenSucceededReviewDecisionWithPersistedCommentOutcome_ReusesReviewCommentBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.comment.md"),
+            "Please cover the deterministic submit path.");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "succeeded",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "ReviewBot",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 0
+                    })
+                }
+            ],
+            reviewOutcome: "fix-requested",
+            reviewCommentBodyPath: ".intent-cli/reviews/G226.comment.md");
+        var originalReviewCommentExecutor = RunCommand.ReviewCommentExecutor;
+
+        try
+        {
+            RunCommand.ReviewCommentExecutor = (context, executionUnit, bodyPath) =>
+            {
+                Assert.Equal(".intent-cli/reviews/G226.comment.md", bodyPath);
+                Assert.Equal(
+                    "Please cover the deterministic submit path.",
+                    File.ReadAllText(Path.Combine(context.RepoRoot, bodyPath.Replace('/', Path.DirectorySeparatorChar))));
+
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => queueItem with
+                    {
+                        State = QueueItemState.Fixing
+                    });
+
+                return new ReviewCommentResult
+                {
+                    ExecutionUnit = executionUnit,
+                    ArtifactPath = ".intent-cli/reviews/G226.comment.json",
+                    CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("deterministic-contract-gap", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("review comment", action.Name);
+            Assert.Equal("G226", action.ExecutionUnit);
+            Assert.Contains("requires .intent-cli/reviews/G226.comment.json", result.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunCommand.ReviewCommentExecutor = originalReviewCommentExecutor;
+        }
     }
 
     [Fact]
@@ -1016,7 +1135,9 @@ public sealed class RunCommandTests
         string runStatus,
         IReadOnlyList<DirectRunProviderEvent>? providerEvents = null,
         string sessionId = "pid:226",
-        string provider = "ReviewBot")
+        string provider = "ReviewBot",
+        string? reviewOutcome = null,
+        string? reviewCommentBodyPath = null)
     {
         var runsDirectory = Path.Combine(repoRoot, ".intent-cli", "runs");
         Directory.CreateDirectory(runsDirectory);
@@ -1034,6 +1155,8 @@ public sealed class RunCommandTests
                     Model = "gpt-5.4-mini",
                     SessionId = sessionId,
                     RunStatus = runStatus,
+                    ReviewOutcome = reviewOutcome,
+                    ReviewCommentBodyPath = reviewCommentBodyPath,
                     RawLogRef = $".intent-cli/runs/{executionUnit}.provider.jsonl",
                     PacketRef = $".intent-cli/issues/{executionUnit}/packet.yaml",
                     ReviewContextRef = $".intent-cli/issues/{executionUnit}/review-context.md",

@@ -334,10 +334,82 @@ public sealed class ReviewRunCommandTests
             var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
                 Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
             Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Null(resultArtifact.ReviewOutcome);
+            Assert.Null(resultArtifact.ReviewCommentBodyPath);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.DoesNotContain(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:9999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("disposition", out _));
 
             var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
             var lifecycleEvent = Assert.Single(runEvents, runEvent => runEvent.Event == "provider-lifecycle");
             Assert.Equal("succeeded", lifecycleEvent.RunStatus);
+        }
+        finally
+        {
+            ReviewRunCommand.TimestampFactory = originalTimestampFactory;
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenCommentOutcomeEvent_PersistsDeterministicCommentBodyRef()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ReviewRunCommand.TimestampFactory;
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            ReviewRunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:35:00Z");
+            ReviewRunCommand.DirectRunLauncherFactory = () => new CommentOutcomeFakeDirectRunLauncher(
+                "pid:9999",
+                "ReviewBot",
+                "gpt-5.4-mini",
+                "grpc",
+                "reviewbot",
+                ["launch", "--model", "{model}", "--artifact", "{request_artifact_path}"],
+                "grpc transport launched via 'reviewbot' in '/repo' for provider 'ReviewBot'.",
+                "fix-requested",
+                "Please cover the deterministic submit path.");
+
+            var exitCode = ReviewRunCommand.Execute(CreateContext(repoRoot), ["G9"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run status: succeeded", writer.ToString(), StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("fix-requested", resultArtifact.ReviewOutcome);
+            Assert.Equal(".intent-cli/reviews/G9.comment.md", resultArtifact.ReviewCommentBodyPath);
+            Assert.Equal(
+                "Please cover the deterministic submit path.",
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.comment.md")));
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:9999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("body_path", out var bodyPathElement)
+                && string.Equals(bodyPathElement.GetString(), ".intent-cli/reviews/G9.comment.md", StringComparison.Ordinal));
         }
         finally
         {
@@ -1024,6 +1096,111 @@ public sealed class ReviewRunCommandTests
                                              {
                                                  type = "backend-exit",
                                                  exit_code = exitCode
+                                             })
+                                         })
+                                     }) + Environment.NewLine;
+            File.WriteAllText(absoluteProviderEventLogPath, providerEvents);
+
+            return new DirectRunLaunchResult
+            {
+                RequestArtifactPath = ".intent-cli/runtime-runs/G9.request.json",
+                ProviderEventLogPath = ".intent-cli/runtime-runs/G9.provider.jsonl",
+                Provider = providerArg,
+                Model = modelArg,
+                Transport = transportArg,
+                ProviderSessionId = providerSessionId,
+                TransportSummary = transportSummary
+            };
+        }
+    }
+
+    private sealed class CommentOutcomeFakeDirectRunLauncher(
+        string providerSessionId,
+        string provider,
+        string model,
+        string transport,
+        string command,
+        IReadOnlyList<string> argsTemplate,
+        string transportSummary,
+        string reviewOutcome,
+        string commentBody) : IDirectRunLauncher
+    {
+        public DirectRunLaunchResult Launch(
+            string executionUnit,
+            string entryKind,
+            string requestArtifactPath,
+            string providerEventLogPath,
+            string providerArg,
+            string modelArg,
+            string transportArg,
+            string commandArg,
+            IReadOnlyList<string> argsTemplateArg,
+            DateTimeOffset launchedAt,
+            string workingDirectory,
+            string absoluteRequestArtifactPath,
+            string absoluteProviderEventLogPath)
+        {
+            Assert.Equal("G9", executionUnit);
+            Assert.Equal("review", entryKind);
+            Assert.Equal(".intent-cli/runtime-runs/G9.request.json", requestArtifactPath);
+            Assert.Equal(".intent-cli/runtime-runs/G9.provider.jsonl", providerEventLogPath);
+            Assert.Equal(provider, providerArg);
+            Assert.Equal(model, modelArg);
+            Assert.Equal(transport, transportArg);
+            Assert.Equal(command, commandArg);
+            Assert.Equal(argsTemplate, argsTemplateArg);
+            Assert.EndsWith("/repo", workingDirectory, StringComparison.Ordinal);
+            Assert.EndsWith("/.intent-cli/reviews/G9.request.json", absoluteRequestArtifactPath, StringComparison.Ordinal);
+            Assert.EndsWith("/.intent-cli/runtime-runs/G9.provider.jsonl", absoluteProviderEventLogPath, StringComparison.Ordinal);
+
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(absoluteProviderEventLogPath)
+                ?? throw new InvalidOperationException("Provider event log path did not contain a directory."));
+            var providerEvents = string.Join(
+                                     Environment.NewLine,
+                                     new[]
+                                     {
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "session-metadata",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 model = modelArg,
+                                                 transport = transportArg,
+                                                 command
+                                             })
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(1).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "provider-event",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 disposition = reviewOutcome,
+                                                 comment_body = commentBody
+                                             })
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(2).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "provider-event",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 type = "backend-exit",
+                                                 exit_code = 0
                                              })
                                          })
                                      }) + Environment.NewLine;

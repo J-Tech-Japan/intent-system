@@ -549,13 +549,11 @@ internal static class RunCommand
         var runStatus = ResolveEffectiveRunStatus(resultArtifact.RunStatus, providerEvents);
         if (!string.Equals(runStatus, resultArtifact.RunStatus, StringComparison.Ordinal))
         {
-            PersistDirectRunResultArtifact(
-                context,
-                executionUnit,
-                resultArtifact with
-                {
-                    RunStatus = runStatus
-                });
+            resultArtifact = resultArtifact with
+            {
+                RunStatus = runStatus
+            };
+            PersistDirectRunResultArtifact(context, executionUnit, resultArtifact);
         }
 
         if (string.Equals(runStatus, "failed", StringComparison.Ordinal))
@@ -565,6 +563,62 @@ internal static class RunCommand
                 Kind = RunReviewDecisionKind.Failure,
                 Detail = $"Review direct run failed for '{executionUnit}'."
             };
+        }
+
+        string? reviewOutcome = null;
+        string? reviewCommentBodyPath = null;
+        if (DirectRunReviewOutcomeSupport.TryResolveCanonicalReviewOutcome(
+                runStatus,
+                resultArtifact.ReviewOutcome,
+                providerEvents,
+                out var resolvedReviewOutcome))
+        {
+            reviewOutcome = resolvedReviewOutcome;
+            if (DirectRunReviewOutcomeSupport.IsCommentOutcome(reviewOutcome))
+            {
+                if (!string.IsNullOrWhiteSpace(resultArtifact.ReviewCommentBodyPath))
+                {
+                    reviewCommentBodyPath = resultArtifact.ReviewCommentBodyPath;
+                }
+                else if (DirectRunReviewOutcomeSupport.TryResolveReviewCommentBodyPath(
+                             context,
+                             executionUnit,
+                             providerEvents,
+                             out var resolvedCommentBodyPath))
+                {
+                    reviewCommentBodyPath = resolvedCommentBodyPath;
+                }
+            }
+
+            if (!string.Equals(resultArtifact.ReviewOutcome, reviewOutcome, StringComparison.Ordinal)
+                || !string.Equals(resultArtifact.ReviewCommentBodyPath, reviewCommentBodyPath, StringComparison.Ordinal))
+            {
+                resultArtifact = resultArtifact with
+                {
+                    ReviewOutcome = reviewOutcome,
+                    ReviewCommentBodyPath = reviewCommentBodyPath
+                };
+                PersistDirectRunResultArtifact(context, executionUnit, resultArtifact);
+            }
+
+            var outcomeEvent = DirectRunReviewOutcomeSupport.CreateCanonicalReviewOutcomeEventIfNeeded(
+                providerEvents,
+                DateTimeOffset.UtcNow,
+                executionUnit,
+                requestArtifact.EntryKind,
+                requestArtifact.Provider,
+                requestArtifact.ProviderSessionId,
+                reviewOutcome,
+                reviewCommentBodyPath);
+            if (outcomeEvent is not null)
+            {
+                var providerLogPath = Path.GetFullPath(Path.Combine(
+                    context.RepoRoot,
+                    resultArtifact.RawLogRef.Replace('/', Path.DirectorySeparatorChar)));
+                var writer = new DirectRunProviderEventWriter(providerLogPath);
+                writer.Append(outcomeEvent);
+                providerEvents = [.. providerEvents, outcomeEvent];
+            }
         }
 
         if (string.Equals(runStatus, "accepted", StringComparison.Ordinal)
@@ -579,10 +633,9 @@ internal static class RunCommand
 
         if (string.Equals(runStatus, "succeeded", StringComparison.Ordinal))
         {
-            if (TryResolveExplicitReviewOutcome(providerEvents, out var explicitReviewOutcome))
+            if (!string.IsNullOrWhiteSpace(reviewOutcome))
             {
-                if (string.Equals(explicitReviewOutcome, "accepted", StringComparison.Ordinal)
-                    || string.Equals(explicitReviewOutcome, "approved", StringComparison.Ordinal))
+                if (DirectRunReviewOutcomeSupport.IsAcceptOutcome(reviewOutcome))
                 {
                     return new RunReviewDecision
                     {
@@ -591,17 +644,14 @@ internal static class RunCommand
                     };
                 }
 
-                if (string.Equals(explicitReviewOutcome, "comment", StringComparison.Ordinal)
-                    || string.Equals(explicitReviewOutcome, "commented", StringComparison.Ordinal)
-                    || string.Equals(explicitReviewOutcome, "fix-requested", StringComparison.Ordinal)
-                    || string.Equals(explicitReviewOutcome, "changes-requested", StringComparison.Ordinal))
+                if (DirectRunReviewOutcomeSupport.IsCommentOutcome(reviewOutcome))
                 {
-                    if (TryResolveReviewCommentBodyPath(context, executionUnit, providerEvents, out var commentBodyPath))
+                    if (!string.IsNullOrWhiteSpace(reviewCommentBodyPath))
                     {
                         return new RunReviewDecision
                         {
                             Kind = RunReviewDecisionKind.Comment,
-                            CommentBodyPath = commentBodyPath,
+                            CommentBodyPath = reviewCommentBodyPath,
                             Detail = $"Review decision for '{executionUnit}' resolved to comment."
                         };
                     }
@@ -620,12 +670,12 @@ internal static class RunCommand
             || string.Equals(runStatus, "fix-requested", StringComparison.Ordinal)
             || string.Equals(runStatus, "changes-requested", StringComparison.Ordinal))
         {
-            if (TryResolveReviewCommentBodyPath(context, executionUnit, providerEvents, out var commentBodyPath))
+            if (!string.IsNullOrWhiteSpace(reviewCommentBodyPath))
             {
                 return new RunReviewDecision
                 {
                     Kind = RunReviewDecisionKind.Comment,
-                    CommentBodyPath = commentBodyPath,
+                    CommentBodyPath = reviewCommentBodyPath,
                     Detail = $"Review decision for '{executionUnit}' resolved to comment."
                 };
             }
@@ -745,27 +795,6 @@ internal static class RunCommand
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal);
     }
 
-    private static bool TryResolveExplicitReviewOutcome(
-        IReadOnlyList<DirectRunProviderEvent> providerEvents,
-        out string explicitReviewOutcome)
-    {
-        explicitReviewOutcome = string.Empty;
-
-        for (var index = providerEvents.Count - 1; index >= 0; index--)
-        {
-            if (TryResolveRunStatus(providerEvents[index].Payload, out var runStatus)
-                && !string.Equals(runStatus, "succeeded", StringComparison.Ordinal)
-                && !string.Equals(runStatus, "failed", StringComparison.Ordinal)
-                && !string.Equals(runStatus, "running", StringComparison.Ordinal))
-            {
-                explicitReviewOutcome = runStatus;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static IReadOnlyList<DirectRunProviderEvent> SelectCurrentSessionEvents(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string launchedSessionId,
@@ -797,69 +826,6 @@ internal static class RunCommand
             && string.Equals(resultArtifact.SessionId, requestArtifact.ProviderSessionId, StringComparison.Ordinal);
     }
 
-    private static bool TryResolveReviewCommentBodyPath(
-        CliContext context,
-        string executionUnit,
-        IReadOnlyList<DirectRunProviderEvent> providerEvents,
-        out string commentBodyPath)
-    {
-        commentBodyPath = string.Empty;
-
-        for (var index = providerEvents.Count - 1; index >= 0; index--)
-        {
-            if (!TryResolveCommentBody(providerEvents[index].Payload, out var bodyOrPath, out var isPath))
-            {
-                continue;
-            }
-
-            if (isPath)
-            {
-                commentBodyPath = bodyOrPath;
-                return true;
-            }
-
-            var relativePath = $".intent-cli/reviews/{executionUnit}.comment.md";
-            var absolutePath = Path.GetFullPath(Path.Combine(
-                context.RepoRoot,
-                relativePath.Replace('/', Path.DirectorySeparatorChar)));
-            var directoryPath = Path.GetDirectoryName(absolutePath)
-                ?? throw new InvalidOperationException("Review comment body path did not contain a directory.");
-            Directory.CreateDirectory(directoryPath);
-            File.WriteAllText(absolutePath, bodyOrPath);
-            commentBodyPath = relativePath;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool TryResolveCommentBody(JsonElement payload, out string bodyOrPath, out bool isPath)
-    {
-        bodyOrPath = string.Empty;
-        isPath = false;
-
-        if (payload.ValueKind != JsonValueKind.Object)
-        {
-            return false;
-        }
-
-        if (TryReadString(payload, "body_path", out var bodyPath))
-        {
-            bodyOrPath = bodyPath;
-            isPath = true;
-            return true;
-        }
-
-        if (TryReadString(payload, "comment_body", out var commentBody)
-            || TryReadString(payload, "body", out commentBody)
-            || TryReadString(payload, "markdown", out commentBody))
-        {
-            bodyOrPath = commentBody;
-            return true;
-        }
-
-        return false;
-    }
 
     private static bool TryResolveRunStatus(JsonElement payload, out string runStatus)
     {
