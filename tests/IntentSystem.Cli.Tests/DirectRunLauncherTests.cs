@@ -284,6 +284,74 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task Launch_GivenRepeatedRealWrappedCodexRuns_EachSessionAppendsOwnBackendExitProviderEvent()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
+        var codexPath = tempDirectory.CreateExecutableFile(
+            "repo/codex-experimental",
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
+            sleep 1
+            """);
+        var launcher = new DirectRunLauncher();
+        var observedSessions = new List<string>();
+
+        for (var iteration = 1; iteration <= 5; iteration++)
+        {
+            var executionUnit = $"G12R{iteration}";
+            var providerEventLogPath = tempDirectory.GetPath($".intent-cli/runs/{executionUnit}.provider.jsonl");
+            var result = launcher.Launch(
+                executionUnit,
+                "review",
+                $".intent-cli/runs/{executionUnit}.request.json",
+                $".intent-cli/runs/{executionUnit}.provider.jsonl",
+                "OpenAI",
+                "gpt-5.4-mini",
+                "responses",
+                codexPath,
+                ["exec", "test prompt"],
+                DateTimeOffset.Parse("2026-04-09T11:05:00Z").AddMinutes(iteration),
+                worktreePath,
+                tempDirectory.GetPath($".intent-cli/reviews/{executionUnit}.request.json"),
+                providerEventLogPath);
+
+            observedSessions.Add(result.ProviderSessionId);
+
+            await TemporaryDirectory.WaitForConditionAsync(
+                () =>
+                {
+                    var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                    return events.Any(providerEvent =>
+                        providerEvent.Kind == "provider-event"
+                        && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                        && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                        && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+                },
+                TimeSpan.FromSeconds(5));
+
+            var finalEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            var backendExitEvent = Assert.Single(finalEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+        }
+
+        Assert.Equal(observedSessions.Count, observedSessions.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
     public async Task Launch_GivenRealProcessRunnerAndNonWrappedCommand_PreservesExitCallbackAfterGarbageCollection()
     {
         if (OperatingSystem.IsWindows())
