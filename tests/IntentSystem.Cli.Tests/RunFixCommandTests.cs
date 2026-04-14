@@ -147,7 +147,9 @@ public sealed class RunFixCommandTests
         string provider,
         string model,
         string transport,
-        string transportSummary) : IDirectRunLauncher
+        string transportSummary,
+        string expectedCommand = "claude",
+        IReadOnlyList<string>? expectedArgsTemplate = null) : IDirectRunLauncher
     {
         public DirectRunLaunchResult Launch(
             string executionUnit,
@@ -171,8 +173,8 @@ public sealed class RunFixCommandTests
             Assert.Equal(provider, providerArg);
             Assert.Equal(model, modelArg);
             Assert.Equal(transport, transportArg);
-            Assert.Equal("claude", command);
-            Assert.Equal(["--print", "--model", "{model}", "--output-format", "json", "{prompt}"], argsTemplate);
+            Assert.Equal(expectedCommand, command);
+            Assert.Equal(expectedArgsTemplate ?? ["--print", "--model", "{model}", "--output-format", "json", "{prompt}"], argsTemplate);
             Assert.EndsWith("/.intent-cli/worktrees/G20", workingDirectory, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/fix/G20.request.md", absoluteRequestArtifactPath, StringComparison.Ordinal);
             Assert.EndsWith("/.intent-cli/runs/G20.provider.jsonl", absoluteProviderEventLogPath, StringComparison.Ordinal);
@@ -225,6 +227,79 @@ public sealed class RunFixCommandTests
                 ProviderSessionId = providerSessionId,
                 TransportSummary = transportSummary
             };
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenCodexCommandPathWithoutModelOverride_UsesRunnableCodexDefaultModel()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateReviewCommentArtifactJson());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunFixCommand.TimestampFactory;
+        var originalLauncherFactory = RunFixCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:25:00Z");
+            RunFixCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:8765",
+                "Codex",
+                CliRuntimeContracts.DefaultCodexDirectRunModel,
+                "stdio",
+                "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo/.intent-cli/worktrees/G20' for provider 'Codex'.",
+                "/opt/homebrew/bin/codex",
+                ["exec", "--model", "{model}", "{prompt}"]);
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Codex",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        Command = "/opt/homebrew/bin/codex"
+                    }
+                }
+            };
+
+            var exitCode = RunFixCommand.Execute(context, ["G20"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains($"Direct model: {CliRuntimeContracts.DefaultCodexDirectRunModel}", writer.ToString(), StringComparison.Ordinal);
+
+            var directRunArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G20.request.json")));
+            Assert.Equal(CliRuntimeContracts.DefaultCodexDirectRunModel, directRunArtifact.Model);
+            Assert.Equal("Codex", directRunArtifact.Provider);
+        }
+        finally
+        {
+            RunFixCommand.TimestampFactory = originalTimestampFactory;
+            RunFixCommand.DirectRunLauncherFactory = originalLauncherFactory;
         }
     }
 

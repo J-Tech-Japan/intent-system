@@ -125,7 +125,9 @@ internal static class DirectRunCommandSupport
         };
 
         var provider = FirstNonEmpty(entryConfig.Provider, directRun.Provider, fallbackProvider);
-        var model = FirstNonEmpty(entryConfig.Model, directRun.Model, CliRuntimeContracts.DefaultDirectRunModel);
+        var model = ResolveModel(
+            provider,
+            FirstNonEmpty(entryConfig.Model, directRun.Model, CliRuntimeContracts.DefaultDirectRunModel));
         var transport = FirstNonEmpty(
             entryConfig.Transport,
             directRun.Transport,
@@ -144,6 +146,17 @@ internal static class DirectRunCommandSupport
             Command = command,
             ArgsTemplate = argsTemplate
         };
+    }
+
+    private static string ResolveModel(string provider, string configuredModel)
+    {
+        if (string.Equals(provider.Trim(), "codex", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(configuredModel.Trim(), CliRuntimeContracts.DefaultDirectRunModel, StringComparison.OrdinalIgnoreCase))
+        {
+            return CliRuntimeContracts.DefaultCodexDirectRunModel;
+        }
+
+        return configuredModel;
     }
 
     private static string ResolveArtifactPath(CliContext context, string executionUnit)
