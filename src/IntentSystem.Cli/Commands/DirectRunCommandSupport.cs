@@ -31,7 +31,9 @@ internal static class DirectRunCommandSupport
     private const string LifecycleEventActor = "intent-cli";
     private const string LifecycleEventName = "provider-lifecycle";
     private const string ReviewCompletionWaitWindowEnvVar = "INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS";
+    private const string ReviewSessionMaxWaitWindowEnvVar = "INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS";
     private static readonly TimeSpan DefaultReviewCompletionWaitWindow = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultReviewSessionMaxWaitWindow = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ReviewCompletionPollInterval = TimeSpan.FromMilliseconds(250);
 
     public static DirectRunLaunchResult CreateAndLaunch(
@@ -157,16 +159,25 @@ internal static class DirectRunCommandSupport
         string providerSessionId,
         DateTimeOffset launchedAt)
     {
-        var deadline = DateTimeOffset.UtcNow + ResolveReviewCompletionWaitWindow();
-        while (DateTimeOffset.UtcNow < deadline)
+        var sessionDeadline = DateTimeOffset.UtcNow + ResolveReviewSessionMaxWaitWindow();
+        while (DateTimeOffset.UtcNow < sessionDeadline)
         {
-            if (HasTerminalReviewBoundary(
+            if (HasExplicitReviewOutcome(
                     providerEventLogPath,
                     capturedMessagePath,
                     providerSessionId,
                     launchedAt))
             {
                 return true;
+            }
+
+            if (HasReviewSessionTerminated(providerEventLogPath, providerSessionId, launchedAt))
+            {
+                return WaitForReviewOutcomeAfterSessionTermination(
+                    providerEventLogPath,
+                    capturedMessagePath,
+                    providerSessionId,
+                    launchedAt);
             }
 
             Thread.Sleep(ReviewCompletionPollInterval);
@@ -177,7 +188,23 @@ internal static class DirectRunCommandSupport
 
     private static TimeSpan ResolveReviewCompletionWaitWindow()
     {
-        var raw = Environment.GetEnvironmentVariable(ReviewCompletionWaitWindowEnvVar);
+        return ResolvePositiveWaitWindow(
+            ReviewCompletionWaitWindowEnvVar,
+            DefaultReviewCompletionWaitWindow);
+    }
+
+    private static TimeSpan ResolveReviewSessionMaxWaitWindow()
+    {
+        return ResolvePositiveWaitWindow(
+            ReviewSessionMaxWaitWindowEnvVar,
+            DefaultReviewSessionMaxWaitWindow);
+    }
+
+    private static TimeSpan ResolvePositiveWaitWindow(string environmentVariableName, TimeSpan defaultValue)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(environmentVariableName);
+
+        var raw = Environment.GetEnvironmentVariable(environmentVariableName);
         if (!string.IsNullOrWhiteSpace(raw)
             && int.TryParse(
                 raw,
@@ -189,7 +216,7 @@ internal static class DirectRunCommandSupport
             return TimeSpan.FromMilliseconds(milliseconds);
         }
 
-        return DefaultReviewCompletionWaitWindow;
+        return defaultValue;
     }
 
     private static void ClassifyMissingReviewCompletionBoundary(
@@ -270,21 +297,92 @@ internal static class DirectRunCommandSupport
             out processId);
     }
 
-    private static bool HasTerminalReviewBoundary(
+    private static bool WaitForReviewOutcomeAfterSessionTermination(
         string providerEventLogPath,
         string capturedMessagePath,
         string providerSessionId,
         DateTimeOffset launchedAt)
     {
+        var deadline = DateTimeOffset.UtcNow + ResolveReviewCompletionWaitWindow();
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (HasExplicitReviewOutcome(
+                    providerEventLogPath,
+                    capturedMessagePath,
+                    providerSessionId,
+                    launchedAt))
+            {
+                return true;
+            }
+
+            Thread.Sleep(ReviewCompletionPollInterval);
+        }
+
+        return HasExplicitReviewOutcome(
+            providerEventLogPath,
+            capturedMessagePath,
+            providerSessionId,
+            launchedAt);
+    }
+
+    private static bool HasExplicitReviewOutcome(
+        string providerEventLogPath,
+        string capturedMessagePath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (!TryReadCurrentProviderEvents(
+                providerEventLogPath,
+                providerSessionId,
+                launchedAt,
+                out var currentProviderEvents))
+        {
+            return false;
+        }
+
+        return DirectRunReviewOutcomeSupport.TryResolveExplicitReviewOutcome(currentProviderEvents, out _)
+            || DirectRunReviewOutcomeSupport.TryReadReviewOutcomeFromCapturedMessagePath(
+                capturedMessagePath,
+                out _,
+                out _,
+                out _);
+    }
+
+    private static bool HasReviewSessionTerminated(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (TryReadCurrentProviderEvents(
+                providerEventLogPath,
+                providerSessionId,
+                launchedAt,
+                out var currentProviderEvents)
+            && TryResolveBackendExitCode(currentProviderEvents, out _))
+        {
+            return true;
+        }
+
+        return !IsProviderSessionAlive(providerSessionId);
+    }
+
+    private static bool TryReadCurrentProviderEvents(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt,
+        out IReadOnlyList<DirectRunProviderEvent> currentProviderEvents)
+    {
+        currentProviderEvents = [];
         if (!File.Exists(providerEventLogPath))
         {
             return false;
         }
 
-        IReadOnlyList<DirectRunProviderEvent> providerEvents;
         try
         {
-            providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            currentProviderEvents = SelectCurrentSessionEvents(providerEvents, providerSessionId, launchedAt);
+            return true;
         }
         catch (Exception exception) when (
             exception is IOException
@@ -294,24 +392,28 @@ internal static class DirectRunCommandSupport
         {
             return false;
         }
+    }
 
-        var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, providerSessionId, launchedAt);
-        if (DirectRunReviewOutcomeSupport.TryResolveExplicitReviewOutcome(currentProviderEvents, out _)
-            || DirectRunReviewOutcomeSupport.TryReadReviewOutcomeFromCapturedMessagePath(
-                capturedMessagePath,
-                out _,
-                out _,
-                out _))
-        {
-            return true;
-        }
-
-        if (!TryResolveBackendExitCode(currentProviderEvents, out _))
+    private static bool IsProviderSessionAlive(string providerSessionId)
+    {
+        if (!TryParseSessionProcessId(providerSessionId, out var processId))
         {
             return false;
         }
 
-        return true;
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            process.Refresh();
+            return !process.HasExited;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or InvalidOperationException
+            or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static bool TryResolveBackendExitCode(

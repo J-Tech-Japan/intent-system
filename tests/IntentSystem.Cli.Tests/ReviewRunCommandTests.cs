@@ -487,9 +487,22 @@ public sealed class ReviewRunCommandTests
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             CreateRunLog());
 
-        var process = StartCliProcess(repoRoot, "review run G9");
-        Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
-        Assert.Equal(0, process.ExitCode);
+        var originalWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS");
+        var originalSessionMaxWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS");
+        try
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", "100");
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", "5000");
+
+            var process = StartCliProcess(repoRoot, "review run G9");
+            Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+            Assert.Equal(0, process.ExitCode);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", originalWaitWindow);
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", originalSessionMaxWaitWindow);
+        }
 
         var providerEventLogPath = Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl");
         TemporaryDirectory.WaitForCondition(
@@ -557,9 +570,22 @@ public sealed class ReviewRunCommandTests
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             CreateRunLog());
 
-        var process = StartCliProcess(repoRoot, "review run G9");
-        Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
-        Assert.Equal(0, process.ExitCode);
+        var originalWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS");
+        var originalSessionMaxWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS");
+        try
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", "100");
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", "5000");
+
+            var process = StartCliProcess(repoRoot, "review run G9");
+            Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+            Assert.Equal(0, process.ExitCode);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", originalWaitWindow);
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", originalSessionMaxWaitWindow);
+        }
 
         var requestArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.request.json");
         TemporaryDirectory.WaitForCondition(
@@ -606,7 +632,7 @@ public sealed class ReviewRunCommandTests
     }
 
     [Fact]
-    public void Execute_GivenRealCodexStyleReviewCommand_WaitsForCurrentSessionOutcomeBeforeReturning()
+    public void Execute_GivenRealCodexStyleReviewCommand_DoesNotForceTimeoutWhileCurrentSessionIsStillRunning()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -664,22 +690,40 @@ public sealed class ReviewRunCommandTests
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             CreateRunLog());
 
-        var process = StartCliProcess(repoRoot, "review run G9");
-        Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
-        Assert.Equal(0, process.ExitCode);
+        var originalWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS");
+        var originalSessionMaxWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS");
+        try
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", "100");
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", "5000");
 
-        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
-            Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
-        Assert.Equal("succeeded", resultArtifact.RunStatus);
-        Assert.Equal("accepted", resultArtifact.ReviewOutcome);
+            var process = StartCliProcess(repoRoot, "review run G9");
+            Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+            Assert.Equal(0, process.ExitCode);
 
-        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
-            Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
-        Assert.Contains(providerEvents, providerEvent =>
-            providerEvent.Kind == "provider-event"
-            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
-            && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
-            && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("accepted", resultArtifact.ReviewOutcome);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
+                && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
+            Assert.DoesNotContain(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", originalWaitWindow);
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", originalSessionMaxWaitWindow);
+        }
     }
 
     [Fact]
@@ -758,7 +802,7 @@ public sealed class ReviewRunCommandTests
     }
 
     [Fact]
-    public void Execute_GivenRealCodexStyleReviewTimeout_ClassifiesMissingBoundaryAsFailed()
+    public void Execute_GivenRealCodexStyleReviewCompletesWithoutOutcome_ClassifiesMissingBoundaryAsFailed()
     {
         if (OperatingSystem.IsWindows())
         {
