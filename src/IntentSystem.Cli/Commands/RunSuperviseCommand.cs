@@ -680,9 +680,21 @@ internal static class RunSuperviseCommand
 
         var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath));
         var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId, requestArtifact.LaunchedAt);
-        if (currentProviderEvents.Any(HasBackendExitType))
+
+        if (TryResolveTerminalFailureReason(
+                currentProviderEvents,
+                executionUnit,
+                requestArtifact.ProviderSessionId,
+                out reason))
         {
-            return false;
+            File.WriteAllText(
+                resultArtifactPath,
+                DirectRunResultArtifactJson.Serialize(resultArtifact with
+                {
+                    RunStatus = "failed"
+                }));
+
+            return true;
         }
 
         var backendExitEvent = DirectRunProviderEventFactory.CreateBackendExitEvent(
@@ -704,6 +716,43 @@ internal static class RunSuperviseCommand
         reason =
             $"Worker session '{requestArtifact.ProviderSessionId}' for '{executionUnit}' is no longer alive and no terminal provider event was captured.";
         return true;
+    }
+
+    private static bool TryResolveTerminalFailureReason(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        string providerSessionId,
+        out string reason)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+
+        reason = string.Empty;
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            var providerEvent = providerEvents[index];
+            if (!HasBackendExitType(providerEvent))
+            {
+                continue;
+            }
+
+            if (providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                && exitCodeElement.TryGetInt32(out var exitCode))
+            {
+                reason =
+                    $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode}.";
+            }
+            else
+            {
+                reason =
+                    $"Worker session '{providerSessionId}' for '{executionUnit}' exited after a terminal backend-exit event.";
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     private static string ResolveDirectRunRequestArtifactPath(CliContext context, string executionUnit)
