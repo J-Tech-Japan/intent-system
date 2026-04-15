@@ -54,17 +54,25 @@ internal static class DirectRunCommandSupport
         var relativeArtifactPath = ResolveArtifactPath(context, executionUnit);
         var relativeProviderEventLogPath = ResolveProviderEventLogPath(context, executionUnit);
         var relativeCapturedMessagePath = ResolveCapturedMessagePath(context, executionUnit, launchedAt);
+        var relativeReviewOutputSchemaPath = ResolveReviewOutputSchemaPath(context, executionUnit, launchedAt);
         var absoluteArtifactPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeArtifactPath.Replace('/', Path.DirectorySeparatorChar)));
         var absoluteProviderEventLogPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeProviderEventLogPath.Replace('/', Path.DirectorySeparatorChar)));
         var absoluteCapturedMessagePath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeCapturedMessagePath.Replace('/', Path.DirectorySeparatorChar)));
+        var absoluteReviewOutputSchemaPath = Path.GetFullPath(
+            Path.Combine(context.RepoRoot, relativeReviewOutputSchemaPath.Replace('/', Path.DirectorySeparatorChar)));
         var absoluteUpstreamRequestPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, upstreamRequestRef.Replace('/', Path.DirectorySeparatorChar)));
         if (entryKind == DirectRunEntryKind.Review && File.Exists(absoluteCapturedMessagePath))
         {
             File.Delete(absoluteCapturedMessagePath);
+        }
+
+        if (entryKind == DirectRunEntryKind.Review)
+        {
+            PersistReviewOutputSchema(absoluteReviewOutputSchemaPath);
         }
 
         var launchResult = launcher.Launch(
@@ -423,9 +431,53 @@ internal static class DirectRunCommandSupport
         return $"{root}/{executionUnit.Trim()}.{CreateCapturedMessageSuffix(launchedAt)}.last-message.json";
     }
 
+    internal static string ResolveReviewOutputSchemaPath(
+        CliContext context,
+        string executionUnit,
+        DateTimeOffset launchedAt)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{root}/{executionUnit.Trim()}.{CreateCapturedMessageSuffix(launchedAt)}.review-output-schema.json";
+    }
+
     internal static string CreateCapturedMessageSuffix(DateTimeOffset launchedAt)
     {
         return launchedAt.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static void PersistReviewOutputSchema(string absoluteReviewOutputSchemaPath)
+    {
+        var directoryPath = Path.GetDirectoryName(absoluteReviewOutputSchemaPath)
+            ?? throw new InvalidOperationException("Review output schema path did not contain a directory.");
+        Directory.CreateDirectory(directoryPath);
+        File.WriteAllText(
+            absoluteReviewOutputSchemaPath,
+            """
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "disposition": {
+                  "type": "string",
+                  "enum": [
+                    "accepted",
+                    "approved",
+                    "comment",
+                    "commented",
+                    "fix-requested",
+                    "changes-requested"
+                  ]
+                },
+                "comment_body": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "disposition"
+              ]
+            }
+            """);
     }
 
     private static string FormatEntryKind(DirectRunEntryKind entryKind)
@@ -491,7 +543,7 @@ internal static class DirectRunCommandSupport
     {
         return provider.Trim().ToLowerInvariant() switch
         {
-            "codex" when entryKind == DirectRunEntryKind.Review => ["exec", "--json", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+            "codex" when entryKind == DirectRunEntryKind.Review => ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
             "codex" => ["exec", "--model", "{model}", "{prompt}"],
             "claude" => ["--print", "--model", "{model}", "--output-format", "json", "{prompt}"],
             _ => ["{prompt}"]

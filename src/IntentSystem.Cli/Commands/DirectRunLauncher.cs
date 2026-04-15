@@ -297,6 +297,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 .Replace("{request_artifact_path}", absoluteRequestArtifactPath, StringComparison.Ordinal)
                 .Replace("{upstream_request_artifact_path}", absoluteRequestArtifactPath, StringComparison.Ordinal)
                 .Replace("{direct_run_artifact_path}", requestArtifactPath, StringComparison.Ordinal)
+                .Replace("{output_schema_path}", ResolveOutputSchemaPath(requestArtifactPath, executionUnit, launchedAt), StringComparison.Ordinal)
                 .Replace("{output_last_message_path}", outputLastMessagePath, StringComparison.Ordinal)
                 .Replace("{prompt}", prompt, StringComparison.Ordinal))
             .ToArray();
@@ -332,6 +333,19 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             ?.TrimEnd('/')
             ?? ".";
         return $"{directory}/{executionUnit.Trim()}.{DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt)}.last-message.json";
+    }
+
+    private static string ResolveOutputSchemaPath(
+        string requestArtifactPath,
+        string executionUnit,
+        DateTimeOffset launchedAt)
+    {
+        var normalizedPath = requestArtifactPath.Replace('\\', '/');
+        var directory = Path.GetDirectoryName(normalizedPath.Replace('/', Path.DirectorySeparatorChar))
+            ?.Replace(Path.DirectorySeparatorChar, '/')
+            ?.TrimEnd('/')
+            ?? ".";
+        return $"{directory}/{executionUnit.Trim()}.{DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt)}.review-output-schema.json";
     }
 
     private static ResolvedProcessInvocation ResolveProcessInvocation(

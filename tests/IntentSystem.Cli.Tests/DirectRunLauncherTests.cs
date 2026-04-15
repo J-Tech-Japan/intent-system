@@ -100,6 +100,56 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public void Launch_GivenReviewOutputSchemaPlaceholder_ExpandsSchemaPath()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var runner = new FakeDirectRunProcessRunner
+        {
+            Result = new DirectRunProcessLaunchResult
+            {
+                ProcessId = 4321,
+                ExitedEarly = false,
+                ExitCode = 0
+            }
+        };
+        var launcher = new DirectRunLauncher(runner);
+        var launchedAt = DateTimeOffset.Parse("2026-04-09T10:15:00Z");
+        var suffix = DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt);
+
+        var result = launcher.Launch(
+            "G19",
+            "review",
+            ".intent-cli/runs/G19.request.json",
+            ".intent-cli/runs/G19.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            "codex",
+            [
+                "exec",
+                "--json",
+                "--model",
+                "{model}",
+                "--output-schema",
+                "{output_schema_path}",
+                "--output-last-message",
+                "{output_last_message_path}",
+                "{prompt}"
+            ],
+            launchedAt,
+            "/repo/.intent-cli/worktrees/G19",
+            "/repo/.intent-cli/reviews/G19.request.json",
+            tempDirectory.GetPath(".intent-cli/runs/G19.provider.jsonl"));
+
+        Assert.Equal("pid:4321", result.ProviderSessionId);
+        Assert.Contains(DirectRunDetachedCaptureCommand.CommandName, runner.Arguments);
+        Assert.Contains("--output-schema", runner.Arguments);
+        Assert.Contains($".intent-cli/runs/G19.{suffix}.review-output-schema.json", runner.Arguments);
+        Assert.Contains("--output-last-message", runner.Arguments);
+        Assert.Contains($".intent-cli/runs/G19.{suffix}.last-message.json", runner.Arguments);
+    }
+
+    [Fact]
     public void Launch_GivenProcessExit_AppendsBackendExitProviderEvent()
     {
         if (OperatingSystem.IsWindows())

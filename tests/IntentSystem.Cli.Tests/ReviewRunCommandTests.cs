@@ -79,6 +79,14 @@ public sealed class ReviewRunCommandTests
             Assert.Equal("grpc", directRunArtifact.Transport);
             Assert.Equal("pid:9999", directRunArtifact.ProviderSessionId);
 
+            var reviewOutputSchemaPath = Path.Combine(
+                repoRoot,
+                ".intent-cli",
+                "runtime-runs",
+                $"G9.{DirectRunCommandSupport.CreateCapturedMessageSuffix(DateTimeOffset.Parse("2026-04-09T10:35:00Z"))}.review-output-schema.json");
+            Assert.True(File.Exists(reviewOutputSchemaPath));
+            Assert.Contains("\"disposition\"", File.ReadAllText(reviewOutputSchemaPath), StringComparison.Ordinal);
+
             var resultArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json");
             Assert.True(File.Exists(resultArtifactPath));
             var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
@@ -656,11 +664,6 @@ public sealed class ReviewRunCommandTests
         Assert.Contains(providerEvents, providerEvent =>
             providerEvent.Kind == "provider-event"
             && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
-            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
-            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
-        Assert.Contains(providerEvents, providerEvent =>
-            providerEvent.Kind == "provider-event"
-            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
             && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
             && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
     }
@@ -851,7 +854,7 @@ public sealed class ReviewRunCommandTests
                 CliRuntimeContracts.DefaultCodexDirectRunModel,
                 "stdio",
                 "/opt/homebrew/bin/codex",
-                ["exec", "--json", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
                 "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.");
 
             var context = CreateContext(repoRoot) with
@@ -920,7 +923,7 @@ public sealed class ReviewRunCommandTests
                 CliRuntimeContracts.DefaultCodexDirectRunModel,
                 "stdio",
                 "/opt/homebrew/bin/codex",
-                ["exec", "--json", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
                 "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
                 """{"disposition":"accepted"}""");
 
@@ -999,7 +1002,7 @@ public sealed class ReviewRunCommandTests
                 CliRuntimeContracts.DefaultCodexDirectRunModel,
                 "stdio",
                 "/opt/homebrew/bin/codex",
-                ["exec", "--json", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
                 "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
                 """{"disposition":"fix-requested","comment_body":"Please cover the deterministic submit path."}""");
 
@@ -1071,7 +1074,7 @@ public sealed class ReviewRunCommandTests
                 CliRuntimeContracts.DefaultCodexDirectRunModel,
                 "stdio",
                 "/opt/homebrew/bin/codex",
-                ["exec", "--json", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
                 "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
                 """{"stop_reason":"deterministic-contract-gap","detail":"Please cover the deterministic submit path."}""");
 
@@ -1152,7 +1155,7 @@ public sealed class ReviewRunCommandTests
                 CliRuntimeContracts.DefaultCodexDirectRunModel,
                 "stdio",
                 "/opt/homebrew/bin/codex",
-                ["exec", "--json", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
                 "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
                 """{"stop_reason":"deterministic-contract-gap","detail":"Please cover the deterministic submit path."}""",
                 137);
@@ -1234,7 +1237,7 @@ public sealed class ReviewRunCommandTests
                 CliRuntimeContracts.DefaultCodexDirectRunModel,
                 "stdio",
                 "/opt/homebrew/bin/codex",
-                ["exec", "--json", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
                 "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
                 """{"stop_reason":"no-actionable-item"}""",
                 137);
