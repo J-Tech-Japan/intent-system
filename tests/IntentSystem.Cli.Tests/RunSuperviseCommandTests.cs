@@ -314,6 +314,211 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenDeadImplementWorkerSession_CapturesFailureAndAutoResumesImplementLoop()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateActiveRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession()));
+        WriteDeadImplementDirectRunArtifacts(repoRoot, "pid:999999");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRunImplementExecutor = RunSuperviseCommand.RunImplementExecutor;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.RunImplementExecutor = (_, executionUnit) =>
+            {
+                WriteLiveImplementDirectRunArtifacts(repoRoot, executionUnit, "pid:4242");
+
+                return new RunImplementResult
+                {
+                    Request = new RunImplementRequest
+                    {
+                        ExecutionUnit = executionUnit,
+                        State = "active",
+                        ImplementRole = "Claude",
+                        QueueWorkerRole = "coder",
+                        QueueReviewRole = "reviewer",
+                        WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit),
+                        ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                        Branch = "issue-178-g25",
+                        LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/178",
+                        LatestLinkedPr = null,
+                        PacketRef = ".intent-cli/issues/G25/packet.yaml",
+                        ReviewContextRef = ".intent-cli/issues/G25/review-context.md",
+                        IssueTitle = "[G25] Run Supervise Command",
+                        Goal = "Supervise retryable run interruptions.",
+                        TargetPart = "cli run supervise command",
+                        TargetRepo = "submodules/intent-system",
+                        TargetPath = ".",
+                        InScope = [],
+                        OutOfScope = [],
+                        AcceptanceCriteria = [],
+                        DeterministicReviewChecks = [],
+                        ExpectedEvidence = []
+                    },
+                    ArtifactPath = ".intent-cli/implement/G25.request.md"
+                };
+            };
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionWorkerEntry.Implement, session.WorkerEntry);
+            Assert.Equal(RunSupervisionSessionStatus.Monitoring, session.Status);
+            Assert.Equal(1, session.RetryCount);
+            Assert.Null(session.NextRetryAt);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                && exitCodeElement.GetInt32() == 1);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.result.json")));
+            Assert.Equal("pid:4242", resultArtifact.SessionId);
+            Assert.Equal("running", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("retry-attempted", runEvents[^2].Event);
+            Assert.Equal("auto-resumed", runEvents[^1].Event);
+            Assert.Contains("no longer alive", runEvents[^2].Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.RunImplementExecutor = originalRunImplementExecutor;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenActiveItemWithoutExistingSessionAndDeadImplementWorkerSession_CapturesFailureAndAutoResumesImplementLoop()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateActiveRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        WriteDeadImplementDirectRunArtifacts(repoRoot, "pid:999999");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRunImplementExecutor = RunSuperviseCommand.RunImplementExecutor;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.RunImplementExecutor = (_, executionUnit) =>
+            {
+                WriteLiveImplementDirectRunArtifacts(repoRoot, executionUnit, "pid:4242");
+
+                return new RunImplementResult
+                {
+                    Request = new RunImplementRequest
+                    {
+                        ExecutionUnit = executionUnit,
+                        State = "active",
+                        ImplementRole = "Claude",
+                        QueueWorkerRole = "coder",
+                        QueueReviewRole = "reviewer",
+                        WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit),
+                        ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                        Branch = "issue-178-g25",
+                        LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/178",
+                        LatestLinkedPr = null,
+                        PacketRef = ".intent-cli/issues/G25/packet.yaml",
+                        ReviewContextRef = ".intent-cli/issues/G25/review-context.md",
+                        IssueTitle = "[G25] Run Supervise Command",
+                        Goal = "Supervise retryable run interruptions.",
+                        TargetPart = "cli run supervise command",
+                        TargetRepo = "submodules/intent-system",
+                        TargetPath = ".",
+                        InScope = [],
+                        OutOfScope = [],
+                        AcceptanceCriteria = [],
+                        DeterministicReviewChecks = [],
+                        ExpectedEvidence = []
+                    },
+                    ArtifactPath = ".intent-cli/implement/G25.request.md"
+                };
+            };
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionWorkerEntry.Implement, session.WorkerEntry);
+            Assert.Equal(RunSupervisionSessionStatus.Monitoring, session.Status);
+            Assert.Equal(1, session.RetryCount);
+            Assert.Null(session.NextRetryAt);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                && exitCodeElement.GetInt32() == 1);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.result.json")));
+            Assert.Equal("pid:4242", resultArtifact.SessionId);
+            Assert.Equal("running", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("retry-attempted", runEvents[^2].Event);
+            Assert.Equal("auto-resumed", runEvents[^1].Event);
+            Assert.Contains("no longer alive", runEvents[^2].Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.RunImplementExecutor = originalRunImplementExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenDeadFixWorkerSession_CapturesFailureAndAutoResumesFixLoop()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -823,6 +1028,65 @@ public sealed class RunSuperviseCommandTests
         File.WriteAllText(Path.Combine(runsPath, "G25.provider.jsonl"), string.Join(Environment.NewLine, providerEvents) + Environment.NewLine);
     }
 
+    private static void WriteDeadImplementDirectRunArtifacts(string repoRoot, string sessionId)
+    {
+        var requestArtifact = new DirectRunRequestArtifact
+        {
+            SchemaVersion = "1",
+            ExecutionUnit = "G25",
+            EntryKind = "implement",
+            UpstreamRequestRef = ".intent-cli/implement/G25.request.md",
+            Provider = "Claude",
+            Model = "sonnet",
+            Transport = "sdk",
+            LaunchedAt = "2026-04-08T10:20:00.0000000+00:00",
+            ProviderSessionId = sessionId,
+            TransportSummary = "sdk transport"
+        };
+        var resultArtifact = new DirectRunResultArtifact
+        {
+            SchemaVersion = "1",
+            ExecutionUnit = "G25",
+            EntryKind = "implement",
+            UpstreamRequestRef = ".intent-cli/implement/G25.request.md",
+            Provider = "Claude",
+            Model = "sonnet",
+            SessionId = sessionId,
+            RunStatus = "running",
+            RawLogRef = ".intent-cli/runs/G25.provider.jsonl",
+            PacketRef = ".intent-cli/issues/G25/packet.yaml",
+            ReviewContextRef = ".intent-cli/issues/G25/review-context.md",
+            Worktree = new DirectRunWorktreeContext
+            {
+                Path = "/repo/.intent-cli/worktrees/G25"
+            }
+        };
+        var providerEvents = new[]
+        {
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.0000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "session-metadata",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    model = "sonnet",
+                    transport = "sdk",
+                    command = "claude"
+                })
+            })
+        };
+
+        var runsPath = Path.Combine(repoRoot, ".intent-cli", "runs");
+        Directory.CreateDirectory(runsPath);
+        File.WriteAllText(Path.Combine(runsPath, "G25.request.json"), DirectRunRequestArtifactJson.Serialize(requestArtifact));
+        File.WriteAllText(Path.Combine(runsPath, "G25.result.json"), DirectRunResultArtifactJson.Serialize(resultArtifact));
+        File.WriteAllText(Path.Combine(runsPath, "G25.provider.jsonl"), string.Join(Environment.NewLine, providerEvents) + Environment.NewLine);
+    }
+
     private static void WriteLiveFixDirectRunArtifacts(string repoRoot, string executionUnit, string sessionId)
     {
         var requestArtifact = new DirectRunRequestArtifact
@@ -865,6 +1129,61 @@ public sealed class RunSuperviseCommandTests
                 ExecutionUnit = executionUnit,
                 Provider = "Claude",
                 EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "session-metadata",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    model = "sonnet",
+                    transport = "sdk",
+                    command = "claude"
+                })
+            }) + Environment.NewLine);
+        File.WriteAllText(Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.request.json"), DirectRunRequestArtifactJson.Serialize(requestArtifact));
+        File.WriteAllText(Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.result.json"), DirectRunResultArtifactJson.Serialize(resultArtifact));
+    }
+
+    private static void WriteLiveImplementDirectRunArtifacts(string repoRoot, string executionUnit, string sessionId)
+    {
+        var requestArtifact = new DirectRunRequestArtifact
+        {
+            SchemaVersion = "1",
+            ExecutionUnit = executionUnit,
+            EntryKind = "implement",
+            UpstreamRequestRef = $".intent-cli/implement/{executionUnit}.request.md",
+            Provider = "Claude",
+            Model = "sonnet",
+            Transport = "sdk",
+            LaunchedAt = "2026-04-08T10:30:00.0000000+00:00",
+            ProviderSessionId = sessionId,
+            TransportSummary = "sdk transport"
+        };
+        var resultArtifact = new DirectRunResultArtifact
+        {
+            SchemaVersion = "1",
+            ExecutionUnit = executionUnit,
+            EntryKind = "implement",
+            UpstreamRequestRef = $".intent-cli/implement/{executionUnit}.request.md",
+            Provider = "Claude",
+            Model = "sonnet",
+            SessionId = sessionId,
+            RunStatus = "running",
+            RawLogRef = $".intent-cli/runs/{executionUnit}.provider.jsonl",
+            PacketRef = $".intent-cli/issues/{executionUnit}/packet.yaml",
+            ReviewContextRef = $".intent-cli/issues/{executionUnit}/review-context.md",
+            Worktree = new DirectRunWorktreeContext
+            {
+                Path = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit)
+            }
+        };
+        var providerLogPath = Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.provider.jsonl");
+        File.AppendAllText(
+            providerLogPath,
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:30:00.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "implement",
                 SessionId = sessionId,
                 Kind = "session-metadata",
                 Payload = JsonSerializer.SerializeToElement(new

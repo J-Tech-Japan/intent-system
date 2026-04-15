@@ -155,8 +155,7 @@ internal static class RunSuperviseCommand
             RetryBudget = retryBudget
         };
 
-        if (session.WorkerEntry == RunSupervisionWorkerEntry.Fix
-            && TryCaptureDeadWorkerSessionFailure(
+        if (TryCaptureDeadWorkerSessionFailure(
                 context,
                 executionUnit,
                 session.WorkerEntry,
@@ -286,8 +285,7 @@ internal static class RunSuperviseCommand
         RunSupervisionSession session,
         DateTimeOffset now)
     {
-        if (session.WorkerEntry == RunSupervisionWorkerEntry.Fix
-            && TryCaptureDeadWorkerSessionFailure(
+        if (TryCaptureDeadWorkerSessionFailure(
                 context,
                 executionUnit,
                 session.WorkerEntry,
