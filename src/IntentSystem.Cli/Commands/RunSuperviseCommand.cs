@@ -2,6 +2,8 @@ using IntentSystem.Review;
 using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
+using System.Diagnostics;
+using System.Text.Json;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -138,6 +140,44 @@ internal static class RunSuperviseCommand
             HandoffArtifactRef = supervisionContext.HandoffArtifactRef,
             RetryBudget = retryBudget
         };
+
+        if (session.WorkerEntry == RunSupervisionWorkerEntry.Fix
+            && TryCaptureDeadWorkerSessionFailure(
+                context,
+                executionUnit,
+                session.WorkerEntry,
+                out var deadWorkerReason))
+        {
+            if (session.RetryCount >= session.RetryBudget)
+            {
+                return ExhaustRetryBudget(
+                    context,
+                    queueState,
+                    executionUnit,
+                    sessionArtifactPath,
+                    sessionArtifactRef,
+                    runLogPath,
+                    session,
+                    now,
+                    deadWorkerReason);
+            }
+
+            var interruptedSession = session with
+            {
+                UpdatedAt = now,
+                LastInterruptionReason = deadWorkerReason
+            };
+
+            return AttemptAutoResume(
+                context,
+                queueState,
+                executionUnit,
+                sessionArtifactPath,
+                sessionArtifactRef,
+                runLogPath,
+                interruptedSession,
+                now);
+        }
 
         if (session.Status == RunSupervisionSessionStatus.RetryScheduled)
         {
@@ -536,6 +576,160 @@ internal static class RunSuperviseCommand
     private static string ResolveArtifactPath(string repoRoot, string artifactRef)
     {
         return Path.GetFullPath(Path.Combine(repoRoot, artifactRef.Replace('/', Path.DirectorySeparatorChar)));
+    }
+
+    private static bool TryCaptureDeadWorkerSessionFailure(
+        CliContext context,
+        string executionUnit,
+        RunSupervisionWorkerEntry workerEntry,
+        out string reason)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        reason = string.Empty;
+        var expectedEntryKind = ResolveDirectRunEntryKind(workerEntry);
+        var requestArtifactPath = ResolveDirectRunRequestArtifactPath(context, executionUnit);
+        var resultArtifactPath = ResolveDirectRunResultArtifactPath(context, executionUnit);
+        if (!File.Exists(requestArtifactPath) || !File.Exists(resultArtifactPath))
+        {
+            return false;
+        }
+
+        var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        if (!string.Equals(requestArtifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.SessionId, requestArtifact.ProviderSessionId, StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.RunStatus, "running", StringComparison.Ordinal)
+            || !TryParseSessionProcessId(requestArtifact.ProviderSessionId, out var processId)
+            || IsProcessAlive(processId))
+        {
+            return false;
+        }
+
+        var providerLogPath = ResolveDirectRunProviderLogPath(context, executionUnit);
+        if (!File.Exists(providerLogPath))
+        {
+            return false;
+        }
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath));
+        var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId, requestArtifact.LaunchedAt);
+        if (currentProviderEvents.Any(HasBackendExitType))
+        {
+            return false;
+        }
+
+        var backendExitEvent = DirectRunProviderEventFactory.CreateBackendExitEvent(
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            expectedEntryKind,
+            requestArtifact.Provider,
+            requestArtifact.ProviderSessionId,
+            exitCode: 1);
+        new DirectRunProviderEventWriter(providerLogPath).Append(backendExitEvent);
+
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(resultArtifact with
+            {
+                RunStatus = "failed"
+            }));
+
+        reason =
+            $"Worker session '{requestArtifact.ProviderSessionId}' for '{executionUnit}' is no longer alive and no terminal provider event was captured.";
+        return true;
+    }
+
+    private static string ResolveDirectRunRequestArtifactPath(CliContext context, string executionUnit)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return ResolveArtifactPath(context.RepoRoot, $"{root}/{executionUnit.Trim()}.request.json");
+    }
+
+    private static string ResolveDirectRunResultArtifactPath(CliContext context, string executionUnit)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return ResolveArtifactPath(context.RepoRoot, $"{root}/{executionUnit.Trim()}.result.json");
+    }
+
+    private static string ResolveDirectRunProviderLogPath(CliContext context, string executionUnit)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return ResolveArtifactPath(context.RepoRoot, $"{root}/{executionUnit.Trim()}.provider.jsonl");
+    }
+
+    private static string ResolveDirectRunEntryKind(RunSupervisionWorkerEntry workerEntry)
+    {
+        return workerEntry switch
+        {
+            RunSupervisionWorkerEntry.Implement => "implement",
+            RunSupervisionWorkerEntry.Fix => "fix",
+            _ => throw new InvalidOperationException($"Unsupported worker entry '{workerEntry}'.")
+        };
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> SelectCurrentSessionEvents(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string launchedSessionId,
+        string launchedAt)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        if (!DirectRunSessionBoundary.TryParseLaunchedAt(launchedAt, out var parsedLaunchedAt))
+        {
+            parsedLaunchedAt = default;
+        }
+
+        return DirectRunSessionBoundary.SelectEvents(
+            providerEvents,
+            launchedSessionId,
+            parsedLaunchedAt == default ? null : parsedLaunchedAt);
+    }
+
+    private static bool TryParseSessionProcessId(string providerSessionId, out int processId)
+    {
+        processId = default;
+
+        const string prefix = "pid:";
+        if (!providerSessionId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(
+            providerSessionId[prefix.Length..],
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out processId);
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            process.Refresh();
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasBackendExitType(DirectRunProviderEvent providerEvent)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvent);
+
+        return providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal);
     }
 
     private static void PersistQueueState(CliContext context, QueueState queueState)
