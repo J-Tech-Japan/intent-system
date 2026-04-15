@@ -323,6 +323,45 @@ public sealed class RunImplementCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRuntimeOnlyTargetPart_ReturnsExitCodeOneWithoutWritingHandoffArtifact()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G19"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "packet.yaml"),
+            CreatePacketYaml(targetPart: ".intent-cli/intake"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "review-context.md"),
+            CreateReviewContextMarkdown());
+        using var writer = new StringWriter();
+        var originalLauncherFactory = RunImplementCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunImplementCommand.DirectRunLauncherFactory = () => throw new InvalidOperationException("launcher should not be called");
+
+            var exitCode = RunImplementCommand.Execute(CreateContext(repoRoot), ["G19"], writer);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("host runtime-only '.intent-cli/**' content", writer.ToString(), StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "implement", "G19.request.md")));
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "runs", "G19.request.json")));
+        }
+        finally
+        {
+            RunImplementCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenMissingQueueItem_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -598,7 +637,7 @@ public sealed class RunImplementCommandTests
         };
     }
 
-    private static string CreatePacketYaml()
+    private static string CreatePacketYaml(string targetPart = "cli run implement command")
     {
         return """
         implementation_issue_packet:
@@ -614,7 +653,7 @@ public sealed class RunImplementCommandTests
             - "worker start"
           target_repo: "submodules/intent-system"
           target_path: "."
-          target_part: "cli run implement command"
+          target_part: "__TARGET_PART__"
           dependencies:
             - "G18"
           technical_baseline:
@@ -647,7 +686,7 @@ public sealed class RunImplementCommandTests
           deterministic_review_checks:
             - "run implement command remains handoff-only"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
-        """;
+        """.Replace("__TARGET_PART__", targetPart, StringComparison.Ordinal);
     }
 
     private static string CreateReviewContextMarkdown(string executionUnit = "G19")

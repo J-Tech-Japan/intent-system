@@ -99,6 +99,12 @@ internal static class RunImplementCommand
             throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
         }
 
+        ChildWorkTargetGuard.EnsureTargetAllowed(
+            executionUnit,
+            worktreePath,
+            packet.ImplementationIssuePacket.TargetPath,
+            packet.ImplementationIssuePacket.TargetPart);
+
         var reviewContext = ReviewContextMarkdownParser.Parse(File.ReadAllText(reviewContextPath));
         if (!string.Equals(reviewContext.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
         {

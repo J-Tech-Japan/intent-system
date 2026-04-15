@@ -260,6 +260,44 @@ public sealed class RunStartCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenRuntimeOnlyTargetPart_ReturnsExitCodeOneWithoutCreatingWorktreeOrMutatingFiles()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreatePacketYaml(targetPart: ".intent-cli/intake"));
+        using var writer = new StringWriter();
+        var gitRunner = new FakeGitRunner();
+        var originalGitFactory = RunStartCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            RunStartCommand.GitCommandRunnerFactory = () => gitRunner;
+            var originalQueueState = File.ReadAllText(queueStatePath);
+
+            var exitCode = RunStartCommand.Execute(CreateContext(repoRoot), ["G14"], writer);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("host runtime-only '.intent-cli/**' content", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
+            Assert.Empty(File.ReadAllText(runLogPath));
+            Assert.Empty(gitRunner.Calls);
+        }
+        finally
+        {
+            RunStartCommand.GitCommandRunnerFactory = originalGitFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -325,7 +363,7 @@ public sealed class RunStartCommandTests
         };
     }
 
-    private static string CreatePacketYaml()
+    private static string CreatePacketYaml(string targetPart = "cli run start command")
     {
         return """
         implementation_issue_packet:
@@ -339,7 +377,7 @@ public sealed class RunStartCommandTests
             - "worker start"
           target_repo: "submodules/intent-system"
           target_path: "."
-          target_part: "cli run start command"
+          target_part: "__TARGET_PART__"
           dependencies:
             - "G13"
           technical_baseline:
@@ -372,7 +410,7 @@ public sealed class RunStartCommandTests
           deterministic_review_checks:
             - "run start remains thin"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
-        """;
+        """.Replace("__TARGET_PART__", targetPart, StringComparison.Ordinal);
     }
 
     private sealed class FakeGitRunner(bool failOnWorktreeAdd = false) : IGitCommandRunner

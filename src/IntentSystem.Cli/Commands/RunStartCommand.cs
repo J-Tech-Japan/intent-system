@@ -90,6 +90,12 @@ internal static class RunStartCommand
             throw new InvalidOperationException($"Worktree path already exists at {worktreePath}");
         }
 
+        ChildWorkTargetGuard.EnsureTargetAllowed(
+            executionUnit,
+            worktreePath,
+            packet.TargetPath,
+            packet.TargetPart);
+
         var branchName = ResolveBranchName(executionUnit, queueItem.LinkedIssue);
         var gitRunner = GitCommandRunnerFactory();
         CreateWorktree(childRepoPath, worktreePath, branchName, gitRunner);

@@ -204,6 +204,40 @@ public sealed class IntakeIssueCommandTests
         Assert.Contains("requires a domain", writer.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Execute_GivenRuntimeOnlyTargetPart_ReturnsExitCodeOneWithoutGeneratingChildFacingArtifacts()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            CreateExecutionBaselineMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            CreateSingleExecutionArtifactMarkdown(
+                "auth",
+                "AUTH-01",
+                "intents/intent-cli/concepts/oauth2.md",
+                ".intent-cli/intake",
+                "Auth Concept"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
+        using var writer = new StringWriter();
+
+        var exitCode = IntakeIssueCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("host runtime-only '.intent-cli/**' content", writer.ToString(), StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "AUTH-01", "github-body.md")));
+    }
+
     private static string CreateExecutionBaselineMarkdown(string namespaceSegment = "intent-cli")
     {
         return $$"""

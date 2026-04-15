@@ -106,6 +106,12 @@ internal static class QueueDispatchCommand
             throw new InvalidOperationException("Projection packet must contain a target repo.");
         }
 
+        ChildWorkTargetGuard.EnsureTargetAllowed(
+            executionUnit,
+            RunStartCommand.ResolveWorktreePath(context, executionUnit),
+            packet.TargetPath,
+            packet.TargetPart);
+
         var issueTitle = packet.IssueTitle;
         if (string.IsNullOrWhiteSpace(issueTitle))
         {
