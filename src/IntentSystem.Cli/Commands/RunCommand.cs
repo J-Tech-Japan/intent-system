@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using IntentSystem.Projection.Serialization;
 using IntentSystem.Review;
 using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
@@ -178,6 +179,16 @@ internal static class RunCommand
                                 inProgressItem.ExecutionUnit,
                                 () => RunFixExecutor(context, inProgressItem.ExecutionUnit));
                             continue;
+                        }
+
+                        var currentFixTargetContractGap = TryResolveCurrentFixTargetContractGap(context, inProgressItem);
+                        if (!string.IsNullOrWhiteSpace(currentFixTargetContractGap))
+                        {
+                            return CreateStopResult(
+                                DeterministicContractGapStopReason,
+                                actions,
+                                inProgressItem.ExecutionUnit,
+                                currentFixTargetContractGap);
                         }
 
                         var fixRunStatus = TryReadDirectRunStatus(
@@ -461,6 +472,52 @@ internal static class RunCommand
         return string.Equals(artifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
             ? artifact
             : null;
+    }
+
+    private static string? TryResolveCurrentFixTargetContractGap(CliContext context, QueueItem queueItem)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueItem);
+
+        var packetPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            queueItem.PacketPaths.Yaml.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(packetPath))
+        {
+            return $"Projection packet artifact was not found at {packetPath}";
+        }
+
+        try
+        {
+            var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
+            var childRepoPath = Path.IsPathRooted(packet.TargetRepo)
+                ? Path.GetFullPath(packet.TargetRepo)
+                : Path.GetFullPath(Path.Combine(context.RepoRoot, packet.TargetRepo));
+            if (!Directory.Exists(childRepoPath))
+            {
+                return $"Child repo path was not found at {childRepoPath}";
+            }
+
+            var worktreePath = RunStartCommand.ResolveWorktreePath(context, queueItem.ExecutionUnit);
+            if (!Directory.Exists(worktreePath))
+            {
+                return $"Worktree path was not found at {worktreePath}";
+            }
+
+            ChildWorkTargetGuard.EnsureTargetAllowed(
+                queueItem.ExecutionUnit,
+                context.RepoRoot,
+                packet.TargetRepo,
+                worktreePath,
+                packet.TargetPath,
+                packet.TargetPart);
+
+            return null;
+        }
+        catch (InvalidOperationException exception)
+        {
+            return exception.Message;
+        }
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> TryReadDirectRunProviderEvents(CliContext context, string executionUnit)
