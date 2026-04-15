@@ -661,6 +661,92 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task Launch_GivenWrappedCodexImplementProcess_DetachedCaptureProvidesTerminalToProvider()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14implement.provider.jsonl");
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
+        var codexPath = tempDirectory.CreateExecutableFile(
+            "repo/codex-experimental",
+            """
+            #!/bin/sh
+            if [ -t 0 ]; then
+                printf '%s\n' '{"type":"tty-present"}'
+            else
+                printf '%s\n' '{"type":"tty-missing"}'
+            fi
+            sleep 1
+            """);
+        var launcher = new DirectRunLauncher();
+
+        var result = launcher.Launch(
+            "G14implement",
+            "implement",
+            ".intent-cli/runs/G14implement.request.json",
+            ".intent-cli/runs/G14implement.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            codexPath,
+            ["exec", "test prompt"],
+            DateTimeOffset.Parse("2026-04-09T11:17:00Z"),
+            worktreePath,
+            tempDirectory.GetPath(".intent-cli/implement/G14implement.request.md"),
+            providerEventLogPath);
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(providerEventLogPath))
+                {
+                    return false;
+                }
+
+                var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                return events.Any(providerEvent =>
+                           providerEvent.Kind == "provider-event"
+                           && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                           && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                           && string.Equals(typeElement.GetString(), "tty-present", StringComparison.Ordinal)
+                           && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal))
+                       && events.Any(providerEvent =>
+                           providerEvent.Kind == "provider-event"
+                           && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                           && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                           && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                           && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            },
+            TimeSpan.FromSeconds(8));
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "tty-missing", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "tty-present", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        var backendExitEvent = Assert.Single(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Equal(0, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+    }
+
+    [Fact]
     public async Task DirectRunExitMonitorCommand_GivenDetachedProcess_AppendsBackendExitForCurrentSession()
     {
         if (OperatingSystem.IsWindows())

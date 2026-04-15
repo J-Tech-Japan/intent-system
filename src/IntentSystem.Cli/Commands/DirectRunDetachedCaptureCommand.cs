@@ -96,6 +96,7 @@ internal static class DirectRunDetachedCaptureCommand
     {
         var writer = new DirectRunProviderEventWriter(options.ProviderEventLogPath);
         Process? process = null;
+        StreamWriter? preservedStandardInput = null;
         Task? stdoutPump = null;
         Task? stderrPump = null;
         var providerSessionId = string.Empty;
@@ -107,6 +108,11 @@ internal static class DirectRunDetachedCaptureCommand
 
             process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start detached direct run process '{options.Command}'.");
+            if (startInfo.RedirectStandardInput)
+            {
+                preservedStandardInput = process.StandardInput;
+                preservedStandardInput.AutoFlush = true;
+            }
             providerSessionId = $"pid:{process.Id}";
             TryWriteSessionId(providerSessionId);
             Console.SetOut(TextWriter.Null);
@@ -184,6 +190,8 @@ internal static class DirectRunDetachedCaptureCommand
 
                 process.Dispose();
             }
+
+            preservedStandardInput?.Dispose();
         }
     }
 
@@ -417,23 +425,107 @@ internal static class DirectRunDetachedCaptureCommand
 
     private static ProcessStartInfo CreateProviderStartInfo(DirectRunDetachedCaptureOptions options)
     {
+        var providerInvocation = ResolveProviderInvocation(options);
+        var preserveStandardInput = ShouldPreserveProviderStandardInput(options);
         var startInfo = new ProcessStartInfo
         {
             WorkingDirectory = options.WorkingDirectory,
             UseShellExecute = false,
-            RedirectStandardInput = false,
+            RedirectStandardInput = preserveStandardInput,
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
 
-        startInfo.FileName = options.Command;
+        startInfo.FileName = providerInvocation.FileName;
 
-        foreach (var argument in options.Arguments)
+        foreach (var argument in providerInvocation.Arguments)
         {
             startInfo.ArgumentList.Add(argument);
         }
 
         return startInfo;
+    }
+
+    private static ResolvedProviderInvocation ResolveProviderInvocation(DirectRunDetachedCaptureOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var scriptExecutable = TryResolveScriptExecutable(options);
+        if (string.IsNullOrWhiteSpace(scriptExecutable))
+        {
+            return new ResolvedProviderInvocation(options.Command, options.Arguments);
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            return new ResolvedProviderInvocation(
+                scriptExecutable,
+                ["-q", "/dev/null", options.Command, .. options.Arguments]);
+        }
+
+        return new ResolvedProviderInvocation(
+            scriptExecutable,
+            ["-q", "-e", "-c", CreateShellCommand(options.Command, options.Arguments), "/dev/null"]);
+    }
+
+    private static bool ShouldPreserveProviderStandardInput(DirectRunDetachedCaptureOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.Equals(options.EntryKind, "review", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(options.Provider, "codex", StringComparison.OrdinalIgnoreCase)
+            || IsCodexLikeCommand(options.Command);
+    }
+
+    private static string? TryResolveScriptExecutable(DirectRunDetachedCaptureOptions options)
+    {
+        if (OperatingSystem.IsWindows()
+            || string.Equals(options.EntryKind, "review", StringComparison.Ordinal)
+            || (!string.Equals(options.Provider, "codex", StringComparison.OrdinalIgnoreCase)
+                && !IsCodexLikeCommand(options.Command)))
+        {
+            return null;
+        }
+
+        const string macOsScriptPath = "/usr/bin/script";
+        if (OperatingSystem.IsMacOS())
+        {
+            return File.Exists(macOsScriptPath) ? macOsScriptPath : null;
+        }
+
+        return File.Exists(macOsScriptPath) ? macOsScriptPath : "script";
+    }
+
+    private static bool IsCodexLikeCommand(string command)
+    {
+        var fileName = Path.GetFileName(command.Trim());
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        var commandStem = Path.GetFileNameWithoutExtension(fileName);
+        return commandStem.StartsWith("codex", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string CreateShellCommand(string command, IReadOnlyList<string> arguments)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        return string.Join(
+            " ",
+            new[] { command }.Concat(arguments).Select(QuoteShellArgument));
+    }
+
+    private static string QuoteShellArgument(string argument)
+    {
+        ArgumentNullException.ThrowIfNull(argument);
+        return "'" + argument.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
     }
 
     private static string NormalizeCapturedLine(string line)
@@ -498,5 +590,9 @@ internal static class DirectRunDetachedCaptureCommand
         DateTimeOffset LaunchedAt,
         string WorkingDirectory,
         string Command,
+        IReadOnlyList<string> Arguments);
+
+    private sealed record ResolvedProviderInvocation(
+        string FileName,
         IReadOnlyList<string> Arguments);
 }
