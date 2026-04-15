@@ -118,8 +118,12 @@ internal static class RunSuperviseCommand
 
         if (session.WorkerEntry != supervisionContext.WorkerEntry)
         {
-            throw new InvalidOperationException(
-                $"Run supervision session worker entry '{FormatWorkerEntry(session.WorkerEntry)}' must match current worker entry '{FormatWorkerEntry(supervisionContext.WorkerEntry)}'.");
+            var realignedSession = CreateSession(supervisionContext, now, retryBudget) with
+            {
+                CreatedAt = session.CreatedAt
+            };
+            PersistSession(sessionArtifactPath, realignedSession);
+            return CreateResult(sessionArtifactRef, realignedSession);
         }
 
         session = session with
