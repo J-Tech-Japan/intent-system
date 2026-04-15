@@ -947,6 +947,187 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenFailedReviewResultWithRawNoActionableItem_Accepts()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226", provider: "Codex");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "failed",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Codex",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        stop_reason = "no-actionable-item"
+                    })
+                },
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:02.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Codex",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 137
+                    })
+                }
+            ],
+            provider: "Codex");
+        var originalReviewAcceptExecutor = RunCommand.ReviewAcceptExecutor;
+
+        try
+        {
+            RunCommand.ReviewAcceptExecutor = (context, executionUnit) =>
+            {
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => queueItem with
+                    {
+                        State = QueueItemState.Completed
+                    });
+
+                return new ReviewAcceptResult
+                {
+                    ExecutionUnit = executionUnit,
+                    MergedPrRef = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                    ClosedIssueRef = "https://github.com/J-Tech-Japan/intent-system/issues/226"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Null(result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("review accept", action.Name);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("accepted", resultArtifact.ReviewOutcome);
+        }
+        finally
+        {
+            RunCommand.ReviewAcceptExecutor = originalReviewAcceptExecutor;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenFailedReviewResultWithRawDeterministicContractGap_Comments()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226", provider: "Codex");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "failed",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Codex",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        stop_reason = "deterministic-contract-gap",
+                        detail = "Please cover the deterministic submit path."
+                    })
+                },
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:02.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Codex",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 137
+                    })
+                }
+            ],
+            provider: "Codex");
+        var originalReviewCommentExecutor = RunCommand.ReviewCommentExecutor;
+
+        try
+        {
+            RunCommand.ReviewCommentExecutor = (context, executionUnit, bodyPath) =>
+            {
+                Assert.Equal(".intent-cli/reviews/G226.comment.md", bodyPath);
+                Assert.Equal(
+                    "Please cover the deterministic submit path.",
+                    File.ReadAllText(Path.Combine(context.RepoRoot, bodyPath.Replace('/', Path.DirectorySeparatorChar))));
+
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => queueItem with
+                    {
+                        State = QueueItemState.Fixing
+                    });
+
+                return new ReviewCommentResult
+                {
+                    ExecutionUnit = executionUnit,
+                    ArtifactPath = ".intent-cli/reviews/G226.comment.json",
+                    CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("deterministic-contract-gap", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("review comment", action.Name);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("fix-requested", resultArtifact.ReviewOutcome);
+            Assert.Equal(".intent-cli/reviews/G226.comment.md", resultArtifact.ReviewCommentBodyPath);
+        }
+        finally
+        {
+            RunCommand.ReviewCommentExecutor = originalReviewCommentExecutor;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenSucceededReviewDecisionWithOnlyStaleCapturedAcceptedLastMessage_Waits()
     {
         using var tempDirectory = new TemporaryDirectory();

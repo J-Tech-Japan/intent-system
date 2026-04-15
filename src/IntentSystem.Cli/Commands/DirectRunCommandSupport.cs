@@ -595,6 +595,10 @@ internal static class DirectRunCommandSupport
             }
         }
 
+        runStatus = string.Equals(entryKind, "review", StringComparison.Ordinal)
+            ? DirectRunReviewOutcomeSupport.ResolveEffectiveReviewRunStatus(runStatus, reviewOutcome)
+            : runStatus;
+
         var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
         var resultArtifactPath = ResolveResultArtifactPath(context, executionUnit);
         var absoluteResultArtifactPath = Path.GetFullPath(Path.Combine(

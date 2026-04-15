@@ -585,15 +585,6 @@ internal static class RunCommand
             providerEvents = [.. providerEvents, capturedOutcomeEvent];
         }
 
-        if (string.Equals(runStatus, "failed", StringComparison.Ordinal))
-        {
-            return new RunReviewDecision
-            {
-                Kind = RunReviewDecisionKind.Failure,
-                Detail = $"Review direct run failed for '{executionUnit}'."
-            };
-        }
-
         string? reviewOutcome = null;
         string? reviewCommentBodyPath = null;
         if (DirectRunReviewOutcomeSupport.TryResolveCanonicalReviewOutcome(
@@ -648,6 +639,30 @@ internal static class RunCommand
                 writer.Append(outcomeEvent);
                 providerEvents = [.. providerEvents, outcomeEvent];
             }
+        }
+
+        var effectiveRunStatus = DirectRunReviewOutcomeSupport.ResolveEffectiveReviewRunStatus(runStatus, reviewOutcome);
+        if (!string.Equals(effectiveRunStatus, runStatus, StringComparison.Ordinal))
+        {
+            runStatus = effectiveRunStatus;
+        }
+
+        if (!string.Equals(runStatus, resultArtifact.RunStatus, StringComparison.Ordinal))
+        {
+            resultArtifact = resultArtifact with
+            {
+                RunStatus = runStatus
+            };
+            PersistDirectRunResultArtifact(context, executionUnit, resultArtifact);
+        }
+
+        if (string.Equals(runStatus, "failed", StringComparison.Ordinal))
+        {
+            return new RunReviewDecision
+            {
+                Kind = RunReviewDecisionKind.Failure,
+                Detail = $"Review direct run failed for '{executionUnit}'."
+            };
         }
 
         if (string.Equals(runStatus, "accepted", StringComparison.Ordinal)

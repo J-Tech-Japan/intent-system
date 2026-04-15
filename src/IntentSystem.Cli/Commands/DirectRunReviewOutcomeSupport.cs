@@ -54,10 +54,7 @@ internal static class DirectRunReviewOutcomeSupport
 
         for (var index = providerEvents.Count - 1; index >= 0; index--)
         {
-            if (TryResolveRunStatus(providerEvents[index].Payload, out var runStatus)
-                && !string.Equals(runStatus, "succeeded", StringComparison.Ordinal)
-                && !string.Equals(runStatus, "failed", StringComparison.Ordinal)
-                && !string.Equals(runStatus, "running", StringComparison.Ordinal))
+            if (TryResolveReviewOutcomeFromPayload(providerEvents[index].Payload, out var runStatus))
             {
                 explicitReviewOutcome = runStatus;
                 return true;
@@ -65,6 +62,17 @@ internal static class DirectRunReviewOutcomeSupport
         }
 
         return false;
+    }
+
+    public static string ResolveEffectiveReviewRunStatus(string runStatus, string? reviewOutcome)
+    {
+        if (!string.IsNullOrWhiteSpace(reviewOutcome)
+            && (IsAcceptOutcome(reviewOutcome) || IsCommentOutcome(reviewOutcome)))
+        {
+            return "succeeded";
+        }
+
+        return runStatus;
     }
 
     public static bool TryResolveReviewCommentBodyPath(
@@ -250,18 +258,7 @@ internal static class DirectRunReviewOutcomeSupport
                 source = reviewResult;
             }
 
-            if (!TryReadString(source, "disposition", out var disposition)
-                && !TryReadString(source, "status", out disposition)
-                && !TryReadString(source, "run_status", out disposition))
-            {
-                if (!TryResolveFallbackReviewDisposition(source, out disposition))
-                {
-                    return false;
-                }
-            }
-
-            reviewOutcome = NormalizeRunStatus(disposition);
-            if (!IsAcceptOutcome(reviewOutcome) && !IsCommentOutcome(reviewOutcome))
+            if (!TryResolveReviewOutcomeFromPayload(source, out reviewOutcome))
             {
                 return false;
             }
@@ -311,7 +308,34 @@ internal static class DirectRunReviewOutcomeSupport
             return true;
         }
 
+        if (string.Equals(stopReason, "no-actionable-item", StringComparison.Ordinal))
+        {
+            disposition = "accepted";
+            return true;
+        }
+
         return false;
+    }
+
+    private static bool TryResolveReviewOutcomeFromPayload(JsonElement payload, out string reviewOutcome)
+    {
+        reviewOutcome = string.Empty;
+
+        if (payload.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!TryReadString(payload, "disposition", out var disposition)
+            && !TryReadString(payload, "status", out disposition)
+            && !TryReadString(payload, "run_status", out disposition)
+            && !TryResolveFallbackReviewDisposition(payload, out disposition))
+        {
+            return false;
+        }
+
+        reviewOutcome = NormalizeRunStatus(disposition);
+        return IsAcceptOutcome(reviewOutcome) || IsCommentOutcome(reviewOutcome);
     }
 
     private static string StripMarkdownCodeFence(string capturedMessage)
@@ -357,7 +381,10 @@ internal static class DirectRunReviewOutcomeSupport
 
         if (TryReadString(payload, "comment_body", out var commentBody)
             || TryReadString(payload, "body", out commentBody)
-            || TryReadString(payload, "markdown", out commentBody))
+            || TryReadString(payload, "markdown", out commentBody)
+            || TryReadString(payload, "detail", out commentBody)
+            || TryReadString(payload, "message", out commentBody)
+            || TryReadString(payload, "summary", out commentBody))
         {
             bodyOrPath = commentBody;
             return true;
