@@ -254,7 +254,10 @@ internal static class DirectRunReviewOutcomeSupport
                 && !TryReadString(source, "status", out disposition)
                 && !TryReadString(source, "run_status", out disposition))
             {
-                return false;
+                if (!TryResolveFallbackReviewDisposition(source, out disposition))
+                {
+                    return false;
+                }
             }
 
             reviewOutcome = NormalizeRunStatus(disposition);
@@ -276,14 +279,39 @@ internal static class DirectRunReviewOutcomeSupport
             }
             else if (TryReadString(source, "comment_body", out var commentBody)
                      || TryReadString(source, "body", out commentBody)
-                     || TryReadString(source, "markdown", out commentBody))
+                     || TryReadString(source, "markdown", out commentBody)
+                     || TryReadString(source, "detail", out commentBody)
+                     || TryReadString(source, "message", out commentBody)
+                     || TryReadString(source, "summary", out commentBody))
             {
                 normalizedPayload["comment_body"] = commentBody;
+            }
+            else if (IsCommentOutcome(reviewOutcome))
+            {
+                normalizedPayload["comment_body"] = "Deterministic review follow-up is required.";
             }
 
             payload = JsonSerializer.SerializeToElement(normalizedPayload);
             return true;
         }
+    }
+
+    private static bool TryResolveFallbackReviewDisposition(JsonElement source, out string disposition)
+    {
+        disposition = string.Empty;
+
+        if (!TryReadString(source, "stop_reason", out var stopReason))
+        {
+            return false;
+        }
+
+        if (string.Equals(stopReason, "deterministic-contract-gap", StringComparison.Ordinal))
+        {
+            disposition = "fix-requested";
+            return true;
+        }
+
+        return false;
     }
 
     private static string StripMarkdownCodeFence(string capturedMessage)

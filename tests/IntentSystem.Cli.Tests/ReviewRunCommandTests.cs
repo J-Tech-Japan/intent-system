@@ -969,6 +969,87 @@ public sealed class ReviewRunCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenCapturedDeterministicContractGapLastMessage_PersistsCommentOutcome()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ReviewRunCommand.TimestampFactory;
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            ReviewRunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:35:00Z");
+            ReviewRunCommand.DirectRunLauncherFactory = () => new CapturedLastMessageFakeDirectRunLauncher(
+                "pid:9999",
+                "Codex",
+                CliRuntimeContracts.DefaultCodexDirectRunModel,
+                "stdio",
+                "/opt/homebrew/bin/codex",
+                ["exec", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
+                """{"stop_reason":"deterministic-contract-gap","detail":"Please cover the deterministic submit path."}""");
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Claude",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        ArtifactRoot = ".intent-cli/runtime-runs",
+                        Review = new DirectRunEntryConfig
+                        {
+                            Command = "/opt/homebrew/bin/codex"
+                        }
+                    }
+                }
+            };
+
+            var exitCode = ReviewRunCommand.Execute(context, ["G9"], writer);
+
+            Assert.Equal(0, exitCode);
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("fix-requested", resultArtifact.ReviewOutcome);
+            Assert.Equal(".intent-cli/reviews/G9.comment.md", resultArtifact.ReviewCommentBodyPath);
+            Assert.Equal(
+                "Please cover the deterministic submit path.",
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.comment.md")));
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:9999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
+                && string.Equals(dispositionElement.GetString(), "fix-requested", StringComparison.Ordinal));
+        }
+        finally
+        {
+            ReviewRunCommand.TimestampFactory = originalTimestampFactory;
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext

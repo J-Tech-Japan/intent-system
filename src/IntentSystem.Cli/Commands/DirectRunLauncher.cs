@@ -316,6 +316,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             + " and an optional string field 'comment_body'."
             + " Use 'accepted' or 'approved' only when no review comment is required."
             + " Use 'comment', 'commented', 'fix-requested', or 'changes-requested' only when a deterministic review comment is required."
+            + " Do not return wrapper fields such as 'stop_reason', 'actions', or execution envelopes instead of 'disposition'."
+            + " If you detect a deterministic contract gap or need follow-up work, still return 'disposition':'fix-requested' with an actionable 'comment_body'."
             + " Do not wrap the JSON in markdown fences.";
     }
 
