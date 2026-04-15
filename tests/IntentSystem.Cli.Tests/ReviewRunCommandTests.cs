@@ -85,7 +85,21 @@ public sealed class ReviewRunCommandTests
                 "runtime-runs",
                 $"G9.{DirectRunCommandSupport.CreateCapturedMessageSuffix(DateTimeOffset.Parse("2026-04-09T10:35:00Z"))}.review-output-schema.json");
             Assert.True(File.Exists(reviewOutputSchemaPath));
-            Assert.Contains("\"disposition\"", File.ReadAllText(reviewOutputSchemaPath), StringComparison.Ordinal);
+            using var reviewOutputSchemaDocument = System.Text.Json.JsonDocument.Parse(File.ReadAllText(reviewOutputSchemaPath));
+            var reviewOutputSchema = reviewOutputSchemaDocument.RootElement;
+            Assert.Equal("object", reviewOutputSchema.GetProperty("type").GetString());
+            var required = reviewOutputSchema.GetProperty("required").EnumerateArray().Select(element => element.GetString()).ToArray();
+            Assert.Contains("disposition", required);
+            Assert.Contains("comment_body", required);
+            var commentBodyTypes = reviewOutputSchema
+                .GetProperty("properties")
+                .GetProperty("comment_body")
+                .GetProperty("type")
+                .EnumerateArray()
+                .Select(element => element.GetString())
+                .ToArray();
+            Assert.Contains("string", commentBodyTypes);
+            Assert.Contains("null", commentBodyTypes);
 
             var resultArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json");
             Assert.True(File.Exists(resultArtifactPath));
@@ -618,7 +632,7 @@ public sealed class ReviewRunCommandTests
             sleep 2
             if [ -n "$output_last_message" ]; then
               mkdir -p "$(dirname "$output_last_message")"
-              printf '%s\n' '{"disposition":"accepted"}' > "$output_last_message"
+              printf '%s\n' '{"disposition":"accepted","comment_body":null}' > "$output_last_message"
             fi
             """);
         tempDirectory.CreateFile(
@@ -925,7 +939,7 @@ public sealed class ReviewRunCommandTests
                 "/opt/homebrew/bin/codex",
                 ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
                 "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
-                """{"disposition":"accepted"}""");
+                """{"disposition":"accepted","comment_body":null}""");
 
             var context = CreateContext(repoRoot) with
             {

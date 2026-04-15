@@ -469,12 +469,16 @@ internal static class DirectRunCommandSupport
                   ]
                 },
                 "comment_body": {
-                  "type": "string",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
                   "minLength": 1
                 }
               },
               "required": [
-                "disposition"
+                "disposition",
+                "comment_body"
               ]
             }
             """);

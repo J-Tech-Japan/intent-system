@@ -314,11 +314,12 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
         return prompt
             + " Your final response must be a single JSON object with a required string field 'disposition'"
-            + " and an optional string field 'comment_body'."
+            + " and a required field 'comment_body' that must be a string when a review comment is required or null when no comment is required."
             + " Use 'accepted' or 'approved' only when no review comment is required."
             + " Use 'comment', 'commented', 'fix-requested', or 'changes-requested' only when a deterministic review comment is required."
             + " Do not return wrapper fields such as 'stop_reason', 'actions', or execution envelopes instead of 'disposition'."
             + " If you detect a deterministic contract gap or need follow-up work, still return 'disposition':'fix-requested' with an actionable 'comment_body'."
+            + " For accepted or approved outcomes, return 'comment_body': null."
             + " Do not wrap the JSON in markdown fences.";
     }
 
