@@ -142,6 +142,48 @@ public sealed class RunFixCommandTests
         Assert.Contains("requires an execution unit", writer.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Execute_GivenRuntimeOnlyTargetPart_ReturnsExitCodeOneWithoutWritingRepairArtifact()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreatePacketYaml(targetPart: ".intent-cli/intake"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateReviewCommentArtifactJson());
+        using var writer = new StringWriter();
+        var originalLauncherFactory = RunFixCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunFixCommand.DirectRunLauncherFactory = () => throw new InvalidOperationException("launcher should not be called");
+
+            var exitCode = RunFixCommand.Execute(CreateContext(repoRoot), ["G20"], writer);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("host runtime-only '.intent-cli/**' content", writer.ToString(), StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "fix", "G20.request.md")));
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "runs", "G20.request.json")));
+        }
+        finally
+        {
+            RunFixCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
     private sealed class FakeDirectRunLauncher(
         string providerSessionId,
         string provider,
@@ -727,7 +769,7 @@ public sealed class RunFixCommandTests
         };
     }
 
-    private static string CreatePacketYaml()
+    private static string CreatePacketYaml(string targetPart = "cli run fix command")
     {
         return """
         implementation_issue_packet:
@@ -743,7 +785,7 @@ public sealed class RunFixCommandTests
             - "worker start"
           target_repo: "submodules/intent-system"
           target_path: "."
-          target_part: "cli run fix command"
+          target_part: "__TARGET_PART__"
           dependencies:
             - "G19"
           technical_baseline:
@@ -776,7 +818,7 @@ public sealed class RunFixCommandTests
           deterministic_review_checks:
             - "run fix command remains handoff-only"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
-        """;
+        """.Replace("__TARGET_PART__", targetPart, StringComparison.Ordinal);
     }
 
     private static string CreateReviewContextMarkdown(string executionUnit = "G20")

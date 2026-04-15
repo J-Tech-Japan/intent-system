@@ -144,6 +144,14 @@ internal static class IntakeIssueCommand
 
         foreach (var unit in units.OrderBy(item => item.ExecutionUnitId, StringComparer.Ordinal))
         {
+            ChildWorkTargetGuard.EnsureTargetAllowed(
+                unit.ExecutionUnitId,
+                repoRoot,
+                baseline.TargetRepo,
+                Path.Combine(repoRoot, ".intent-cli", "__child-target-guard__", unit.ExecutionUnitId),
+                baseline.TargetPath,
+                unit.TargetPart);
+
             var parentRefs = ResolveParentRefs(repoRoot, unit, baseline);
             var packet = PacketGenerator.Generate(
                 CreateRow(unit, baseline, parentRefs),

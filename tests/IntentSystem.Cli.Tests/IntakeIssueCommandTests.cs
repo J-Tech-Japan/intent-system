@@ -204,14 +204,84 @@ public sealed class IntakeIssueCommandTests
         Assert.Contains("requires a domain", writer.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string CreateExecutionBaselineMarkdown(string namespaceSegment = "intent-cli")
+    [Fact]
+    public void Execute_GivenRuntimeOnlyTargetPart_ReturnsExitCodeOneWithoutGeneratingChildFacingArtifacts()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            CreateExecutionBaselineMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            CreateSingleExecutionArtifactMarkdown(
+                "auth",
+                "AUTH-01",
+                "intents/intent-cli/concepts/oauth2.md",
+                ".intent-cli/intake",
+                "Auth Concept"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
+        using var writer = new StringWriter();
+
+        var exitCode = IntakeIssueCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("host runtime-only '.intent-cli/**' content", writer.ToString(), StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "AUTH-01", "github-body.md")));
+    }
+
+    [Fact]
+    public void Execute_GivenRuntimeOnlyTargetRepo_ReturnsExitCodeOneWithoutGeneratingChildFacingArtifacts()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            CreateExecutionBaselineMarkdown(targetRepo: ".intent-cli"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            CreateSingleExecutionArtifactMarkdown(
+                "auth",
+                "AUTH-01",
+                "intents/intent-cli/concepts/oauth2.md",
+                "concepts",
+                "Auth Concept"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "concepts", "oauth2.md"),
+            "# Auth Concept");
+        using var writer = new StringWriter();
+
+        var exitCode = IntakeIssueCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Child target repo '.intent-cli'", writer.ToString(), StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "AUTH-01", "github-body.md")));
+    }
+
+    private static string CreateExecutionBaselineMarkdown(
+        string namespaceSegment = "intent-cli",
+        string targetRepo = "submodules/intent-system")
     {
         return $$"""
             # Post-MVP Sub-Slices
 
             | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
             |---|---|---|---|---|---|---|---|
-            | G37 | G | `intake issue <domain>` を CLI shell から使えるようにし、updated intake-origin `execution/` source-of-truth から issue-ready execution unit の issue artifact 群を deterministic に生成できるようにする | G2, G35, G36 | submodules/intent-system | . | cli intake issue command | yes |
+            | G37 | G | `intake issue <domain>` を CLI shell から使えるようにし、updated intake-origin `execution/` source-of-truth から issue-ready execution unit の issue artifact 群を deterministic に生成できるようにする | G2, G35, G36 | {{targetRepo}} | . | cli intake issue command | yes |
 
             ## G37 の current baseline
 

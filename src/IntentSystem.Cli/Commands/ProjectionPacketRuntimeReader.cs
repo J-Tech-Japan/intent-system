@@ -10,6 +10,8 @@ internal static class ProjectionPacketRuntimeReader
         string ExecutionUnit,
         string IssueTitle,
         string TargetRepo,
+        string TargetPath,
+        string TargetPart,
         IReadOnlyList<string> Dependencies,
         string ClarificationReturnPath);
 
@@ -24,6 +26,8 @@ internal static class ProjectionPacketRuntimeReader
                 packet.ImplementationIssuePacket.SourceExecutionUnit,
                 packet.ImplementationIssuePacket.IssueTitle,
                 packet.ImplementationIssuePacket.TargetRepo,
+                packet.ImplementationIssuePacket.TargetPath,
+                packet.ImplementationIssuePacket.TargetPart,
                 packet.ImplementationIssuePacket.Dependencies,
                 packet.ReviewContextPacket.ClarificationReturnPath);
         }
@@ -151,12 +155,26 @@ internal static class ProjectionPacketRuntimeReader
             throw new InvalidOperationException("Implementation issue must contain required field 'target_repo'.");
         }
 
+        var targetPath = TryGetScalar(implementationIssue, "target_path") ?? ".";
+        var targetPart = TryGetScalar(implementationIssue, "target_part") ?? issueTitle;
+
         return new RuntimePacket(
             executionUnit,
             issueTitle,
             targetRepo,
+            targetPath,
+            targetPart,
             GetOptionalList(implementationIssue, "dependencies"),
             DefaultClarificationReturnPath);
+    }
+
+    private static string? TryGetScalar(
+        IReadOnlyDictionary<string, object> values,
+        string key)
+    {
+        return values.TryGetValue(key, out var value)
+            ? value as string
+            : null;
     }
 
     private static IReadOnlyList<string> GetOptionalList(
