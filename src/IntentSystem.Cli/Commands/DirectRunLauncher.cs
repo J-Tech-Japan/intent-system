@@ -370,7 +370,9 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             command,
             arguments);
 
-        if (detachHelperFromLauncherSession && !OperatingSystem.IsWindows())
+        if (detachHelperFromLauncherSession
+            && !OperatingSystem.IsWindows()
+            && !string.Equals(entryKind, "review", StringComparison.Ordinal))
         {
             var detachedLauncherStartInfo = CreateDetachedHelperLauncherStartInfo(helperStartInfo);
             return new ResolvedProcessInvocation
