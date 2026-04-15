@@ -422,6 +422,111 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenFixingItemWithoutExistingSessionAndDeadFixWorkerSession_CapturesFailureAndAutoResumesFixLoop()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        WriteDeadFixDirectRunArtifacts(repoRoot, "pid:999999");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRunFixExecutor = RunSuperviseCommand.RunFixExecutor;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.RunFixExecutor = (_, executionUnit) =>
+            {
+                WriteLiveFixDirectRunArtifacts(repoRoot, executionUnit, "pid:4242");
+
+                return new RunFixResult
+                {
+                    Request = new RunFixRequest
+                    {
+                        ExecutionUnit = executionUnit,
+                        State = "fixing",
+                        ImplementRole = "Claude",
+                        QueueWorkerRole = "coder",
+                        QueueReviewRole = "reviewer",
+                        WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit),
+                        ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                        Branch = "issue-178-g25",
+                        LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/178",
+                        LatestLinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/180",
+                        LatestCommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1",
+                        PacketRef = ".intent-cli/issues/G25/packet.yaml",
+                        ReviewContextRef = ".intent-cli/issues/G25/review-context.md",
+                        ReviewCommentArtifactRef = ".intent-cli/reviews/G25.comment.json",
+                        ReviewRequestRef = ".intent-cli/reviews/G25.request.json",
+                        ReviewCommentBodyPath = ".intent-cli/reviews/G25.comment.md",
+                        IssueTitle = "[G25] Run Supervise Command",
+                        Goal = "Supervise retryable run interruptions.",
+                        TargetPart = "cli run supervise command",
+                        TargetRepo = "submodules/intent-system",
+                        TargetPath = ".",
+                        InScope = [],
+                        OutOfScope = [],
+                        AcceptanceCriteria = [],
+                        DeterministicReviewChecks = [],
+                        ExpectedEvidence = []
+                    },
+                    ArtifactPath = ".intent-cli/fix/G25.request.md"
+                };
+            };
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionWorkerEntry.Fix, session.WorkerEntry);
+            Assert.Equal(RunSupervisionSessionStatus.Monitoring, session.Status);
+            Assert.Equal(1, session.RetryCount);
+            Assert.Null(session.NextRetryAt);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                && exitCodeElement.GetInt32() == 1);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.result.json")));
+            Assert.Equal("pid:4242", resultArtifact.SessionId);
+            Assert.Equal("running", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("retry-attempted", runEvents[^2].Event);
+            Assert.Equal("auto-resumed", runEvents[^1].Event);
+            Assert.Contains("no longer alive", runEvents[^2].Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.RunFixExecutor = originalRunFixExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenNonRetryableAutoResumeFailure_BlocksSelectedItemAndAppendsTerminalEvents()
     {
         using var tempDirectory = new TemporaryDirectory();

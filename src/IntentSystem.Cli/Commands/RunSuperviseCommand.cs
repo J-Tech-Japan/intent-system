@@ -114,8 +114,15 @@ internal static class RunSuperviseCommand
         if (session is null)
         {
             var createdSession = CreateSession(supervisionContext, now, retryBudget);
-            PersistSession(sessionArtifactPath, createdSession);
-            return CreateResult(sessionArtifactRef, createdSession);
+            return FinalizeSessionInitialization(
+                context,
+                queueState,
+                executionUnit,
+                sessionArtifactPath,
+                sessionArtifactRef,
+                runLogPath,
+                createdSession,
+                now);
         }
 
         if (session.WorkerEntry != supervisionContext.WorkerEntry)
@@ -124,8 +131,15 @@ internal static class RunSuperviseCommand
             {
                 CreatedAt = session.CreatedAt
             };
-            PersistSession(sessionArtifactPath, realignedSession);
-            return CreateResult(sessionArtifactRef, realignedSession);
+            return FinalizeSessionInitialization(
+                context,
+                queueState,
+                executionUnit,
+                sessionArtifactPath,
+                sessionArtifactRef,
+                runLogPath,
+                realignedSession,
+                now);
         }
 
         session = session with
@@ -260,6 +274,58 @@ internal static class RunSuperviseCommand
         };
         PersistSession(sessionArtifactPath, monitoringSession);
         return CreateResult(sessionArtifactRef, monitoringSession);
+    }
+
+    private static RunSuperviseResult FinalizeSessionInitialization(
+        CliContext context,
+        QueueState queueState,
+        string executionUnit,
+        string sessionArtifactPath,
+        string sessionArtifactRef,
+        string runLogPath,
+        RunSupervisionSession session,
+        DateTimeOffset now)
+    {
+        if (session.WorkerEntry == RunSupervisionWorkerEntry.Fix
+            && TryCaptureDeadWorkerSessionFailure(
+                context,
+                executionUnit,
+                session.WorkerEntry,
+                out var deadWorkerReason))
+        {
+            if (session.RetryCount >= session.RetryBudget)
+            {
+                return ExhaustRetryBudget(
+                    context,
+                    queueState,
+                    executionUnit,
+                    sessionArtifactPath,
+                    sessionArtifactRef,
+                    runLogPath,
+                    session,
+                    now,
+                    deadWorkerReason);
+            }
+
+            var interruptedSession = session with
+            {
+                UpdatedAt = now,
+                LastInterruptionReason = deadWorkerReason
+            };
+
+            return AttemptAutoResume(
+                context,
+                queueState,
+                executionUnit,
+                sessionArtifactPath,
+                sessionArtifactRef,
+                runLogPath,
+                interruptedSession,
+                now);
+        }
+
+        PersistSession(sessionArtifactPath, session);
+        return CreateResult(sessionArtifactRef, session);
     }
 
     private static RunSuperviseResult AttemptAutoResume(
