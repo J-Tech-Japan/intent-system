@@ -92,6 +92,8 @@ internal static class RunStartCommand
 
         ChildWorkTargetGuard.EnsureTargetAllowed(
             executionUnit,
+            context.RepoRoot,
+            packet.TargetRepo,
             worktreePath,
             packet.TargetPath,
             packet.TargetPart);

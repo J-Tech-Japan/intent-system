@@ -295,6 +295,45 @@ public sealed class QueueDispatchCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenRuntimeOnlyTargetRepo_ReturnsExitCodeOneWithoutCreatingIssue()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
+            CreatePacketYaml(targetRepo: ".intent-cli"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
+            "# Goal");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        using var writer = new StringWriter();
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+
+        try
+        {
+            QueueDispatchCommand.PublisherFactory = () => new ThrowingPublisher();
+            var originalQueueState = File.ReadAllText(queueStatePath);
+
+            var exitCode = QueueDispatchCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("Child target repo '.intent-cli'", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
+            Assert.Empty(File.ReadAllText(runLogPath));
+        }
+        finally
+        {
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+        }
+    }
+
     [Theory]
     [InlineData("https://github.com/J-Tech-Japan/intent-system.git", "J-Tech-Japan/intent-system")]
     [InlineData("git@github.com:J-Tech-Japan/intent-system.git", "J-Tech-Japan/intent-system")]

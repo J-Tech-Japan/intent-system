@@ -109,6 +109,8 @@ internal static class RunFixCommand
 
         ChildWorkTargetGuard.EnsureTargetAllowed(
             executionUnit,
+            context.RepoRoot,
+            packet.ImplementationIssuePacket.TargetRepo,
             worktreePath,
             packet.ImplementationIssuePacket.TargetPath,
             packet.ImplementationIssuePacket.TargetPart);

@@ -146,6 +146,8 @@ internal static class IntakeIssueCommand
         {
             ChildWorkTargetGuard.EnsureTargetAllowed(
                 unit.ExecutionUnitId,
+                repoRoot,
+                baseline.TargetRepo,
                 Path.Combine(repoRoot, ".intent-cli", "__child-target-guard__", unit.ExecutionUnitId),
                 baseline.TargetPath,
                 unit.TargetPart);

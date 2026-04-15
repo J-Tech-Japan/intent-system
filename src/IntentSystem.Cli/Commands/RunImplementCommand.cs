@@ -101,6 +101,8 @@ internal static class RunImplementCommand
 
         ChildWorkTargetGuard.EnsureTargetAllowed(
             executionUnit,
+            context.RepoRoot,
+            packet.ImplementationIssuePacket.TargetRepo,
             worktreePath,
             packet.ImplementationIssuePacket.TargetPath,
             packet.ImplementationIssuePacket.TargetPart);

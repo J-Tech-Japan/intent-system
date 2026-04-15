@@ -6,14 +6,34 @@ internal static class ChildWorkTargetGuard
 
     public static void EnsureTargetAllowed(
         string executionUnit,
+        string hostRepoRootPath,
+        string targetRepo,
         string checkoutRootPath,
         string targetPath,
         string targetPart)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostRepoRootPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetRepo);
         ArgumentException.ThrowIfNullOrWhiteSpace(checkoutRootPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPart);
+
+        if (ContainsHostRuntimeSegment(targetRepo))
+        {
+            throw new InvalidOperationException(
+                $"Child target repo '{targetRepo}' for '{executionUnit}' points to host runtime-only '.intent-cli/**' content. Parent-side clarification is required before generating or launching child work.");
+        }
+
+        var normalizedHostRepoRoot = Path.GetFullPath(hostRepoRootPath);
+        var resolvedTargetRepo = ResolvePath(normalizedHostRepoRoot, targetRepo);
+        if (IsWithinRoot(
+                ResolvePath(normalizedHostRepoRoot, HostRuntimeSegment),
+                resolvedTargetRepo))
+        {
+            throw new InvalidOperationException(
+                $"Child target repo '{targetRepo}' for '{executionUnit}' resolves into host runtime-only '.intent-cli/**' content. Parent-side clarification is required before generating or launching child work.");
+        }
 
         if (ContainsHostRuntimeSegment(targetPath))
         {

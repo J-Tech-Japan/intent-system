@@ -108,6 +108,8 @@ internal static class QueueDispatchCommand
 
         ChildWorkTargetGuard.EnsureTargetAllowed(
             executionUnit,
+            context.RepoRoot,
+            packet.TargetRepo,
             RunStartCommand.ResolveWorktreePath(context, executionUnit),
             packet.TargetPath,
             packet.TargetPart);
