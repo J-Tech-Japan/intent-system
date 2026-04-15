@@ -288,6 +288,16 @@ internal static class DirectRunCommandSupport
         }
 
         var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, providerSessionId, launchedAt);
+        if (DirectRunReviewOutcomeSupport.TryResolveExplicitReviewOutcome(currentProviderEvents, out _)
+            || DirectRunReviewOutcomeSupport.TryReadReviewOutcomeFromCapturedMessagePath(
+                capturedMessagePath,
+                out _,
+                out _,
+                out _))
+        {
+            return true;
+        }
+
         if (!TryResolveBackendExitCode(currentProviderEvents, out _))
         {
             return false;
@@ -481,7 +491,7 @@ internal static class DirectRunCommandSupport
     {
         return provider.Trim().ToLowerInvariant() switch
         {
-            "codex" when entryKind == DirectRunEntryKind.Review => ["exec", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+            "codex" when entryKind == DirectRunEntryKind.Review => ["exec", "--json", "--model", "{model}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
             "codex" => ["exec", "--model", "{model}", "{prompt}"],
             "claude" => ["--print", "--model", "{model}", "--output-format", "json", "{prompt}"],
             _ => ["{prompt}"]

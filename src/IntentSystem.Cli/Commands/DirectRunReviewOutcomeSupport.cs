@@ -166,9 +166,8 @@ internal static class DirectRunReviewOutcomeSupport
         ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
 
         if (TryResolveExplicitReviewOutcome(currentProviderEvents, out _)
-            || !File.Exists(capturedMessagePath)
-            || !TryParseCapturedReviewOutcomePayload(
-                File.ReadAllText(capturedMessagePath),
+            || !TryReadReviewOutcomeFromCapturedMessagePath(
+                capturedMessagePath,
                 out var payload,
                 out var reviewOutcome,
                 out var reviewCommentBodyPath)
@@ -187,6 +186,29 @@ internal static class DirectRunReviewOutcomeSupport
             Kind = "provider-event",
             Payload = payload
         };
+    }
+
+    public static bool TryReadReviewOutcomeFromCapturedMessagePath(
+        string capturedMessagePath,
+        out JsonElement payload,
+        out string reviewOutcome,
+        out string? reviewCommentBodyPath)
+    {
+        payload = default;
+        reviewOutcome = string.Empty;
+        reviewCommentBodyPath = null;
+
+        if (!File.Exists(capturedMessagePath)
+            || !TryParseCapturedReviewOutcomePayload(
+                File.ReadAllText(capturedMessagePath),
+                out payload,
+                out reviewOutcome,
+                out reviewCommentBodyPath))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static bool HasCanonicalReviewOutcomeEvent(
@@ -246,16 +268,9 @@ internal static class DirectRunReviewOutcomeSupport
 
         using (document)
         {
-            var source = document.RootElement;
-            if (source.ValueKind != JsonValueKind.Object)
+            if (!TryResolveReviewPayloadSource(document.RootElement, out var source))
             {
                 return false;
-            }
-
-            if (source.TryGetProperty("review_result", out var reviewResult)
-                && reviewResult.ValueKind == JsonValueKind.Object)
-            {
-                source = reviewResult;
             }
 
             if (!TryResolveReviewOutcomeFromPayload(source, out reviewOutcome))
@@ -317,19 +332,69 @@ internal static class DirectRunReviewOutcomeSupport
         return false;
     }
 
-    private static bool TryResolveReviewOutcomeFromPayload(JsonElement payload, out string reviewOutcome)
+    private static bool TryResolveReviewPayloadSource(JsonElement payload, out JsonElement source)
     {
-        reviewOutcome = string.Empty;
+        source = default;
 
         if (payload.ValueKind != JsonValueKind.Object)
         {
             return false;
         }
 
-        if (!TryReadString(payload, "disposition", out var disposition)
-            && !TryReadString(payload, "status", out disposition)
-            && !TryReadString(payload, "run_status", out disposition)
-            && !TryResolveFallbackReviewDisposition(payload, out disposition))
+        source = payload;
+        if (payload.TryGetProperty("review_result", out var reviewResult)
+            && reviewResult.ValueKind == JsonValueKind.Object)
+        {
+            source = reviewResult;
+            return true;
+        }
+
+        if (payload.TryGetProperty("type", out var typeElement)
+            && typeElement.ValueKind == JsonValueKind.String
+            && string.Equals(typeElement.GetString(), "item.completed", StringComparison.Ordinal)
+            && payload.TryGetProperty("item", out var itemElement)
+            && itemElement.ValueKind == JsonValueKind.Object
+            && TryReadString(itemElement, "text", out var itemText))
+        {
+            try
+            {
+                using var itemDocument = JsonDocument.Parse(StripMarkdownCodeFence(itemText));
+                if (itemDocument.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    return false;
+                }
+
+                source = itemDocument.RootElement.Clone();
+                if (source.TryGetProperty("review_result", out var nestedReviewResult)
+                    && nestedReviewResult.ValueKind == JsonValueKind.Object)
+                {
+                    source = nestedReviewResult;
+                }
+
+                return true;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryResolveReviewOutcomeFromPayload(JsonElement payload, out string reviewOutcome)
+    {
+        reviewOutcome = string.Empty;
+
+        if (!TryResolveReviewPayloadSource(payload, out var source))
+        {
+            return false;
+        }
+
+        if (!TryReadString(source, "disposition", out var disposition)
+            && !TryReadString(source, "status", out disposition)
+            && !TryReadString(source, "run_status", out disposition)
+            && !TryResolveFallbackReviewDisposition(source, out disposition))
         {
             return false;
         }
@@ -367,24 +432,24 @@ internal static class DirectRunReviewOutcomeSupport
         bodyOrPath = string.Empty;
         isPath = false;
 
-        if (payload.ValueKind != JsonValueKind.Object)
+        if (!TryResolveReviewPayloadSource(payload, out var source))
         {
             return false;
         }
 
-        if (TryReadString(payload, "body_path", out var bodyPath))
+        if (TryReadString(source, "body_path", out var bodyPath))
         {
             bodyOrPath = bodyPath;
             isPath = true;
             return true;
         }
 
-        if (TryReadString(payload, "comment_body", out var commentBody)
-            || TryReadString(payload, "body", out commentBody)
-            || TryReadString(payload, "markdown", out commentBody)
-            || TryReadString(payload, "detail", out commentBody)
-            || TryReadString(payload, "message", out commentBody)
-            || TryReadString(payload, "summary", out commentBody))
+        if (TryReadString(source, "comment_body", out var commentBody)
+            || TryReadString(source, "body", out commentBody)
+            || TryReadString(source, "markdown", out commentBody)
+            || TryReadString(source, "detail", out commentBody)
+            || TryReadString(source, "message", out commentBody)
+            || TryReadString(source, "summary", out commentBody))
         {
             bodyOrPath = commentBody;
             return true;
@@ -397,31 +462,31 @@ internal static class DirectRunReviewOutcomeSupport
     {
         runStatus = string.Empty;
 
-        if (payload.ValueKind != JsonValueKind.Object)
+        if (!TryResolveReviewPayloadSource(payload, out var source))
         {
             return false;
         }
 
-        if (TryReadString(payload, "run_status", out var payloadRunStatus))
+        if (TryReadString(source, "run_status", out var payloadRunStatus))
         {
             runStatus = NormalizeRunStatus(payloadRunStatus);
             return true;
         }
 
-        if (TryReadString(payload, "status", out var status))
+        if (TryReadString(source, "status", out var status))
         {
             runStatus = NormalizeRunStatus(status);
             return true;
         }
 
-        if (TryReadString(payload, "disposition", out var disposition))
+        if (TryReadString(source, "disposition", out var disposition))
         {
             runStatus = NormalizeRunStatus(disposition);
             return true;
         }
 
-        if (TryReadInt32(payload, "exit_code", out var exitCode)
-            || TryReadInt32(payload, "exitCode", out exitCode))
+        if (TryReadInt32(source, "exit_code", out var exitCode)
+            || TryReadInt32(source, "exitCode", out exitCode))
         {
             runStatus = exitCode == 0 ? "succeeded" : "failed";
             return true;
