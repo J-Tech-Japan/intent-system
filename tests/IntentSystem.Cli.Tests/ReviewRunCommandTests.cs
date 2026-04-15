@@ -666,6 +666,87 @@ public sealed class ReviewRunCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRealCodexStyleReviewTimeout_ClassifiesMissingBoundaryAsFailed()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var codexPath = tempDirectory.CreateExecutableFile(
+            Path.Combine("bin", "codex-experimental"),
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
+            sleep 2
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "config.toml"),
+            $$"""
+            default_domain = "intent-system"
+            artifact_root = ".intent-cli"
+            worktree_root = ".intent-cli/worktrees"
+
+            [direct_backend]
+            artifact_root = ".intent-cli/runtime-runs"
+
+            [direct_backend.review]
+            provider = "Codex"
+            model = "gpt-5.4-mini"
+            transport = "responses"
+            command = "{{codexPath.Replace("\\", "\\\\", StringComparison.Ordinal)}}"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "packet.yaml"),
+            "execution_unit: G9" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+
+        var originalWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS");
+        try
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", "100");
+
+            var process = StartCliProcess(repoRoot, "review run G9");
+            Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+            Assert.Equal(0, process.ExitCode);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("failed", resultArtifact.RunStatus);
+            Assert.Null(resultArtifact.ReviewOutcome);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                && exitCodeElement.GetInt32() == 1);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", originalWaitWindow);
+        }
+    }
+
+    [Fact]
     public void Execute_GivenCodexReviewCommandWithoutModelOverride_UsesRunnableCodexDefaultModel()
     {
         using var tempDirectory = new TemporaryDirectory();

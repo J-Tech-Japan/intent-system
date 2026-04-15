@@ -1,6 +1,7 @@
 using IntentSystem.Review;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace IntentSystem.Cli.Commands;
@@ -29,7 +30,8 @@ internal static class DirectRunCommandSupport
 {
     private const string LifecycleEventActor = "intent-cli";
     private const string LifecycleEventName = "provider-lifecycle";
-    private static readonly TimeSpan ReviewCompletionWaitWindow = TimeSpan.FromSeconds(30);
+    private const string ReviewCompletionWaitWindowEnvVar = "INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS";
+    private static readonly TimeSpan DefaultReviewCompletionWaitWindow = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ReviewCompletionPollInterval = TimeSpan.FromMilliseconds(250);
 
     public static DirectRunLaunchResult CreateAndLaunch(
@@ -99,13 +101,19 @@ internal static class DirectRunCommandSupport
         Directory.CreateDirectory(directoryPath);
         File.WriteAllText(absoluteArtifactPath, DirectRunRequestArtifactJson.Serialize(artifact));
 
-        if (ShouldAwaitRealReviewCompletion(entryKind, launcher, policy.Command))
-        {
-            WaitForReviewCompletionBoundary(
+        if (ShouldAwaitRealReviewCompletion(entryKind, launcher, policy.Command)
+            && !WaitForReviewCompletionBoundary(
                 absoluteProviderEventLogPath,
                 absoluteCapturedMessagePath,
                 launchResult.ProviderSessionId,
-                launchedAt);
+                launchedAt))
+        {
+            ClassifyMissingReviewCompletionBoundary(
+                absoluteProviderEventLogPath,
+                executionUnit,
+                entryKindValue,
+                launchResult.Provider,
+                launchResult.ProviderSessionId);
         }
 
         var synthesis = SynthesizeAndPersistResult(
@@ -135,13 +143,13 @@ internal static class DirectRunCommandSupport
             && IsCodexLikeCommand(command);
     }
 
-    private static void WaitForReviewCompletionBoundary(
+    private static bool WaitForReviewCompletionBoundary(
         string providerEventLogPath,
         string capturedMessagePath,
         string providerSessionId,
         DateTimeOffset launchedAt)
     {
-        var deadline = DateTimeOffset.UtcNow + ReviewCompletionWaitWindow;
+        var deadline = DateTimeOffset.UtcNow + ResolveReviewCompletionWaitWindow();
         while (DateTimeOffset.UtcNow < deadline)
         {
             if (HasTerminalReviewBoundary(
@@ -150,11 +158,108 @@ internal static class DirectRunCommandSupport
                     providerSessionId,
                     launchedAt))
             {
-                return;
+                return true;
             }
 
             Thread.Sleep(ReviewCompletionPollInterval);
         }
+
+        return false;
+    }
+
+    private static TimeSpan ResolveReviewCompletionWaitWindow()
+    {
+        var raw = Environment.GetEnvironmentVariable(ReviewCompletionWaitWindowEnvVar);
+        if (!string.IsNullOrWhiteSpace(raw)
+            && int.TryParse(
+                raw,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var milliseconds)
+            && milliseconds > 0)
+        {
+            return TimeSpan.FromMilliseconds(milliseconds);
+        }
+
+        return DefaultReviewCompletionWaitWindow;
+    }
+
+    private static void ClassifyMissingReviewCompletionBoundary(
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId)
+    {
+        TryTerminateProviderSession(providerSessionId);
+
+        var timestamp = DateTimeOffset.UtcNow;
+        var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+        writer.Append(new DirectRunProviderEvent
+        {
+            Timestamp = timestamp.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
+            SessionId = providerSessionId,
+            Kind = "provider-event",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                type = "contract-gap",
+                run_status = "failed",
+                reason = "review-completion-boundary-timeout"
+            })
+        });
+        writer.Append(DirectRunProviderEventFactory.CreateBackendExitEvent(
+            timestamp,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            1));
+    }
+
+    private static void TryTerminateProviderSession(string providerSessionId)
+    {
+        if (!TryParseSessionProcessId(providerSessionId, out var processId))
+        {
+            return;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (process.HasExited)
+            {
+                return;
+            }
+
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit((int)TimeSpan.FromSeconds(2).TotalMilliseconds);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or InvalidOperationException
+            or NotSupportedException)
+        {
+        }
+    }
+
+    private static bool TryParseSessionProcessId(string providerSessionId, out int processId)
+    {
+        processId = default;
+
+        const string prefix = "pid:";
+        if (!providerSessionId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(
+            providerSessionId[prefix.Length..],
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out processId);
     }
 
     private static bool HasTerminalReviewBoundary(
