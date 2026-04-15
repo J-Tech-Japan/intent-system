@@ -79,6 +79,28 @@ public sealed class ReviewRunCommandTests
             Assert.Equal("grpc", directRunArtifact.Transport);
             Assert.Equal("pid:9999", directRunArtifact.ProviderSessionId);
 
+            var reviewOutputSchemaPath = Path.Combine(
+                repoRoot,
+                ".intent-cli",
+                "runtime-runs",
+                $"G9.{DirectRunCommandSupport.CreateCapturedMessageSuffix(DateTimeOffset.Parse("2026-04-09T10:35:00Z"))}.review-output-schema.json");
+            Assert.True(File.Exists(reviewOutputSchemaPath));
+            using var reviewOutputSchemaDocument = System.Text.Json.JsonDocument.Parse(File.ReadAllText(reviewOutputSchemaPath));
+            var reviewOutputSchema = reviewOutputSchemaDocument.RootElement;
+            Assert.Equal("object", reviewOutputSchema.GetProperty("type").GetString());
+            var required = reviewOutputSchema.GetProperty("required").EnumerateArray().Select(element => element.GetString()).ToArray();
+            Assert.Contains("disposition", required);
+            Assert.Contains("comment_body", required);
+            var commentBodyTypes = reviewOutputSchema
+                .GetProperty("properties")
+                .GetProperty("comment_body")
+                .GetProperty("type")
+                .EnumerateArray()
+                .Select(element => element.GetString())
+                .ToArray();
+            Assert.Contains("string", commentBodyTypes);
+            Assert.Contains("null", commentBodyTypes);
+
             var resultArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json");
             Assert.True(File.Exists(resultArtifactPath));
             var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
@@ -465,9 +487,22 @@ public sealed class ReviewRunCommandTests
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             CreateRunLog());
 
-        var process = StartCliProcess(repoRoot, "review run G9");
-        Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
-        Assert.Equal(0, process.ExitCode);
+        var originalWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS");
+        var originalSessionMaxWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS");
+        try
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", "100");
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", "5000");
+
+            var process = StartCliProcess(repoRoot, "review run G9");
+            Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+            Assert.Equal(0, process.ExitCode);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", originalWaitWindow);
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", originalSessionMaxWaitWindow);
+        }
 
         var providerEventLogPath = Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl");
         TemporaryDirectory.WaitForCondition(
@@ -535,9 +570,22 @@ public sealed class ReviewRunCommandTests
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             CreateRunLog());
 
-        var process = StartCliProcess(repoRoot, "review run G9");
-        Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
-        Assert.Equal(0, process.ExitCode);
+        var originalWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS");
+        var originalSessionMaxWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS");
+        try
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", "100");
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", "5000");
+
+            var process = StartCliProcess(repoRoot, "review run G9");
+            Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+            Assert.Equal(0, process.ExitCode);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", originalWaitWindow);
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", originalSessionMaxWaitWindow);
+        }
 
         var requestArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.request.json");
         TemporaryDirectory.WaitForCondition(
@@ -584,6 +632,257 @@ public sealed class ReviewRunCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRealCodexStyleReviewCommand_DoesNotForceTimeoutWhileCurrentSessionIsStillRunning()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var codexPath = tempDirectory.CreateExecutableFile(
+            Path.Combine("bin", "codex-experimental"),
+            """
+            #!/bin/sh
+            output_last_message=""
+            while [ $# -gt 0 ]; do
+              if [ "$1" = "--output-last-message" ]; then
+                output_last_message="$2"
+                shift 2
+                continue
+              fi
+              shift
+            done
+            printf '%s\n' '{"type":"ready"}'
+            sleep 2
+            if [ -n "$output_last_message" ]; then
+              mkdir -p "$(dirname "$output_last_message")"
+              printf '%s\n' '{"disposition":"accepted","comment_body":null}' > "$output_last_message"
+            fi
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "config.toml"),
+            $$"""
+            default_domain = "intent-system"
+            artifact_root = ".intent-cli"
+            worktree_root = ".intent-cli/worktrees"
+
+            [direct_backend]
+            artifact_root = ".intent-cli/runtime-runs"
+
+            [direct_backend.review]
+            provider = "Codex"
+            model = "gpt-5.4-mini"
+            transport = "responses"
+            command = "{{codexPath.Replace("\\", "\\\\", StringComparison.Ordinal)}}"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "packet.yaml"),
+            "execution_unit: G9" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+
+        var originalWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS");
+        var originalSessionMaxWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS");
+        try
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", "100");
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", "5000");
+
+            var process = StartCliProcess(repoRoot, "review run G9");
+            Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+            Assert.Equal(0, process.ExitCode);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("accepted", resultArtifact.ReviewOutcome);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
+                && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
+            Assert.DoesNotContain(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", originalWaitWindow);
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS", originalSessionMaxWaitWindow);
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenRealCodexJsonOutcomeBeforeBackendExit_PersistsAcceptedOutcome()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var codexPath = tempDirectory.CreateExecutableFile(
+            Path.Combine("bin", "codex-experimental"),
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"thread.started","thread_id":"thread-1"}'
+            printf '%s\n' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"disposition\":\"accepted\"}"}}'
+            sleep 2
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "config.toml"),
+            $$"""
+            default_domain = "intent-system"
+            artifact_root = ".intent-cli"
+            worktree_root = ".intent-cli/worktrees"
+
+            [direct_backend]
+            artifact_root = ".intent-cli/runtime-runs"
+
+            [direct_backend.review]
+            provider = "Codex"
+            model = "gpt-5.4-mini"
+            transport = "responses"
+            command = "{{codexPath.Replace("\\", "\\\\", StringComparison.Ordinal)}}"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "packet.yaml"),
+            "execution_unit: G9" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+
+        var originalWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS");
+        try
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", "300");
+
+            var process = StartCliProcess(repoRoot, "review run G9");
+            Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+            Assert.Equal(0, process.ExitCode);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("accepted", resultArtifact.ReviewOutcome);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "item.completed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", originalWaitWindow);
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenRealCodexStyleReviewCompletesWithoutOutcome_ClassifiesMissingBoundaryAsFailed()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var codexPath = tempDirectory.CreateExecutableFile(
+            Path.Combine("bin", "codex-experimental"),
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
+            sleep 2
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "config.toml"),
+            $$"""
+            default_domain = "intent-system"
+            artifact_root = ".intent-cli"
+            worktree_root = ".intent-cli/worktrees"
+
+            [direct_backend]
+            artifact_root = ".intent-cli/runtime-runs"
+
+            [direct_backend.review]
+            provider = "Codex"
+            model = "gpt-5.4-mini"
+            transport = "responses"
+            command = "{{codexPath.Replace("\\", "\\\\", StringComparison.Ordinal)}}"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "packet.yaml"),
+            "execution_unit: G9" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+
+        var originalWaitWindow = Environment.GetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS");
+        try
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", "100");
+
+            var process = StartCliProcess(repoRoot, "review run G9");
+            Assert.True(process.WaitForExit(120000), "CLI process did not exit within the timeout.");
+            Assert.Equal(0, process.ExitCode);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("failed", resultArtifact.RunStatus);
+            Assert.Null(resultArtifact.ReviewOutcome);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                && exitCodeElement.GetInt32() == 1);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS", originalWaitWindow);
+        }
+    }
+
+    [Fact]
     public void Execute_GivenCodexReviewCommandWithoutModelOverride_UsesRunnableCodexDefaultModel()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -613,7 +912,7 @@ public sealed class ReviewRunCommandTests
                 CliRuntimeContracts.DefaultCodexDirectRunModel,
                 "stdio",
                 "/opt/homebrew/bin/codex",
-                ["exec", "--model", "{model}", "{prompt}"],
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
                 "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.");
 
             var context = CreateContext(repoRoot) with
@@ -647,6 +946,399 @@ public sealed class ReviewRunCommandTests
                 Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.request.json")));
             Assert.Equal(CliRuntimeContracts.DefaultCodexDirectRunModel, directRunArtifact.Model);
             Assert.Equal("Codex", directRunArtifact.Provider);
+        }
+        finally
+        {
+            ReviewRunCommand.TimestampFactory = originalTimestampFactory;
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenCapturedAcceptedLastMessage_PersistsReviewOutcome()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ReviewRunCommand.TimestampFactory;
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            ReviewRunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:35:00Z");
+            ReviewRunCommand.DirectRunLauncherFactory = () => new CapturedLastMessageFakeDirectRunLauncher(
+                "pid:9999",
+                "Codex",
+                CliRuntimeContracts.DefaultCodexDirectRunModel,
+                "stdio",
+                "/opt/homebrew/bin/codex",
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
+                """{"disposition":"accepted","comment_body":null}""");
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Claude",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        ArtifactRoot = ".intent-cli/runtime-runs",
+                        Review = new DirectRunEntryConfig
+                        {
+                            Command = "/opt/homebrew/bin/codex"
+                        }
+                    }
+                }
+            };
+
+            var exitCode = ReviewRunCommand.Execute(context, ["G9"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run status: succeeded", writer.ToString(), StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("accepted", resultArtifact.ReviewOutcome);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:9999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
+                && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            ReviewRunCommand.TimestampFactory = originalTimestampFactory;
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenCapturedCommentLastMessage_PersistsDeterministicCommentBodyRef()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ReviewRunCommand.TimestampFactory;
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            ReviewRunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:35:00Z");
+            ReviewRunCommand.DirectRunLauncherFactory = () => new CapturedLastMessageFakeDirectRunLauncher(
+                "pid:9999",
+                "Codex",
+                CliRuntimeContracts.DefaultCodexDirectRunModel,
+                "stdio",
+                "/opt/homebrew/bin/codex",
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
+                """{"disposition":"fix-requested","comment_body":"Please cover the deterministic submit path."}""");
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Claude",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        ArtifactRoot = ".intent-cli/runtime-runs",
+                        Review = new DirectRunEntryConfig
+                        {
+                            Command = "/opt/homebrew/bin/codex"
+                        }
+                    }
+                }
+            };
+
+            var exitCode = ReviewRunCommand.Execute(context, ["G9"], writer);
+
+            Assert.Equal(0, exitCode);
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("fix-requested", resultArtifact.ReviewOutcome);
+            Assert.Equal(".intent-cli/reviews/G9.comment.md", resultArtifact.ReviewCommentBodyPath);
+            Assert.Equal(
+                "Please cover the deterministic submit path.",
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.comment.md")));
+        }
+        finally
+        {
+            ReviewRunCommand.TimestampFactory = originalTimestampFactory;
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenCapturedDeterministicContractGapLastMessage_PersistsCommentOutcome()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ReviewRunCommand.TimestampFactory;
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            ReviewRunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:35:00Z");
+            ReviewRunCommand.DirectRunLauncherFactory = () => new CapturedLastMessageFakeDirectRunLauncher(
+                "pid:9999",
+                "Codex",
+                CliRuntimeContracts.DefaultCodexDirectRunModel,
+                "stdio",
+                "/opt/homebrew/bin/codex",
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
+                """{"stop_reason":"deterministic-contract-gap","detail":"Please cover the deterministic submit path."}""");
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Claude",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        ArtifactRoot = ".intent-cli/runtime-runs",
+                        Review = new DirectRunEntryConfig
+                        {
+                            Command = "/opt/homebrew/bin/codex"
+                        }
+                    }
+                }
+            };
+
+            var exitCode = ReviewRunCommand.Execute(context, ["G9"], writer);
+
+            Assert.Equal(0, exitCode);
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("fix-requested", resultArtifact.ReviewOutcome);
+            Assert.Equal(".intent-cli/reviews/G9.comment.md", resultArtifact.ReviewCommentBodyPath);
+            Assert.Equal(
+                "Please cover the deterministic submit path.",
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.comment.md")));
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:9999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
+                && string.Equals(dispositionElement.GetString(), "fix-requested", StringComparison.Ordinal));
+        }
+        finally
+        {
+            ReviewRunCommand.TimestampFactory = originalTimestampFactory;
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenRawDeterministicContractGapProviderEvent_PersistsCommentOutcomeDespiteFailedBackendExit()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ReviewRunCommand.TimestampFactory;
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            ReviewRunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:35:00Z");
+            ReviewRunCommand.DirectRunLauncherFactory = () => new RawReviewOutcomeFakeDirectRunLauncher(
+                "pid:9999",
+                "Codex",
+                CliRuntimeContracts.DefaultCodexDirectRunModel,
+                "stdio",
+                "/opt/homebrew/bin/codex",
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
+                """{"stop_reason":"deterministic-contract-gap","detail":"Please cover the deterministic submit path."}""",
+                137);
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Claude",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        ArtifactRoot = ".intent-cli/runtime-runs",
+                        Review = new DirectRunEntryConfig
+                        {
+                            Command = "/opt/homebrew/bin/codex"
+                        }
+                    }
+                }
+            };
+
+            var exitCode = ReviewRunCommand.Execute(context, ["G9"], writer);
+
+            Assert.Equal(0, exitCode);
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("fix-requested", resultArtifact.ReviewOutcome);
+            Assert.Equal(".intent-cli/reviews/G9.comment.md", resultArtifact.ReviewCommentBodyPath);
+            Assert.Equal(
+                "Please cover the deterministic submit path.",
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.comment.md")));
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:9999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
+                && string.Equals(dispositionElement.GetString(), "fix-requested", StringComparison.Ordinal));
+        }
+        finally
+        {
+            ReviewRunCommand.TimestampFactory = originalTimestampFactory;
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenRawNoActionableItemProviderEvent_PersistsAcceptedOutcomeDespiteFailedBackendExit()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = ReviewRunCommand.TimestampFactory;
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            ReviewRunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:35:00Z");
+            ReviewRunCommand.DirectRunLauncherFactory = () => new RawReviewOutcomeFakeDirectRunLauncher(
+                "pid:9999",
+                "Codex",
+                CliRuntimeContracts.DefaultCodexDirectRunModel,
+                "stdio",
+                "/opt/homebrew/bin/codex",
+                ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
+                "stdio transport launched via '/opt/homebrew/bin/codex' in '/repo' for provider 'Codex'.",
+                """{"stop_reason":"no-actionable-item"}""",
+                137);
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Claude",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        ArtifactRoot = ".intent-cli/runtime-runs",
+                        Review = new DirectRunEntryConfig
+                        {
+                            Command = "/opt/homebrew/bin/codex"
+                        }
+                    }
+                }
+            };
+
+            var exitCode = ReviewRunCommand.Execute(context, ["G9"], writer);
+
+            Assert.Equal(0, exitCode);
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.result.json")));
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+            Assert.Equal("accepted", resultArtifact.ReviewOutcome);
+            Assert.Null(resultArtifact.ReviewCommentBodyPath);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runtime-runs", "G9.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:9999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("disposition", out var dispositionElement)
+                && string.Equals(dispositionElement.GetString(), "accepted", StringComparison.Ordinal));
         }
         finally
         {
@@ -1201,6 +1893,201 @@ public sealed class ReviewRunCommandTests
                                              {
                                                  type = "backend-exit",
                                                  exit_code = 0
+                                             })
+                                         })
+                                     }) + Environment.NewLine;
+            File.WriteAllText(absoluteProviderEventLogPath, providerEvents);
+
+            return new DirectRunLaunchResult
+            {
+                RequestArtifactPath = ".intent-cli/runtime-runs/G9.request.json",
+                ProviderEventLogPath = ".intent-cli/runtime-runs/G9.provider.jsonl",
+                Provider = providerArg,
+                Model = modelArg,
+                Transport = transportArg,
+                ProviderSessionId = providerSessionId,
+                TransportSummary = transportSummary
+            };
+        }
+    }
+
+    private sealed class CapturedLastMessageFakeDirectRunLauncher(
+        string providerSessionId,
+        string provider,
+        string model,
+        string transport,
+        string command,
+        IReadOnlyList<string> argsTemplate,
+        string transportSummary,
+        string capturedLastMessage) : IDirectRunLauncher
+    {
+        public DirectRunLaunchResult Launch(
+            string executionUnit,
+            string entryKind,
+            string requestArtifactPath,
+            string providerEventLogPath,
+            string providerArg,
+            string modelArg,
+            string transportArg,
+            string commandArg,
+            IReadOnlyList<string> argsTemplateArg,
+            DateTimeOffset launchedAt,
+            string workingDirectory,
+            string absoluteRequestArtifactPath,
+            string absoluteProviderEventLogPath)
+        {
+            Assert.Equal("G9", executionUnit);
+            Assert.Equal("review", entryKind);
+            Assert.Equal(".intent-cli/runtime-runs/G9.request.json", requestArtifactPath);
+            Assert.Equal(".intent-cli/runtime-runs/G9.provider.jsonl", providerEventLogPath);
+            Assert.Equal(provider, providerArg);
+            Assert.Equal(model, modelArg);
+            Assert.Equal(transport, transportArg);
+            Assert.Equal(command, commandArg);
+            Assert.Equal(argsTemplate, argsTemplateArg);
+
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(absoluteProviderEventLogPath)
+                ?? throw new InvalidOperationException("Provider event log path did not contain a directory."));
+            var providerEvents = string.Join(
+                                     Environment.NewLine,
+                                     new[]
+                                     {
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "session-metadata",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 model = modelArg,
+                                                 transport = transportArg,
+                                                 command
+                                             })
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(1).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "provider-event",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 type = "backend-exit",
+                                                 exit_code = 0
+                                             })
+                                         })
+                                     }) + Environment.NewLine;
+            File.WriteAllText(absoluteProviderEventLogPath, providerEvents);
+
+            var capturedMessagePath = Path.Combine(
+                workingDirectory,
+                ".intent-cli",
+                "runtime-runs",
+                $"{executionUnit}.{DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt)}.last-message.json");
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(capturedMessagePath)
+                ?? throw new InvalidOperationException("Captured last message path did not contain a directory."));
+            File.WriteAllText(capturedMessagePath, capturedLastMessage);
+
+            return new DirectRunLaunchResult
+            {
+                RequestArtifactPath = ".intent-cli/runtime-runs/G9.request.json",
+                ProviderEventLogPath = ".intent-cli/runtime-runs/G9.provider.jsonl",
+                Provider = providerArg,
+                Model = modelArg,
+                Transport = transportArg,
+                ProviderSessionId = providerSessionId,
+                TransportSummary = transportSummary
+            };
+        }
+    }
+
+    private sealed class RawReviewOutcomeFakeDirectRunLauncher(
+        string providerSessionId,
+        string provider,
+        string model,
+        string transport,
+        string command,
+        IReadOnlyList<string> argsTemplate,
+        string transportSummary,
+        string providerPayload,
+        int exitCode) : IDirectRunLauncher
+    {
+        public DirectRunLaunchResult Launch(
+            string executionUnit,
+            string entryKind,
+            string requestArtifactPath,
+            string providerEventLogPath,
+            string providerArg,
+            string modelArg,
+            string transportArg,
+            string commandArg,
+            IReadOnlyList<string> argsTemplateArg,
+            DateTimeOffset launchedAt,
+            string workingDirectory,
+            string absoluteRequestArtifactPath,
+            string absoluteProviderEventLogPath)
+        {
+            Assert.Equal("G9", executionUnit);
+            Assert.Equal("review", entryKind);
+            Assert.Equal(".intent-cli/runtime-runs/G9.request.json", requestArtifactPath);
+            Assert.Equal(".intent-cli/runtime-runs/G9.provider.jsonl", providerEventLogPath);
+            Assert.Equal(provider, providerArg);
+            Assert.Equal(model, modelArg);
+            Assert.Equal(transport, transportArg);
+            Assert.Equal(command, commandArg);
+            Assert.Equal(argsTemplate, argsTemplateArg);
+
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(absoluteProviderEventLogPath)
+                ?? throw new InvalidOperationException("Provider event log path did not contain a directory."));
+            var providerEvents = string.Join(
+                                     Environment.NewLine,
+                                     new[]
+                                     {
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "session-metadata",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 model = modelArg,
+                                                 transport = transportArg,
+                                                 command
+                                             })
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(1).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "provider-event",
+                                             Payload = DirectRunProviderEventFactory.ParsePayload(providerPayload)
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(2).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = providerSessionId,
+                                             Kind = "provider-event",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 type = "backend-exit",
+                                                 exit_code = exitCode
                                              })
                                          })
                                      }) + Environment.NewLine;

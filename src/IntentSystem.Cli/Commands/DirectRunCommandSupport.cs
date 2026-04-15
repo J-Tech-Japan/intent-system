@@ -1,6 +1,8 @@
 using IntentSystem.Review;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
+using System.Diagnostics;
+using System.Text.Json;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -28,6 +30,11 @@ internal static class DirectRunCommandSupport
 {
     private const string LifecycleEventActor = "intent-cli";
     private const string LifecycleEventName = "provider-lifecycle";
+    private const string ReviewCompletionWaitWindowEnvVar = "INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS";
+    private const string ReviewSessionMaxWaitWindowEnvVar = "INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS";
+    private static readonly TimeSpan DefaultReviewCompletionWaitWindow = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultReviewSessionMaxWaitWindow = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ReviewCompletionPollInterval = TimeSpan.FromMilliseconds(250);
 
     public static DirectRunLaunchResult CreateAndLaunch(
         CliContext context,
@@ -48,12 +55,28 @@ internal static class DirectRunCommandSupport
         var entryKindValue = FormatEntryKind(entryKind);
         var relativeArtifactPath = ResolveArtifactPath(context, executionUnit);
         var relativeProviderEventLogPath = ResolveProviderEventLogPath(context, executionUnit);
+        var relativeCapturedMessagePath = ResolveCapturedMessagePath(context, executionUnit, launchedAt);
+        var relativeReviewOutputSchemaPath = ResolveReviewOutputSchemaPath(context, executionUnit, launchedAt);
         var absoluteArtifactPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeArtifactPath.Replace('/', Path.DirectorySeparatorChar)));
         var absoluteProviderEventLogPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, relativeProviderEventLogPath.Replace('/', Path.DirectorySeparatorChar)));
+        var absoluteCapturedMessagePath = Path.GetFullPath(
+            Path.Combine(context.RepoRoot, relativeCapturedMessagePath.Replace('/', Path.DirectorySeparatorChar)));
+        var absoluteReviewOutputSchemaPath = Path.GetFullPath(
+            Path.Combine(context.RepoRoot, relativeReviewOutputSchemaPath.Replace('/', Path.DirectorySeparatorChar)));
         var absoluteUpstreamRequestPath = Path.GetFullPath(
             Path.Combine(context.RepoRoot, upstreamRequestRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (entryKind == DirectRunEntryKind.Review && File.Exists(absoluteCapturedMessagePath))
+        {
+            File.Delete(absoluteCapturedMessagePath);
+        }
+
+        if (entryKind == DirectRunEntryKind.Review)
+        {
+            PersistReviewOutputSchema(absoluteReviewOutputSchemaPath);
+        }
+
         var launchResult = launcher.Launch(
             executionUnit,
             entryKindValue,
@@ -88,6 +111,21 @@ internal static class DirectRunCommandSupport
         Directory.CreateDirectory(directoryPath);
         File.WriteAllText(absoluteArtifactPath, DirectRunRequestArtifactJson.Serialize(artifact));
 
+        if (ShouldAwaitRealReviewCompletion(entryKind, launcher, policy.Command)
+            && !WaitForReviewCompletionBoundary(
+                absoluteProviderEventLogPath,
+                absoluteCapturedMessagePath,
+                launchResult.ProviderSessionId,
+                launchedAt))
+        {
+            ClassifyMissingReviewCompletionBoundary(
+                absoluteProviderEventLogPath,
+                executionUnit,
+                entryKindValue,
+                launchResult.Provider,
+                launchResult.ProviderSessionId);
+        }
+
         var synthesis = SynthesizeAndPersistResult(
             context,
             executionUnit,
@@ -101,6 +139,315 @@ internal static class DirectRunCommandSupport
             ResultArtifactPath = synthesis.ResultArtifactPath,
             RunStatus = synthesis.RunStatus
         };
+    }
+
+    private static bool ShouldAwaitRealReviewCompletion(
+        DirectRunEntryKind entryKind,
+        IDirectRunLauncher launcher,
+        string command)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+
+        return entryKind == DirectRunEntryKind.Review
+            && launcher is DirectRunLauncher
+            && IsCodexLikeCommand(command);
+    }
+
+    private static bool WaitForReviewCompletionBoundary(
+        string providerEventLogPath,
+        string capturedMessagePath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        var sessionDeadline = DateTimeOffset.UtcNow + ResolveReviewSessionMaxWaitWindow();
+        while (DateTimeOffset.UtcNow < sessionDeadline)
+        {
+            if (HasExplicitReviewOutcome(
+                    providerEventLogPath,
+                    capturedMessagePath,
+                    providerSessionId,
+                    launchedAt))
+            {
+                return true;
+            }
+
+            if (HasReviewSessionTerminated(providerEventLogPath, providerSessionId, launchedAt))
+            {
+                return WaitForReviewOutcomeAfterSessionTermination(
+                    providerEventLogPath,
+                    capturedMessagePath,
+                    providerSessionId,
+                    launchedAt);
+            }
+
+            Thread.Sleep(ReviewCompletionPollInterval);
+        }
+
+        return false;
+    }
+
+    private static TimeSpan ResolveReviewCompletionWaitWindow()
+    {
+        return ResolvePositiveWaitWindow(
+            ReviewCompletionWaitWindowEnvVar,
+            DefaultReviewCompletionWaitWindow);
+    }
+
+    private static TimeSpan ResolveReviewSessionMaxWaitWindow()
+    {
+        return ResolvePositiveWaitWindow(
+            ReviewSessionMaxWaitWindowEnvVar,
+            DefaultReviewSessionMaxWaitWindow);
+    }
+
+    private static TimeSpan ResolvePositiveWaitWindow(string environmentVariableName, TimeSpan defaultValue)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(environmentVariableName);
+
+        var raw = Environment.GetEnvironmentVariable(environmentVariableName);
+        if (!string.IsNullOrWhiteSpace(raw)
+            && int.TryParse(
+                raw,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var milliseconds)
+            && milliseconds > 0)
+        {
+            return TimeSpan.FromMilliseconds(milliseconds);
+        }
+
+        return defaultValue;
+    }
+
+    private static void ClassifyMissingReviewCompletionBoundary(
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId)
+    {
+        TryTerminateProviderSession(providerSessionId);
+
+        var timestamp = DateTimeOffset.UtcNow;
+        var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+        writer.Append(new DirectRunProviderEvent
+        {
+            Timestamp = timestamp.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
+            SessionId = providerSessionId,
+            Kind = "provider-event",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                type = "contract-gap",
+                run_status = "failed",
+                reason = "review-completion-boundary-timeout"
+            })
+        });
+        writer.Append(DirectRunProviderEventFactory.CreateBackendExitEvent(
+            timestamp,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            1));
+    }
+
+    private static void TryTerminateProviderSession(string providerSessionId)
+    {
+        if (!TryParseSessionProcessId(providerSessionId, out var processId))
+        {
+            return;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (process.HasExited)
+            {
+                return;
+            }
+
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit((int)TimeSpan.FromSeconds(2).TotalMilliseconds);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or InvalidOperationException
+            or NotSupportedException)
+        {
+        }
+    }
+
+    private static bool TryParseSessionProcessId(string providerSessionId, out int processId)
+    {
+        processId = default;
+
+        const string prefix = "pid:";
+        if (!providerSessionId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(
+            providerSessionId[prefix.Length..],
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out processId);
+    }
+
+    private static bool WaitForReviewOutcomeAfterSessionTermination(
+        string providerEventLogPath,
+        string capturedMessagePath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        var deadline = DateTimeOffset.UtcNow + ResolveReviewCompletionWaitWindow();
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (HasExplicitReviewOutcome(
+                    providerEventLogPath,
+                    capturedMessagePath,
+                    providerSessionId,
+                    launchedAt))
+            {
+                return true;
+            }
+
+            Thread.Sleep(ReviewCompletionPollInterval);
+        }
+
+        return HasExplicitReviewOutcome(
+            providerEventLogPath,
+            capturedMessagePath,
+            providerSessionId,
+            launchedAt);
+    }
+
+    private static bool HasExplicitReviewOutcome(
+        string providerEventLogPath,
+        string capturedMessagePath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (!TryReadCurrentProviderEvents(
+                providerEventLogPath,
+                providerSessionId,
+                launchedAt,
+                out var currentProviderEvents))
+        {
+            return false;
+        }
+
+        return DirectRunReviewOutcomeSupport.TryResolveExplicitReviewOutcome(currentProviderEvents, out _)
+            || DirectRunReviewOutcomeSupport.TryReadReviewOutcomeFromCapturedMessagePath(
+                capturedMessagePath,
+                out _,
+                out _,
+                out _);
+    }
+
+    private static bool HasReviewSessionTerminated(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (TryReadCurrentProviderEvents(
+                providerEventLogPath,
+                providerSessionId,
+                launchedAt,
+                out var currentProviderEvents)
+            && TryResolveBackendExitCode(currentProviderEvents, out _))
+        {
+            return true;
+        }
+
+        return !IsProviderSessionAlive(providerSessionId);
+    }
+
+    private static bool TryReadCurrentProviderEvents(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt,
+        out IReadOnlyList<DirectRunProviderEvent> currentProviderEvents)
+    {
+        currentProviderEvents = [];
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            currentProviderEvents = SelectCurrentSessionEvents(providerEvents, providerSessionId, launchedAt);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsProviderSessionAlive(string providerSessionId)
+    {
+        if (!TryParseSessionProcessId(providerSessionId, out var processId))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            process.Refresh();
+            return !process.HasExited;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or InvalidOperationException
+            or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryResolveBackendExitCode(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        out int exitCode)
+    {
+        exitCode = default;
+
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            var providerEvent = providerEvents[index];
+            if (!HasBackendExitType(providerEvent))
+            {
+                continue;
+            }
+
+            if (TryReadInt32(providerEvent.Payload, "exit_code", out exitCode)
+                || TryReadInt32(providerEvent.Payload, "exitCode", out exitCode))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasBackendExitType(DirectRunProviderEvent providerEvent)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvent);
+
+        return providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal);
     }
 
     private static DirectRunResolvedPolicy ResolvePolicy(
@@ -136,7 +483,7 @@ internal static class DirectRunCommandSupport
         var argsTemplate = FirstNonEmptyList(
             entryConfig.Args,
             directRun.Args,
-            ResolveDefaultArgsTemplate(provider));
+            ResolveDefaultArgsTemplate(provider, entryKind));
 
         return new DirectRunResolvedPolicy
         {
@@ -175,6 +522,68 @@ internal static class DirectRunCommandSupport
     {
         var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
         return $"{root}/{executionUnit.Trim()}.result.json";
+    }
+
+    internal static string ResolveCapturedMessagePath(
+        CliContext context,
+        string executionUnit,
+        DateTimeOffset launchedAt)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{root}/{executionUnit.Trim()}.{CreateCapturedMessageSuffix(launchedAt)}.last-message.json";
+    }
+
+    internal static string ResolveReviewOutputSchemaPath(
+        CliContext context,
+        string executionUnit,
+        DateTimeOffset launchedAt)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{root}/{executionUnit.Trim()}.{CreateCapturedMessageSuffix(launchedAt)}.review-output-schema.json";
+    }
+
+    internal static string CreateCapturedMessageSuffix(DateTimeOffset launchedAt)
+    {
+        return launchedAt.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static void PersistReviewOutputSchema(string absoluteReviewOutputSchemaPath)
+    {
+        var directoryPath = Path.GetDirectoryName(absoluteReviewOutputSchemaPath)
+            ?? throw new InvalidOperationException("Review output schema path did not contain a directory.");
+        Directory.CreateDirectory(directoryPath);
+        File.WriteAllText(
+            absoluteReviewOutputSchemaPath,
+            """
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "disposition": {
+                  "type": "string",
+                  "enum": [
+                    "accepted",
+                    "approved",
+                    "comment",
+                    "commented",
+                    "fix-requested",
+                    "changes-requested"
+                  ]
+                },
+                "comment_body": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "disposition",
+                "comment_body"
+              ]
+            }
+            """);
     }
 
     private static string FormatEntryKind(DirectRunEntryKind entryKind)
@@ -224,10 +633,23 @@ internal static class DirectRunCommandSupport
         };
     }
 
-    private static IReadOnlyList<string> ResolveDefaultArgsTemplate(string provider)
+    private static bool IsCodexLikeCommand(string command)
+    {
+        var fileName = Path.GetFileName(command.Trim());
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        var commandStem = Path.GetFileNameWithoutExtension(fileName);
+        return commandStem.StartsWith("codex", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<string> ResolveDefaultArgsTemplate(string provider, DirectRunEntryKind entryKind)
     {
         return provider.Trim().ToLowerInvariant() switch
         {
+            "codex" when entryKind == DirectRunEntryKind.Review => ["exec", "--json", "--model", "{model}", "--output-schema", "{output_schema_path}", "--output-last-message", "{output_last_message_path}", "{prompt}"],
             "codex" => ["exec", "--model", "{model}", "{prompt}"],
             "claude" => ["--print", "--model", "{model}", "--output-format", "json", "{prompt}"],
             _ => ["{prompt}"]
@@ -276,6 +698,28 @@ internal static class DirectRunCommandSupport
         var sessionId = ResolveSessionId(currentProviderEvents, launchResult.ProviderSessionId);
         var provider = ResolveProvider(currentProviderEvents, launchResult.Provider);
         var runStatus = ResolveRunStatus(currentProviderEvents);
+        if (string.Equals(entryKind, "review", StringComparison.Ordinal))
+        {
+            var capturedMessagePath = Path.GetFullPath(Path.Combine(
+                context.RepoRoot,
+                ResolveCapturedMessagePath(context, executionUnit, launchedAt).Replace('/', Path.DirectorySeparatorChar)));
+            var capturedOutcomeEvent = DirectRunReviewOutcomeSupport.TryCreateReviewOutcomeEventFromCapturedMessage(
+                currentProviderEvents,
+                capturedMessagePath,
+                DateTimeOffset.UtcNow,
+                executionUnit,
+                entryKind,
+                provider,
+                sessionId);
+            if (capturedOutcomeEvent is not null)
+            {
+                var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+                writer.Append(capturedOutcomeEvent);
+                providerEvents = [.. providerEvents, capturedOutcomeEvent];
+                currentProviderEvents = [.. currentProviderEvents, capturedOutcomeEvent];
+            }
+        }
+
         string? reviewOutcome = null;
         string? reviewCommentBodyPath = null;
         if (string.Equals(entryKind, "review", StringComparison.Ordinal)
@@ -318,6 +762,10 @@ internal static class DirectRunCommandSupport
                 currentProviderEvents = [.. currentProviderEvents, outcomeEvent];
             }
         }
+
+        runStatus = string.Equals(entryKind, "review", StringComparison.Ordinal)
+            ? DirectRunReviewOutcomeSupport.ResolveEffectiveReviewRunStatus(runStatus, reviewOutcome)
+            : runStatus;
 
         var worktreePath = RunStartCommand.ResolveWorktreePath(context, executionUnit);
         var resultArtifactPath = ResolveResultArtifactPath(context, executionUnit);

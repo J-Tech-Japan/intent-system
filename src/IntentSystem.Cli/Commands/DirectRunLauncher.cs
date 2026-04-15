@@ -54,6 +54,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             provider,
             model,
             transport,
+            launchedAt,
             absoluteRequestArtifactPath,
             argsTemplate);
         var processInvocation = ResolveProcessInvocation(
@@ -279,11 +280,12 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string provider,
         string model,
         string transport,
+        DateTimeOffset launchedAt,
         string absoluteRequestArtifactPath,
         IReadOnlyList<string> argsTemplate)
     {
-        var prompt =
-            $"Use the request artifact at '{absoluteRequestArtifactPath}' as the bounded source of truth for this direct run.";
+        var prompt = CreatePrompt(entryKind, absoluteRequestArtifactPath);
+        var outputLastMessagePath = ResolveOutputLastMessagePath(requestArtifactPath, executionUnit, launchedAt);
 
         return argsTemplate
             .Select(argument => argument
@@ -295,8 +297,56 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 .Replace("{request_artifact_path}", absoluteRequestArtifactPath, StringComparison.Ordinal)
                 .Replace("{upstream_request_artifact_path}", absoluteRequestArtifactPath, StringComparison.Ordinal)
                 .Replace("{direct_run_artifact_path}", requestArtifactPath, StringComparison.Ordinal)
+                .Replace("{output_schema_path}", ResolveOutputSchemaPath(requestArtifactPath, executionUnit, launchedAt), StringComparison.Ordinal)
+                .Replace("{output_last_message_path}", outputLastMessagePath, StringComparison.Ordinal)
                 .Replace("{prompt}", prompt, StringComparison.Ordinal))
             .ToArray();
+    }
+
+    private static string CreatePrompt(string entryKind, string absoluteRequestArtifactPath)
+    {
+        var prompt =
+            $"Use the request artifact at '{absoluteRequestArtifactPath}' as the bounded source of truth for this direct run.";
+        if (!string.Equals(entryKind, "review", StringComparison.Ordinal))
+        {
+            return prompt;
+        }
+
+        return prompt
+            + " Your final response must be a single JSON object with a required string field 'disposition'"
+            + " and a required field 'comment_body' that must be a string when a review comment is required or null when no comment is required."
+            + " Use 'accepted' or 'approved' only when no review comment is required."
+            + " Use 'comment', 'commented', 'fix-requested', or 'changes-requested' only when a deterministic review comment is required."
+            + " Do not return wrapper fields such as 'stop_reason', 'actions', or execution envelopes instead of 'disposition'."
+            + " If you detect a deterministic contract gap or need follow-up work, still return 'disposition':'fix-requested' with an actionable 'comment_body'."
+            + " For accepted or approved outcomes, return 'comment_body': null."
+            + " Do not wrap the JSON in markdown fences.";
+    }
+
+    private static string ResolveOutputLastMessagePath(
+        string requestArtifactPath,
+        string executionUnit,
+        DateTimeOffset launchedAt)
+    {
+        var normalizedPath = requestArtifactPath.Replace('\\', '/');
+        var directory = Path.GetDirectoryName(normalizedPath.Replace('/', Path.DirectorySeparatorChar))
+            ?.Replace(Path.DirectorySeparatorChar, '/')
+            ?.TrimEnd('/')
+            ?? ".";
+        return $"{directory}/{executionUnit.Trim()}.{DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt)}.last-message.json";
+    }
+
+    private static string ResolveOutputSchemaPath(
+        string requestArtifactPath,
+        string executionUnit,
+        DateTimeOffset launchedAt)
+    {
+        var normalizedPath = requestArtifactPath.Replace('\\', '/');
+        var directory = Path.GetDirectoryName(normalizedPath.Replace('/', Path.DirectorySeparatorChar))
+            ?.Replace(Path.DirectorySeparatorChar, '/')
+            ?.TrimEnd('/')
+            ?? ".";
+        return $"{directory}/{executionUnit.Trim()}.{DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt)}.review-output-schema.json";
     }
 
     private static ResolvedProcessInvocation ResolveProcessInvocation(
@@ -337,7 +387,9 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             command,
             arguments);
 
-        if (detachHelperFromLauncherSession && !OperatingSystem.IsWindows())
+        if (detachHelperFromLauncherSession
+            && !OperatingSystem.IsWindows()
+            && !string.Equals(entryKind, "review", StringComparison.Ordinal))
         {
             var detachedLauncherStartInfo = CreateDetachedHelperLauncherStartInfo(helperStartInfo);
             return new ResolvedProcessInvocation
