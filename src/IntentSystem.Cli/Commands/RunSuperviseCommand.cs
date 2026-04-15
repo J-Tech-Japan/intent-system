@@ -10,6 +10,8 @@ namespace IntentSystem.Cli.Commands;
 internal static class RunSuperviseCommand
 {
     private const string TransitionActor = "intent-cli";
+    internal static TimeSpan TerminalFailureRaceWindow { get; set; } = TimeSpan.FromMilliseconds(100);
+    internal static TimeSpan TerminalFailureRacePollInterval { get; set; } = TimeSpan.FromMilliseconds(10);
 
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
 
@@ -697,6 +699,23 @@ internal static class RunSuperviseCommand
             return true;
         }
 
+        if (TryAwaitTerminalFailureReason(
+                providerLogPath,
+                executionUnit,
+                requestArtifact.ProviderSessionId,
+                requestArtifact.LaunchedAt,
+                out reason))
+        {
+            File.WriteAllText(
+                resultArtifactPath,
+                DirectRunResultArtifactJson.Serialize(resultArtifact with
+                {
+                    RunStatus = "failed"
+                }));
+
+            return true;
+        }
+
         var backendExitEvent = DirectRunProviderEventFactory.CreateBackendExitEvent(
             DateTimeOffset.UtcNow,
             executionUnit,
@@ -716,6 +735,56 @@ internal static class RunSuperviseCommand
         reason =
             $"Worker session '{requestArtifact.ProviderSessionId}' for '{executionUnit}' is no longer alive and no terminal provider event was captured.";
         return true;
+    }
+
+    private static bool TryAwaitTerminalFailureReason(
+        string providerLogPath,
+        string executionUnit,
+        string providerSessionId,
+        string launchedAt,
+        out string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerLogPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(launchedAt);
+
+        reason = string.Empty;
+        if (TerminalFailureRaceWindow <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        var deadline = DateTimeOffset.UtcNow + TerminalFailureRaceWindow;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            Thread.Sleep(TerminalFailureRacePollInterval);
+            IReadOnlyList<DirectRunProviderEvent> providerEvents;
+            try
+            {
+                providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath));
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                or InvalidOperationException
+                or ArgumentException
+                or JsonException)
+            {
+                continue;
+            }
+
+            var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, providerSessionId, launchedAt);
+            if (TryResolveTerminalFailureReason(
+                    currentProviderEvents,
+                    executionUnit,
+                    providerSessionId,
+                    out reason))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryResolveTerminalFailureReason(
