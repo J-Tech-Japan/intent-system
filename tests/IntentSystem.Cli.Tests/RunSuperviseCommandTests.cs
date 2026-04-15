@@ -66,6 +66,61 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenFixingItemWithStaleImplementSession_RealignsSessionToFixLoop()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession()));
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:15:00Z");
+            var originalQueueState = File.ReadAllText(queueStatePath);
+            var originalRunLog = File.ReadAllText(runLogPath);
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Worker entry: run fix", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Session status: monitoring", writer.ToString(), StringComparison.Ordinal);
+
+            var sessionPath = Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json");
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionPath));
+            Assert.Equal(RunSupervisionWorkerEntry.Fix, session.WorkerEntry);
+            Assert.Equal(RunSupervisionSessionStatus.Monitoring, session.Status);
+            Assert.Equal("fixing", session.QueueState);
+            Assert.Equal(".intent-cli/fix/G25.request.md", session.HandoffArtifactRef);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/180", session.LinkedPr);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1", session.CommentRef);
+            Assert.Equal("2026-04-08T09:00:00.0000000+00:00", session.CreatedAt.ToString("O"));
+            Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
+            Assert.Equal(originalRunLog, File.ReadAllText(runLogPath));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenExpiredHeartbeat_SchedulesRetryAndAppendsRetryScheduledEvent()
     {
         using var tempDirectory = new TemporaryDirectory();
