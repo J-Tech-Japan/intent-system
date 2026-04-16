@@ -734,8 +734,16 @@ internal static class RunSuperviseCommand
                 RunStatus = "failed"
             }));
 
-        reason =
-            $"Worker session '{requestArtifact.ProviderSessionId}' for '{executionUnit}' is no longer alive and no terminal provider event was captured.";
+        if (!TryResolveTerminalFailureReason(
+                [backendExitEvent],
+                executionUnit,
+                requestArtifact.ProviderSessionId,
+                out reason))
+        {
+            throw new InvalidOperationException(
+                $"Synthetic backend-exit for '{executionUnit}' did not resolve to a terminal failure reason.");
+        }
+
         return true;
     }
 
