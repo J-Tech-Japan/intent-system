@@ -105,6 +105,55 @@ public sealed class IntakeAdvanceCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRuntimeConceptArtifactSourceRef_DoesNotCorruptConceptYaml()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var conceptArtifactPath = Path.Combine(repoRoot, ".intent-cli", "intake", "auth.concept.yaml");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
+            CreateConceptArtifactYaml("auth"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
+            CreateInterviewArtifactYaml(CreateAnsweredItem(sourceConceptRef: ".intent-cli/intake/auth.concept.yaml")));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.md"),
+            "# Interview Question");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
+            "# Auth Means" + Environment.NewLine + Environment.NewLine + "- Existing rule" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            """
+            # Post-MVP Sub-Slices
+
+            ## G36 の current baseline
+
+            - `intake execution apply <domain>` を最初の execution source-of-truth apply command にする
+            - canonical source は current `.intent-cli/intake/<domain>.execution.md` と current `execution/` source files, plus the `G29` / `G30` / `G32` / `G33` / `G34` / `G35` intake baseline である
+            - successful output は execution draft で指定された source files だけを deterministic に更新することを baseline にする
+            """);
+        using var writer = new StringWriter();
+
+        var originalConceptYaml = File.ReadAllText(conceptArtifactPath);
+        var exitCode = IntakeAdvanceCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(originalConceptYaml, File.ReadAllText(conceptArtifactPath));
+        var packet = IntakeConceptArtifactYaml.Deserialize(File.ReadAllText(conceptArtifactPath));
+        Assert.Equal("auth", packet.DomainSlug);
+
+        var output = writer.ToString();
+        Assert.Contains("Readiness status: ready", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("- .intent-cli/intake/auth.concept.yaml", output, StringComparison.Ordinal);
+        Assert.Contains("- intents/intent-cli/intent-tree/means/auth-oauth2.md", output, StringComparison.Ordinal);
+
+        var patchDraft = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "intake", "auth.patch.md"));
+        Assert.Contains("- .intent-cli/intake/auth.concept.yaml", patchDraft, StringComparison.Ordinal);
+        Assert.DoesNotContain("### `.intent-cli/intake/auth.concept.yaml`", patchDraft, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenMissingDomainArgument_ReturnsExitCodeOne()
     {
         using var writer = new StringWriter();
@@ -131,12 +180,13 @@ public sealed class IntakeAdvanceCommandTests
         };
     }
 
-    private static IntentSystem.ConceptIntake.Models.InterviewQueueItem CreateAnsweredItem()
+    private static IntentSystem.ConceptIntake.Models.InterviewQueueItem CreateAnsweredItem(
+        string sourceConceptRef = "intents/intent-cli/concepts/auth-oauth2.md")
     {
         return new IntentSystem.ConceptIntake.Models.InterviewQueueItem
         {
             DomainSlug = "auth",
-            SourceConceptRef = "intents/intent-cli/concepts/auth-oauth2.md",
+            SourceConceptRef = sourceConceptRef,
             QuestionId = "iq-1",
             QuestionText = "What should be updated?",
             Reason = "Clarify auth direction.",

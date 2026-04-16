@@ -124,6 +124,59 @@ public sealed class IntakePatchCommandTests
         Assert.Contains("requires a domain", writer.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Execute_GivenRuntimeConceptArtifactSourceRef_DoesNotDraftYamlArtifactAsPatchTarget()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.foldin.md"),
+            """
+            # Intake Fold-In Draft
+
+            ## Domain
+
+            `auth`
+
+            answered_question_ids:
+            - iq-1
+
+            recommended_updates:
+            - Add device-code note
+
+            return_to_intent_paths:
+            - intents/intent-cli/intent-tree/means/auth-oauth2.md
+
+            source_concept_refs:
+            - .intent-cli/intake/auth.concept.yaml
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
+            """
+            domain_slug: auth
+            concept_source: interactive
+            concept_text: "Add OAuth2 provider support."
+            upstream_paths: []
+            initial_goal: "Add OAuth2 provider support."
+            constraints: []
+            known_unknowns: []
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
+            "# Auth Means" + Environment.NewLine + "Existing line");
+        using var writer = new StringWriter();
+
+        var exitCode = IntakePatchCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+        Assert.Equal(0, exitCode);
+        var markdown = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "intake", "auth.patch.md"));
+        Assert.Contains("source_concept_refs:", markdown, StringComparison.Ordinal);
+        Assert.Contains("- .intent-cli/intake/auth.concept.yaml", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("### `.intent-cli/intake/auth.concept.yaml`", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("Reconcile this source concept file with the current fold-in draft.", markdown, StringComparison.Ordinal);
+        Assert.Contains("### `intents/intent-cli/intent-tree/means/auth-oauth2.md`", markdown, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
