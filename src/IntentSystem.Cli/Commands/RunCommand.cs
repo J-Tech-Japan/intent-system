@@ -211,6 +211,19 @@ internal static class RunCommand
                         }
 
                         var fixRunStatus = fixResultArtifact?.RunStatus;
+                        var currentFixSessionContractGap = TryResolveCurrentFixSessionContractGap(
+                            context,
+                            inProgressItem.ExecutionUnit,
+                            fixRequestArtifact);
+                        if (!string.IsNullOrWhiteSpace(currentFixSessionContractGap))
+                        {
+                            return CreateStopResult(
+                                DeterministicContractGapStopReason,
+                                actions,
+                                inProgressItem.ExecutionUnit,
+                                currentFixSessionContractGap);
+                        }
+
                         if (string.Equals(fixRunStatus, "succeeded", StringComparison.Ordinal))
                         {
                             ExecuteAction(
@@ -576,6 +589,36 @@ internal static class RunCommand
         {
             return exception.Message;
         }
+    }
+
+    private static string? TryResolveCurrentFixSessionContractGap(
+        CliContext context,
+        string executionUnit,
+        DirectRunRequestArtifact? requestArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (requestArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "fix", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
+        if (providerEvents.Count == 0)
+        {
+            return null;
+        }
+
+        providerEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        return DirectRunFixOutcomeSupport.TryResolveContractGapDetail(providerEvents, executionUnit, out var detail)
+            ? detail
+            : null;
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> TryReadDirectRunProviderEvents(CliContext context, string executionUnit)

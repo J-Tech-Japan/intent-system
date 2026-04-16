@@ -143,6 +143,77 @@ public sealed class RunFixCommandTests
     }
 
     [Fact]
+    public void Execute_GivenInspectionOnlyBackendExitFailure_AppendsDeterministicContractGapEvent()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateReviewCommentArtifactJson());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunFixCommand.TimestampFactory;
+        var originalLauncherFactory = RunFixCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-16T00:17:00Z");
+            RunFixCommand.DirectRunLauncherFactory = () => new InspectionOnlyFailureDirectRunLauncher();
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Codex",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    }
+                }
+            };
+
+            var exitCode = RunFixCommand.Execute(context, ["G20"], writer);
+
+            Assert.Equal(0, exitCode);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G20.result.json")));
+            Assert.Equal("failed", resultArtifact.RunStatus);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G20.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                string.Equals(providerEvent.SessionId, "pid:4321", StringComparison.Ordinal)
+                && providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("stop_reason", out var stopReasonElement)
+                && string.Equals(stopReasonElement.GetString(), "deterministic-contract-gap", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("reason", out var reasonElement)
+                && string.Equals(reasonElement.GetString(), "fix-session-ended-after-initial-inspection", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunFixCommand.TimestampFactory = originalTimestampFactory;
+            RunFixCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenRuntimeOnlyTargetPart_ReturnsExitCodeOneWithoutWritingRepairArtifact()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -268,6 +339,87 @@ public sealed class RunFixCommandTests
                 Transport = transportArg,
                 ProviderSessionId = providerSessionId,
                 TransportSummary = transportSummary
+            };
+        }
+    }
+
+    private sealed class InspectionOnlyFailureDirectRunLauncher : IDirectRunLauncher
+    {
+        public DirectRunLaunchResult Launch(
+            string executionUnit,
+            string entryKind,
+            string requestArtifactPath,
+            string providerEventLogPath,
+            string providerArg,
+            string modelArg,
+            string transportArg,
+            string command,
+            IReadOnlyList<string> argsTemplate,
+            DateTimeOffset launchedAt,
+            string workingDirectory,
+            string absoluteRequestArtifactPath,
+            string absoluteProviderEventLogPath)
+        {
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(absoluteProviderEventLogPath)
+                ?? throw new InvalidOperationException("Provider event log path did not contain a directory."));
+            var providerEvents = string.Join(
+                                     Environment.NewLine,
+                                     new[]
+                                     {
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = "pid:4321",
+                                             Kind = "session-metadata",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 model = modelArg,
+                                                 transport = transportArg,
+                                                 command
+                                             })
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(1).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = "pid:4321",
+                                             Kind = "provider-event",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(
+                                                 "exec /bin/zsh -lc 'rg --files' succeeded in 0ms")
+                                         }),
+                                         DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                                         {
+                                             Timestamp = launchedAt.AddSeconds(2).ToString("O"),
+                                             ExecutionUnit = executionUnit,
+                                             Provider = providerArg,
+                                             EntryKind = entryKind,
+                                             SessionId = "pid:4321",
+                                             Kind = "provider-event",
+                                             Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                                             {
+                                                 type = "backend-exit",
+                                                 exit_code = 1
+                                             })
+                                         })
+                                     }) + Environment.NewLine;
+            File.WriteAllText(absoluteProviderEventLogPath, providerEvents);
+
+            return new DirectRunLaunchResult
+            {
+                RequestArtifactPath = requestArtifactPath,
+                ProviderEventLogPath = providerEventLogPath,
+                Provider = providerArg,
+                Model = modelArg,
+                Transport = transportArg,
+                ProviderSessionId = "pid:4321",
+                TransportSummary =
+                    $"{transportArg} transport launched via '{command}' in '{workingDirectory}' for provider '{providerArg}'."
             };
         }
     }
