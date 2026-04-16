@@ -21,6 +21,28 @@ internal static class DirectRunFixOutcomeSupport
         "upsert_needed",
         "slow path"
     ];
+    private static readonly string[] StartupPreamblePrefixes =
+    [
+        "openai codex v",
+        "--------",
+        "workdir:",
+        "model:",
+        "provider:",
+        "approval:",
+        "sandbox:",
+        "reasoning effort:",
+        "reasoning summaries:",
+        "session id:",
+        "user"
+    ];
+    private static readonly string[] EchoedStartupRequestMarkers =
+    [
+        "please ",
+        "use the request artifact at",
+        "bounded source of truth for this direct run",
+        "continue beyond initial repository inspection",
+        "do not stop after a single inspection command"
+    ];
 
     public static DirectRunProviderEvent? CreateCanonicalContractGapEventIfNeeded(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
@@ -109,8 +131,18 @@ internal static class DirectRunFixOutcomeSupport
             }
 
             if (TryResolveExplicitContractGapDetail(providerEvent.Payload, executionUnit, out _)
-                || ContainsSuccessfulInitialRepoInspection(providerEvent.Payload)
-                || ContainsBoundedFixProgressSignal(providerEvent.Payload))
+                || ContainsSuccessfulInitialRepoInspection(providerEvent.Payload))
+            {
+                return false;
+            }
+
+            if (!sawStartupNoise
+                && IsIgnorableStartupPreamble(providerEvent.Payload))
+            {
+                continue;
+            }
+
+            if (ContainsBoundedFixProgressSignal(providerEvent.Payload))
             {
                 return false;
             }
@@ -118,12 +150,6 @@ internal static class DirectRunFixOutcomeSupport
             if (IsIgnorableStartupNoise(providerEvent.Payload))
             {
                 sawStartupNoise = true;
-                continue;
-            }
-
-            if (!sawStartupNoise
-                && IsIgnorableStartupPreamble(providerEvent.Payload))
-            {
                 continue;
             }
 
@@ -303,8 +329,20 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         var value = payload.GetString();
-        return !string.IsNullOrWhiteSpace(value)
-            && !ContainsBoundedFixProgressSignal(payload);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Trim().ToLowerInvariant();
+        if (StartupPreamblePrefixes.Any(prefix => normalized.StartsWith(prefix, StringComparison.Ordinal))
+            || EchoedStartupRequestMarkers.Any(marker => normalized.StartsWith(marker, StringComparison.Ordinal)
+                || normalized.Contains(marker, StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsIgnorableStartupNoise(JsonElement payload)
