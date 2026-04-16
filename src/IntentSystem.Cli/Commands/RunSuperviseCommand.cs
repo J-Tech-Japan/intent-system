@@ -12,7 +12,7 @@ internal static class RunSuperviseCommand
     private const string TransitionActor = "intent-cli";
     // Detached terminal callbacks can trail the dead-process probe slightly; keep the handoff bounded
     // while still allowing the same-session backend-exit reason to win deterministically.
-    internal static TimeSpan TerminalFailureRaceWindow { get; set; } = TimeSpan.FromMilliseconds(250);
+    internal static TimeSpan TerminalFailureRaceWindow { get; set; } = TimeSpan.FromMilliseconds(500);
     internal static TimeSpan TerminalFailureRacePollInterval { get; set; } = TimeSpan.FromMilliseconds(10);
 
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
