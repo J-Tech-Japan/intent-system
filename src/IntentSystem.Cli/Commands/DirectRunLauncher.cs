@@ -180,6 +180,14 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 absoluteProviderEventLogPath,
                 launchedAt,
                 providerSessionId);
+            StartDetachedProviderExitMonitorIfNeeded(
+                processInvocation.StartedProcessCarriesProviderSession,
+                absoluteProviderEventLogPath,
+                executionUnit,
+                entryKind,
+                provider,
+                providerSessionId,
+                launchedAt);
         }
 
         if (process.ExitedEarly && process.ExitCode != 0)
@@ -482,6 +490,15 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         if (string.IsNullOrWhiteSpace(providerSessionId)
             || DirectRunSessionBoundary.HasBackendExitEvent(providerEventLogPath, providerSessionId, launchedAt))
         {
+            if (!string.IsNullOrWhiteSpace(providerSessionId))
+            {
+                DirectRunTerminalArtifactUpdater.PersistTerminalRunStatusIfCurrent(
+                    providerEventLogPath,
+                    providerSessionId,
+                    launchedAt,
+                    exitCode);
+            }
+
             return;
         }
 
@@ -492,6 +509,11 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             provider,
             providerSessionId,
             exitCode));
+        DirectRunTerminalArtifactUpdater.PersistTerminalRunStatusIfCurrent(
+            providerEventLogPath,
+            providerSessionId,
+            launchedAt,
+            exitCode);
     }
 
     private static void StartPersistentExitMonitorIfNeeded(
@@ -542,6 +564,32 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         }
 
         using var launcher = Process.Start(launcherStartInfo);
+    }
+
+    private static void StartDetachedProviderExitMonitorIfNeeded(
+        bool startedProcessCarriesProviderSession,
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (startedProcessCarriesProviderSession
+            || !TryParseProcessId(providerSessionId, out var processId))
+        {
+            return;
+        }
+
+        StartPersistentExitMonitorIfNeeded(
+            requiresPersistentExitMonitor: true,
+            processId,
+            providerEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            launchedAt);
     }
 
     private static void BestEffortAppendBackendExitIfProcessExitedSoon(
@@ -605,6 +653,15 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         {
             return false;
         }
+    }
+
+    private static bool TryParseProcessId(string providerSessionId, out int processId)
+    {
+        processId = default;
+        const string prefix = "pid:";
+        return providerSessionId.StartsWith(prefix, StringComparison.Ordinal)
+            && int.TryParse(providerSessionId[prefix.Length..], out processId)
+            && processId > 0;
     }
 
     private static bool TryHandleDetachedCaptureHandshake(

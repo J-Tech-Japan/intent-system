@@ -346,6 +346,125 @@ public sealed class RunFixCommandTests
     }
 
     [Fact]
+    public async Task Execute_GivenWrapperCodexCommand_AppendsTerminalBackendExitAndUpdatesResultArtifact()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateReviewCommentArtifactJson());
+        var providerBinaryPath = tempDirectory.CreateExecutableFile(
+            "bin/codex",
+            """
+            #!/bin/sh
+            sleep 1
+            exit 1
+            """);
+        var wrapperPath = tempDirectory.CreateExecutableFile(
+            "bin/codex-isolated",
+            $$"""
+            #!/bin/zsh
+            export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
+            exec {{providerBinaryPath}} "$@"
+            """);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunFixCommand.TimestampFactory;
+
+        try
+        {
+            RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-16T00:17:00Z");
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Codex",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        Command = wrapperPath
+                    }
+                }
+            };
+
+            var exitCode = RunFixCommand.Execute(context, ["G20"], writer);
+
+            Assert.Equal(0, exitCode);
+
+            var resultArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.result.json");
+            var providerEventLogPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.provider.jsonl");
+            var initialArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+
+            await WaitForConditionAsync(
+                () =>
+                {
+                    if (!File.Exists(providerEventLogPath) || !File.Exists(resultArtifactPath))
+                    {
+                        return false;
+                    }
+
+                    var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                    var terminalEventExists = providerEvents.Any(providerEvent =>
+                        string.Equals(providerEvent.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                        && providerEvent.Kind == "provider-event"
+                        && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                        && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+                    if (!terminalEventExists)
+                    {
+                        return false;
+                    }
+
+                    var updatedArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                    return string.Equals(updatedArtifact.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                        && string.Equals(updatedArtifact.RunStatus, "failed", StringComparison.Ordinal);
+                },
+                TimeSpan.FromSeconds(10));
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            var backendExitEvent = Assert.Single(providerEvents, providerEvent =>
+                string.Equals(providerEvent.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                && providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+            Assert.Equal(1, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+            Assert.Equal(initialArtifact.SessionId, resultArtifact.SessionId);
+            Assert.Equal("failed", resultArtifact.RunStatus);
+        }
+        finally
+        {
+            RunFixCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenMissingQueueItem_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -870,6 +989,22 @@ public sealed class RunFixCommandTests
         """ + Environment.NewLine;
     }
 
+    private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert.True(condition(), "Timed out waiting for condition.");
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         private readonly string rootPath = Directory.CreateTempSubdirectory("intent-cli-run-fix-tests-").FullName;
@@ -890,6 +1025,31 @@ public sealed class RunFixCommandTests
             Directory.CreateDirectory(directoryPath);
             File.WriteAllText(fullPath, contents);
             return fullPath;
+        }
+
+        public string CreateExecutableFile(string relativePath, string contents)
+        {
+            var fullPath = CreateFile(relativePath, contents);
+            if (OperatingSystem.IsWindows())
+            {
+                return fullPath;
+            }
+
+            File.SetUnixFileMode(
+                fullPath,
+                UnixFileMode.UserRead
+                | UnixFileMode.UserWrite
+                | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead
+                | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead
+                | UnixFileMode.OtherExecute);
+            return fullPath;
+        }
+
+        public string GetPath(string relativePath)
+        {
+            return Path.Combine(rootPath, relativePath);
         }
 
         public void Dispose()
