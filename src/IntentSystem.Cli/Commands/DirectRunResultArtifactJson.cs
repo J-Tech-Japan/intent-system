@@ -35,6 +35,9 @@ internal sealed record DirectRunResultArtifact
     [JsonPropertyName("review_comment_body_path")]
     public string? ReviewCommentBodyPath { get; init; }
 
+    [JsonPropertyName("review_comment_ref")]
+    public string? ReviewCommentRef { get; init; }
+
     [JsonPropertyName("raw_log_ref")]
     public required string RawLogRef { get; init; }
 

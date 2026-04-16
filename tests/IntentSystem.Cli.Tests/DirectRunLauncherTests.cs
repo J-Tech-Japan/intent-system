@@ -150,6 +150,48 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public void Launch_GivenReviewEntry_InjectsPromptThatKeepsPrCommentPublicationCanonical()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var runner = new FakeDirectRunProcessRunner
+        {
+            Result = new DirectRunProcessLaunchResult
+            {
+                ProcessId = 4321,
+                ExitedEarly = false,
+                ExitCode = 0
+            }
+        };
+        var launcher = new DirectRunLauncher(runner);
+
+        launcher.Launch(
+            "G19",
+            "review",
+            ".intent-cli/runs/G19.request.json",
+            ".intent-cli/runs/G19.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            "codex",
+            [
+                "exec",
+                "--json",
+                "--model",
+                "{model}",
+                "{prompt}"
+            ],
+            DateTimeOffset.Parse("2026-04-09T10:15:00Z"),
+            "/repo/.intent-cli/worktrees/G19",
+            "/repo/.intent-cli/reviews/G19.request.json",
+            tempDirectory.GetPath(".intent-cli/runs/G19.provider.jsonl"));
+
+        var prompt = Assert.Single(runner.Arguments, argument => argument.Contains("bounded source of truth", StringComparison.Ordinal));
+        Assert.Contains("Do not post GitHub or pull request comments", prompt, StringComparison.Ordinal);
+        Assert.Contains("do not run 'gh pr comment'", prompt, StringComparison.Ordinal);
+        Assert.Contains("the separate 'review comment' step owns PR comment publication", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Launch_GivenProcessExit_AppendsBackendExitProviderEvent()
     {
         if (OperatingSystem.IsWindows())
