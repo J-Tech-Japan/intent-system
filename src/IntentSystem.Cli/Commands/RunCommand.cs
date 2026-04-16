@@ -154,6 +154,11 @@ internal static class RunCommand
 
                         if (superviseResult.Blocked)
                         {
+                            if (superviseResult.ReportAsNonRetryableFailure)
+                            {
+                                return CreateMonitoringStopResult(actions, inProgressItem.ExecutionUnit, superviseResult);
+                            }
+
                             continue;
                         }
 
@@ -259,6 +264,11 @@ internal static class RunCommand
 
                         if (superviseResult.Blocked)
                         {
+                            if (superviseResult.ReportAsNonRetryableFailure)
+                            {
+                                return CreateMonitoringStopResult(actions, inProgressItem.ExecutionUnit, superviseResult);
+                            }
+
                             continue;
                         }
 
@@ -464,7 +474,8 @@ internal static class RunCommand
                 NonRetryableFailureStopReason,
                 actions,
                 executionUnit,
-                $"Supervisor blocked '{executionUnit}' after non-retryable failure.");
+                superviseResult.FailureReason
+                ?? $"Supervisor blocked '{executionUnit}' after non-retryable failure.");
         }
 
         return CreateStopResult(

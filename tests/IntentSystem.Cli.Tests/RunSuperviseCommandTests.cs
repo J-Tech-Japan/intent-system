@@ -917,6 +917,74 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenStartupOnlyDeadFixWorkerSession_BlocksWithoutConsumingRetryBudget()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession(workerEntry: RunSupervisionWorkerEntry.Fix)));
+        WriteStartupOnlyDeadFixDirectRunArtifacts(repoRoot, "pid:999999");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            var selectedItem = Assert.Single(queueState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("during provider startup", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionWorkerEntry.Fix, session.WorkerEntry);
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.Null(session.NextRetryAt);
+            Assert.Contains("during provider startup", session.LastInterruptionReason, StringComparison.Ordinal);
+            Assert.Contains("startup warnings or noise", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.result.json")));
+            Assert.Equal("pid:999999", resultArtifact.SessionId);
+            Assert.Equal("failed", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("during provider startup", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenFixingItemWithoutExistingSessionAndDeadFixWorkerSession_CapturesFailureAndAutoResumesFixLoop()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -1308,6 +1376,93 @@ public sealed class RunSuperviseCommandTests
                     model = "sonnet",
                     transport = "sdk",
                     command = "claude"
+                })
+            })
+        };
+
+        var runsPath = Path.Combine(repoRoot, ".intent-cli", "runs");
+        Directory.CreateDirectory(runsPath);
+        File.WriteAllText(Path.Combine(runsPath, "G25.request.json"), DirectRunRequestArtifactJson.Serialize(requestArtifact));
+        File.WriteAllText(Path.Combine(runsPath, "G25.result.json"), DirectRunResultArtifactJson.Serialize(resultArtifact));
+        File.WriteAllText(Path.Combine(runsPath, "G25.provider.jsonl"), string.Join(Environment.NewLine, providerEvents) + Environment.NewLine);
+    }
+
+    private static void WriteStartupOnlyDeadFixDirectRunArtifacts(string repoRoot, string sessionId)
+    {
+        var requestArtifact = new DirectRunRequestArtifact
+        {
+            SchemaVersion = "1",
+            ExecutionUnit = "G25",
+            EntryKind = "fix",
+            UpstreamRequestRef = ".intent-cli/fix/G25.request.md",
+            Provider = "Claude",
+            Model = "sonnet",
+            Transport = "sdk",
+            LaunchedAt = "2026-04-08T10:20:00.0000000+00:00",
+            ProviderSessionId = sessionId,
+            TransportSummary = "sdk transport"
+        };
+        var resultArtifact = new DirectRunResultArtifact
+        {
+            SchemaVersion = "1",
+            ExecutionUnit = "G25",
+            EntryKind = "fix",
+            UpstreamRequestRef = ".intent-cli/fix/G25.request.md",
+            Provider = "Claude",
+            Model = "sonnet",
+            SessionId = sessionId,
+            RunStatus = "running",
+            RawLogRef = ".intent-cli/runs/G25.provider.jsonl",
+            PacketRef = ".intent-cli/issues/G25/packet.yaml",
+            ReviewContextRef = ".intent-cli/issues/G25/review-context.md",
+            Worktree = new DirectRunWorktreeContext
+            {
+                Path = "/repo/.intent-cli/worktrees/G25"
+            }
+        };
+        var providerEvents = new[]
+        {
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.0000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "session-metadata",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    model = "sonnet",
+                    transport = "sdk",
+                    command = "claude"
+                })
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.2000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    level = "warn",
+                    message = "state db discrepancy detected on slow path while reconcile_rollout started"
+                })
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:01.0000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    type = "backend-exit",
+                    exit_code = 1
                 })
             })
         };

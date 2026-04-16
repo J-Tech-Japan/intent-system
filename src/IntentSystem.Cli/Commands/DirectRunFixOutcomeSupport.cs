@@ -6,6 +6,21 @@ internal static class DirectRunFixOutcomeSupport
 {
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
     private const string InspectionOnlyExitReason = "fix-session-ended-after-initial-inspection";
+    private static readonly string[] StartupWarningMarkers =
+    [
+        "warn",
+        "warn ",
+        "warning",
+        "state db discrepancy",
+        "find_thread_path_by_id_str_in_subdir",
+        "read_repair_rollout_path",
+        "reconcile_rollout",
+        "empty session file",
+        "plugin manifest",
+        "falling_back",
+        "upsert_needed",
+        "slow path"
+    ];
 
     public static DirectRunProviderEvent? CreateCanonicalContractGapEventIfNeeded(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
@@ -66,6 +81,51 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return TryResolveInspectionOnlyFailureDetail(providerEvents, executionUnit, out detail);
+    }
+
+    public static bool TryResolveStartupOnlyFailureDetail(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        out string detail)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        detail = string.Empty;
+        var failingBackendExitIndex = FindFailingBackendExitIndex(providerEvents);
+        if (failingBackendExitIndex < 0)
+        {
+            return false;
+        }
+
+        var sawStartupNoise = false;
+        for (var index = 0; index < failingBackendExitIndex; index++)
+        {
+            var providerEvent = providerEvents[index];
+            if (providerEvent.Kind == "session-metadata"
+                || IsIgnorableReadyEvent(providerEvent.Payload))
+            {
+                continue;
+            }
+
+            if (TryResolveExplicitContractGapDetail(providerEvent.Payload, executionUnit, out _)
+                || ContainsSuccessfulInitialRepoInspection(providerEvent.Payload)
+                || !IsIgnorableStartupNoise(providerEvent.Payload))
+            {
+                return false;
+            }
+
+            sawStartupNoise = true;
+        }
+
+        if (!sawStartupNoise)
+        {
+            return false;
+        }
+
+        detail =
+            $"Fix direct run for '{executionUnit}' exited during provider startup before any bounded repo inspection, edit, test, refusal, or contract-gap output was emitted. Current-session provider output only contained startup warnings or noise before the backend exit.";
+        return true;
     }
 
     private static bool TryResolveInspectionOnlyFailureDetail(
@@ -221,6 +281,22 @@ internal static class DirectRunFixOutcomeSupport
         return payload.ValueKind == JsonValueKind.Object
             && TryReadString(payload, "type", out var type)
             && string.Equals(type, "ready", StringComparison.Ordinal);
+    }
+
+    private static bool IsIgnorableStartupNoise(JsonElement payload)
+    {
+        var sawString = false;
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            sawString = true;
+            var normalized = value.Trim().ToLowerInvariant();
+            if (!StartupWarningMarkers.Any(marker => normalized.Contains(marker, StringComparison.Ordinal)))
+            {
+                return false;
+            }
+        }
+
+        return sawString;
     }
 
     private static IEnumerable<string> EnumeratePayloadStrings(JsonElement payload)
