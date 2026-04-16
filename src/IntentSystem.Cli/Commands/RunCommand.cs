@@ -4,6 +4,7 @@ using IntentSystem.Projection.Serialization;
 using IntentSystem.Review;
 using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -170,7 +171,8 @@ internal static class RunCommand
                                 $"Fixing item '{inProgressItem.ExecutionUnit}' requires {ReviewCommentArtifactPathResolver.Resolve(inProgressItem.ExecutionUnit)}.");
                         }
 
-                        if (!ArtifactExists(context, RunFixArtifactPathResolver.Resolve(inProgressItem.ExecutionUnit)))
+                        var hasFixArtifact = ArtifactExists(context, RunFixArtifactPathResolver.Resolve(inProgressItem.ExecutionUnit));
+                        if (!hasFixArtifact)
                         {
                             ExecuteAction(
                                 context,
@@ -191,10 +193,24 @@ internal static class RunCommand
                                 currentFixTargetContractGap);
                         }
 
-                        var fixRunStatus = TryReadDirectRunStatus(
-                            context,
-                            inProgressItem.ExecutionUnit,
-                            "fix");
+                        var fixRequestArtifact = TryReadDirectRunRequestArtifact(context, inProgressItem.ExecutionUnit);
+                        var fixResultArtifact = TryReadDirectRunResultArtifact(context, inProgressItem.ExecutionUnit, "fix");
+                        if (ShouldLaunchFreshFixAttempt(
+                                context,
+                                inProgressItem.ExecutionUnit,
+                                fixRequestArtifact,
+                                fixResultArtifact))
+                        {
+                            ExecuteAction(
+                                context,
+                                actions,
+                                "run fix",
+                                inProgressItem.ExecutionUnit,
+                                () => RunFixExecutor(context, inProgressItem.ExecutionUnit));
+                            continue;
+                        }
+
+                        var fixRunStatus = fixResultArtifact?.RunStatus;
                         if (string.Equals(fixRunStatus, "succeeded", StringComparison.Ordinal))
                         {
                             ExecuteAction(
@@ -445,6 +461,48 @@ internal static class RunCommand
             DescribeSupervisionResult(superviseResult));
     }
 
+    private static bool ShouldLaunchFreshFixAttempt(
+        CliContext context,
+        string executionUnit,
+        DirectRunRequestArtifact? requestArtifact,
+        DirectRunResultArtifact? resultArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (ArtifactExists(
+                context,
+                RunSupervisionSessionArtifactPathResolver.Resolve(
+                    context.Config.Supervision.ArtifactRoot,
+                    executionUnit)))
+        {
+            return false;
+        }
+
+        if (requestArtifact is null || resultArtifact is null)
+        {
+            return true;
+        }
+
+        if (!MatchesCurrentDirectRunRequestBoundary(requestArtifact, resultArtifact))
+        {
+            return true;
+        }
+
+        if (string.Equals(resultArtifact.RunStatus, "running", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var launchedAt))
+        {
+            return false;
+        }
+
+        var latestFixRequestedAt = TryResolveLatestFixRequestedTimestamp(context, executionUnit);
+        return latestFixRequestedAt is not null && latestFixRequestedAt > launchedAt;
+    }
+
     private static string? TryReadDirectRunStatus(
         CliContext context,
         string executionUnit,
@@ -566,6 +624,31 @@ internal static class RunCommand
         return $"{root}/{executionUnit.Trim()}.provider.jsonl";
     }
 
+    private static DateTimeOffset? TryResolveLatestFixRequestedTimestamp(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            return null;
+        }
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        for (var index = runEvents.Count - 1; index >= 0; index--)
+        {
+            var runEvent = runEvents[index];
+            if (string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                && string.Equals(runEvent.Event, "fix-requested", StringComparison.Ordinal))
+            {
+                return runEvent.Ts;
+            }
+        }
+
+        return null;
+    }
+
     private static RunReviewDecision ResolveReviewDecision(CliContext context, string executionUnit)
     {
         var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
@@ -588,7 +671,7 @@ internal static class RunCommand
             };
         }
 
-        if (!MatchesCurrentReviewRequestBoundary(requestArtifact, resultArtifact))
+        if (!MatchesCurrentDirectRunRequestBoundary(requestArtifact, resultArtifact))
         {
             return new RunReviewDecision
             {
@@ -913,7 +996,7 @@ internal static class RunCommand
             parsedLaunchedAt == default ? null : parsedLaunchedAt);
     }
 
-    private static bool MatchesCurrentReviewRequestBoundary(
+    private static bool MatchesCurrentDirectRunRequestBoundary(
         DirectRunRequestArtifact requestArtifact,
         DirectRunResultArtifact resultArtifact)
     {
