@@ -831,6 +831,85 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task Launch_GivenWrappedCodexFixProcess_PreservesStandardInputLongEnoughForBoundedRepoActivity()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14fix.provider.jsonl");
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
+        var codexPath = tempDirectory.CreateExecutableFile(
+            "repo/codex-experimental",
+            """
+            #!/bin/sh
+            printf '%s\n' 'OpenAI Codex v0.118.0 (research preview)'
+            printf '%s\n' '--------'
+            printf '%s\n' "workdir: $PWD"
+            printf '%s\n' 'user'
+            /usr/bin/python3 -c 'import os,select,sys; fd = sys.stdin.fileno(); os.isatty(fd) or (print("tty-missing", flush=True), sys.exit(1)); readable, _, _ = select.select([sys.stdin], [], [], 0.2); data = os.read(fd, 1) if readable else None; data != b"" or (print("stdin-eof", flush=True), sys.exit(1)); print("pwd && rg --files .", flush=True); print("git status --short", flush=True); print("dotnet test", flush=True)'
+            sleep 1
+            """);
+        var launcher = new DirectRunLauncher();
+
+        var result = launcher.Launch(
+            "G14fix",
+            "fix",
+            ".intent-cli/runs/G14fix.request.json",
+            ".intent-cli/runs/G14fix.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            codexPath,
+            ["exec", "test prompt"],
+            DateTimeOffset.Parse("2026-04-16T18:15:00Z"),
+            worktreePath,
+            tempDirectory.GetPath(".intent-cli/fix/G14fix.request.md"),
+            providerEventLogPath);
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(providerEventLogPath))
+                {
+                    return false;
+                }
+
+                var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                return events.Any(providerEvent =>
+                           providerEvent.Kind == "provider-event"
+                           && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                           && string.Equals(providerEvent.Payload.GetString(), "pwd && rg --files .", StringComparison.Ordinal));
+            },
+            TimeSpan.FromSeconds(8));
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "stdin-eof", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "tty-missing", StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "pwd && rg --files .", StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "git status --short", StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "dotnet test", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task DirectRunExitMonitorCommand_GivenDetachedProcess_AppendsBackendExitForCurrentSession()
     {
         if (OperatingSystem.IsWindows())
@@ -1303,6 +1382,7 @@ public sealed class DirectRunLauncherTests
             string fileName,
             IReadOnlyList<string> arguments,
             bool inheritStandardInput,
+            bool keepStandardInputOpen,
             TimeSpan earlyExitWindow,
             Action<int> onStarted,
             Action<int> onExited,
@@ -1321,7 +1401,7 @@ public sealed class DirectRunLauncherTests
                     FileName = fileName,
                     WorkingDirectory = workingDirectory,
                     UseShellExecute = false,
-                    RedirectStandardInput = !inheritStandardInput,
+                    RedirectStandardInput = !inheritStandardInput || keepStandardInputOpen,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
@@ -1334,7 +1414,7 @@ public sealed class DirectRunLauncherTests
                 var process = System.Diagnostics.Process.Start(startInfo)
                     ?? throw new InvalidOperationException("Failed to start wrapper process.");
 
-                if (!inheritStandardInput)
+                if (!inheritStandardInput && !keepStandardInputOpen)
                 {
                     process.StandardInput.Close();
                 }

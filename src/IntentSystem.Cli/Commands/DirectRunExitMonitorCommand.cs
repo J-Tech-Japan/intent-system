@@ -87,11 +87,18 @@ internal static class DirectRunExitMonitorCommand
 
         if (DirectRunSessionBoundary.HasBackendExitEvent(options.ProviderEventLogPath, options.ProviderSessionId, options.LaunchedAt))
         {
+            var resolvedExitCode = DirectRunSessionBoundary.TryResolveBackendExitCode(
+                options.ProviderEventLogPath,
+                options.ProviderSessionId,
+                options.LaunchedAt,
+                out var existingExitCode)
+                ? existingExitCode
+                : 1;
             DirectRunTerminalArtifactUpdater.PersistTerminalRunStatusIfCurrent(
                 options.ProviderEventLogPath,
                 options.ProviderSessionId,
                 options.LaunchedAt,
-                exitCode: 1);
+                resolvedExitCode);
             return 0;
         }
 

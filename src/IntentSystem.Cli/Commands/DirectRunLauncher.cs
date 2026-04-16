@@ -77,6 +77,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             processInvocation.FileName,
             processInvocation.Arguments,
             processInvocation.InheritStandardInput,
+            processInvocation.KeepStandardInputOpen,
             DefaultEarlyExitWindow,
             processId =>
             {
@@ -388,6 +389,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 Arguments = arguments,
                 RequiresPersistentExitMonitor = false,
                 InheritStandardInput = false,
+                KeepStandardInputOpen = false,
                 UsesDetachedCaptureHelper = false,
                 StartedProcessCarriesProviderSession = true
             };
@@ -405,17 +407,35 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             command,
             arguments);
 
+        if (string.Equals(entryKind, "fix", StringComparison.Ordinal))
+        {
+            return new ResolvedProcessInvocation
+            {
+                FileName = helperStartInfo.FileName,
+                Arguments = helperStartInfo.ArgumentList.ToArray(),
+                RequiresPersistentExitMonitor = false,
+                InheritStandardInput = false,
+                KeepStandardInputOpen = true,
+                UsesDetachedCaptureHelper = true,
+                StartedProcessCarriesProviderSession = true
+            };
+        }
+
         if (detachHelperFromLauncherSession
             && !OperatingSystem.IsWindows()
             && !string.Equals(entryKind, "review", StringComparison.Ordinal))
         {
-            var detachedLauncherStartInfo = CreateDetachedHelperLauncherStartInfo(helperStartInfo);
+            var keepDetachedHelperStandardInputOpen = string.Equals(entryKind, "fix", StringComparison.Ordinal);
+            var detachedLauncherStartInfo = CreateDetachedHelperLauncherStartInfo(
+                helperStartInfo,
+                keepDetachedHelperStandardInputOpen);
             return new ResolvedProcessInvocation
             {
                 FileName = detachedLauncherStartInfo.FileName,
                 Arguments = detachedLauncherStartInfo.ArgumentList.ToArray(),
                 RequiresPersistentExitMonitor = false,
                 InheritStandardInput = false,
+                KeepStandardInputOpen = keepDetachedHelperStandardInputOpen,
                 UsesDetachedCaptureHelper = true,
                 StartedProcessCarriesProviderSession = false
             };
@@ -427,12 +447,15 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             Arguments = helperStartInfo.ArgumentList.ToArray(),
             RequiresPersistentExitMonitor = false,
             InheritStandardInput = false,
+            KeepStandardInputOpen = false,
             UsesDetachedCaptureHelper = true,
             StartedProcessCarriesProviderSession = true
         };
     }
 
-    private static ProcessStartInfo CreateDetachedHelperLauncherStartInfo(ProcessStartInfo helperStartInfo)
+    private static ProcessStartInfo CreateDetachedHelperLauncherStartInfo(
+        ProcessStartInfo helperStartInfo,
+        bool inheritStandardInput)
     {
         var launcherStartInfo = new ProcessStartInfo
         {
@@ -444,13 +467,21 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
         launcherStartInfo.ArgumentList.Add("-c");
         launcherStartInfo.ArgumentList.Add(
-            """
-            if command -v nohup >/dev/null 2>&1; then
-                nohup "$@" >/dev/null 2>&1 </dev/null &
-            else
-                "$@" >/dev/null 2>&1 </dev/null &
-            fi
-            """);
+            inheritStandardInput
+                ? """
+                  if command -v nohup >/dev/null 2>&1; then
+                      nohup "$@" >/dev/null 2>&1 &
+                  else
+                      "$@" >/dev/null 2>&1 &
+                  fi
+                  """
+                : """
+                  if command -v nohup >/dev/null 2>&1; then
+                      nohup "$@" >/dev/null 2>&1 </dev/null &
+                  else
+                      "$@" >/dev/null 2>&1 </dev/null &
+                  fi
+                  """);
         launcherStartInfo.ArgumentList.Add("direct-run-detached-capture-launcher");
         launcherStartInfo.ArgumentList.Add(helperStartInfo.FileName);
         foreach (var argument in helperStartInfo.ArgumentList)
@@ -711,6 +742,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         public required bool RequiresPersistentExitMonitor { get; init; }
 
         public required bool InheritStandardInput { get; init; }
+
+        public required bool KeepStandardInputOpen { get; init; }
 
         public required bool UsesDetachedCaptureHelper { get; init; }
 

@@ -13,6 +13,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
         string fileName,
         IReadOnlyList<string> arguments,
         bool inheritStandardInput,
+        bool keepStandardInputOpen,
         TimeSpan earlyExitWindow,
         Action<int> onStarted,
         Action<int> onExited,
@@ -34,7 +35,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
                 FileName = fileName,
                 WorkingDirectory = workingDirectory,
                 UseShellExecute = false,
-                RedirectStandardInput = !inheritStandardInput,
+                RedirectStandardInput = !inheritStandardInput || keepStandardInputOpen,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
@@ -47,7 +48,7 @@ internal sealed class DirectRunProcessRunner : IDirectRunProcessRunner
             var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start direct run process '{fileName}'.");
 
-            if (!inheritStandardInput)
+            if (!inheritStandardInput && !keepStandardInputOpen)
             {
                 process.StandardInput.Close();
             }
