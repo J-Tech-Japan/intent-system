@@ -10,7 +10,9 @@ namespace IntentSystem.Cli.Commands;
 internal static class RunSuperviseCommand
 {
     private const string TransitionActor = "intent-cli";
-    internal static TimeSpan TerminalFailureRaceWindow { get; set; } = TimeSpan.FromMilliseconds(100);
+    // Detached terminal callbacks can trail the dead-process probe slightly; keep the handoff bounded
+    // while still allowing the same-session backend-exit reason to win deterministically.
+    internal static TimeSpan TerminalFailureRaceWindow { get; set; } = TimeSpan.FromMilliseconds(250);
     internal static TimeSpan TerminalFailureRacePollInterval { get; set; } = TimeSpan.FromMilliseconds(10);
 
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
@@ -755,10 +757,13 @@ internal static class RunSuperviseCommand
             return false;
         }
 
+        var pollInterval = TerminalFailureRacePollInterval > TimeSpan.Zero
+            ? TerminalFailureRacePollInterval
+            : TimeSpan.FromMilliseconds(10);
         var deadline = DateTimeOffset.UtcNow + TerminalFailureRaceWindow;
         while (DateTimeOffset.UtcNow < deadline)
         {
-            Thread.Sleep(TerminalFailureRacePollInterval);
+            Thread.Sleep(pollInterval);
             IReadOnlyList<DirectRunProviderEvent> providerEvents;
             try
             {
