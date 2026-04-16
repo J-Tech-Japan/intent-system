@@ -614,6 +614,97 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public async Task Execute_GivenDeadImplementWorkerSessionAtRetryExhaustionWhenBackendExitLandsAfterPreviousRaceWindow_BlocksUsingBackendExitReason()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateActiveRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession() with
+            {
+                RetryCount = 3,
+                RetryBudget = 3
+            }));
+        WriteDeadImplementDirectRunArtifacts(repoRoot, "pid:999999");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRaceWindow = RunSuperviseCommand.TerminalFailureRaceWindow;
+        var originalRacePollInterval = RunSuperviseCommand.TerminalFailureRacePollInterval;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.TerminalFailureRacePollInterval = TimeSpan.FromMilliseconds(5);
+
+            var appendTask = Task.Run(async () =>
+            {
+                await Task.Delay(150);
+                new DirectRunProviderEventWriter(Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"))
+                    .Append(new DirectRunProviderEvent
+                    {
+                        Timestamp = "2026-04-08T10:20:01.0000000+00:00",
+                        ExecutionUnit = "G25",
+                        Provider = "Claude",
+                        EntryKind = "implement",
+                        SessionId = "pid:999999",
+                        Kind = "provider-event",
+                        Payload = JsonSerializer.SerializeToElement(new
+                        {
+                            type = "backend-exit",
+                            exit_code = 1
+                        })
+                    });
+            });
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+            await appendTask;
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("backend exit code 1", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal("blocked", session.QueueState);
+            Assert.Contains("backend exit code 1", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("retry-exhausted", runEvents[^2].Event);
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("backend exit code 1", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.Contains("backend exit code 1", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", runEvents[^1].Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.TerminalFailureRaceWindow = originalRaceWindow;
+            RunSuperviseCommand.TerminalFailureRacePollInterval = originalRacePollInterval;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenActiveItemWithoutExistingSessionAndDeadImplementWorkerSession_CapturesFailureAndAutoResumesImplementLoop()
     {
         using var tempDirectory = new TemporaryDirectory();
