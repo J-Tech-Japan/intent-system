@@ -325,6 +325,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             + " and a required field 'comment_body' that must be a string when a review comment is required or null when no comment is required."
             + " Use 'accepted' or 'approved' only when no review comment is required."
             + " Use 'comment', 'commented', 'fix-requested', or 'changes-requested' only when a deterministic review comment is required."
+            + " Do not post GitHub or pull request comments, do not run 'gh pr comment', and do not publish or mutate any external review state from this direct review run."
+            + " Persist only the review outcome JSON for downstream handling because the separate 'review comment' step owns PR comment publication."
             + " Do not return wrapper fields such as 'stop_reason', 'actions', or execution envelopes instead of 'disposition'."
             + " If you detect a deterministic contract gap or need follow-up work, still return 'disposition':'fix-requested' with an actionable 'comment_body'."
             + " For accepted or approved outcomes, return 'comment_body': null."
