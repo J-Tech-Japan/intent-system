@@ -13,6 +13,7 @@ internal static class DirectRunDetachedCaptureCommand
     private static readonly TimeSpan ExitPollInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan OutputDrainGracePeriod = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ExitCodeResolutionGracePeriod = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan FixStandardInputGracePeriod = TimeSpan.FromSeconds(1);
 
     public static bool TryExecute(string[] args, out int exitCode)
     {
@@ -108,6 +109,9 @@ internal static class DirectRunDetachedCaptureCommand
             var closePreservedStandardInputAfterLaunch = ShouldClosePreservedStandardInputAfterLaunch(
                 startInfo.FileName,
                 options);
+            var delayClosingPreservedStandardInputAfterLaunch = ShouldDelayClosingPreservedStandardInputAfterLaunch(
+                startInfo.FileName,
+                options);
 
             process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start detached direct run process '{options.Command}'.");
@@ -121,6 +125,10 @@ internal static class DirectRunDetachedCaptureCommand
                     // while this helper-owned stdin pipe remains open, which suppresses terminal events.
                     preservedStandardInput.Dispose();
                     preservedStandardInput = null;
+                }
+                else if (delayClosingPreservedStandardInputAfterLaunch)
+                {
+                    SchedulePreservedStandardInputClosure(preservedStandardInput);
                 }
             }
             providerSessionId = $"pid:{process.Id}";
@@ -513,8 +521,49 @@ internal static class DirectRunDetachedCaptureCommand
             return false;
         }
 
+        if (string.Equals(options.EntryKind, "fix", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         var executableName = Path.GetFileNameWithoutExtension(providerExecutablePath.Trim());
         return string.Equals(executableName, "script", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldDelayClosingPreservedStandardInputAfterLaunch(
+        string providerExecutablePath,
+        DirectRunDetachedCaptureOptions options)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerExecutablePath);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (!string.Equals(options.EntryKind, "fix", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var executableName = Path.GetFileNameWithoutExtension(providerExecutablePath.Trim());
+        return string.Equals(executableName, "script", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void SchedulePreservedStandardInputClosure(StreamWriter preservedStandardInput)
+    {
+        ArgumentNullException.ThrowIfNull(preservedStandardInput);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(FixStandardInputGracePeriod).ConfigureAwait(false);
+                preservedStandardInput.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        });
     }
 
     private static string? TryResolveScriptExecutable(DirectRunDetachedCaptureOptions options)

@@ -922,6 +922,141 @@ public sealed class RunFixCommandTests
     }
 
     [Fact]
+    public async Task Execute_GivenWrapperCodexFixCommand_PersistsBoundedRepoActivityForCurrentSession()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateReviewCommentArtifactJson());
+        var providerBinaryPath = tempDirectory.CreateExecutableFile(
+            "bin/codex",
+            """
+            #!/bin/sh
+            printf '%s\n' 'OpenAI Codex v0.118.0 (research preview)'
+            printf '%s\n' '--------'
+            printf '%s\n' "workdir: $PWD"
+            printf '%s\n' 'user'
+            /usr/bin/python3 -c 'import os,select,sys; fd = sys.stdin.fileno(); os.isatty(fd) or (print("tty-missing", flush=True), sys.exit(1)); readable, _, _ = select.select([sys.stdin], [], [], 0.2); data = os.read(fd, 1) if readable else None; data != b"" or (print("stdin-eof", flush=True), sys.exit(1)); print("pwd && rg --files .", flush=True); print("git status --short", flush=True); print("dotnet test", flush=True)'
+            exit 0
+            """);
+        var wrapperPath = tempDirectory.CreateExecutableFile(
+            "bin/codex-isolated",
+            $$"""
+            #!/bin/zsh
+            export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
+            exec {{providerBinaryPath}} "$@"
+            """);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunFixCommand.TimestampFactory;
+
+        try
+        {
+            RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-16T18:16:00Z");
+
+            var baseContext = CreateContext(repoRoot);
+            var context = baseContext with
+            {
+                Config = baseContext.Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Codex",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        Command = wrapperPath
+                    }
+                }
+            };
+
+            var exitCode = RunFixCommand.Execute(context, ["G20"], writer);
+
+            Assert.Equal(0, exitCode);
+
+            var resultArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.result.json");
+            var providerEventLogPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.provider.jsonl");
+            var initialArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+
+            await WaitForConditionAsync(
+                () =>
+                {
+                    if (!File.Exists(providerEventLogPath) || !File.Exists(resultArtifactPath))
+                    {
+                        return false;
+                    }
+
+                    var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                    var sawBoundedProgress = providerEvents.Any(providerEvent =>
+                        providerEvent.Kind == "provider-event"
+                        && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                        && string.Equals(providerEvent.Payload.GetString(), "pwd && rg --files .", StringComparison.Ordinal));
+                    if (!sawBoundedProgress)
+                    {
+                        return false;
+                    }
+
+                    var updatedArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                    return string.Equals(updatedArtifact.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                        && !string.Equals(updatedArtifact.RunStatus, "failed", StringComparison.Ordinal);
+                },
+                TimeSpan.FromSeconds(10));
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            Assert.DoesNotContain(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                && string.Equals(providerEvent.Payload.GetString(), "stdin-eof", StringComparison.Ordinal));
+            Assert.DoesNotContain(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                && string.Equals(providerEvent.Payload.GetString(), "tty-missing", StringComparison.Ordinal));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                && string.Equals(providerEvent.Payload.GetString(), "pwd && rg --files .", StringComparison.Ordinal));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                && string.Equals(providerEvent.Payload.GetString(), "git status --short", StringComparison.Ordinal));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                && string.Equals(providerEvent.Payload.GetString(), "dotnet test", StringComparison.Ordinal));
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+            Assert.Equal(initialArtifact.SessionId, resultArtifact.SessionId);
+            Assert.NotEqual("failed", resultArtifact.RunStatus);
+        }
+        finally
+        {
+            RunFixCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenMissingQueueItem_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();
