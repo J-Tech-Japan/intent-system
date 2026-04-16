@@ -821,6 +821,99 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task DirectRunExitMonitorCommand_GivenCurrentRunningResultArtifact_UpdatesRunStatusToFailed()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var externalProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 1" }
+        });
+        Assert.NotNull(externalProcess);
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b-result.provider.jsonl");
+        var requestArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-result.request.json");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-result.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(providerEventLogPath)!);
+
+        var launchedAt = DateTimeOffset.UtcNow;
+        var providerSessionId = $"pid:{externalProcess!.Id}";
+        File.WriteAllText(
+            requestArtifactPath,
+            DirectRunRequestArtifactJson.Serialize(new DirectRunRequestArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-result",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-result.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                Transport = "responses",
+                LaunchedAt = launchedAt.ToString("O"),
+                ProviderSessionId = providerSessionId,
+                TransportSummary = "launched via wrapper"
+            }));
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(new DirectRunResultArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-result",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-result.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                SessionId = providerSessionId,
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G14b-result.provider.jsonl",
+                PacketRef = ".intent-cli/issues/G14b-result/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G14b-result/review-context.md",
+                Worktree = new DirectRunWorktreeContext
+                {
+                    Path = "/repo/.intent-cli/worktrees/G14b-result"
+                }
+            }));
+
+        using var monitor = Process.Start(DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            externalProcess.Id,
+            providerEventLogPath,
+            "G14b-result",
+            "fix",
+            "Codex",
+            providerSessionId,
+            launchedAt));
+        Assert.NotNull(monitor);
+        monitor!.StandardInput.Close();
+        monitor.StandardOutput.Dispose();
+        monitor.StandardError.Dispose();
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(resultArtifactPath))
+                {
+                    return false;
+                }
+
+                var artifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                return string.Equals(artifact.RunStatus, "failed", StringComparison.Ordinal);
+            },
+            TimeSpan.FromSeconds(5));
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal(providerSessionId, resultArtifact.SessionId);
+        Assert.Equal("failed", resultArtifact.RunStatus);
+    }
+
+    [Fact]
     public async Task DirectRunExitMonitorCommand_GivenStaleBackendExitForSamePid_AppendsFreshBackendExit()
     {
         if (OperatingSystem.IsWindows())

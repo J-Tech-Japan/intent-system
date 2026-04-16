@@ -87,6 +87,11 @@ internal static class DirectRunExitMonitorCommand
 
         if (DirectRunSessionBoundary.HasBackendExitEvent(options.ProviderEventLogPath, options.ProviderSessionId, options.LaunchedAt))
         {
+            DirectRunTerminalArtifactUpdater.PersistTerminalRunStatusIfCurrent(
+                options.ProviderEventLogPath,
+                options.ProviderSessionId,
+                options.LaunchedAt,
+                exitCode: 1);
             return 0;
         }
 
@@ -98,6 +103,11 @@ internal static class DirectRunExitMonitorCommand
             options.Provider,
             options.ProviderSessionId,
             1));
+        DirectRunTerminalArtifactUpdater.PersistTerminalRunStatusIfCurrent(
+            options.ProviderEventLogPath,
+            options.ProviderSessionId,
+            options.LaunchedAt,
+            exitCode: 1);
 
         return 0;
     }

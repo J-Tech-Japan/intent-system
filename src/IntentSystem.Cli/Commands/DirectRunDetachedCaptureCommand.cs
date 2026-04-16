@@ -203,6 +203,11 @@ internal static class DirectRunDetachedCaptureCommand
     {
         if (DirectRunSessionBoundary.HasBackendExitEvent(options.ProviderEventLogPath, providerSessionId, options.LaunchedAt))
         {
+            DirectRunTerminalArtifactUpdater.PersistTerminalRunStatusIfCurrent(
+                options.ProviderEventLogPath,
+                providerSessionId,
+                options.LaunchedAt,
+                exitCode);
             return;
         }
 
@@ -213,6 +218,11 @@ internal static class DirectRunDetachedCaptureCommand
             options.Provider,
             providerSessionId,
             exitCode));
+        DirectRunTerminalArtifactUpdater.PersistTerminalRunStatusIfCurrent(
+            options.ProviderEventLogPath,
+            providerSessionId,
+            options.LaunchedAt,
+            exitCode);
     }
 
     private static void StartProviderExitMonitorIfPossible(
