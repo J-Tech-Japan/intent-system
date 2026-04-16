@@ -395,6 +395,7 @@ public sealed class RunSuperviseCommandTests
             Assert.Contains(providerEvents, providerEvent =>
                 providerEvent.Kind == "provider-event"
                 && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == JsonValueKind.Object
                 && providerEvent.Payload.TryGetProperty("type", out var typeElement)
                 && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
                 && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
@@ -784,6 +785,7 @@ public sealed class RunSuperviseCommandTests
             Assert.Contains(providerEvents, providerEvent =>
                 providerEvent.Kind == "provider-event"
                 && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == JsonValueKind.Object
                 && providerEvent.Payload.TryGetProperty("type", out var typeElement)
                 && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
                 && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
@@ -893,6 +895,7 @@ public sealed class RunSuperviseCommandTests
             Assert.Contains(providerEvents, providerEvent =>
                 providerEvent.Kind == "provider-event"
                 && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == JsonValueKind.Object
                 && providerEvent.Payload.TryGetProperty("type", out var typeElement)
                 && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
                 && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
@@ -981,6 +984,154 @@ public sealed class RunSuperviseCommandTests
         finally
         {
             RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
+    public async Task Execute_GivenStartupOnlyDeadFixWorkerSessionWhenBackendExitLandsDuringRaceWindow_BlocksWithoutAutoResume()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession(workerEntry: RunSupervisionWorkerEntry.Fix)));
+        WriteStartupOnlyDeadFixDirectRunArtifacts(repoRoot, "pid:999999", includeBackendExit: false);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRaceWindow = RunSuperviseCommand.TerminalFailureRaceWindow;
+        var originalRacePollInterval = RunSuperviseCommand.TerminalFailureRacePollInterval;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.TerminalFailureRaceWindow = TimeSpan.FromMilliseconds(700);
+            RunSuperviseCommand.TerminalFailureRacePollInterval = TimeSpan.FromMilliseconds(5);
+
+            var appendTask = Task.Run(async () =>
+            {
+                await Task.Delay(600);
+                new DirectRunProviderEventWriter(Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"))
+                    .Append(new DirectRunProviderEvent
+                    {
+                        Timestamp = "2026-04-08T10:20:01.0000000+00:00",
+                        ExecutionUnit = "G25",
+                        Provider = "Claude",
+                        EntryKind = "fix",
+                        SessionId = "pid:999999",
+                        Kind = "provider-event",
+                        Payload = JsonSerializer.SerializeToElement(new
+                        {
+                            type = "backend-exit",
+                            exit_code = 1
+                        })
+                    });
+            });
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+            await appendTask;
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.Contains("during provider startup", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.TerminalFailureRaceWindow = originalRaceWindow;
+            RunSuperviseCommand.TerminalFailureRacePollInterval = originalRacePollInterval;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenStartupOnlyDeadFixWorkerSessionWithoutCapturedTerminalEvent_BlocksUsingSyntheticStartupOnlyReason()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession(workerEntry: RunSupervisionWorkerEntry.Fix)));
+        WriteStartupOnlyDeadFixDirectRunArtifacts(repoRoot, "pid:999999", includeBackendExit: false);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRaceWindow = RunSuperviseCommand.TerminalFailureRaceWindow;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.TerminalFailureRaceWindow = TimeSpan.Zero;
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.Contains("during provider startup", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                && exitCodeElement.GetInt32() == 1);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("during provider startup", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.TerminalFailureRaceWindow = originalRaceWindow;
         }
     }
 
@@ -1387,7 +1538,7 @@ public sealed class RunSuperviseCommandTests
         File.WriteAllText(Path.Combine(runsPath, "G25.provider.jsonl"), string.Join(Environment.NewLine, providerEvents) + Environment.NewLine);
     }
 
-    private static void WriteStartupOnlyDeadFixDirectRunArtifacts(string repoRoot, string sessionId)
+    private static void WriteStartupOnlyDeadFixDirectRunArtifacts(string repoRoot, string sessionId, bool includeBackendExit = true)
     {
         var requestArtifact = new DirectRunRequestArtifact
         {
@@ -1449,13 +1600,23 @@ public sealed class RunSuperviseCommandTests
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
-                Timestamp = "2026-04-08T10:20:00.3000000+00:00",
+                Timestamp = "2026-04-08T10:20:00.2500000+00:00",
                 ExecutionUnit = "G25",
                 Provider = "Claude",
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
                 Payload = JsonSerializer.SerializeToElement("--------")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.3000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G25")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
@@ -1496,16 +1657,6 @@ public sealed class RunSuperviseCommandTests
                 SessionId = sessionId,
                 Kind = "provider-event",
                 Payload = JsonSerializer.SerializeToElement("user")
-            }),
-            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
-            {
-                Timestamp = "2026-04-08T10:20:00.5500000+00:00",
-                ExecutionUnit = "G25",
-                Provider = "Claude",
-                EntryKind = "fix",
-                SessionId = sessionId,
-                Kind = "provider-event",
-                Payload = JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G25")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
@@ -1569,19 +1720,37 @@ public sealed class RunSuperviseCommandTests
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
-                Timestamp = "2026-04-08T10:20:01.0000000+00:00",
+                Timestamp = "2026-04-08T10:20:00.9500000+00:00",
                 ExecutionUnit = "G25",
                 Provider = "Claude",
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = JsonSerializer.SerializeToElement(new
-                {
-                    type = "backend-exit",
-                    exit_code = 1
-                })
-            })
+                Payload = JsonSerializer.SerializeToElement(
+                    "2026-04-08T10:20:00.9500000Z  WARN codex_core::shell_snapshot: Failed to delete shell snapshot at \"/tmp/snapshot\"")
+            }),
         };
+        if (includeBackendExit)
+        {
+            providerEvents =
+            [
+                .. providerEvents,
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-08T10:20:01.0000000+00:00",
+                    ExecutionUnit = "G25",
+                    Provider = "Claude",
+                    EntryKind = "fix",
+                    SessionId = sessionId,
+                    Kind = "provider-event",
+                    Payload = JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 1
+                    })
+                })
+            ];
+        }
 
         var runsPath = Path.Combine(repoRoot, ".intent-cli", "runs");
         Directory.CreateDirectory(runsPath);
