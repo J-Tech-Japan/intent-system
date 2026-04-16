@@ -781,6 +781,24 @@ internal static class RunSuperviseCommand
                 RunStatus = "failed"
             }));
 
+        if (string.Equals(expectedEntryKind, "fix", StringComparison.Ordinal))
+        {
+            var providerEventsWithSyntheticExit = new List<DirectRunProviderEvent>(currentProviderEvents.Count + 1);
+            providerEventsWithSyntheticExit.AddRange(currentProviderEvents);
+            providerEventsWithSyntheticExit.Add(backendExitEvent);
+
+            if (DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
+                    providerEventsWithSyntheticExit,
+                    executionUnit,
+                    out var startupOnlyDetail))
+            {
+                failure = new WorkerSessionFailure(
+                    $"Worker session '{requestArtifact.ProviderSessionId}' for '{executionUnit}' exited with backend exit code 1. {startupOnlyDetail}",
+                    IsStartupOnly: true);
+                return true;
+            }
+        }
+
         if (!TryResolveTerminalFailureReason(
                 [backendExitEvent],
                 executionUnit,

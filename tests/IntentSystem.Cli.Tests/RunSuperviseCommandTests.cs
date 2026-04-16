@@ -395,6 +395,7 @@ public sealed class RunSuperviseCommandTests
             Assert.Contains(providerEvents, providerEvent =>
                 providerEvent.Kind == "provider-event"
                 && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == JsonValueKind.Object
                 && providerEvent.Payload.TryGetProperty("type", out var typeElement)
                 && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
                 && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
@@ -784,6 +785,7 @@ public sealed class RunSuperviseCommandTests
             Assert.Contains(providerEvents, providerEvent =>
                 providerEvent.Kind == "provider-event"
                 && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == JsonValueKind.Object
                 && providerEvent.Payload.TryGetProperty("type", out var typeElement)
                 && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
                 && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
@@ -893,6 +895,7 @@ public sealed class RunSuperviseCommandTests
             Assert.Contains(providerEvents, providerEvent =>
                 providerEvent.Kind == "provider-event"
                 && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == JsonValueKind.Object
                 && providerEvent.Payload.TryGetProperty("type", out var typeElement)
                 && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
                 && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
@@ -1061,6 +1064,74 @@ public sealed class RunSuperviseCommandTests
             RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
             RunSuperviseCommand.TerminalFailureRaceWindow = originalRaceWindow;
             RunSuperviseCommand.TerminalFailureRacePollInterval = originalRacePollInterval;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenStartupOnlyDeadFixWorkerSessionWithoutCapturedTerminalEvent_BlocksUsingSyntheticStartupOnlyReason()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession(workerEntry: RunSupervisionWorkerEntry.Fix)));
+        WriteStartupOnlyDeadFixDirectRunArtifacts(repoRoot, "pid:999999", includeBackendExit: false);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRaceWindow = RunSuperviseCommand.TerminalFailureRaceWindow;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.TerminalFailureRaceWindow = TimeSpan.Zero;
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.Contains("during provider startup", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl")));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+                && providerEvent.Payload.ValueKind == JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                && exitCodeElement.GetInt32() == 1);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("during provider startup", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.TerminalFailureRaceWindow = originalRaceWindow;
         }
     }
 
