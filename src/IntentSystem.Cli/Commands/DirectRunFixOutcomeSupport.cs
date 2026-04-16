@@ -6,6 +6,15 @@ internal static class DirectRunFixOutcomeSupport
 {
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
     private const string InspectionOnlyExitReason = "fix-session-ended-after-initial-inspection";
+    private static readonly string[] StartupPreamblePrefixes =
+    [
+        "openai codex v",
+        "workdir:",
+        "provider:",
+        "approval:",
+        "sandbox:",
+        "reasoning effort:"
+    ];
     private static readonly string[] StartupWarningMarkers =
     [
         "warn",
@@ -99,6 +108,7 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         var sawStartupNoise = false;
+        var sawStartupPreamble = false;
         for (var index = 0; index < failingBackendExitIndex; index++)
         {
             var providerEvent = providerEvents[index];
@@ -110,12 +120,31 @@ internal static class DirectRunFixOutcomeSupport
 
             if (TryResolveExplicitContractGapDetail(providerEvent.Payload, executionUnit, out _)
                 || ContainsSuccessfulInitialRepoInspection(providerEvent.Payload)
-                || !IsIgnorableStartupNoise(providerEvent.Payload))
+                || ContainsBoundedFixProgressSignal(providerEvent.Payload))
             {
                 return false;
             }
 
-            sawStartupNoise = true;
+            if (IsIgnorableStartupNoise(providerEvent.Payload))
+            {
+                sawStartupNoise = true;
+                continue;
+            }
+
+            if (IsIgnorableStartupPreamble(providerEvent.Payload))
+            {
+                sawStartupPreamble = true;
+                continue;
+            }
+
+            if (sawStartupPreamble
+                && !sawStartupNoise
+                && IsIgnorablePromptEcho(providerEvent.Payload))
+            {
+                continue;
+            }
+
+            return false;
         }
 
         if (!sawStartupNoise)
@@ -283,6 +312,22 @@ internal static class DirectRunFixOutcomeSupport
             && string.Equals(type, "ready", StringComparison.Ordinal);
     }
 
+    private static bool IsIgnorableStartupPreamble(JsonElement payload)
+    {
+        var sawString = false;
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            sawString = true;
+            var normalized = value.Trim().ToLowerInvariant();
+            if (!StartupPreamblePrefixes.Any(prefix => normalized.StartsWith(prefix, StringComparison.Ordinal)))
+            {
+                return false;
+            }
+        }
+
+        return sawString;
+    }
+
     private static bool IsIgnorableStartupNoise(JsonElement payload)
     {
         var sawString = false;
@@ -297,6 +342,46 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return sawString;
+    }
+
+    private static bool IsIgnorablePromptEcho(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var value = payload.GetString();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return !StartupPreamblePrefixes.Any(prefix => normalized.StartsWith(prefix, StringComparison.Ordinal))
+            && !StartupWarningMarkers.Any(marker => normalized.Contains(marker, StringComparison.Ordinal))
+            && !ContainsBoundedFixProgressSignal(payload);
+    }
+
+    private static bool ContainsBoundedFixProgressSignal(JsonElement payload)
+    {
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            var normalized = value.Trim().ToLowerInvariant();
+            if (normalized.Contains("rg --files", StringComparison.Ordinal)
+                || normalized.Contains("apply_patch", StringComparison.Ordinal)
+                || normalized.Contains("dotnet test", StringComparison.Ordinal)
+                || normalized.Contains("git diff", StringComparison.Ordinal)
+                || normalized.Contains("git status", StringComparison.Ordinal)
+                || normalized.Contains("ls ", StringComparison.Ordinal)
+                || normalized.Contains("cat ", StringComparison.Ordinal)
+                || normalized.Contains("sed -n", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static IEnumerable<string> EnumeratePayloadStrings(JsonElement payload)

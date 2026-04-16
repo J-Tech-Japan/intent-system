@@ -3765,11 +3765,77 @@ public sealed class RunCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
-                {
-                    level = "warn",
-                    message = "plugin manifest falling_back after state db discrepancy on slow path"
-                })
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("OpenAI Codex v0.118.0 (research preview)")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.3000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G226")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.4000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("provider: openai")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.5000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("approval: never")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.6000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("sandbox: danger-full-access")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.7000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("reasoning effort: high")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.8000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("Please diagnose the startup-only backend exit reproduction for issue #295.")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.9000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("warn plugin manifest falling_back after state db discrepancy on slow path")
             },
             new DirectRunProviderEvent
             {

@@ -1445,11 +1445,77 @@ public sealed class RunSuperviseCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = JsonSerializer.SerializeToElement(new
-                {
-                    level = "warn",
-                    message = "state db discrepancy detected on slow path while reconcile_rollout started"
-                })
+                Payload = JsonSerializer.SerializeToElement("OpenAI Codex v0.118.0 (research preview)")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.3000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G25")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.4000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("provider: openai")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.5000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("approval: never")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.6000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("sandbox: danger-full-access")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.7000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("reasoning effort: high")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.8000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("Please diagnose the startup-only backend exit reproduction for issue #295.")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.9000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("warn state db discrepancy detected on slow path while reconcile_rollout started")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
