@@ -24,6 +24,9 @@ internal static class RunSuperviseCommand
     public static Func<CliContext, string, RunFixResult> RunFixExecutor { get; set; } =
         RunFixCommand.ExecuteCore;
 
+    public static Func<IGitCommandRunner> GitCommandRunnerFactory { get; set; } =
+        () => new GitCommandRunner();
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -166,7 +169,7 @@ internal static class RunSuperviseCommand
                 session.WorkerEntry,
                 out var deadWorkerFailure))
         {
-            if (deadWorkerFailure.IsStartupOnly)
+            if (deadWorkerFailure.ReportAsNonRetryableFailure)
             {
                 return BlockForTerminalFailure(
                     context,
@@ -313,7 +316,7 @@ internal static class RunSuperviseCommand
                 session.WorkerEntry,
                 out var deadWorkerFailure))
         {
-            if (deadWorkerFailure.IsStartupOnly)
+            if (deadWorkerFailure.ReportAsNonRetryableFailure)
             {
                 return BlockForTerminalFailure(
                     context,
@@ -730,6 +733,24 @@ internal static class RunSuperviseCommand
         var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath));
         var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId, requestArtifact.LaunchedAt);
 
+        if (string.Equals(expectedEntryKind, "fix", StringComparison.Ordinal)
+            && TryResolveFixWorktreeProgressFailure(
+                currentProviderEvents,
+                executionUnit,
+                requestArtifact.ProviderSessionId,
+                resultArtifact.Worktree.Path,
+                out failure))
+        {
+            File.WriteAllText(
+                resultArtifactPath,
+                DirectRunResultArtifactJson.Serialize(resultArtifact with
+                {
+                    RunStatus = "failed"
+                }));
+
+            return true;
+        }
+
         if (TryResolveTerminalFailureReason(
                 currentProviderEvents,
                 executionUnit,
@@ -787,14 +808,24 @@ internal static class RunSuperviseCommand
             providerEventsWithSyntheticExit.AddRange(currentProviderEvents);
             providerEventsWithSyntheticExit.Add(backendExitEvent);
 
+            if (TryResolveFixWorktreeProgressFailure(
+                    providerEventsWithSyntheticExit,
+                    executionUnit,
+                    requestArtifact.ProviderSessionId,
+                    resultArtifact.Worktree.Path,
+                    out failure))
+            {
+                return true;
+            }
+
             if (DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
                     providerEventsWithSyntheticExit,
                     executionUnit,
                     out var startupOnlyDetail))
             {
-                failure = new WorkerSessionFailure(
-                    $"Worker session '{requestArtifact.ProviderSessionId}' for '{executionUnit}' exited with backend exit code 1. {startupOnlyDetail}",
-                    IsStartupOnly: true);
+                    failure = new WorkerSessionFailure(
+                        $"Worker session '{requestArtifact.ProviderSessionId}' for '{executionUnit}' exited with backend exit code 1. {startupOnlyDetail}",
+                        ReportAsNonRetryableFailure: true);
                 return true;
             }
         }
@@ -869,6 +900,39 @@ internal static class RunSuperviseCommand
         return false;
     }
 
+    private static bool TryResolveFixWorktreeProgressFailure(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        string providerSessionId,
+        string worktreePath,
+        out WorkerSessionFailure failure)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+
+        failure = null!;
+        if (!TryFindFailingBackendExitCode(providerEvents, out var exitCode)
+            || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(providerEvents, executionUnit, out _)
+            || !DirectRunFixOutcomeSupport.HasBoundedProgressSignal(providerEvents)
+            || !TryResolveMeaningfulWorktreeDiffPaths(worktreePath, out var changedPaths))
+        {
+            return false;
+        }
+
+        var summarizedPaths = string.Join(", ", changedPaths.Take(3));
+        if (changedPaths.Count > 3)
+        {
+            summarizedPaths += ", ...";
+        }
+
+        failure = new WorkerSessionFailure(
+            $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode} after bounded fix progress and left meaningful execution-unit worktree changes. Changed paths: {summarizedPaths}.",
+            ReportAsNonRetryableFailure: true);
+        return true;
+    }
+
     private static bool TryResolveTerminalFailureReason(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
@@ -901,25 +965,124 @@ internal static class RunSuperviseCommand
                 {
                     failure = new WorkerSessionFailure(
                         $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode}. {startupOnlyDetail}",
-                        IsStartupOnly: true);
+                        ReportAsNonRetryableFailure: true);
                     return true;
                 }
 
                 failure = new WorkerSessionFailure(
                     $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode}.",
-                    IsStartupOnly: false);
+                    ReportAsNonRetryableFailure: false);
             }
             else
             {
                 failure = new WorkerSessionFailure(
                     $"Worker session '{providerSessionId}' for '{executionUnit}' exited after a terminal backend-exit event.",
-                    IsStartupOnly: false);
+                    ReportAsNonRetryableFailure: false);
             }
 
             return true;
         }
 
         return false;
+    }
+
+    private static bool TryFindFailingBackendExitCode(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        out int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            var providerEvent = providerEvents[index];
+            if (!HasBackendExitType(providerEvent)
+                || !providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                || !exitCodeElement.TryGetInt32(out exitCode)
+                || exitCode == 0)
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        exitCode = default;
+        return false;
+    }
+
+    private static bool TryResolveMeaningfulWorktreeDiffPaths(
+        string worktreePath,
+        out IReadOnlyList<string> changedPaths)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+
+        changedPaths = [];
+        GitCommandResult statusResult;
+        try
+        {
+            statusResult = GitCommandRunnerFactory().Run(
+                worktreePath,
+                ["status", "--short", "--untracked-files=all"]);
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+            or IOException
+            or ArgumentException
+            or DirectoryNotFoundException
+            or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+
+        if (statusResult.ExitCode != 0 || string.IsNullOrWhiteSpace(statusResult.StdOut))
+        {
+            return false;
+        }
+
+        var paths = new List<string>();
+        foreach (var rawLine in statusResult.StdOut.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.TrimEnd();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var pathText = line.Length > 3 ? line[3..].Trim() : line.Trim();
+            if (string.IsNullOrWhiteSpace(pathText))
+            {
+                continue;
+            }
+
+            var normalizedPath = pathText.Contains(" -> ", StringComparison.Ordinal)
+                ? pathText[(pathText.LastIndexOf(" -> ", StringComparison.Ordinal) + 4)..].Trim()
+                : pathText;
+            normalizedPath = normalizedPath.Trim().Trim('"').Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(normalizedPath)
+                || IsIgnoredWorktreeArtifactPath(normalizedPath))
+            {
+                continue;
+            }
+
+            paths.Add(normalizedPath);
+        }
+
+        if (paths.Count == 0)
+        {
+            return false;
+        }
+
+        changedPaths = paths;
+        return true;
+    }
+
+    private static bool IsIgnoredWorktreeArtifactPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        return path.StartsWith(".intent-cli/", StringComparison.Ordinal)
+            || path.StartsWith(".takt/", StringComparison.Ordinal)
+            || path.StartsWith("node_modules/", StringComparison.Ordinal);
     }
 
     private static string ResolveDirectRunRequestArtifactPath(CliContext context, string executionUnit)
@@ -1069,7 +1232,7 @@ internal static class RunSuperviseCommand
         };
     }
 
-    private sealed record WorkerSessionFailure(string Reason, bool IsStartupOnly);
+    private sealed record WorkerSessionFailure(string Reason, bool ReportAsNonRetryableFailure);
 
     private static string FormatQueueState(QueueItemState state)
     {
