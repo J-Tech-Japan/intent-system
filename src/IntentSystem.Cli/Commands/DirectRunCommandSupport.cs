@@ -697,6 +697,21 @@ internal static class DirectRunCommandSupport
         var model = ResolveModel(currentProviderEvents, launchResult.Model);
         var sessionId = ResolveSessionId(currentProviderEvents, launchResult.ProviderSessionId);
         var provider = ResolveProvider(currentProviderEvents, launchResult.Provider);
+        var fixContractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            currentProviderEvents,
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            entryKind,
+            provider,
+            sessionId);
+        if (fixContractGapEvent is not null)
+        {
+            var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+            writer.Append(fixContractGapEvent);
+            providerEvents = [.. providerEvents, fixContractGapEvent];
+            currentProviderEvents = [.. currentProviderEvents, fixContractGapEvent];
+        }
+
         var runStatus = ResolveRunStatus(currentProviderEvents);
         if (string.Equals(entryKind, "review", StringComparison.Ordinal))
         {

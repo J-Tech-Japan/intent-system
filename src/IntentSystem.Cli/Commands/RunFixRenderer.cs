@@ -67,6 +67,12 @@ internal static class RunFixRenderer
         lines.Add("## Expected Evidence");
         lines.Add(string.Empty);
         lines.AddRange(FormatList(request.ExpectedEvidence));
+        lines.Add(string.Empty);
+        lines.Add("## Execution Contract");
+        lines.Add(string.Empty);
+        lines.Add("- Continue beyond initial repository inspection; do not stop after a single listing/read-only command.");
+        lines.Add("- Use the repair inputs to attempt the bounded fix inside the provided worktree when the change is feasible.");
+        lines.Add("- If no safe bounded repair can continue, end with a deterministic refusal or contract-gap explanation instead of silent termination.");
 
         return string.Join(Environment.NewLine, lines);
     }

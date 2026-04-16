@@ -192,6 +192,48 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public void Launch_GivenFixEntry_InjectsPromptThatRequiresRepairOrDeterministicRefusal()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var runner = new FakeDirectRunProcessRunner
+        {
+            Result = new DirectRunProcessLaunchResult
+            {
+                ProcessId = 4321,
+                ExitedEarly = false,
+                ExitCode = 0
+            }
+        };
+        var launcher = new DirectRunLauncher(runner);
+
+        launcher.Launch(
+            "G19",
+            "fix",
+            ".intent-cli/runs/G19.request.json",
+            ".intent-cli/runs/G19.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            "codex",
+            [
+                "exec",
+                "--model",
+                "{model}",
+                "{prompt}"
+            ],
+            DateTimeOffset.Parse("2026-04-09T10:15:00Z"),
+            "/repo/.intent-cli/worktrees/G19",
+            "/repo/.intent-cli/fix/G19.request.md",
+            tempDirectory.GetPath(".intent-cli/runs/G19.provider.jsonl"));
+
+        var prompt = Assert.Single(runner.Arguments, argument => argument.Contains("bounded source of truth", StringComparison.Ordinal));
+        Assert.Contains("Continue beyond initial repository inspection", prompt, StringComparison.Ordinal);
+        Assert.Contains("complete the bounded repair attempt", prompt, StringComparison.Ordinal);
+        Assert.Contains("deterministic refusal or contract-gap explanation", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not stop after a single inspection command", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Launch_GivenProcessExit_AppendsBackendExitProviderEvent()
     {
         if (OperatingSystem.IsWindows())

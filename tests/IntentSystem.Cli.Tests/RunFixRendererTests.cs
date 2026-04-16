@@ -16,6 +16,9 @@ public sealed class RunFixRendererTests
         Assert.Contains("- review_request_ref: .intent-cli/reviews/G20.request.json", markdown, StringComparison.Ordinal);
         Assert.Contains("- review_comment_body_path: /repo/prepared-comment.md", markdown, StringComparison.Ordinal);
         Assert.Contains("## Deterministic Review Checks", markdown, StringComparison.Ordinal);
+        Assert.Contains("## Execution Contract", markdown, StringComparison.Ordinal);
+        Assert.Contains("Continue beyond initial repository inspection", markdown, StringComparison.Ordinal);
+        Assert.Contains("deterministic refusal or contract-gap explanation", markdown, StringComparison.Ordinal);
     }
 
     [Fact]

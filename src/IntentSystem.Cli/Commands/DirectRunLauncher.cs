@@ -315,6 +315,14 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
     {
         var prompt =
             $"Use the request artifact at '{absoluteRequestArtifactPath}' as the bounded source of truth for this direct run.";
+        if (string.Equals(entryKind, "fix", StringComparison.Ordinal))
+        {
+            return prompt
+                + " Continue beyond initial repository inspection and either complete the bounded repair attempt from that artifact"
+                + " or end with a deterministic refusal or contract-gap explanation."
+                + " Do not stop after a single inspection command without producing one of those outcomes.";
+        }
+
         if (!string.Equals(entryKind, "review", StringComparison.Ordinal))
         {
             return prompt;
