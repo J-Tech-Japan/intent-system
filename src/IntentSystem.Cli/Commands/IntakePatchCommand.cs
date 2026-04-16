@@ -56,7 +56,7 @@ internal static class IntakePatchCommand
     private static IntakePatchRequest CreateRequest(string repoRoot, IntakePatchFoldinDraft foldinDraft)
     {
         var targetFilePaths = foldinDraft.ReturnToIntentPaths
-            .Concat(foldinDraft.SourceConceptRefs)
+            .Concat(foldinDraft.SourceConceptRefs.Where(path => !IsRuntimeConceptArtifactPath(path)))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
@@ -172,5 +172,13 @@ internal static class IntakePatchCommand
         return values.Count == 0
             ? "none"
             : string.Join(", ", values.OrderBy(value => value, StringComparer.Ordinal));
+    }
+
+    private static bool IsRuntimeConceptArtifactPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        return path.StartsWith(".intent-cli/intake/", StringComparison.Ordinal)
+            && path.EndsWith(".concept.yaml", StringComparison.Ordinal);
     }
 }

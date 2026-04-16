@@ -167,6 +167,75 @@ public sealed class IntakeApplyCommandTests
         Assert.Contains("requires a domain", writer.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Execute_GivenRuntimeConceptArtifactSourceRef_KeepsConceptYamlDeserializable()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.patch.md"),
+            """
+            # Intake Patch Draft
+
+            ## Domain
+
+            `auth`
+
+            target_file_paths:
+            - intents/intent-cli/intent-tree/means/auth-oauth2.md
+
+            source_concept_refs:
+            - .intent-cli/intake/auth.concept.yaml
+
+            ## File-By-File Patch Candidates
+
+            ### `intents/intent-cli/intent-tree/means/auth-oauth2.md`
+
+            current_file_state: present
+            foldin_anchors:
+            - answered_question_ids:iq-1
+            - recommended_updates:Add device-code note
+            source_concept_refs:
+            - .intent-cli/intake/auth.concept.yaml
+            proposed_edits:
+            - Apply update candidate: Add device-code note
+            rationale:
+            - This path is listed in return_to_intent_paths.
+            current_file_excerpt:
+            ```text
+            # Auth Means
+            Existing line
+            ```
+            """);
+        var conceptArtifactPath = Path.Combine(repoRoot, ".intent-cli", "intake", "auth.concept.yaml");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
+            """
+            domain_slug: auth
+            concept_source: interactive
+            concept_text: "Add OAuth2 provider support."
+            upstream_paths: []
+            initial_goal: "Add OAuth2 provider support."
+            constraints: []
+            known_unknowns: []
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
+            "# Auth Means" + Environment.NewLine + "Existing line");
+        using var writer = new StringWriter();
+
+        var originalConceptYaml = File.ReadAllText(conceptArtifactPath);
+        var exitCode = IntakeApplyCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(originalConceptYaml, File.ReadAllText(conceptArtifactPath));
+        var packet = IntakeConceptArtifactYaml.Deserialize(File.ReadAllText(conceptArtifactPath));
+        Assert.Equal("auth", packet.DomainSlug);
+
+        var updatedMeans = File.ReadAllText(Path.Combine(repoRoot, "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"));
+        Assert.Contains("- Add device-code note", updatedMeans, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext

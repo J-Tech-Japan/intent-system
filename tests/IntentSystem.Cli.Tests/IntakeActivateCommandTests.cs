@@ -195,6 +195,87 @@ public sealed class IntakeActivateCommandTests
         Assert.Contains("requires a domain", writer.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Execute_GivenRuntimeConceptArtifactSourceRef_DoesNotCorruptConceptYaml()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        var conceptArtifactPath = Path.Combine(repoRoot, ".intent-cli", "intake", "auth.concept.yaml");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.concept.yaml"),
+            CreateConceptArtifactYaml("auth"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.yaml"),
+            CreateInterviewArtifactYaml(CreateAnsweredItem(sourceConceptRef: ".intent-cli/intake/auth.concept.yaml")));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "auth", "iq-1.md"),
+            "# Interview Question");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "means", "auth-oauth2.md"),
+            "# Auth Means" + Environment.NewLine + Environment.NewLine + "- Existing rule" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "intent-tree", "00-map.md"),
+            "# Intent CLI Map");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "clarifications", "open.md"),
+            "# Clarifications");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "intent-cli", "execution", "05-post-mvp-sub-slices.md"),
+            CreateExecutionBaselineMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var originalEnqueueTimestampFactory = QueueEnqueueCommand.TimestampFactory;
+        var originalPublisherFactory = QueueDispatchCommand.PublisherFactory;
+        var originalRemoteGitFactory = QueueDispatchCommand.GitCommandRunnerFactory;
+        var originalDispatchTimestampFactory = QueueDispatchCommand.TimestampFactory;
+        var originalStartGitFactory = RunStartCommand.GitCommandRunnerFactory;
+        var originalStartTimestampFactory = RunStartCommand.TimestampFactory;
+        var startGitRunner = new FakeStartGitRunner();
+        var publisher = new FakePublisher();
+
+        try
+        {
+            QueueEnqueueCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:00:00Z");
+            QueueDispatchCommand.PublisherFactory = () => publisher;
+            QueueDispatchCommand.GitCommandRunnerFactory = () => new FakeRemoteGitRunner();
+            QueueDispatchCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:05:00Z");
+            RunStartCommand.GitCommandRunnerFactory = () => startGitRunner;
+            RunStartCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-06T11:10:00Z");
+
+            var originalConceptYaml = File.ReadAllText(conceptArtifactPath);
+            var exitCode = IntakeActivateCommand.Execute(CreateContext(repoRoot), ["auth"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(originalConceptYaml, File.ReadAllText(conceptArtifactPath));
+            var packet = IntakeConceptArtifactYaml.Deserialize(File.ReadAllText(conceptArtifactPath));
+            Assert.Equal("auth", packet.DomainSlug);
+
+            var output = writer.ToString();
+            Assert.Contains("Readiness status: ready", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("- .intent-cli/intake/auth.concept.yaml", output, StringComparison.Ordinal);
+            Assert.Contains("- AUTH-01", output, StringComparison.Ordinal);
+
+            var patchDraft = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "intake", "auth.patch.md"));
+            Assert.Contains("- .intent-cli/intake/auth.concept.yaml", patchDraft, StringComparison.Ordinal);
+            Assert.DoesNotContain("### `.intent-cli/intake/auth.concept.yaml`", patchDraft, StringComparison.Ordinal);
+        }
+        finally
+        {
+            QueueEnqueueCommand.TimestampFactory = originalEnqueueTimestampFactory;
+            QueueDispatchCommand.PublisherFactory = originalPublisherFactory;
+            QueueDispatchCommand.GitCommandRunnerFactory = originalRemoteGitFactory;
+            QueueDispatchCommand.TimestampFactory = originalDispatchTimestampFactory;
+            RunStartCommand.GitCommandRunnerFactory = originalStartGitFactory;
+            RunStartCommand.TimestampFactory = originalStartTimestampFactory;
+        }
+    }
+
     private static string CreateExecutionBaselineMarkdown()
     {
         return """
@@ -275,12 +356,13 @@ public sealed class IntakeActivateCommandTests
         };
     }
 
-    private static IntentSystem.ConceptIntake.Models.InterviewQueueItem CreateAnsweredItem()
+    private static IntentSystem.ConceptIntake.Models.InterviewQueueItem CreateAnsweredItem(
+        string sourceConceptRef = "intents/intent-cli/concepts/auth-oauth2.md")
     {
         return new IntentSystem.ConceptIntake.Models.InterviewQueueItem
         {
             DomainSlug = "auth",
-            SourceConceptRef = "intents/intent-cli/concepts/auth-oauth2.md",
+            SourceConceptRef = sourceConceptRef,
             QuestionId = "iq-1",
             QuestionText = "What should be updated?",
             Reason = "Clarify auth direction.",
