@@ -1080,9 +1080,25 @@ internal static class RunSuperviseCommand
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        return path.StartsWith(".intent-cli/", StringComparison.Ordinal)
-            || path.StartsWith(".takt/", StringComparison.Ordinal)
-            || path.StartsWith("node_modules/", StringComparison.Ordinal);
+        var normalizedPath = path.Replace('\\', '/').Trim('/');
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+        {
+            return true;
+        }
+
+        if (normalizedPath.StartsWith(".intent-cli/", StringComparison.Ordinal)
+            || normalizedPath.StartsWith(".takt/", StringComparison.Ordinal)
+            || normalizedPath.StartsWith("node_modules/", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Any(segment =>
+            string.Equals(segment, "bin", StringComparison.Ordinal)
+            || string.Equals(segment, "obj", StringComparison.Ordinal)
+            || string.Equals(segment, "TestResults", StringComparison.Ordinal)
+            || string.Equals(segment, ".vs", StringComparison.Ordinal));
     }
 
     private static string ResolveDirectRunRequestArtifactPath(CliContext context, string executionUnit)
