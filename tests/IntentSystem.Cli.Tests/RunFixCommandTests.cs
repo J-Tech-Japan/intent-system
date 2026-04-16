@@ -465,6 +465,150 @@ public sealed class RunFixCommandTests
     }
 
     [Fact]
+    public async Task Execute_GivenWrapperCodexCommandWithPartialProviderOutput_AppendsTerminalBackendExitAndUpdatesResultArtifact()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateReviewCommentArtifactJson());
+        var providerBinaryPath = tempDirectory.CreateExecutableFile(
+            "bin/codex",
+            """
+            #!/bin/sh
+            printf '%s\n' '{"type":"ready"}'
+            printf '%s\n' '{"type":"error","message":"AuthRequired(No access token was provided)"}' 1>&2
+            exit 1
+            """);
+        var wrapperPath = tempDirectory.CreateExecutableFile(
+            "bin/codex-isolated",
+            $$"""
+            #!/bin/zsh
+            export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
+            exec {{providerBinaryPath}} "$@"
+            """);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunFixCommand.TimestampFactory;
+
+        try
+        {
+            RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-16T00:18:00Z");
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Codex",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        Command = wrapperPath
+                    }
+                }
+            };
+
+            var exitCode = RunFixCommand.Execute(context, ["G20"], writer);
+
+            Assert.Equal(0, exitCode);
+
+            var resultArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.result.json");
+            var providerEventLogPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.provider.jsonl");
+            var initialArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+
+            await WaitForConditionAsync(
+                () =>
+                {
+                    if (!File.Exists(providerEventLogPath) || !File.Exists(resultArtifactPath))
+                    {
+                        return false;
+                    }
+
+                    var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                    var sawAuthRequired = providerEvents.Any(providerEvent =>
+                        string.Equals(providerEvent.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                        && providerEvent.Kind == "provider-event"
+                        && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && providerEvent.Payload.TryGetProperty("message", out var messageElement)
+                        && string.Equals(
+                            messageElement.GetString(),
+                            "AuthRequired(No access token was provided)",
+                            StringComparison.Ordinal));
+                    var terminalEventExists = providerEvents.Any(providerEvent =>
+                        string.Equals(providerEvent.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                        && providerEvent.Kind == "provider-event"
+                        && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                        && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+                    if (!sawAuthRequired || !terminalEventExists)
+                    {
+                        return false;
+                    }
+
+                    var updatedArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                    return string.Equals(updatedArtifact.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                        && string.Equals(updatedArtifact.RunStatus, "failed", StringComparison.Ordinal);
+                },
+                TimeSpan.FromSeconds(10));
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            Assert.Contains(providerEvents, providerEvent =>
+                string.Equals(providerEvent.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                && providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "ready", StringComparison.Ordinal));
+            Assert.Contains(providerEvents, providerEvent =>
+                string.Equals(providerEvent.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                && providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("message", out var messageElement)
+                && string.Equals(
+                    messageElement.GetString(),
+                    "AuthRequired(No access token was provided)",
+                    StringComparison.Ordinal));
+            var backendExitEvent = Assert.Single(providerEvents, providerEvent =>
+                string.Equals(providerEvent.SessionId, initialArtifact.SessionId, StringComparison.Ordinal)
+                && providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+            Assert.Equal(1, backendExitEvent.Payload.GetProperty("exit_code").GetInt32());
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+            Assert.Equal(initialArtifact.SessionId, resultArtifact.SessionId);
+            Assert.Equal("failed", resultArtifact.RunStatus);
+        }
+        finally
+        {
+            RunFixCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenMissingQueueItem_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();
