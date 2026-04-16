@@ -166,6 +166,13 @@ internal static class DirectRunFixOutcomeSupport
         return true;
     }
 
+    public static bool HasBoundedProgressSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        return providerEvents.Any(providerEvent => ContainsBoundedFixProgressSignal(providerEvent.Payload));
+    }
+
     private static bool TryResolveInspectionOnlyFailureDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
