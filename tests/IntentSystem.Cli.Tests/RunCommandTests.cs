@@ -3769,13 +3769,23 @@ public sealed class RunCommandTests
             },
             new DirectRunProviderEvent
             {
-                Timestamp = "2026-04-10T12:00:00.3000000+00:00",
+                Timestamp = "2026-04-10T12:00:00.2500000+00:00",
                 ExecutionUnit = executionUnit,
                 Provider = "Claude",
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
                 Payload = System.Text.Json.JsonSerializer.SerializeToElement("--------")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.3000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G226")
             },
             new DirectRunProviderEvent
             {
@@ -3816,16 +3826,6 @@ public sealed class RunCommandTests
                 SessionId = sessionId,
                 Kind = "provider-event",
                 Payload = System.Text.Json.JsonSerializer.SerializeToElement("user")
-            },
-            new DirectRunProviderEvent
-            {
-                Timestamp = "2026-04-10T12:00:00.5500000+00:00",
-                ExecutionUnit = executionUnit,
-                Provider = "Claude",
-                EntryKind = "fix",
-                SessionId = sessionId,
-                Kind = "provider-event",
-                Payload = System.Text.Json.JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G226")
             },
             new DirectRunProviderEvent
             {
@@ -3886,6 +3886,17 @@ public sealed class RunCommandTests
                 SessionId = sessionId,
                 Kind = "provider-event",
                 Payload = System.Text.Json.JsonSerializer.SerializeToElement("warn plugin manifest falling_back after state db discrepancy on slow path")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.9500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(
+                    "2026-04-10T12:00:00.9500000Z  WARN codex_core::shell_snapshot: Failed to delete shell snapshot at \"/tmp/snapshot\"")
             },
             new DirectRunProviderEvent
             {

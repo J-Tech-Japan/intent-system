@@ -1449,13 +1449,23 @@ public sealed class RunSuperviseCommandTests
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
-                Timestamp = "2026-04-08T10:20:00.3000000+00:00",
+                Timestamp = "2026-04-08T10:20:00.2500000+00:00",
                 ExecutionUnit = "G25",
                 Provider = "Claude",
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
                 Payload = JsonSerializer.SerializeToElement("--------")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.3000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G25")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
@@ -1496,16 +1506,6 @@ public sealed class RunSuperviseCommandTests
                 SessionId = sessionId,
                 Kind = "provider-event",
                 Payload = JsonSerializer.SerializeToElement("user")
-            }),
-            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
-            {
-                Timestamp = "2026-04-08T10:20:00.5500000+00:00",
-                ExecutionUnit = "G25",
-                Provider = "Claude",
-                EntryKind = "fix",
-                SessionId = sessionId,
-                Kind = "provider-event",
-                Payload = JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G25")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
@@ -1566,6 +1566,17 @@ public sealed class RunSuperviseCommandTests
                 SessionId = sessionId,
                 Kind = "provider-event",
                 Payload = JsonSerializer.SerializeToElement("warn state db discrepancy detected on slow path while reconcile_rollout started")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.9500000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(
+                    "2026-04-08T10:20:00.9500000Z  WARN codex_core::shell_snapshot: Failed to delete shell snapshot at \"/tmp/snapshot\"")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {

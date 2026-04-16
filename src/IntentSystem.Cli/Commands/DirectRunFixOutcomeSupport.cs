@@ -6,23 +6,6 @@ internal static class DirectRunFixOutcomeSupport
 {
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
     private const string InspectionOnlyExitReason = "fix-session-ended-after-initial-inspection";
-    private static readonly string[] StartupPreamblePrefixes =
-    [
-        "openai codex v",
-        "model:",
-        "reasoning summaries:",
-        "session id:",
-        "workdir:",
-        "provider:",
-        "approval:",
-        "sandbox:",
-        "reasoning effort:"
-    ];
-    private static readonly string[] StartupPreambleExactLines =
-    [
-        "--------",
-        "user"
-    ];
     private static readonly string[] StartupWarningMarkers =
     [
         "warn",
@@ -116,7 +99,6 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         var sawStartupNoise = false;
-        var sawStartupPreamble = false;
         for (var index = 0; index < failingBackendExitIndex; index++)
         {
             var providerEvent = providerEvents[index];
@@ -139,15 +121,8 @@ internal static class DirectRunFixOutcomeSupport
                 continue;
             }
 
-            if (IsIgnorableStartupPreamble(providerEvent.Payload))
-            {
-                sawStartupPreamble = true;
-                continue;
-            }
-
-            if (sawStartupPreamble
-                && !sawStartupNoise
-                && IsIgnorablePromptEcho(providerEvent.Payload))
+            if (!sawStartupNoise
+                && IsIgnorableStartupPreamble(providerEvent.Payload))
             {
                 continue;
             }
@@ -322,19 +297,14 @@ internal static class DirectRunFixOutcomeSupport
 
     private static bool IsIgnorableStartupPreamble(JsonElement payload)
     {
-        var sawString = false;
-        foreach (var value in EnumeratePayloadStrings(payload))
+        if (payload.ValueKind != JsonValueKind.String)
         {
-            sawString = true;
-            var normalized = value.Trim().ToLowerInvariant();
-            if (!StartupPreamblePrefixes.Any(prefix => normalized.StartsWith(prefix, StringComparison.Ordinal))
-                && !StartupPreambleExactLines.Any(line => string.Equals(normalized, line, StringComparison.Ordinal)))
-            {
-                return false;
-            }
+            return false;
         }
 
-        return sawString;
+        var value = payload.GetString();
+        return !string.IsNullOrWhiteSpace(value)
+            && !ContainsBoundedFixProgressSignal(payload);
     }
 
     private static bool IsIgnorableStartupNoise(JsonElement payload)
@@ -351,25 +321,6 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return sawString;
-    }
-
-    private static bool IsIgnorablePromptEcho(JsonElement payload)
-    {
-        if (payload.ValueKind != JsonValueKind.String)
-        {
-            return false;
-        }
-
-        var value = payload.GetString();
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var normalized = value.Trim().ToLowerInvariant();
-        return !StartupPreamblePrefixes.Any(prefix => normalized.StartsWith(prefix, StringComparison.Ordinal))
-            && !StartupWarningMarkers.Any(marker => normalized.Contains(marker, StringComparison.Ordinal))
-            && !ContainsBoundedFixProgressSignal(payload);
     }
 
     private static bool ContainsBoundedFixProgressSignal(JsonElement payload)
