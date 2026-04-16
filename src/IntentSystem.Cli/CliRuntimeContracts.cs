@@ -15,6 +15,7 @@ internal static class CliRuntimeContracts
     public const string ParentIntentRepoRootKey = "parent_intent_repo_root";
     public const string RolesSectionName = "roles";
     public const string SupervisionSectionName = "supervision";
+    public const string RunSectionName = "run";
     public const string DirectRunSectionName = "direct_backend";
     public const string ImplementRoleKey = "implement";
     public const string ReviewRoleKey = "review";
@@ -28,6 +29,7 @@ internal static class CliRuntimeContracts
     public const string StaleHeartbeatTimeoutMinutesKey = "stale_heartbeat_timeout_minutes";
     public const string RetryDelayMinutesKey = "retry_delay_minutes";
     public const string RetryBudgetKey = "retry_budget";
+    public const string PostFixWorktreeProgressPolicyKey = "post_fix_worktree_progress_policy";
     public const string DefaultWorktreeRoot = ".intent-cli/worktrees";
     public const string DefaultSupervisionArtifactRoot = ".intent-cli/supervision";
     public const string DefaultDirectRunArtifactRoot = ".intent-cli/runs";
@@ -38,6 +40,9 @@ internal static class CliRuntimeContracts
     public const string DefaultReviewRole = "Codex";
     public const string DefaultInterviewRole = "Claude";
     public const string DefaultClarifyRole = "Codex";
+    public const string ConfirmPostFixWorktreeProgressPolicy = "confirm";
+    public const string AutoContinuePostFixWorktreeProgressPolicy = "auto-continue";
+    public const string DefaultPostFixWorktreeProgressPolicy = ConfirmPostFixWorktreeProgressPolicy;
     public const string DefaultDirectRunModel = "default";
     public const string DefaultCodexDirectRunModel = "gpt-5.4-mini";
     public const string DefaultDirectRunTransport = "stdio";

@@ -58,6 +58,7 @@ internal static class CliConfigLoader
             ?? string.Empty;
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
+        var run = ReadRun(rootTable);
         var directRun = ReadDirectRun(rootTable);
 
         config = CreateConfig(
@@ -68,6 +69,7 @@ internal static class CliConfigLoader
             parentIntentRepoRoot,
             roles,
             supervision,
+            run,
             directRun);
         return true;
     }
@@ -100,6 +102,7 @@ internal static class CliConfigLoader
             ?? string.Empty;
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
+        var run = ReadRun(rootTable);
         var directRun = ReadDirectRun(rootTable);
 
         config = CreateConfig(
@@ -110,6 +113,7 @@ internal static class CliConfigLoader
             parentIntentRepoRoot,
             roles,
             supervision,
+            run,
             directRun);
         return true;
     }
@@ -122,6 +126,7 @@ internal static class CliConfigLoader
         string parentIntentRepoRoot,
         RoleMappings roles,
         SupervisionConfig supervision,
+        RunConfig run,
         DirectRunConfig directRun)
     {
         return new CliConfig
@@ -136,6 +141,7 @@ internal static class CliConfigLoader
             },
             Roles = roles,
             Supervision = supervision,
+            Run = run,
             DirectRun = directRun
         };
     }
@@ -199,6 +205,28 @@ internal static class CliConfigLoader
                 ?? CliRuntimeContracts.DefaultSupervisionRetryDelayMinutes,
             RetryBudget = TryGetOptionalInt32(supervisionTable, CliRuntimeContracts.RetryBudgetKey)
                 ?? CliRuntimeContracts.DefaultSupervisionRetryBudget
+        };
+    }
+
+    private static RunConfig ReadRun(TomlTable rootTable)
+    {
+        ArgumentNullException.ThrowIfNull(rootTable);
+
+        if (!rootTable.TryGetValue(CliRuntimeContracts.RunSectionName, out var section)
+            || section is not TomlTable runTable)
+        {
+            return new RunConfig();
+        }
+
+        var postFixWorktreeProgressPolicy = TryGetOptionalString(
+                runTable,
+                CliRuntimeContracts.PostFixWorktreeProgressPolicyKey)
+            ?? CliRuntimeContracts.DefaultPostFixWorktreeProgressPolicy;
+        ValidatePostFixWorktreeProgressPolicy(postFixWorktreeProgressPolicy);
+
+        return new RunConfig
+        {
+            PostFixWorktreeProgressPolicy = postFixWorktreeProgressPolicy
         };
     }
 
@@ -345,5 +373,21 @@ internal static class CliConfigLoader
         }
 
         return values;
+    }
+
+    private static void ValidatePostFixWorktreeProgressPolicy(string policy)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(policy);
+
+        if (string.Equals(policy, CliRuntimeContracts.ConfirmPostFixWorktreeProgressPolicy, StringComparison.Ordinal)
+            || string.Equals(policy, CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"CLI config value '{CliRuntimeContracts.PostFixWorktreeProgressPolicyKey}' must be " +
+            $"'{CliRuntimeContracts.ConfirmPostFixWorktreeProgressPolicy}' or " +
+            $"'{CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy}'.");
     }
 }

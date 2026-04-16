@@ -37,4 +37,6 @@ internal sealed record RunSupervisionSession
     public DateTimeOffset? NextRetryAt { get; init; }
 
     public string? LastInterruptionReason { get; init; }
+
+    public bool RequiresPostFixWorktreeProgressDecision { get; init; }
 }

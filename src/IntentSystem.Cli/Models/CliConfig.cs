@@ -8,6 +8,8 @@ internal sealed record CliConfig
 
     public SupervisionConfig Supervision { get; init; } = new();
 
+    public RunConfig Run { get; init; } = new();
+
     public DirectRunConfig DirectRun { get; init; } = new();
 }
 
@@ -45,6 +47,12 @@ internal sealed record SupervisionConfig
     public int RetryDelayMinutes { get; init; } = CliRuntimeContracts.DefaultSupervisionRetryDelayMinutes;
 
     public int RetryBudget { get; init; } = CliRuntimeContracts.DefaultSupervisionRetryBudget;
+}
+
+internal sealed record RunConfig
+{
+    public string PostFixWorktreeProgressPolicy { get; init; } =
+        CliRuntimeContracts.DefaultPostFixWorktreeProgressPolicy;
 }
 
 internal sealed record DirectRunConfig
