@@ -96,7 +96,7 @@ internal static class ReviewCommentCommand
             throw new InvalidOperationException("Review request must contain a linked PR.");
         }
 
-        var commentRef = PublisherFactory().PostComment(request.LinkedPr, body);
+        var commentRef = ResolveCommentRef(context, executionUnit, request.LinkedPr, body);
         var artifact = new ReviewCommentArtifact
         {
             ExecutionUnit = executionUnit,
@@ -131,6 +131,83 @@ internal static class ReviewCommentCommand
             ArtifactPath = Review.ReviewCommentArtifactPathResolver.Resolve(executionUnit),
             CommentRef = commentRef
         };
+    }
+
+    private static string ResolveCommentRef(CliContext context, string executionUnit, string linkedPr, string body)
+    {
+        if (TryResolveCurrentSessionCommentRef(context, executionUnit, linkedPr, out var existingCommentRef))
+        {
+            return existingCommentRef;
+        }
+
+        return PublisherFactory().PostComment(linkedPr, body);
+    }
+
+    private static bool TryResolveCurrentSessionCommentRef(
+        CliContext context,
+        string executionUnit,
+        string linkedPr,
+        out string commentRef)
+    {
+        commentRef = string.Empty;
+
+        var resultArtifactPath = Path.Combine(context.ResolveDirectRunArtifactRootPath(), $"{executionUnit}.result.json");
+        if (!File.Exists(resultArtifactPath))
+        {
+            return false;
+        }
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        if (!string.Equals(resultArtifact.EntryKind, "review", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(resultArtifact.ReviewCommentRef)
+            && resultArtifact.ReviewCommentRef.StartsWith($"{linkedPr}#issuecomment-", StringComparison.OrdinalIgnoreCase))
+        {
+            commentRef = resultArtifact.ReviewCommentRef;
+            return true;
+        }
+
+        var providerEventLogPath = Path.IsPathRooted(resultArtifact.RawLogRef)
+            ? Path.GetFullPath(resultArtifact.RawLogRef)
+            : Path.GetFullPath(Path.Combine(context.RepoRoot, resultArtifact.RawLogRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        DateTimeOffset? launchedAt = null;
+        var requestArtifactPath = Path.Combine(context.ResolveDirectRunArtifactRootPath(), $"{executionUnit}.request.json");
+        if (File.Exists(requestArtifactPath))
+        {
+            var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+            if (string.Equals(requestArtifact.EntryKind, "review", StringComparison.Ordinal)
+                && DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var parsedLaunchedAt))
+            {
+                launchedAt = parsedLaunchedAt;
+            }
+        }
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        var currentSessionEvents = DirectRunSessionBoundary.SelectEvents(providerEvents, resultArtifact.SessionId, launchedAt);
+        if (!DirectRunReviewOutcomeSupport.TryResolvePublishedReviewCommentRef(currentSessionEvents, linkedPr, out commentRef))
+        {
+            return false;
+        }
+
+        if (!string.Equals(resultArtifact.ReviewCommentRef, commentRef, StringComparison.Ordinal))
+        {
+            File.WriteAllText(
+                resultArtifactPath,
+                DirectRunResultArtifactJson.Serialize(resultArtifact with
+                {
+                    ReviewCommentRef = commentRef
+                }));
+        }
+
+        return true;
     }
 
     private static string ResolveBodyPath(string repoRoot, string rawPath)

@@ -19,6 +19,7 @@ public sealed class DirectRunResultArtifactJsonTests
             RunStatus = "running",
             ReviewOutcome = "fix-requested",
             ReviewCommentBodyPath = ".intent-cli/reviews/G19.comment.md",
+            ReviewCommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/67#issuecomment-3",
             RawLogRef = ".intent-cli/runs/G19.provider.jsonl",
             PacketRef = ".intent-cli/issues/G19/packet.yaml",
             ReviewContextRef = ".intent-cli/issues/G19/review-context.md",
@@ -52,6 +53,7 @@ public sealed class DirectRunResultArtifactJsonTests
         Assert.Equal("running", roundTripped.RunStatus);
         Assert.Equal("fix-requested", roundTripped.ReviewOutcome);
         Assert.Equal(".intent-cli/reviews/G19.comment.md", roundTripped.ReviewCommentBodyPath);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/67#issuecomment-3", roundTripped.ReviewCommentRef);
         Assert.Equal(".intent-cli/runs/G19.provider.jsonl", roundTripped.RawLogRef);
         Assert.Equal(".intent-cli/issues/G19/packet.yaml", roundTripped.PacketRef);
         Assert.Equal(".intent-cli/issues/G19/review-context.md", roundTripped.ReviewContextRef);
@@ -93,5 +95,6 @@ public sealed class DirectRunResultArtifactJsonTests
         Assert.Equal("pid:legacy", artifact.SessionId);
         Assert.Null(artifact.ReviewOutcome);
         Assert.Null(artifact.ReviewCommentBodyPath);
+        Assert.Null(artifact.ReviewCommentRef);
     }
 }

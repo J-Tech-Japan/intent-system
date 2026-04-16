@@ -1,9 +1,14 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace IntentSystem.Cli.Commands;
 
 internal static class DirectRunReviewOutcomeSupport
 {
+    private static readonly Regex ReviewCommentUrlPattern = new(
+        @"https://github\.com/[^\s/]+/[^\s/]+/pull/\d+#issuecomment-\d+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     public static bool IsAcceptOutcome(string outcome)
     {
         return string.Equals(outcome, "accepted", StringComparison.Ordinal)
@@ -105,6 +110,26 @@ internal static class DirectRunReviewOutcomeSupport
             Directory.CreateDirectory(directoryPath);
             File.WriteAllText(absolutePath, bodyOrPath);
             commentBodyPath = relativePath;
+            return true;
+        }
+
+        return false;
+    }
+
+    public static bool TryResolvePublishedReviewCommentRef(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string? linkedPr,
+        out string reviewCommentRef)
+    {
+        reviewCommentRef = string.Empty;
+
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            if (!TryResolvePublishedReviewCommentRef(providerEvents[index].Payload, linkedPr, out reviewCommentRef))
+            {
+                continue;
+            }
+
             return true;
         }
 
@@ -456,6 +481,77 @@ internal static class DirectRunReviewOutcomeSupport
         }
 
         return false;
+    }
+
+    private static bool TryResolvePublishedReviewCommentRef(
+        JsonElement payload,
+        string? linkedPr,
+        out string reviewCommentRef)
+    {
+        reviewCommentRef = string.Empty;
+
+        foreach (var candidate in EnumeratePayloadStrings(payload))
+        {
+            var match = ReviewCommentUrlPattern.Matches(candidate)
+                .Select(match => match.Value)
+                .LastOrDefault(value => IsMatchingLinkedPr(value, linkedPr));
+            if (!string.IsNullOrWhiteSpace(match))
+            {
+                reviewCommentRef = match;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> EnumeratePayloadStrings(JsonElement payload)
+    {
+        switch (payload.ValueKind)
+        {
+            case JsonValueKind.String:
+            {
+                var value = payload.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    yield return value;
+                }
+
+                yield break;
+            }
+            case JsonValueKind.Object:
+                foreach (var property in payload.EnumerateObject())
+                {
+                    foreach (var value in EnumeratePayloadStrings(property.Value))
+                    {
+                        yield return value;
+                    }
+                }
+
+                yield break;
+            case JsonValueKind.Array:
+                foreach (var item in payload.EnumerateArray())
+                {
+                    foreach (var value in EnumeratePayloadStrings(item))
+                    {
+                        yield return value;
+                    }
+                }
+
+                yield break;
+            default:
+                yield break;
+        }
+    }
+
+    private static bool IsMatchingLinkedPr(string reviewCommentRef, string? linkedPr)
+    {
+        if (string.IsNullOrWhiteSpace(linkedPr))
+        {
+            return true;
+        }
+
+        return reviewCommentRef.StartsWith($"{linkedPr}#issuecomment-", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryResolveRunStatus(JsonElement payload, out string runStatus)

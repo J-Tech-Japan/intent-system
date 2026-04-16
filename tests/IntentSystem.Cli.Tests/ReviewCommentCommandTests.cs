@@ -42,6 +42,7 @@ public sealed class ReviewCommentCommandTests
                 writer);
 
             Assert.Equal(0, exitCode);
+            Assert.Equal(1, publisher.CallCount);
             Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/46", publisher.LinkedPr);
             Assert.Equal("repair in place", publisher.Body);
             Assert.Contains("Review comment posted for G10", writer.ToString(), StringComparison.Ordinal);
@@ -65,6 +66,121 @@ public sealed class ReviewCommentCommandTests
             Assert.Equal("fix-requested", runEvents[^1].Event);
             Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/46", runEvents[^1].LinkedPr);
             Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-1", runEvents[^1].CommentRef);
+        }
+        finally
+        {
+            ReviewCommentCommand.PublisherFactory = originalFactory;
+            ReviewCommentCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenCurrentReviewSessionAlreadyPublishedComment_ReusesExistingCommentRefWithoutPostingDuplicate()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var bodyPath = tempDirectory.CreateFile(Path.Combine("repo", "prepared-comment.md"), "repair in place");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G10.request.json"),
+            CreateReviewRequestJson());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """{"ts":"2026-04-03T10:00:00Z","execution_unit":"G10","event":"review-started","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/46"}""" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs", "G10.request.json"),
+            """
+            {
+              "schema_version": "1",
+              "execution_unit": "G10",
+              "entry_kind": "review",
+              "upstream_request_ref": ".intent-cli/reviews/G10.request.json",
+              "provider": "Codex",
+              "model": "gpt-5.4-mini",
+              "transport": "responses",
+              "launched_at": "2026-04-04T04:35:00Z",
+              "provider_session_id": "pid:777",
+              "transport_summary": "launched"
+            }
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs", "G10.result.json"),
+            """
+            {
+              "schema_version": "1",
+              "execution_unit": "G10",
+              "entry_kind": "review",
+              "upstream_request_ref": ".intent-cli/reviews/G10.request.json",
+              "provider": "Codex",
+              "model": "gpt-5.4-mini",
+              "session_id": "pid:777",
+              "run_status": "succeeded",
+              "review_outcome": "fix-requested",
+              "review_comment_body_path": ".intent-cli/reviews/G10.comment.md",
+              "raw_log_ref": ".intent-cli/runs/G10.provider.jsonl",
+              "packet_ref": ".intent-cli/issues/G10/packet.yaml",
+              "review_context_ref": ".intent-cli/issues/G10/review-context.md",
+              "linked_pr": {
+                "repo": "J-Tech-Japan/intent-system",
+                "number": 46,
+                "url": "https://github.com/J-Tech-Japan/intent-system/pull/46"
+              },
+              "worktree": {
+                "path": "/repo/.intent-cli/worktrees/G10"
+              }
+            }
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs", "G10.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                [
+                    DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                    {
+                        Timestamp = "2026-04-04T04:35:00Z",
+                        ExecutionUnit = "G10",
+                        Provider = "Codex",
+                        EntryKind = "review",
+                        SessionId = "pid:777",
+                        Kind = "provider-event",
+                        Payload = System.Text.Json.JsonSerializer.SerializeToElement(
+                            "https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-9")
+                    })
+                ]) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var publisher = new FakePublisher();
+
+        var originalFactory = ReviewCommentCommand.PublisherFactory;
+        var originalTimestampFactory = ReviewCommentCommand.TimestampFactory;
+
+        try
+        {
+            ReviewCommentCommand.PublisherFactory = () => publisher;
+            ReviewCommentCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-04T04:40:00Z");
+
+            var exitCode = ReviewCommentCommand.Execute(
+                CreateContext(repoRoot),
+                ["G10", "--from-file", "prepared-comment.md"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(0, publisher.CallCount);
+            Assert.Contains("Review comment posted for G10", writer.ToString(), StringComparison.Ordinal);
+
+            var artifact = ReviewCommentArtifactSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "reviews", "G10.comment.json")));
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-9", artifact.CommentRef);
+            Assert.Equal(Path.GetFullPath(bodyPath), artifact.BodyPath);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "G10.result.json")));
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-9", resultArtifact.ReviewCommentRef);
+
+            var runEvents = RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-9", runEvents[^1].CommentRef);
         }
         finally
         {
@@ -231,8 +347,11 @@ public sealed class ReviewCommentCommandTests
 
         public string Body { get; private set; } = string.Empty;
 
+        public int CallCount { get; private set; }
+
         public string PostComment(string linkedPr, string body)
         {
+            CallCount++;
             LinkedPr = linkedPr;
             Body = body;
             return "https://github.com/J-Tech-Japan/intent-system/pull/46#issuecomment-1";

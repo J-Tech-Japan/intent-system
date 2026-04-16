@@ -1,6 +1,8 @@
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Review;
+using IntentSystem.Review.Serialization;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -943,6 +945,92 @@ public sealed class RunCommandTests
         finally
         {
             RunCommand.ReviewCommentExecutor = originalReviewCommentExecutor;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenCurrentReviewSessionAlreadyPublishedComment_DoesNotDuplicatePublicationDuringRootRun()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            """
+            {
+              "execution_unit": "G226",
+              "review_context_ref": ".intent-cli/issues/G226/review-context.md",
+              "linked_pr": "https://github.com/J-Tech-Japan/intent-system/pull/226",
+              "deterministic_review_checks": [],
+              "acceptance_criteria": [],
+              "expected_evidence": []
+            }
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.comment.md"),
+            "Please cover the deterministic submit path.");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "review",
+            "succeeded",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "ReviewBot",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(
+                        "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2")
+                },
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:02.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "ReviewBot",
+                    EntryKind = "review",
+                    SessionId = "pid:226",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 0
+                    })
+                }
+            ],
+            reviewOutcome: "fix-requested",
+            reviewCommentBodyPath: ".intent-cli/reviews/G226.comment.md");
+        var originalPublisherFactory = ReviewCommentCommand.PublisherFactory;
+        var publisher = new FakeReviewCommentPublisher();
+
+        try
+        {
+            ReviewCommentCommand.PublisherFactory = () => publisher;
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("deterministic-contract-gap", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Equal(0, publisher.CallCount);
+
+            var reviewCommentArtifact = ReviewCommentArtifactSerializer.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "reviews", "G226.comment.json")));
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2", reviewCommentArtifact.CommentRef);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2", resultArtifact.ReviewCommentRef);
+        }
+        finally
+        {
+            ReviewCommentCommand.PublisherFactory = originalPublisherFactory;
         }
     }
 
@@ -2722,6 +2810,17 @@ public sealed class RunCommandTests
     private static string CreateCapturedLastMessageFileName(string executionUnit, DateTimeOffset launchedAt)
     {
         return $"{executionUnit}.{DirectRunCommandSupport.CreateCapturedMessageSuffix(launchedAt)}.last-message.json";
+    }
+
+    private sealed class FakeReviewCommentPublisher : IReviewCommentPublisher
+    {
+        public int CallCount { get; private set; }
+
+        public string PostComment(string linkedPr, string body)
+        {
+            CallCount++;
+            return $"{linkedPr}#issuecomment-generated";
+        }
     }
 
     private sealed class TemporaryDirectory : IDisposable
