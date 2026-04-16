@@ -12,7 +12,7 @@ internal static class RunSuperviseCommand
     private const string TransitionActor = "intent-cli";
     // Detached terminal callbacks can trail the dead-process probe slightly; keep the handoff bounded
     // while still allowing the same-session backend-exit reason to win deterministically.
-    internal static TimeSpan TerminalFailureRaceWindow { get; set; } = TimeSpan.FromMilliseconds(250);
+    internal static TimeSpan TerminalFailureRaceWindow { get; set; } = TimeSpan.FromMilliseconds(500);
     internal static TimeSpan TerminalFailureRacePollInterval { get; set; } = TimeSpan.FromMilliseconds(10);
 
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
@@ -734,8 +734,16 @@ internal static class RunSuperviseCommand
                 RunStatus = "failed"
             }));
 
-        reason =
-            $"Worker session '{requestArtifact.ProviderSessionId}' for '{executionUnit}' is no longer alive and no terminal provider event was captured.";
+        if (!TryResolveTerminalFailureReason(
+                [backendExitEvent],
+                executionUnit,
+                requestArtifact.ProviderSessionId,
+                out reason))
+        {
+            throw new InvalidOperationException(
+                $"Synthetic backend-exit for '{executionUnit}' did not resolve to a terminal failure reason.");
+        }
+
         return true;
     }
 

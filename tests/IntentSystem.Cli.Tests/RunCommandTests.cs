@@ -2438,10 +2438,292 @@ public sealed class RunCommandTests
                 Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
             Assert.Equal("pid:4242", resultArtifact.SessionId);
             Assert.Equal("running", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+            Assert.Contains("backend exit code 1", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", runEvents[^2].Reason, StringComparison.Ordinal);
         }
         finally
         {
             RunSuperviseCommand.RunFixExecutor = originalRunFixExecutor;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenDeadFixWorkerSessionAtRetryExhaustionWithoutCapturedTerminalEvent_BlocksUsingSyntheticBackendExitReason()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G226"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Fixing))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"G226","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
+            {"ts":"2026-04-10T10:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"contract mismatch"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            execution_unit: "G226"
+
+            implementation_issue:
+              issue_title: "[G226] Root Run Orchestration Command"
+              goal: "Coordinate the root run loop."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/G226/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.comment.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G226.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G226.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "G226",
+                WorkerEntry = RunSupervisionWorkerEntry.Fix,
+                Status = RunSupervisionSessionStatus.Monitoring,
+                QueueState = "fixing",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "G226"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-226-g226",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2",
+                HandoffArtifactRef = ".intent-cli/fix/G226.request.md",
+                RetryCount = 3,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z")
+            }));
+        WriteDirectRunRequest(repoRoot, "G226", "fix", "pid:999999", provider: "Claude");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "fix",
+            "running",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:00.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Claude",
+                    EntryKind = "fix",
+                    SessionId = "pid:999999",
+                    Kind = "session-metadata",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        model = "sonnet",
+                        transport = "sdk",
+                        command = "claude"
+                    })
+                }
+            ],
+            sessionId: "pid:999999",
+            provider: "Claude");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("parent-intent-update-required", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+
+        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
+        Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+        Assert.Contains("backend exit code 1", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("no terminal provider event was captured", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "supervision", "G226.session.json")));
+        Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+        Assert.Contains("backend exit code 1", session.LastInterruptionReason, StringComparison.Ordinal);
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+        Assert.Equal("failed", resultArtifact.RunStatus);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G226.provider.jsonl")));
+        Assert.Contains(providerEvents, providerEvent =>
+            string.Equals(providerEvent.SessionId, "pid:999999", StringComparison.Ordinal)
+            && providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+            && exitCodeElement.GetInt32() == 1);
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        Assert.Equal("retry-exhausted", runEvents[^2].Event);
+        Assert.Equal("blocked", runEvents[^1].Event);
+        Assert.Contains("backend exit code 1", runEvents[^2].Reason, StringComparison.Ordinal);
+        Assert.Contains("backend exit code 1", runEvents[^1].Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("no terminal provider event was captured", runEvents[^2].Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("no terminal provider event was captured", runEvents[^1].Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteCore_GivenDeadFixWorkerSessionAtRetryExhaustionWhenBackendExitLandsAfterObservedDelay_BlocksUsingBackendExitReason()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G226"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Fixing))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"G226","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
+            {"ts":"2026-04-10T10:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"contract mismatch"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            execution_unit: "G226"
+
+            implementation_issue:
+              issue_title: "[G226] Root Run Orchestration Command"
+              goal: "Coordinate the root run loop."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/G226/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.comment.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G226.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G226.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "G226",
+                WorkerEntry = RunSupervisionWorkerEntry.Fix,
+                Status = RunSupervisionSessionStatus.Monitoring,
+                QueueState = "fixing",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "G226"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-226-g226",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2",
+                HandoffArtifactRef = ".intent-cli/fix/G226.request.md",
+                RetryCount = 3,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z")
+            }));
+        WriteDirectRunRequest(repoRoot, "G226", "fix", "pid:999999", provider: "Claude");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "fix",
+            "running",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:00.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Claude",
+                    EntryKind = "fix",
+                    SessionId = "pid:999999",
+                    Kind = "session-metadata",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        model = "sonnet",
+                        transport = "sdk",
+                        command = "claude"
+                    })
+                }
+            ],
+            sessionId: "pid:999999",
+            provider: "Claude");
+        var originalRacePollInterval = RunSuperviseCommand.TerminalFailureRacePollInterval;
+
+        try
+        {
+            RunSuperviseCommand.TerminalFailureRacePollInterval = TimeSpan.FromMilliseconds(5);
+
+            var appendTask = Task.Run(async () =>
+            {
+                await Task.Delay(300);
+                new DirectRunProviderEventWriter(Path.Combine(repoRoot, ".intent-cli", "runs", "G226.provider.jsonl"))
+                    .Append(new DirectRunProviderEvent
+                    {
+                        Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                        ExecutionUnit = "G226",
+                        Provider = "Claude",
+                        EntryKind = "fix",
+                        SessionId = "pid:999999",
+                        Kind = "provider-event",
+                        Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                        {
+                            type = "backend-exit",
+                            exit_code = 1
+                        })
+                    });
+            });
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+            await appendTask;
+
+            Assert.Equal("parent-intent-update-required", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("backend exit code 1", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G226.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Contains("backend exit code 1", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("retry-exhausted", runEvents[^2].Event);
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("backend exit code 1", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.Contains("backend exit code 1", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", runEvents[^1].Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunSuperviseCommand.TerminalFailureRacePollInterval = originalRacePollInterval;
         }
     }
 

@@ -408,7 +408,8 @@ public sealed class RunSuperviseCommandTests
             var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
             Assert.Equal("retry-attempted", runEvents[^2].Event);
             Assert.Equal("auto-resumed", runEvents[^1].Event);
-            Assert.Contains("no longer alive", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.Contains("backend exit code 1", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", runEvents[^2].Reason, StringComparison.Ordinal);
         }
         finally
         {
@@ -796,7 +797,8 @@ public sealed class RunSuperviseCommandTests
             var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
             Assert.Equal("retry-attempted", runEvents[^2].Event);
             Assert.Equal("auto-resumed", runEvents[^1].Event);
-            Assert.Contains("no longer alive", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.Contains("backend exit code 1", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", runEvents[^2].Reason, StringComparison.Ordinal);
         }
         finally
         {
@@ -904,7 +906,8 @@ public sealed class RunSuperviseCommandTests
             var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
             Assert.Equal("retry-attempted", runEvents[^2].Event);
             Assert.Equal("auto-resumed", runEvents[^1].Event);
-            Assert.Contains("no longer alive", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.Contains("backend exit code 1", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", runEvents[^2].Reason, StringComparison.Ordinal);
         }
         finally
         {
@@ -1009,7 +1012,8 @@ public sealed class RunSuperviseCommandTests
             var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
             Assert.Equal("retry-attempted", runEvents[^2].Event);
             Assert.Equal("auto-resumed", runEvents[^1].Event);
-            Assert.Contains("no longer alive", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.Contains("backend exit code 1", runEvents[^2].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("no terminal provider event was captured", runEvents[^2].Reason, StringComparison.Ordinal);
         }
         finally
         {
