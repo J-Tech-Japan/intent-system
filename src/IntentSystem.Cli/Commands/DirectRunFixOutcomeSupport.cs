@@ -7,17 +7,6 @@ internal static class DirectRunFixOutcomeSupport
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
     private const string InspectionOnlyExitReason = "fix-session-ended-after-initial-inspection";
 
-    private static readonly string[] ActionProgressMarkers =
-    [
-        "apply_patch",
-        "dotnet test",
-        "dotnet build",
-        "git diff",
-        "git add ",
-        "git commit",
-        "git push"
-    ];
-
     public static DirectRunProviderEvent? CreateCanonicalContractGapEventIfNeeded(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         DateTimeOffset timestamp,
@@ -92,7 +81,7 @@ internal static class DirectRunFixOutcomeSupport
             return false;
         }
 
-        var sawSuccessfulRepoListing = false;
+        var initialInspectionEventIndex = -1;
         for (var index = 0; index < failingBackendExitIndex; index++)
         {
             var providerEvent = providerEvents[index];
@@ -102,19 +91,26 @@ internal static class DirectRunFixOutcomeSupport
                 continue;
             }
 
-            if (HasActionProgress(providerEvent.Payload)
-                || TryResolveExplicitContractGapDetail(providerEvent.Payload, executionUnit, out _))
+            if (TryResolveExplicitContractGapDetail(providerEvent.Payload, executionUnit, out _))
             {
                 return false;
             }
 
             if (ContainsSuccessfulInitialRepoInspection(providerEvent.Payload))
             {
-                sawSuccessfulRepoListing = true;
+                if (initialInspectionEventIndex >= 0)
+                {
+                    return false;
+                }
+
+                initialInspectionEventIndex = index;
+                continue;
             }
+
+            return false;
         }
 
-        if (!sawSuccessfulRepoListing)
+        if (initialInspectionEventIndex < 0)
         {
             return false;
         }
@@ -218,23 +214,6 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return sawRepoListing && sawSuccess;
-    }
-
-    private static bool HasActionProgress(JsonElement payload)
-    {
-        foreach (var value in EnumeratePayloadStrings(payload))
-        {
-            var normalized = value.Trim().ToLowerInvariant();
-            foreach (var marker in ActionProgressMarkers)
-            {
-                if (normalized.Contains(marker, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     private static bool IsIgnorableReadyEvent(JsonElement payload)
