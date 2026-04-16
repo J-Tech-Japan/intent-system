@@ -105,6 +105,9 @@ internal static class DirectRunDetachedCaptureCommand
         try
         {
             var startInfo = CreateProviderStartInfo(options);
+            var closePreservedStandardInputAfterLaunch = ShouldClosePreservedStandardInputAfterLaunch(
+                startInfo.FileName,
+                options);
 
             process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start detached direct run process '{options.Command}'.");
@@ -112,6 +115,13 @@ internal static class DirectRunDetachedCaptureCommand
             {
                 preservedStandardInput = process.StandardInput;
                 preservedStandardInput.AutoFlush = true;
+                if (closePreservedStandardInputAfterLaunch)
+                {
+                    // macOS `script` can keep the wrapper session alive after the real provider exits
+                    // while this helper-owned stdin pipe remains open, which suppresses terminal events.
+                    preservedStandardInput.Dispose();
+                    preservedStandardInput = null;
+                }
             }
             providerSessionId = $"pid:{process.Id}";
             TryWriteSessionId(providerSessionId);
@@ -489,6 +499,22 @@ internal static class DirectRunDetachedCaptureCommand
 
         return string.Equals(options.Provider, "codex", StringComparison.OrdinalIgnoreCase)
             || IsCodexLikeCommand(options.Command);
+    }
+
+    private static bool ShouldClosePreservedStandardInputAfterLaunch(
+        string providerExecutablePath,
+        DirectRunDetachedCaptureOptions options)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerExecutablePath);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.Equals(options.EntryKind, "review", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var executableName = Path.GetFileNameWithoutExtension(providerExecutablePath.Trim());
+        return string.Equals(executableName, "script", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? TryResolveScriptExecutable(DirectRunDetachedCaptureOptions options)
