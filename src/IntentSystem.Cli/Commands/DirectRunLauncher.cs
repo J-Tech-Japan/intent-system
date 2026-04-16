@@ -7,6 +7,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
     private static readonly TimeSpan DefaultEarlyExitWindow = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan PersistentExitObservationWindow = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan DetachedCaptureSessionIdWaitWindow = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan FixProgressObservationWindow = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan FixProgressPollInterval = TimeSpan.FromMilliseconds(100);
     private readonly IDirectRunProcessRunner processRunner;
 
     public DirectRunLauncher()
@@ -189,6 +191,16 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 provider,
                 providerSessionId,
                 launchedAt);
+        }
+
+        if (string.Equals(entryKind, "fix", StringComparison.Ordinal)
+            && processInvocation.StartedProcessCarriesProviderSession)
+        {
+            WaitForFixProgressBoundary(
+                absoluteProviderEventLogPath,
+                providerSessionId,
+                launchedAt,
+                process.ProcessId);
         }
 
         if (process.ExitedEarly && process.ExitCode != 0)
@@ -425,17 +437,14 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             && !OperatingSystem.IsWindows()
             && !string.Equals(entryKind, "review", StringComparison.Ordinal))
         {
-            var keepDetachedHelperStandardInputOpen = string.Equals(entryKind, "fix", StringComparison.Ordinal);
-            var detachedLauncherStartInfo = CreateDetachedHelperLauncherStartInfo(
-                helperStartInfo,
-                keepDetachedHelperStandardInputOpen);
+            var detachedLauncherStartInfo = CreateDetachedHelperLauncherStartInfo(helperStartInfo);
             return new ResolvedProcessInvocation
             {
                 FileName = detachedLauncherStartInfo.FileName,
                 Arguments = detachedLauncherStartInfo.ArgumentList.ToArray(),
                 RequiresPersistentExitMonitor = false,
                 InheritStandardInput = false,
-                KeepStandardInputOpen = keepDetachedHelperStandardInputOpen,
+                KeepStandardInputOpen = false,
                 UsesDetachedCaptureHelper = true,
                 StartedProcessCarriesProviderSession = false
             };
@@ -453,9 +462,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         };
     }
 
-    private static ProcessStartInfo CreateDetachedHelperLauncherStartInfo(
-        ProcessStartInfo helperStartInfo,
-        bool inheritStandardInput)
+    private static ProcessStartInfo CreateDetachedHelperLauncherStartInfo(ProcessStartInfo helperStartInfo)
     {
         var launcherStartInfo = new ProcessStartInfo
         {
@@ -467,21 +474,13 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
 
         launcherStartInfo.ArgumentList.Add("-c");
         launcherStartInfo.ArgumentList.Add(
-            inheritStandardInput
-                ? """
-                  if command -v nohup >/dev/null 2>&1; then
-                      nohup "$@" >/dev/null 2>&1 &
-                  else
-                      "$@" >/dev/null 2>&1 &
-                  fi
-                  """
-                : """
-                  if command -v nohup >/dev/null 2>&1; then
-                      nohup "$@" >/dev/null 2>&1 </dev/null &
-                  else
-                      "$@" >/dev/null 2>&1 </dev/null &
-                  fi
-                  """);
+            """
+            if command -v nohup >/dev/null 2>&1; then
+                nohup "$@" >/dev/null 2>&1 </dev/null &
+            else
+                "$@" >/dev/null 2>&1 </dev/null &
+            fi
+            """);
         launcherStartInfo.ArgumentList.Add("direct-run-detached-capture-launcher");
         launcherStartInfo.ArgumentList.Add(helperStartInfo.FileName);
         foreach (var argument in helperStartInfo.ArgumentList)
@@ -490,6 +489,57 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         }
 
         return launcherStartInfo;
+    }
+
+    private static void WaitForFixProgressBoundary(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt,
+        int processId)
+    {
+        if (string.IsNullOrWhiteSpace(providerSessionId))
+        {
+            return;
+        }
+
+        var deadline = DateTimeOffset.UtcNow + FixProgressObservationWindow;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (HasFixProgressSignal(providerEventLogPath, providerSessionId, launchedAt)
+                || DirectRunSessionBoundary.HasBackendExitEvent(providerEventLogPath, providerSessionId, launchedAt)
+                || !IsProcessAlive(processId))
+            {
+                return;
+            }
+
+            Thread.Sleep(FixProgressPollInterval);
+        }
+    }
+
+    private static bool HasFixProgressSignal(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            var currentProviderEvents = DirectRunSessionBoundary.SelectEvents(providerEvents, providerSessionId, launchedAt);
+            return DirectRunFixOutcomeSupport.HasBoundedProgressSignal(currentProviderEvents);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool ShouldShellWrapForPersistentExitLogging(string provider, string command)
