@@ -483,11 +483,8 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
-        if (ArtifactExists(
-                context,
-                RunSupervisionSessionArtifactPathResolver.Resolve(
-                    context.Config.Supervision.ArtifactRoot,
-                    executionUnit)))
+        var latestFixRequestedAt = TryResolveLatestFixRequestedTimestamp(context, executionUnit);
+        if (HasBlockingFixSupervisionSession(context, executionUnit, latestFixRequestedAt))
         {
             return false;
         }
@@ -512,8 +509,38 @@ internal static class RunCommand
             return false;
         }
 
-        var latestFixRequestedAt = TryResolveLatestFixRequestedTimestamp(context, executionUnit);
         return latestFixRequestedAt is not null && latestFixRequestedAt > launchedAt;
+    }
+
+    private static bool HasBlockingFixSupervisionSession(
+        CliContext context,
+        string executionUnit,
+        DateTimeOffset? latestFixRequestedAt)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            executionUnit);
+        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(sessionArtifactPath))
+        {
+            return false;
+        }
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
+        if (session.WorkerEntry == RunSupervisionWorkerEntry.Fix
+            && session.Status == RunSupervisionSessionStatus.Blocked
+            && latestFixRequestedAt is not null
+            && latestFixRequestedAt > session.UpdatedAt)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static string? TryReadDirectRunStatus(
