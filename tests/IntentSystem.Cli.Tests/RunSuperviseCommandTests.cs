@@ -1,5 +1,6 @@
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Review;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 using System.Text.Json;
@@ -1242,6 +1243,75 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenDeadFixWorkerSessionWithMeaningfulWorktreeDiff_BlocksAsNonRetryableFailure()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        WriteDeadFixDirectRunArtifacts(repoRoot, "pid:999999");
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                CreateMeaningfulFixWorktreeProgressEvents("G25", "pid:999999")
+                    .Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                """
+                 M src/ToyCalc/Calculator.cs
+                 M src/ToyCalc/CommandLine.cs
+                 M tests/ToyCalc.Tests/CalculatorTests.cs
+                """);
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("meaningful execution-unit worktree changes", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("src/ToyCalc/Calculator.cs", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Contains("meaningful execution-unit worktree changes", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("meaningful execution-unit worktree changes", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenNonRetryableAutoResumeFailure_BlocksSelectedItemAndAppendsTerminalEvents()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -1943,6 +2013,61 @@ public sealed class RunSuperviseCommandTests
             }) + Environment.NewLine);
         File.WriteAllText(Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.request.json"), DirectRunRequestArtifactJson.Serialize(requestArtifact));
         File.WriteAllText(Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.result.json"), DirectRunResultArtifactJson.Serialize(resultArtifact));
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateMeaningfulFixWorktreeProgressEvents(string executionUnit, string sessionId)
+    {
+        return
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.1000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'rg --files' succeeded in 0ms")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.2000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("git status --short")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:01.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    type = "backend-exit",
+                    exit_code = 1
+                })
+            }
+        ];
+    }
+
+    private sealed class FakeGitRunner(string statusOutput) : IGitCommandRunner
+    {
+        public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            Assert.Equal(["status", "--short", "--untracked-files=all"], arguments);
+            return new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = statusOutput,
+                StdErr = string.Empty
+            };
+        }
     }
 
     private sealed class TemporaryDirectory : IDisposable
