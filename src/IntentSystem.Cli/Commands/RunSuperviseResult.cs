@@ -23,4 +23,8 @@ internal sealed record RunSuperviseResult
     public bool AutoResumed { get; init; }
 
     public bool Blocked { get; init; }
+
+    public string? FailureReason { get; init; }
+
+    public bool ReportAsNonRetryableFailure { get; init; }
 }

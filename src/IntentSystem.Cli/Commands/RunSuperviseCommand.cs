@@ -163,8 +163,25 @@ internal static class RunSuperviseCommand
                 context,
                 executionUnit,
                 session.WorkerEntry,
-                out var deadWorkerReason))
+                out var deadWorkerFailure))
         {
+            if (deadWorkerFailure.IsStartupOnly)
+            {
+                return BlockForTerminalFailure(
+                    context,
+                    queueState,
+                    executionUnit,
+                    sessionArtifactPath,
+                    sessionArtifactRef,
+                    runLogPath,
+                    session,
+                    now,
+                    deadWorkerFailure.Reason,
+                    incrementRetryCount: false,
+                    emitRetryExhaustedEvent: false,
+                    reportAsNonRetryableFailure: true);
+            }
+
             if (session.RetryCount >= session.RetryBudget)
             {
                 return ExhaustRetryBudget(
@@ -176,13 +193,13 @@ internal static class RunSuperviseCommand
                     runLogPath,
                     session,
                     now,
-                    deadWorkerReason);
+                    deadWorkerFailure.Reason);
             }
 
             var interruptedSession = session with
             {
                 UpdatedAt = now,
-                LastInterruptionReason = deadWorkerReason
+                LastInterruptionReason = deadWorkerFailure.Reason
             };
 
             return AttemptAutoResume(
@@ -293,8 +310,25 @@ internal static class RunSuperviseCommand
                 context,
                 executionUnit,
                 session.WorkerEntry,
-                out var deadWorkerReason))
+                out var deadWorkerFailure))
         {
+            if (deadWorkerFailure.IsStartupOnly)
+            {
+                return BlockForTerminalFailure(
+                    context,
+                    queueState,
+                    executionUnit,
+                    sessionArtifactPath,
+                    sessionArtifactRef,
+                    runLogPath,
+                    session,
+                    now,
+                    deadWorkerFailure.Reason,
+                    incrementRetryCount: false,
+                    emitRetryExhaustedEvent: false,
+                    reportAsNonRetryableFailure: true);
+            }
+
             if (session.RetryCount >= session.RetryBudget)
             {
                 return ExhaustRetryBudget(
@@ -306,13 +340,13 @@ internal static class RunSuperviseCommand
                     runLogPath,
                     session,
                     now,
-                    deadWorkerReason);
+                    deadWorkerFailure.Reason);
             }
 
             var interruptedSession = session with
             {
                 UpdatedAt = now,
-                LastInterruptionReason = deadWorkerReason
+                LastInterruptionReason = deadWorkerFailure.Reason
             };
 
             return AttemptAutoResume(
@@ -433,7 +467,9 @@ internal static class RunSuperviseCommand
         RunSupervisionSession session,
         DateTimeOffset now,
         string reason,
-        bool incrementRetryCount)
+        bool incrementRetryCount,
+        bool emitRetryExhaustedEvent = true,
+        bool reportAsNonRetryableFailure = false)
     {
         var transition = QueueManager.TransitionBlocking(
             queueState,
@@ -454,23 +490,31 @@ internal static class RunSuperviseCommand
 
         PersistQueueState(context, transition.UpdatedState);
         PersistSession(sessionArtifactPath, blockedSession);
+        List<RunEvent> runEvents = [];
+        if (emitRetryExhaustedEvent)
+        {
+            runEvents.Add(new RunEvent
+            {
+                Ts = now,
+                ExecutionUnit = executionUnit,
+                Event = "retry-exhausted",
+                By = TransitionActor,
+                LinkedPr = session.LinkedPr,
+                CommentRef = session.CommentRef,
+                Reason = reason
+            });
+        }
+
+        runEvents.Add(transition.Event);
         AppendRunEvents(
             runLogPath,
-            [
-                new RunEvent
-                {
-                    Ts = now,
-                    ExecutionUnit = executionUnit,
-                    Event = "retry-exhausted",
-                    By = TransitionActor,
-                    LinkedPr = session.LinkedPr,
-                    CommentRef = session.CommentRef,
-                    Reason = reason
-                },
-                transition.Event
-            ]);
+            runEvents);
 
-        return CreateResult(sessionArtifactRef, blockedSession, blocked: true);
+        return CreateResult(
+            sessionArtifactRef,
+            blockedSession,
+            blocked: true,
+            reportAsNonRetryableFailure: reportAsNonRetryableFailure);
     }
 
     private static RunSupervisionSession BuildResumedSession(
@@ -650,12 +694,12 @@ internal static class RunSuperviseCommand
         CliContext context,
         string executionUnit,
         RunSupervisionWorkerEntry workerEntry,
-        out string reason)
+        out WorkerSessionFailure failure)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
-        reason = string.Empty;
+        failure = null!;
         var expectedEntryKind = ResolveDirectRunEntryKind(workerEntry);
         var requestArtifactPath = ResolveDirectRunRequestArtifactPath(context, executionUnit);
         var resultArtifactPath = ResolveDirectRunResultArtifactPath(context, executionUnit);
@@ -689,7 +733,8 @@ internal static class RunSuperviseCommand
                 currentProviderEvents,
                 executionUnit,
                 requestArtifact.ProviderSessionId,
-                out reason))
+                expectedEntryKind,
+                out failure))
         {
             File.WriteAllText(
                 resultArtifactPath,
@@ -706,7 +751,8 @@ internal static class RunSuperviseCommand
                 executionUnit,
                 requestArtifact.ProviderSessionId,
                 requestArtifact.LaunchedAt,
-                out reason))
+                expectedEntryKind,
+                out failure))
         {
             File.WriteAllText(
                 resultArtifactPath,
@@ -738,7 +784,8 @@ internal static class RunSuperviseCommand
                 [backendExitEvent],
                 executionUnit,
                 requestArtifact.ProviderSessionId,
-                out reason))
+                expectedEntryKind,
+                out failure))
         {
             throw new InvalidOperationException(
                 $"Synthetic backend-exit for '{executionUnit}' did not resolve to a terminal failure reason.");
@@ -752,14 +799,16 @@ internal static class RunSuperviseCommand
         string executionUnit,
         string providerSessionId,
         string launchedAt,
-        out string reason)
+        string expectedEntryKind,
+        out WorkerSessionFailure failure)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerLogPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(launchedAt);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedEntryKind);
 
-        reason = string.Empty;
+        failure = null!;
         if (TerminalFailureRaceWindow <= TimeSpan.Zero)
         {
             return false;
@@ -791,7 +840,8 @@ internal static class RunSuperviseCommand
                     currentProviderEvents,
                     executionUnit,
                     providerSessionId,
-                    out reason))
+                    expectedEntryKind,
+                    out failure))
             {
                 return true;
             }
@@ -804,13 +854,15 @@ internal static class RunSuperviseCommand
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
         string providerSessionId,
-        out string reason)
+        string expectedEntryKind,
+        out WorkerSessionFailure failure)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedEntryKind);
 
-        reason = string.Empty;
+        failure = null!;
         for (var index = providerEvents.Count - 1; index >= 0; index--)
         {
             var providerEvent = providerEvents[index];
@@ -822,13 +874,27 @@ internal static class RunSuperviseCommand
             if (providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
                 && exitCodeElement.TryGetInt32(out var exitCode))
             {
-                reason =
-                    $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode}.";
+                if (string.Equals(expectedEntryKind, "fix", StringComparison.Ordinal)
+                    && DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
+                        providerEvents,
+                        executionUnit,
+                        out var startupOnlyDetail))
+                {
+                    failure = new WorkerSessionFailure(
+                        $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode}. {startupOnlyDetail}",
+                        IsStartupOnly: true);
+                    return true;
+                }
+
+                failure = new WorkerSessionFailure(
+                    $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode}.",
+                    IsStartupOnly: false);
             }
             else
             {
-                reason =
-                    $"Worker session '{providerSessionId}' for '{executionUnit}' exited after a terminal backend-exit event.";
+                failure = new WorkerSessionFailure(
+                    $"Worker session '{providerSessionId}' for '{executionUnit}' exited after a terminal backend-exit event.",
+                    IsStartupOnly: false);
             }
 
             return true;
@@ -963,7 +1029,8 @@ internal static class RunSuperviseCommand
         RunSupervisionSession session,
         bool retryScheduled = false,
         bool autoResumed = false,
-        bool blocked = false)
+        bool blocked = false,
+        bool reportAsNonRetryableFailure = false)
     {
         return new RunSuperviseResult
         {
@@ -977,9 +1044,13 @@ internal static class RunSuperviseCommand
             NextRetryAt = session.NextRetryAt?.ToString("O"),
             RetryScheduled = retryScheduled,
             AutoResumed = autoResumed,
-            Blocked = blocked
+            Blocked = blocked,
+            FailureReason = blocked ? session.LastInterruptionReason : null,
+            ReportAsNonRetryableFailure = reportAsNonRetryableFailure
         };
     }
+
+    private sealed record WorkerSessionFailure(string Reason, bool IsStartupOnly);
 
     private static string FormatQueueState(QueueItemState state)
     {

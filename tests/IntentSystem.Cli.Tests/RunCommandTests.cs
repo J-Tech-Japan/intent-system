@@ -3054,6 +3054,107 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenStartupOnlyDeadFixWorkerSession_StopsWithNonRetryableFailureDetail()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G226"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Fixing))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"G226","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
+            {"ts":"2026-04-10T10:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"contract mismatch"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            execution_unit: "G226"
+
+            implementation_issue:
+              issue_title: "[G226] Root Run Orchestration Command"
+              goal: "Coordinate the root run loop."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/G226/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.comment.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G226.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G226.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "G226",
+                WorkerEntry = RunSupervisionWorkerEntry.Fix,
+                Status = RunSupervisionSessionStatus.Monitoring,
+                QueueState = "fixing",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "G226"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-226-g226",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2",
+                HandoffArtifactRef = ".intent-cli/fix/G226.request.md",
+                RetryCount = 0,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z")
+            }));
+        WriteDirectRunRequest(repoRoot, "G226", "fix", "pid:999999", provider: "Claude");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "fix",
+            "running",
+            providerEvents: CreateStartupOnlyFixProviderEvents("G226", "pid:999999"),
+            sessionId: "pid:999999",
+            provider: "Claude");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("non-retryable-failure", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        var action = Assert.Single(result.Actions);
+        Assert.Equal("run supervise", action.Name);
+        Assert.Contains("during provider startup", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("startup warnings or noise", result.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("Supervisor blocked 'G226' after non-retryable failure.", result.Detail, StringComparison.Ordinal);
+
+        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
+        Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+        Assert.Contains("during provider startup", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "supervision", "G226.session.json")));
+        Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+        Assert.Equal(0, session.RetryCount);
+        Assert.Contains("during provider startup", session.LastInterruptionReason, StringComparison.Ordinal);
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        Assert.Equal("blocked", runEvents[^1].Event);
+        Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+        Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ExecuteCore_GivenDeadFixWorkerSessionAtRetryExhaustionWithoutCapturedTerminalEvent_BlocksUsingSyntheticBackendExitReason()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -3635,6 +3736,172 @@ public sealed class RunCommandTests
         File.WriteAllText(
             Path.Combine(runsDirectory, $"{executionUnit}.provider.jsonl"),
             string.Join(Environment.NewLine, providerEvents.Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateStartupOnlyFixProviderEvents(string executionUnit, string sessionId)
+    {
+        return
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "session-metadata",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    model = "sonnet",
+                    transport = "sdk",
+                    command = "claude"
+                })
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.2000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("OpenAI Codex v0.118.0 (research preview)")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.3000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("--------")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.3500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("model: gpt-5.4")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.4000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("reasoning summaries: none")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.4500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("session id: sess_123")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.5000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("user")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.5500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G226")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.6000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("provider: openai")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.6500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("approval: never")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.7000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("sandbox: danger-full-access")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.7500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("reasoning effort: high")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.8000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("Please diagnose the startup-only backend exit reproduction for issue #295.")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.9000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("warn plugin manifest falling_back after state db discrepancy on slow path")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    type = "backend-exit",
+                    exit_code = 1
+                })
+            }
+        ];
     }
 
     private static void WriteDirectRunRequest(
