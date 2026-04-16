@@ -1455,7 +1455,17 @@ public sealed class RunSuperviseCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G25")
+                Payload = JsonSerializer.SerializeToElement("--------")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.3500000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("model: gpt-5.4")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
@@ -1465,7 +1475,17 @@ public sealed class RunSuperviseCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = JsonSerializer.SerializeToElement("provider: openai")
+                Payload = JsonSerializer.SerializeToElement("reasoning summaries: none")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.4500000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("session id: sess_123")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
@@ -1475,7 +1495,17 @@ public sealed class RunSuperviseCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = JsonSerializer.SerializeToElement("approval: never")
+                Payload = JsonSerializer.SerializeToElement("user")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.5500000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G25")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
@@ -1485,11 +1515,31 @@ public sealed class RunSuperviseCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = JsonSerializer.SerializeToElement("sandbox: danger-full-access")
+                Payload = JsonSerializer.SerializeToElement("provider: openai")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.6500000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("approval: never")
             }),
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
                 Timestamp = "2026-04-08T10:20:00.7000000+00:00",
+                ExecutionUnit = "G25",
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("sandbox: danger-full-access")
+            }),
+            DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.7500000+00:00",
                 ExecutionUnit = "G25",
                 Provider = "Claude",
                 EntryKind = "fix",

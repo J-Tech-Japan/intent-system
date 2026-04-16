@@ -3775,7 +3775,17 @@ public sealed class RunCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = System.Text.Json.JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G226")
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("--------")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.3500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("model: gpt-5.4")
             },
             new DirectRunProviderEvent
             {
@@ -3785,7 +3795,17 @@ public sealed class RunCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = System.Text.Json.JsonSerializer.SerializeToElement("provider: openai")
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("reasoning summaries: none")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.4500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("session id: sess_123")
             },
             new DirectRunProviderEvent
             {
@@ -3795,7 +3815,17 @@ public sealed class RunCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = System.Text.Json.JsonSerializer.SerializeToElement("approval: never")
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("user")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.5500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("workdir: /repo/.intent-cli/worktrees/G226")
             },
             new DirectRunProviderEvent
             {
@@ -3805,11 +3835,31 @@ public sealed class RunCommandTests
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
-                Payload = System.Text.Json.JsonSerializer.SerializeToElement("sandbox: danger-full-access")
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("provider: openai")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.6500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("approval: never")
             },
             new DirectRunProviderEvent
             {
                 Timestamp = "2026-04-10T12:00:00.7000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("sandbox: danger-full-access")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.7500000+00:00",
                 ExecutionUnit = executionUnit,
                 Provider = "Claude",
                 EntryKind = "fix",

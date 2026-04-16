@@ -9,11 +9,19 @@ internal static class DirectRunFixOutcomeSupport
     private static readonly string[] StartupPreamblePrefixes =
     [
         "openai codex v",
+        "model:",
+        "reasoning summaries:",
+        "session id:",
         "workdir:",
         "provider:",
         "approval:",
         "sandbox:",
         "reasoning effort:"
+    ];
+    private static readonly string[] StartupPreambleExactLines =
+    [
+        "--------",
+        "user"
     ];
     private static readonly string[] StartupWarningMarkers =
     [
@@ -319,7 +327,8 @@ internal static class DirectRunFixOutcomeSupport
         {
             sawString = true;
             var normalized = value.Trim().ToLowerInvariant();
-            if (!StartupPreamblePrefixes.Any(prefix => normalized.StartsWith(prefix, StringComparison.Ordinal)))
+            if (!StartupPreamblePrefixes.Any(prefix => normalized.StartsWith(prefix, StringComparison.Ordinal))
+                && !StartupPreambleExactLines.Any(line => string.Equals(normalized, line, StringComparison.Ordinal)))
             {
                 return false;
             }
