@@ -3852,6 +3852,157 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenAutoContinueResubmitFailure_RollsBackConfirmationBoundaryState()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G226"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Fixing))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"G226","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
+            {"ts":"2026-04-10T10:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"contract mismatch"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            execution_unit: "G226"
+
+            implementation_issue:
+              issue_title: "[G226] Root Run Orchestration Command"
+              goal: "Coordinate the root run loop."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/G226/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.comment.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G226.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G226.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "G226",
+                WorkerEntry = RunSupervisionWorkerEntry.Fix,
+                Status = RunSupervisionSessionStatus.Monitoring,
+                QueueState = "fixing",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "G226"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-226-g226",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2",
+                HandoffArtifactRef = ".intent-cli/fix/G226.request.md",
+                RetryCount = 3,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z")
+            }));
+        WriteDirectRunRequest(repoRoot, "G226", "fix", "pid:999999", provider: "Claude");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "fix",
+            "running",
+            providerEvents: CreateMeaningfulFixWorktreeProgressProviderEvents("G226", "pid:999999"),
+            sessionId: "pid:999999",
+            provider: "Claude");
+        var gitRunner = new FakeGitRunner(new Dictionary<string, GitCommandResult>
+        {
+            [FakeGitRunner.CreateCommandKey(["status", "--short", "--untracked-files=all"])] = new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut =
+                    """
+                     M src/ToyCalc/Calculator.cs
+                     M src/ToyCalc/CommandLine.cs
+                     M tests/ToyCalc.Tests/CalculatorTests.cs
+                    """,
+                StdErr = string.Empty
+            },
+            [FakeGitRunner.CreateCommandKey(["rev-parse", "--abbrev-ref", "HEAD"])] = new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = "issue-226-g226\n",
+                StdErr = string.Empty
+            },
+            [FakeGitRunner.CreateCommandKey(["add", "--", "src/ToyCalc/Calculator.cs", "src/ToyCalc/CommandLine.cs", "tests/ToyCalc.Tests/CalculatorTests.cs"])] = new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = string.Empty,
+                StdErr = string.Empty
+            },
+            [FakeGitRunner.CreateCommandKey(["diff", "--cached", "--quiet"])] = new GitCommandResult
+            {
+                ExitCode = 1,
+                StdOut = string.Empty,
+                StdErr = string.Empty
+            },
+            [FakeGitRunner.CreateCommandKey(["commit", "-m", "Carry forward post-fix progress for G226"])] = new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = "[issue-226-g226 abc123] Carry forward post-fix progress for G226\n",
+                StdErr = string.Empty
+            }
+        });
+        var originalSuperviseGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
+        var originalRunGitCommandRunnerFactory = RunCommand.GitCommandRunnerFactory;
+        var originalRunResubmitExecutor = RunCommand.RunResubmitExecutor;
+
+        try
+        {
+            RunSuperviseCommand.GitCommandRunnerFactory = () => gitRunner;
+            RunCommand.GitCommandRunnerFactory = () => gitRunner;
+            RunCommand.RunResubmitExecutor = (_, _) => throw new InvalidOperationException("git push failed.");
+
+            var result = RunCommand.ExecuteCore(CreateContext(
+                repoRoot,
+                postFixWorktreeProgressPolicy: CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy));
+
+            Assert.Equal("deterministic-contract-gap", result.StopReason);
+            Assert.Contains("run resubmit", result.Detail, StringComparison.Ordinal);
+            Assert.Contains("git push failed.", result.Detail, StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("meaningful execution-unit worktree changes", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G226.session.json")));
+            Assert.True(session.RequiresPostFixWorktreeProgressDecision);
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "post-fix-progress-accepted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "resubmitted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.GitCommandRunnerFactory = originalSuperviseGitCommandRunnerFactory;
+            RunCommand.GitCommandRunnerFactory = originalRunGitCommandRunnerFactory;
+            RunCommand.RunResubmitExecutor = originalRunResubmitExecutor;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenDeadFixWorkerSessionAtRetryExhaustionWithBuildOutputOnlyDiff_StaysOnBackendExitPath()
     {
         using var tempDirectory = new TemporaryDirectory();

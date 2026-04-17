@@ -559,20 +559,43 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(blockedItem);
         ArgumentNullException.ThrowIfNull(session);
 
-        RestoreFixingStateAfterPostFixProgressBoundary(context, blockedItem.ExecutionUnit, session);
         CommitPostFixWorktreeProgress(context, blockedItem);
-        ExecuteAction(
-            context,
-            actions,
-            "run resubmit",
-            blockedItem.ExecutionUnit,
-            () => RunResubmitExecutor(context, blockedItem.ExecutionUnit));
-        ExecuteAction(
-            context,
-            actions,
-            "run rereview",
-            blockedItem.ExecutionUnit,
-            () => RunRereviewExecutor(context, blockedItem.ExecutionUnit));
+        var rollbackState = CapturePostFixProgressRollbackState(context, blockedItem.ExecutionUnit);
+
+        try
+        {
+            RestoreFixingStateAfterPostFixProgressBoundary(context, blockedItem.ExecutionUnit, session);
+            ExecuteAction(
+                context,
+                actions,
+                "run resubmit",
+                blockedItem.ExecutionUnit,
+                () => RunResubmitExecutor(context, blockedItem.ExecutionUnit));
+            ExecuteAction(
+                context,
+                actions,
+                "run rereview",
+                blockedItem.ExecutionUnit,
+                () => RunRereviewExecutor(context, blockedItem.ExecutionUnit));
+        }
+        catch
+        {
+            RestorePostFixProgressRollbackState(rollbackState);
+            throw;
+        }
+
+        AppendRunEvent(
+            context.GetRunLogPath(),
+            new RunEvent
+            {
+                Ts = TimestampFactory(),
+                ExecutionUnit = blockedItem.ExecutionUnit,
+                Event = "post-fix-progress-accepted",
+                By = "intent-cli",
+                LinkedPr = session.LinkedPr,
+                CommentRef = session.CommentRef,
+                Reason = "Auto-continued repair from meaningful post-fix worktree progress."
+            });
     }
 
     private static void RestoreFixingStateAfterPostFixProgressBoundary(
@@ -614,19 +637,6 @@ internal static class RunCommand
                 RequiresPostFixWorktreeProgressDecision = false,
                 UpdatedAt = now
             }));
-
-        AppendRunEvent(
-            context.GetRunLogPath(),
-            new RunEvent
-            {
-                Ts = now,
-                ExecutionUnit = executionUnit,
-                Event = "post-fix-progress-accepted",
-                By = "intent-cli",
-                LinkedPr = session.LinkedPr,
-                CommentRef = session.CommentRef,
-                Reason = "Auto-continued repair from meaningful post-fix worktree progress."
-            });
     }
 
     private static void CommitPostFixWorktreeProgress(CliContext context, QueueItem blockedItem)
@@ -732,6 +742,40 @@ internal static class RunCommand
         File.AppendAllText(
             runLogPath,
             RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
+    }
+
+    private static PostFixProgressRollbackState CapturePostFixProgressRollbackState(
+        CliContext context,
+        string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var runLogPath = context.GetRunLogPath();
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            executionUnit);
+        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+
+        return new PostFixProgressRollbackState(
+            queueStatePath,
+            File.ReadAllText(queueStatePath),
+            sessionArtifactPath,
+            File.ReadAllText(sessionArtifactPath),
+            runLogPath,
+            File.Exists(runLogPath) ? File.ReadAllText(runLogPath) : string.Empty);
+    }
+
+    private static void RestorePostFixProgressRollbackState(PostFixProgressRollbackState rollbackState)
+    {
+        ArgumentNullException.ThrowIfNull(rollbackState);
+
+        File.WriteAllText(rollbackState.QueueStatePath, rollbackState.QueueStateContent);
+        File.WriteAllText(rollbackState.SessionArtifactPath, rollbackState.SessionArtifactContent);
+        File.WriteAllText(rollbackState.RunLogPath, rollbackState.RunLogContent);
     }
 
     private static string DescribeSupervisionResult(RunSuperviseResult superviseResult)
@@ -1571,4 +1615,12 @@ internal static class RunCommand
 
         public required string Detail { get; init; }
     }
+
+    private sealed record PostFixProgressRollbackState(
+        string QueueStatePath,
+        string QueueStateContent,
+        string SessionArtifactPath,
+        string SessionArtifactContent,
+        string RunLogPath,
+        string RunLogContent);
 }
