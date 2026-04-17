@@ -187,7 +187,7 @@ internal static class RunSuperviseCommand
                     requiresPostFixWorktreeProgressDecision: deadWorkerFailure.RequiresPostFixWorktreeProgressDecision);
             }
 
-            if (session.RetryCount >= session.RetryBudget)
+            if (ShouldExhaustRetryBudgetAfterCurrentFailure(session))
             {
                 return ExhaustRetryBudget(
                     context,
@@ -246,7 +246,7 @@ internal static class RunSuperviseCommand
 
         if (now - session.LastHeartbeatAt > heartbeatTimeout)
         {
-            if (session.RetryCount >= session.RetryBudget)
+            if (ShouldExhaustRetryBudgetAfterCurrentFailure(session))
             {
                 return ExhaustRetryBudget(
                     context,
@@ -450,6 +450,14 @@ internal static class RunSuperviseCommand
         DateTimeOffset now,
         string reason)
     {
+        var consumeCurrentFailureIntoRetryBudget = session.RetryCount < session.RetryBudget;
+        var terminalReason = CreateRetryExhaustionSummary(
+            context,
+            executionUnit,
+            session,
+            reason,
+            consumeCurrentFailureIntoRetryBudget);
+
         return BlockForTerminalFailure(
             context,
             queueState,
@@ -459,8 +467,11 @@ internal static class RunSuperviseCommand
             runLogPath,
             session,
             now,
-            reason,
-            incrementRetryCount: false);
+            terminalReason,
+            incrementRetryCount: consumeCurrentFailureIntoRetryBudget,
+            emitRetryExhaustedEvent: true,
+            emitRetryAttemptedEvent: consumeCurrentFailureIntoRetryBudget,
+            retryAttemptReason: reason);
     }
 
     private static RunSuperviseResult BlockForTerminalFailure(
@@ -475,6 +486,8 @@ internal static class RunSuperviseCommand
         string reason,
         bool incrementRetryCount,
         bool emitRetryExhaustedEvent = true,
+        bool emitRetryAttemptedEvent = false,
+        string? retryAttemptReason = null,
         bool reportAsNonRetryableFailure = false,
         bool requiresPostFixWorktreeProgressDecision = false)
     {
@@ -499,6 +512,20 @@ internal static class RunSuperviseCommand
         PersistQueueState(context, transition.UpdatedState);
         PersistSession(sessionArtifactPath, blockedSession);
         List<RunEvent> runEvents = [];
+        if (emitRetryAttemptedEvent)
+        {
+            runEvents.Add(new RunEvent
+            {
+                Ts = now,
+                ExecutionUnit = executionUnit,
+                Event = "retry-attempted",
+                By = TransitionActor,
+                LinkedPr = session.LinkedPr,
+                CommentRef = session.CommentRef,
+                Reason = retryAttemptReason ?? reason
+            });
+        }
+
         if (emitRetryExhaustedEvent)
         {
             runEvents.Add(new RunEvent
@@ -1101,6 +1128,237 @@ internal static class RunSuperviseCommand
             && providerEvent.Payload.ValueKind == JsonValueKind.Object
             && providerEvent.Payload.TryGetProperty("type", out var typeElement)
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal);
+    }
+
+    private static bool ShouldExhaustRetryBudgetAfterCurrentFailure(RunSupervisionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (session.RetryBudget <= 0)
+        {
+            return true;
+        }
+
+        return session.RetryCount >= session.RetryBudget
+            || session.RetryCount + 1 >= session.RetryBudget;
+    }
+
+    private static string CreateRetryExhaustionSummary(
+        CliContext context,
+        string executionUnit,
+        RunSupervisionSession session,
+        string latestFailureReason,
+        bool consumeCurrentFailureIntoRetryBudget)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(latestFailureReason);
+
+        if (session.WorkerEntry != RunSupervisionWorkerEntry.Fix)
+        {
+            return latestFailureReason;
+        }
+
+        var failedAttemptCount = consumeCurrentFailureIntoRetryBudget && session.RetryCount < session.RetryBudget
+            ? session.RetryCount + 1
+            : session.RetryCount;
+        failedAttemptCount = Math.Max(failedAttemptCount, 1);
+
+        var sessionIds = ResolveRecentFixFailureSessionIds(context, executionUnit, failedAttemptCount);
+        var failureReasons = ResolveRecentFixFailureReasons(
+            context.GetRunLogPath(),
+            executionUnit,
+            failedAttemptCount,
+            latestFailureReason);
+        var latestOutput = TryResolveRepresentativeLatestFixOutput(context, executionUnit);
+
+        var segments = new List<string>
+        {
+            $"Fix retry budget exhausted for '{executionUnit}' after {failedAttemptCount} failed attempts."
+        };
+
+        if (sessionIds.Count > 0)
+        {
+            segments.Add($"Affected sessions: {string.Join(", ", sessionIds)}.");
+        }
+
+        if (failureReasons.Count > 0)
+        {
+            segments.Add($"Failure reasons: {string.Join(" | ", failureReasons)}.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(latestOutput))
+        {
+            segments.Add($"Representative latest output: {latestOutput}.");
+        }
+
+        return string.Join(" ", segments);
+    }
+
+    private static IReadOnlyList<string> ResolveRecentFixFailureSessionIds(
+        CliContext context,
+        string executionUnit,
+        int failedAttemptCount)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var providerLogPath = ResolveDirectRunProviderLogPath(context, executionUnit);
+        if (!File.Exists(providerLogPath))
+        {
+            return [];
+        }
+
+        var orderedSessionIds = new List<string>();
+        foreach (var providerEvent in DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath)))
+        {
+            if (!string.Equals(providerEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                || !string.Equals(providerEvent.EntryKind, "fix", StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(providerEvent.SessionId)
+                || orderedSessionIds.Contains(providerEvent.SessionId, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            orderedSessionIds.Add(providerEvent.SessionId);
+        }
+
+        if (orderedSessionIds.Count <= failedAttemptCount)
+        {
+            return orderedSessionIds;
+        }
+
+        return orderedSessionIds[^failedAttemptCount..];
+    }
+
+    private static IReadOnlyList<string> ResolveRecentFixFailureReasons(
+        string runLogPath,
+        string executionUnit,
+        int failedAttemptCount,
+        string latestFailureReason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runLogPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(latestFailureReason);
+
+        var reasons = new List<string>();
+        if (File.Exists(runLogPath))
+        {
+            var historicalReasons = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath))
+                .Where(runEvent =>
+                    string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                    && string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(runEvent.Reason))
+                .Select(runEvent => runEvent.Reason!)
+                .ToList();
+
+            var priorReasonCount = Math.Max(failedAttemptCount - 1, 0);
+            if (historicalReasons.Count > priorReasonCount)
+            {
+                historicalReasons = historicalReasons[^priorReasonCount..];
+            }
+
+            reasons.AddRange(historicalReasons);
+        }
+
+        reasons.Add(latestFailureReason);
+        return reasons;
+    }
+
+    private static string? TryResolveRepresentativeLatestFixOutput(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var requestArtifactPath = ResolveDirectRunRequestArtifactPath(context, executionUnit);
+        var providerLogPath = ResolveDirectRunProviderLogPath(context, executionUnit);
+        if (!File.Exists(requestArtifactPath) || !File.Exists(providerLogPath))
+        {
+            return null;
+        }
+
+        var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+        if (!string.Equals(requestArtifact.EntryKind, "fix", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var currentSessionEvents = SelectCurrentSessionEvents(
+            DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath)),
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        if (DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
+                currentSessionEvents,
+                executionUnit,
+                out var startupOnlyDetail))
+        {
+            return startupOnlyDetail;
+        }
+
+        for (var index = currentSessionEvents.Count - 1; index >= 0; index--)
+        {
+            var providerEvent = currentSessionEvents[index];
+            if (providerEvent.Kind == "session-metadata" || HasBackendExitType(providerEvent))
+            {
+                continue;
+            }
+
+            var summary = SummarizeProviderPayload(providerEvent.Payload);
+            if (!string.IsNullOrWhiteSpace(summary))
+            {
+                return summary;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? SummarizeProviderPayload(JsonElement payload)
+    {
+        return payload.ValueKind switch
+        {
+            JsonValueKind.String => NormalizeSummaryText(payload.GetString()),
+            JsonValueKind.Object => NormalizeSummaryText(ResolveObjectPayloadSummary(payload)),
+            _ => null
+        };
+    }
+
+    private static string? ResolveObjectPayloadSummary(JsonElement payload)
+    {
+        if (payload.TryGetProperty("detail", out var detailElement)
+            && detailElement.ValueKind == JsonValueKind.String)
+        {
+            return detailElement.GetString();
+        }
+
+        if (payload.TryGetProperty("reason", out var reasonElement)
+            && reasonElement.ValueKind == JsonValueKind.String)
+        {
+            return reasonElement.GetString();
+        }
+
+        if (payload.TryGetProperty("message", out var messageElement)
+            && messageElement.ValueKind == JsonValueKind.String)
+        {
+            return messageElement.GetString();
+        }
+
+        return payload.GetRawText();
+    }
+
+    private static string? NormalizeSummaryText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var normalized = value.Trim();
+        return normalized.Length <= 240
+            ? normalized
+            : normalized[..237] + "...";
     }
 
     private static void PersistQueueState(CliContext context, QueueState queueState)

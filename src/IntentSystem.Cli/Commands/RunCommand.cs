@@ -394,6 +394,11 @@ internal static class RunCommand
                         continue;
                     }
 
+                    if (TryResolveBlockedFixRetryExhaustionResult(context, actions, blockedItem, out var blockedFixResult))
+                    {
+                        return blockedFixResult;
+                    }
+
                     return CreateStopResult(
                         ParentIntentUpdateRequiredStopReason,
                         actions,
@@ -503,6 +508,45 @@ internal static class RunCommand
         }
 
         ExecuteAutoContinuePostFixWorktreeProgress(context, actions, blockedItem, session);
+        return true;
+    }
+
+    private static bool TryResolveBlockedFixRetryExhaustionResult(
+        CliContext context,
+        IReadOnlyList<RunCommandAction> actions,
+        QueueItem blockedItem,
+        out RunCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(actions);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+
+        result = null!;
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            blockedItem.ExecutionUnit);
+        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(sessionArtifactPath))
+        {
+            return false;
+        }
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
+        if (session.WorkerEntry != RunSupervisionWorkerEntry.Fix
+            || session.Status != RunSupervisionSessionStatus.Blocked
+            || session.RetryCount < session.RetryBudget
+            || string.IsNullOrWhiteSpace(session.LastInterruptionReason))
+        {
+            return false;
+        }
+
+        result = CreateStopResult(
+            NonRetryableFailureStopReason,
+            actions,
+            blockedItem.ExecutionUnit,
+            session.LastInterruptionReason);
         return true;
     }
 
