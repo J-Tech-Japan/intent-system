@@ -127,6 +127,22 @@ public sealed class CliConfigLoaderTests
     }
 
     [Fact]
+    public void Load_GivenRunSection_RestoresPostFixWorktreeProgressPolicy()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+
+        [run]
+        post_fix_worktree_progress_policy = "auto-continue"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal("auto-continue", config.Run.PostFixWorktreeProgressPolicy);
+    }
+
+    [Fact]
     public void Load_GivenDirectBackendSection_RestoresDefaultAndEntrySpecificPolicies()
     {
         var toml = """
@@ -217,6 +233,22 @@ public sealed class CliConfigLoaderTests
         var exception = Assert.Throws<InvalidOperationException>(() => CliConfigLoader.Load(toml));
 
         Assert.Contains("workflow_engine", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Load_GivenInvalidPostFixWorktreeProgressPolicy_ThrowsInvalidOperationException()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+
+        [run]
+        post_fix_worktree_progress_policy = "always"
+        """;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => CliConfigLoader.Load(toml));
+
+        Assert.Contains("post_fix_worktree_progress_policy", exception.Message, StringComparison.Ordinal);
     }
 
     private sealed class TemporaryDirectory : IDisposable

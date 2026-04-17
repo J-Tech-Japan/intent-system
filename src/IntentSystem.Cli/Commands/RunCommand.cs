@@ -56,6 +56,11 @@ internal static class RunCommand
     public static Func<CliContext, string, ReviewAcceptResult> ReviewAcceptExecutor { get; set; } =
         ReviewAcceptCommand.ExecuteCore;
 
+    public static Func<IGitCommandRunner> GitCommandRunnerFactory { get; set; } =
+        () => new GitCommandRunner();
+
+    public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -156,6 +161,11 @@ internal static class RunCommand
                         {
                             if (superviseResult.ReportAsNonRetryableFailure)
                             {
+                                if (superviseResult.RequiresPostFixWorktreeProgressDecision)
+                                {
+                                    continue;
+                                }
+
                                 return CreateMonitoringStopResult(actions, inProgressItem.ExecutionUnit, superviseResult);
                             }
 
@@ -266,6 +276,11 @@ internal static class RunCommand
                         {
                             if (superviseResult.ReportAsNonRetryableFailure)
                             {
+                                if (superviseResult.RequiresPostFixWorktreeProgressDecision)
+                                {
+                                    continue;
+                                }
+
                                 return CreateMonitoringStopResult(actions, inProgressItem.ExecutionUnit, superviseResult);
                             }
 
@@ -369,6 +384,16 @@ internal static class RunCommand
                 var blockedItem = queueState.Items.FirstOrDefault(item => item.State == QueueItemState.Blocked);
                 if (blockedItem is not null)
                 {
+                    if (TryHandlePostFixWorktreeProgressBoundary(context, actions, blockedItem, out var decisionResult))
+                    {
+                        if (decisionResult is not null)
+                        {
+                            return decisionResult;
+                        }
+
+                        continue;
+                    }
+
                     return CreateStopResult(
                         ParentIntentUpdateRequiredStopReason,
                         actions,
@@ -446,6 +471,359 @@ internal static class RunCommand
             context.RepoRoot,
             artifactRef.Replace('/', Path.DirectorySeparatorChar)));
         return File.Exists(artifactPath);
+    }
+
+    private static bool TryHandlePostFixWorktreeProgressBoundary(
+        CliContext context,
+        List<RunCommandAction> actions,
+        QueueItem blockedItem,
+        out RunCommandResult? decisionResult)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(actions);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+
+        decisionResult = null;
+        if (!TryResolvePostFixWorktreeProgressDecisionSession(context, blockedItem.ExecutionUnit, out var session))
+        {
+            return false;
+        }
+
+        if (!string.Equals(
+                context.Config.Run.PostFixWorktreeProgressPolicy,
+                CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy,
+                StringComparison.Ordinal))
+        {
+            decisionResult = CreateStopResult(
+                ClarificationRequiredStopReason,
+                actions,
+                blockedItem.ExecutionUnit,
+                CreatePostFixWorktreeProgressClarificationDetail(blockedItem.ExecutionUnit, session));
+            return true;
+        }
+
+        ExecuteAutoContinuePostFixWorktreeProgress(context, actions, blockedItem, session);
+        return true;
+    }
+
+    private static bool TryResolvePostFixWorktreeProgressDecisionSession(
+        CliContext context,
+        string executionUnit,
+        out RunSupervisionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        session = null!;
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            executionUnit);
+        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(sessionArtifactPath))
+        {
+            return false;
+        }
+
+        session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
+        return session.WorkerEntry == RunSupervisionWorkerEntry.Fix
+            && session.Status == RunSupervisionSessionStatus.Blocked
+            && session.RequiresPostFixWorktreeProgressDecision;
+    }
+
+    private static string CreatePostFixWorktreeProgressClarificationDetail(
+        string executionUnit,
+        RunSupervisionSession session)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(session);
+
+        var reason = string.IsNullOrWhiteSpace(session.LastInterruptionReason)
+            ? $"Meaningful fix progress exists in the execution-unit worktree for '{executionUnit}'."
+            : session.LastInterruptionReason;
+        return $"{reason} Confirm whether to carry this progress forward. " +
+               $"To continue automatically on the next root run, set [run] " +
+               $"{CliRuntimeContracts.PostFixWorktreeProgressPolicyKey} = " +
+               $"\"{CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy}\" and rerun.";
+    }
+
+    private static void ExecuteAutoContinuePostFixWorktreeProgress(
+        CliContext context,
+        List<RunCommandAction> actions,
+        QueueItem blockedItem,
+        RunSupervisionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(actions);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+        ArgumentNullException.ThrowIfNull(session);
+
+        var carryForwardCommit = CommitPostFixWorktreeProgress(context, blockedItem);
+        var rollbackState = CapturePostFixProgressRollbackState(context, blockedItem.ExecutionUnit);
+
+        try
+        {
+            RestoreFixingStateAfterPostFixProgressBoundary(context, blockedItem.ExecutionUnit, session);
+            ExecuteAction(
+                context,
+                actions,
+                "run resubmit",
+                blockedItem.ExecutionUnit,
+                () => RunResubmitExecutor(context, blockedItem.ExecutionUnit));
+            ExecuteAction(
+                context,
+                actions,
+                "run rereview",
+                blockedItem.ExecutionUnit,
+                () => RunRereviewExecutor(context, blockedItem.ExecutionUnit));
+        }
+        catch
+        {
+            RestorePostFixProgressRollbackState(rollbackState);
+            try
+            {
+                RollBackPostFixCarryForwardCommit(carryForwardCommit);
+            }
+            catch (InvalidOperationException rollbackException)
+            {
+                throw new RunDeterministicGapException(
+                    blockedItem.ExecutionUnit,
+                    $"Failed to roll back auto-continue carry-forward for '{blockedItem.ExecutionUnit}': {rollbackException.Message}");
+            }
+
+            throw;
+        }
+
+        AppendRunEvent(
+            context.GetRunLogPath(),
+            new RunEvent
+            {
+                Ts = TimestampFactory(),
+                ExecutionUnit = blockedItem.ExecutionUnit,
+                Event = "post-fix-progress-accepted",
+                By = "intent-cli",
+                LinkedPr = session.LinkedPr,
+                CommentRef = session.CommentRef,
+                Reason = "Auto-continued repair from meaningful post-fix worktree progress."
+            });
+    }
+
+    private static void RestoreFixingStateAfterPostFixProgressBoundary(
+        CliContext context,
+        string executionUnit,
+        RunSupervisionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(session);
+
+        var queueState = LoadQueueStateOrThrow(context);
+        var queueStatePath = context.GetQueueStatePath();
+        var now = TimestampFactory();
+        var updatedState = queueState with
+        {
+            UpdatedAt = now,
+            Items = queueState.Items.Select(item =>
+                string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                    ? item with
+                    {
+                        State = QueueItemState.Fixing,
+                        BlockedBy = []
+                    }
+                    : item).ToArray()
+        };
+        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
+
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            executionUnit);
+        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+        File.WriteAllText(
+            sessionArtifactPath,
+            RunSupervisionSessionArtifactJson.Serialize(session with
+            {
+                RequiresPostFixWorktreeProgressDecision = false,
+                UpdatedAt = now
+            }));
+    }
+
+    private static PostFixCarryForwardCommit CommitPostFixWorktreeProgress(CliContext context, QueueItem blockedItem)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+
+        if (blockedItem.LinkedIssue is null)
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                $"Blocked execution unit '{blockedItem.ExecutionUnit}' must have a linked issue before carry-forward.");
+        }
+
+        var worktreePath = RunStartCommand.ResolveWorktreePath(context, blockedItem.ExecutionUnit);
+        if (!Directory.Exists(worktreePath))
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                $"Worktree path was not found at {worktreePath}.");
+        }
+
+        var gitRunner = GitCommandRunnerFactory();
+        if (!RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                gitRunner,
+                worktreePath,
+                out var changedPaths))
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                $"Meaningful post-fix worktree progress for '{blockedItem.ExecutionUnit}' was no longer present.");
+        }
+
+        var expectedBranchName = RunStartCommand.ResolveBranchName(blockedItem.ExecutionUnit, blockedItem.LinkedIssue);
+        var branchResult = gitRunner.Run(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+        if (branchResult.ExitCode != 0)
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                string.IsNullOrWhiteSpace(branchResult.StdErr)
+                    ? "git rev-parse --abbrev-ref HEAD failed."
+                    : branchResult.StdErr.Trim());
+        }
+
+        var currentBranch = branchResult.StdOut.Trim();
+        if (!string.Equals(currentBranch, expectedBranchName, StringComparison.Ordinal))
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                $"Current worktree branch '{currentBranch}' must match expected branch '{expectedBranchName}'.");
+        }
+
+        var headResult = gitRunner.Run(worktreePath, ["rev-parse", "HEAD"]);
+        if (headResult.ExitCode != 0)
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                string.IsNullOrWhiteSpace(headResult.StdErr)
+                    ? "git rev-parse HEAD failed."
+                    : headResult.StdErr.Trim());
+        }
+
+        var originalHead = headResult.StdOut.Trim();
+        if (string.IsNullOrWhiteSpace(originalHead))
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                "git rev-parse HEAD returned an empty commit id.");
+        }
+
+        var addArguments = new List<string> { "add", "--" };
+        addArguments.AddRange(changedPaths);
+        var addResult = gitRunner.Run(worktreePath, addArguments);
+        if (addResult.ExitCode != 0)
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                string.IsNullOrWhiteSpace(addResult.StdErr)
+                    ? "git add failed."
+                    : addResult.StdErr.Trim());
+        }
+
+        var diffResult = gitRunner.Run(worktreePath, ["diff", "--cached", "--quiet"]);
+        if (diffResult.ExitCode == 0)
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                $"Carry-forward commit for '{blockedItem.ExecutionUnit}' had no staged changes.");
+        }
+
+        if (diffResult.ExitCode != 1)
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                string.IsNullOrWhiteSpace(diffResult.StdErr)
+                    ? "git diff --cached --quiet failed."
+                    : diffResult.StdErr.Trim());
+        }
+
+        var commitResult = gitRunner.Run(
+            worktreePath,
+            ["commit", "-m", $"Carry forward post-fix progress for {blockedItem.ExecutionUnit}"]);
+        if (commitResult.ExitCode != 0)
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                string.IsNullOrWhiteSpace(commitResult.StdErr)
+                    ? "git commit failed."
+                    : commitResult.StdErr.Trim());
+        }
+
+        return new PostFixCarryForwardCommit(worktreePath, originalHead);
+    }
+
+    private static void RollBackPostFixCarryForwardCommit(PostFixCarryForwardCommit carryForwardCommit)
+    {
+        ArgumentNullException.ThrowIfNull(carryForwardCommit);
+
+        var gitRunner = GitCommandRunnerFactory();
+        var resetResult = gitRunner.Run(
+            carryForwardCommit.WorktreePath,
+            ["reset", "--mixed", carryForwardCommit.PreviousHead]);
+        if (resetResult.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(resetResult.StdErr)
+                    ? "git reset --mixed failed."
+                    : resetResult.StdErr.Trim());
+        }
+    }
+
+    private static void AppendRunEvent(string runLogPath, RunEvent runEvent)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runLogPath);
+        ArgumentNullException.ThrowIfNull(runEvent);
+
+        var runLogDirectory = Path.GetDirectoryName(runLogPath)
+            ?? throw new InvalidOperationException("Run log path did not contain a directory.");
+        Directory.CreateDirectory(runLogDirectory);
+        File.AppendAllText(
+            runLogPath,
+            RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
+    }
+
+    private static PostFixProgressRollbackState CapturePostFixProgressRollbackState(
+        CliContext context,
+        string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var runLogPath = context.GetRunLogPath();
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            executionUnit);
+        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+
+        return new PostFixProgressRollbackState(
+            queueStatePath,
+            File.ReadAllText(queueStatePath),
+            sessionArtifactPath,
+            File.ReadAllText(sessionArtifactPath),
+            runLogPath,
+            File.Exists(runLogPath) ? File.ReadAllText(runLogPath) : string.Empty);
+    }
+
+    private static void RestorePostFixProgressRollbackState(PostFixProgressRollbackState rollbackState)
+    {
+        ArgumentNullException.ThrowIfNull(rollbackState);
+
+        File.WriteAllText(rollbackState.QueueStatePath, rollbackState.QueueStateContent);
+        File.WriteAllText(rollbackState.SessionArtifactPath, rollbackState.SessionArtifactContent);
+        File.WriteAllText(rollbackState.RunLogPath, rollbackState.RunLogContent);
     }
 
     private static string DescribeSupervisionResult(RunSuperviseResult superviseResult)
@@ -1285,4 +1663,16 @@ internal static class RunCommand
 
         public required string Detail { get; init; }
     }
+
+    private sealed record PostFixProgressRollbackState(
+        string QueueStatePath,
+        string QueueStateContent,
+        string SessionArtifactPath,
+        string SessionArtifactContent,
+        string RunLogPath,
+        string RunLogContent);
+
+    private sealed record PostFixCarryForwardCommit(
+        string WorktreePath,
+        string PreviousHead);
 }

@@ -27,4 +27,6 @@ internal sealed record RunSuperviseResult
     public string? FailureReason { get; init; }
 
     public bool ReportAsNonRetryableFailure { get; init; }
+
+    public bool RequiresPostFixWorktreeProgressDecision { get; init; }
 }

@@ -183,7 +183,8 @@ internal static class RunSuperviseCommand
                     deadWorkerFailure.Reason,
                     incrementRetryCount: false,
                     emitRetryExhaustedEvent: false,
-                    reportAsNonRetryableFailure: true);
+                    reportAsNonRetryableFailure: true,
+                    requiresPostFixWorktreeProgressDecision: deadWorkerFailure.RequiresPostFixWorktreeProgressDecision);
             }
 
             if (session.RetryCount >= session.RetryBudget)
@@ -330,7 +331,8 @@ internal static class RunSuperviseCommand
                     deadWorkerFailure.Reason,
                     incrementRetryCount: false,
                     emitRetryExhaustedEvent: false,
-                    reportAsNonRetryableFailure: true);
+                    reportAsNonRetryableFailure: true,
+                    requiresPostFixWorktreeProgressDecision: deadWorkerFailure.RequiresPostFixWorktreeProgressDecision);
             }
 
             if (session.RetryCount >= session.RetryBudget)
@@ -473,7 +475,8 @@ internal static class RunSuperviseCommand
         string reason,
         bool incrementRetryCount,
         bool emitRetryExhaustedEvent = true,
-        bool reportAsNonRetryableFailure = false)
+        bool reportAsNonRetryableFailure = false,
+        bool requiresPostFixWorktreeProgressDecision = false)
     {
         var transition = QueueManager.TransitionBlocking(
             queueState,
@@ -489,7 +492,8 @@ internal static class RunSuperviseCommand
             UpdatedAt = now,
             NextRetryAt = null,
             LastInterruptionReason = reason,
-            RetryCount = incrementRetryCount ? session.RetryCount + 1 : session.RetryCount
+            RetryCount = incrementRetryCount ? session.RetryCount + 1 : session.RetryCount,
+            RequiresPostFixWorktreeProgressDecision = requiresPostFixWorktreeProgressDecision
         };
 
         PersistQueueState(context, transition.UpdatedState);
@@ -518,7 +522,8 @@ internal static class RunSuperviseCommand
             sessionArtifactRef,
             blockedSession,
             blocked: true,
-            reportAsNonRetryableFailure: reportAsNonRetryableFailure);
+            reportAsNonRetryableFailure: reportAsNonRetryableFailure,
+            requiresPostFixWorktreeProgressDecision: requiresPostFixWorktreeProgressDecision);
     }
 
     private static RunSupervisionSession BuildResumedSession(
@@ -916,20 +921,18 @@ internal static class RunSuperviseCommand
         if (!TryFindFailingBackendExitCode(providerEvents, out var exitCode)
             || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(providerEvents, executionUnit, out _)
             || !DirectRunFixOutcomeSupport.HasBoundedProgressSignal(providerEvents)
-            || !TryResolveMeaningfulWorktreeDiffPaths(worktreePath, out var changedPaths))
+            || !RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                GitCommandRunnerFactory(),
+                worktreePath,
+                out var changedPaths))
         {
             return false;
         }
 
-        var summarizedPaths = string.Join(", ", changedPaths.Take(3));
-        if (changedPaths.Count > 3)
-        {
-            summarizedPaths += ", ...";
-        }
-
         failure = new WorkerSessionFailure(
-            $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode} after bounded fix progress and left meaningful execution-unit worktree changes. Changed paths: {summarizedPaths}.",
-            ReportAsNonRetryableFailure: true);
+            $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode} after bounded fix progress and left meaningful execution-unit worktree changes. Changed paths: {RunWorktreeProgressSupport.SummarizePaths(changedPaths)}.",
+            ReportAsNonRetryableFailure: true,
+            RequiresPostFixWorktreeProgressDecision: true);
         return true;
     }
 
@@ -1008,97 +1011,6 @@ internal static class RunSuperviseCommand
 
         exitCode = default;
         return false;
-    }
-
-    private static bool TryResolveMeaningfulWorktreeDiffPaths(
-        string worktreePath,
-        out IReadOnlyList<string> changedPaths)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
-
-        changedPaths = [];
-        GitCommandResult statusResult;
-        try
-        {
-            statusResult = GitCommandRunnerFactory().Run(
-                worktreePath,
-                ["status", "--short", "--untracked-files=all"]);
-        }
-        catch (Exception exception) when (
-            exception is InvalidOperationException
-            or IOException
-            or ArgumentException
-            or DirectoryNotFoundException
-            or System.ComponentModel.Win32Exception)
-        {
-            return false;
-        }
-
-        if (statusResult.ExitCode != 0 || string.IsNullOrWhiteSpace(statusResult.StdOut))
-        {
-            return false;
-        }
-
-        var paths = new List<string>();
-        foreach (var rawLine in statusResult.StdOut.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            var line = rawLine.TrimEnd();
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            var pathText = line.Length > 3 ? line[3..].Trim() : line.Trim();
-            if (string.IsNullOrWhiteSpace(pathText))
-            {
-                continue;
-            }
-
-            var normalizedPath = pathText.Contains(" -> ", StringComparison.Ordinal)
-                ? pathText[(pathText.LastIndexOf(" -> ", StringComparison.Ordinal) + 4)..].Trim()
-                : pathText;
-            normalizedPath = normalizedPath.Trim().Trim('"').Replace('\\', '/');
-            if (string.IsNullOrWhiteSpace(normalizedPath)
-                || IsIgnoredWorktreeArtifactPath(normalizedPath))
-            {
-                continue;
-            }
-
-            paths.Add(normalizedPath);
-        }
-
-        if (paths.Count == 0)
-        {
-            return false;
-        }
-
-        changedPaths = paths;
-        return true;
-    }
-
-    private static bool IsIgnoredWorktreeArtifactPath(string path)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-
-        var normalizedPath = path.Replace('\\', '/').Trim('/');
-        if (string.IsNullOrWhiteSpace(normalizedPath))
-        {
-            return true;
-        }
-
-        if (normalizedPath.StartsWith(".intent-cli/", StringComparison.Ordinal)
-            || normalizedPath.StartsWith(".takt/", StringComparison.Ordinal)
-            || normalizedPath.StartsWith("node_modules/", StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return segments.Any(segment =>
-            string.Equals(segment, "bin", StringComparison.Ordinal)
-            || string.Equals(segment, "obj", StringComparison.Ordinal)
-            || string.Equals(segment, "TestResults", StringComparison.Ordinal)
-            || string.Equals(segment, ".vs", StringComparison.Ordinal));
     }
 
     private static string ResolveDirectRunRequestArtifactPath(CliContext context, string executionUnit)
@@ -1228,7 +1140,8 @@ internal static class RunSuperviseCommand
         bool retryScheduled = false,
         bool autoResumed = false,
         bool blocked = false,
-        bool reportAsNonRetryableFailure = false)
+        bool reportAsNonRetryableFailure = false,
+        bool requiresPostFixWorktreeProgressDecision = false)
     {
         return new RunSuperviseResult
         {
@@ -1244,11 +1157,15 @@ internal static class RunSuperviseCommand
             AutoResumed = autoResumed,
             Blocked = blocked,
             FailureReason = blocked ? session.LastInterruptionReason : null,
-            ReportAsNonRetryableFailure = reportAsNonRetryableFailure
+            ReportAsNonRetryableFailure = reportAsNonRetryableFailure,
+            RequiresPostFixWorktreeProgressDecision = requiresPostFixWorktreeProgressDecision
         };
     }
 
-    private sealed record WorkerSessionFailure(string Reason, bool ReportAsNonRetryableFailure);
+    private sealed record WorkerSessionFailure(
+        string Reason,
+        bool ReportAsNonRetryableFailure,
+        bool RequiresPostFixWorktreeProgressDecision = false);
 
     private static string FormatQueueState(QueueItemState state)
     {
