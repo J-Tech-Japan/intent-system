@@ -1165,10 +1165,15 @@ internal static class RunSuperviseCommand
             : session.RetryCount;
         failedAttemptCount = Math.Max(failedAttemptCount, 1);
 
-        var sessionIds = ResolveRecentFixFailureSessionIds(context, executionUnit, failedAttemptCount);
+        var sessionIds = ResolveRecentFixFailureSessionIds(
+            context,
+            executionUnit,
+            session.CreatedAt,
+            failedAttemptCount);
         var failureReasons = ResolveRecentFixFailureReasons(
             context.GetRunLogPath(),
             executionUnit,
+            session.CreatedAt,
             failedAttemptCount,
             latestFailureReason);
         var latestOutput = TryResolveRepresentativeLatestFixOutput(context, executionUnit);
@@ -1199,6 +1204,7 @@ internal static class RunSuperviseCommand
     private static IReadOnlyList<string> ResolveRecentFixFailureSessionIds(
         CliContext context,
         string executionUnit,
+        DateTimeOffset sessionCreatedAt,
         int failedAttemptCount)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -1216,6 +1222,7 @@ internal static class RunSuperviseCommand
             if (!string.Equals(providerEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
                 || !string.Equals(providerEvent.EntryKind, "fix", StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(providerEvent.SessionId)
+                || !IsProviderEventOnOrAfterSessionStart(providerEvent, sessionCreatedAt)
                 || orderedSessionIds.Contains(providerEvent.SessionId, StringComparer.Ordinal))
             {
                 continue;
@@ -1235,6 +1242,7 @@ internal static class RunSuperviseCommand
     private static IReadOnlyList<string> ResolveRecentFixFailureReasons(
         string runLogPath,
         string executionUnit,
+        DateTimeOffset sessionCreatedAt,
         int failedAttemptCount,
         string latestFailureReason)
     {
@@ -1249,6 +1257,7 @@ internal static class RunSuperviseCommand
                 .Where(runEvent =>
                     string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
                     && string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal)
+                    && runEvent.Ts >= sessionCreatedAt
                     && !string.IsNullOrWhiteSpace(runEvent.Reason))
                 .Select(runEvent => runEvent.Reason!)
                 .ToList();
@@ -1359,6 +1368,20 @@ internal static class RunSuperviseCommand
         return normalized.Length <= 240
             ? normalized
             : normalized[..237] + "...";
+    }
+
+    private static bool IsProviderEventOnOrAfterSessionStart(
+        DirectRunProviderEvent providerEvent,
+        DateTimeOffset sessionCreatedAt)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvent);
+
+        return DateTimeOffset.TryParse(
+                   providerEvent.Timestamp,
+                   System.Globalization.CultureInfo.InvariantCulture,
+                   System.Globalization.DateTimeStyles.RoundtripKind,
+                   out var providerEventTimestamp)
+               && providerEventTimestamp >= sessionCreatedAt;
     }
 
     private static void PersistQueueState(CliContext context, QueueState queueState)

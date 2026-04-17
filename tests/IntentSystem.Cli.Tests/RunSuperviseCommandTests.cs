@@ -1341,6 +1341,103 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRetryExhaustionWithOlderFixLoopHistory_ExcludesStaleSessionsFromSummary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog() + string.Join(
+                Environment.NewLine,
+                [
+                    """{"ts":"2026-04-08T10:24:00Z","execution_unit":"G25","event":"retry-attempted","by":"intent-cli","reason":"Worker session 'pid:82625' for 'G25' exited with backend exit code 1."}""",
+                    """{"ts":"2026-04-08T10:24:00Z","execution_unit":"G25","event":"auto-resumed","by":"intent-cli","reason":"run fix"}""",
+                    """{"ts":"2026-04-08T10:25:00Z","execution_unit":"G25","event":"retry-attempted","by":"intent-cli","reason":"Worker session 'pid:83683' for 'G25' exited with backend exit code 1."}""",
+                    """{"ts":"2026-04-08T10:25:00Z","execution_unit":"G25","event":"auto-resumed","by":"intent-cli","reason":"run fix"}""",
+                    """{"ts":"2026-04-08T10:28:00Z","execution_unit":"G25","event":"retry-attempted","by":"intent-cli","reason":"Worker session 'pid:90001' for 'G25' exited with backend exit code 1."}""",
+                    """{"ts":"2026-04-08T10:28:00Z","execution_unit":"G25","event":"auto-resumed","by":"intent-cli","reason":"run fix"}""",
+                    """{"ts":"2026-04-08T10:29:00Z","execution_unit":"G25","event":"retry-attempted","by":"intent-cli","reason":"Worker session 'pid:90002' for 'G25' exited with backend exit code 1."}""",
+                    """{"ts":"2026-04-08T10:29:00Z","execution_unit":"G25","event":"auto-resumed","by":"intent-cli","reason":"run fix"}"""
+                ]) + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession(workerEntry: RunSupervisionWorkerEntry.Fix) with
+            {
+                RetryCount = 2,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-08T10:27:30Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-08T10:29:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-08T10:29:00Z")
+            }));
+        WriteDeadFixDirectRunArtifacts(repoRoot, "pid:90003");
+        File.WriteAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                new[]
+                {
+                    CreateProviderEvent("2026-04-08T10:24:00.0000000+00:00", "G25", "fix", "pid:82625", "session-metadata", new { model = "sonnet", transport = "sdk", command = "claude" }),
+                    CreateProviderEvent("2026-04-08T10:24:01.0000000+00:00", "G25", "fix", "pid:82625", "provider-event", new { type = "backend-exit", exit_code = 1 }),
+                    CreateProviderEvent("2026-04-08T10:25:00.0000000+00:00", "G25", "fix", "pid:83683", "session-metadata", new { model = "sonnet", transport = "sdk", command = "claude" }),
+                    CreateProviderEvent("2026-04-08T10:25:01.0000000+00:00", "G25", "fix", "pid:83683", "provider-event", new { type = "backend-exit", exit_code = 1 }),
+                    CreateProviderEvent("2026-04-08T10:28:00.0000000+00:00", "G25", "fix", "pid:90001", "session-metadata", new { model = "sonnet", transport = "sdk", command = "claude" }),
+                    CreateProviderEvent("2026-04-08T10:28:01.0000000+00:00", "G25", "fix", "pid:90001", "provider-event", new { type = "backend-exit", exit_code = 1 }),
+                    CreateProviderEvent("2026-04-08T10:29:00.0000000+00:00", "G25", "fix", "pid:90002", "session-metadata", new { model = "sonnet", transport = "sdk", command = "claude" }),
+                    CreateProviderEvent("2026-04-08T10:29:01.0000000+00:00", "G25", "fix", "pid:90002", "provider-event", new { type = "backend-exit", exit_code = 1 }),
+                    CreateProviderEvent("2026-04-08T10:30:00.0000000+00:00", "G25", "fix", "pid:90003", "session-metadata", new { model = "sonnet", transport = "sdk", command = "claude" }),
+                    CreateProviderEvent("2026-04-08T10:30:00.5000000+00:00", "G25", "fix", "pid:90003", "provider-event", "checked current review comment context before fix planning"),
+                    CreateProviderEvent("2026-04-08T10:30:00.7500000+00:00", "G25", "fix", "pid:90003", "provider-event", "warn plugin manifest falling_back after state db discrepancy on slow path"),
+                    CreateProviderEvent("2026-04-08T10:30:01.0000000+00:00", "G25", "fix", "pid:90003", "provider-event", new { type = "backend-exit", exit_code = 1 })
+                }
+                .Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRunFixExecutor = RunSuperviseCommand.RunFixExecutor;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:31:00Z");
+            RunSuperviseCommand.RunFixExecutor = (_, _) =>
+                throw new InvalidOperationException("unexpected extra fix worker launch");
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Contains("pid:90001", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("pid:90002", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("pid:90003", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("pid:82625", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("pid:83683", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("10:24", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("10:25", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("Worker session 'pid:90001'", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("Worker session 'pid:90002'", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("Worker session 'pid:90003'", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("Worker session 'pid:82625'", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("Worker session 'pid:83683'", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.RunFixExecutor = originalRunFixExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenDeadFixWorkerSessionWithMeaningfulWorktreeDiff_BlocksAsNonRetryableFailure()
     {
         using var tempDirectory = new TemporaryDirectory();
