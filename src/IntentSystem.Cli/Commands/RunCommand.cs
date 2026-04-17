@@ -22,7 +22,6 @@ internal static class RunCommand
     private const string ParentIntentUpdateRequiredStopReason = "parent-intent-update-required";
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
     private const string NonRetryableFailureStopReason = "non-retryable-failure";
-    private const string ReviewContinuationWaitingStopReason = "review-continuation-waiting";
 
     public static Func<CliContext, string, QueueDispatchCommandResult> QueueDispatchExecutor { get; set; } =
         QueueDispatchCommand.ExecuteCore;
@@ -345,7 +344,7 @@ internal static class RunCommand
                     if (ShouldReportReviewContinuationWaiting(reviewDecision))
                     {
                         return CreateStopResult(
-                            ReviewContinuationWaitingStopReason,
+                            DeterministicContractGapStopReason,
                             actions,
                             inProgressItem.ExecutionUnit,
                             reviewDecision.Detail);

@@ -244,7 +244,7 @@ public sealed class RunCommandTests
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("review-continuation-waiting", result.StopReason);
+            Assert.Equal("deterministic-contract-gap", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
             var action = Assert.Single(result.Actions);
             Assert.Equal("review run", action.Name);
@@ -345,7 +345,7 @@ public sealed class RunCommandTests
                 repoRoot,
                 postFixWorktreeProgressPolicy: CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy));
 
-            Assert.Equal("review-continuation-waiting", result.StopReason);
+            Assert.Equal("deterministic-contract-gap", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
             Assert.Contains("no direct run result is available yet", result.Detail, StringComparison.Ordinal);
             Assert.Contains(result.Actions, action => action.Name == "run resubmit" && action.ExecutionUnit == "G226");
@@ -381,7 +381,7 @@ public sealed class RunCommandTests
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("review-continuation-waiting", result.StopReason);
+            Assert.Equal("deterministic-contract-gap", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
             var action = Assert.Single(result.Actions);
             Assert.Equal("review run", action.Name);
@@ -443,7 +443,7 @@ public sealed class RunCommandTests
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("review-continuation-waiting", result.StopReason);
+            Assert.Equal("deterministic-contract-gap", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
             Assert.Collection(
                 result.Actions,
@@ -1459,7 +1459,7 @@ public sealed class RunCommandTests
 
         var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-        Assert.Equal("review-continuation-waiting", result.StopReason);
+        Assert.Equal("deterministic-contract-gap", result.StopReason);
         Assert.Equal("G226", result.ExecutionUnit);
         Assert.Empty(result.Actions);
         Assert.Contains("does not match the current launched request boundary", result.Detail, StringComparison.Ordinal);
@@ -1504,7 +1504,7 @@ public sealed class RunCommandTests
 
         var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-        Assert.Equal("review-continuation-waiting", result.StopReason);
+        Assert.Equal("deterministic-contract-gap", result.StopReason);
         Assert.Equal("G226", result.ExecutionUnit);
         Assert.Empty(result.Actions);
         Assert.Contains("does not match the current launched request boundary", result.Detail, StringComparison.Ordinal);
