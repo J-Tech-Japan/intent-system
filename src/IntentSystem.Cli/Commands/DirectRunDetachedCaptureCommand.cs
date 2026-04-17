@@ -13,6 +13,8 @@ internal static class DirectRunDetachedCaptureCommand
     private static readonly TimeSpan ExitPollInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan OutputDrainGracePeriod = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ExitCodeResolutionGracePeriod = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ImplementProgressObservationWindow = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan ImplementProgressPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan FixStandardInputGracePeriod = TimeSpan.FromSeconds(1);
 
     public static bool TryExecute(string[] args, out int exitCode)
@@ -128,7 +130,6 @@ internal static class DirectRunDetachedCaptureCommand
                 }
                 else if (delayClosingPreservedStandardInputAfterLaunch)
                 {
-                    SchedulePreservedStandardInputClosure(preservedStandardInput);
                 }
             }
             providerSessionId = $"pid:{process.Id}";
@@ -163,6 +164,25 @@ internal static class DirectRunDetachedCaptureCommand
                 writer,
                 options,
                 providerSessionId);
+
+            if (delayClosingPreservedStandardInputAfterLaunch
+                && preservedStandardInput is not null)
+            {
+                if (string.Equals(options.EntryKind, "implement", StringComparison.Ordinal))
+                {
+                    ScheduleImplementStandardInputClosure(
+                        preservedStandardInput,
+                        options.ProviderEventLogPath,
+                        providerSessionId,
+                        options.LaunchedAt);
+                }
+                else
+                {
+                    SchedulePreservedStandardInputClosure(
+                        preservedStandardInput,
+                        FixStandardInputGracePeriod);
+                }
+            }
 
             exitedEarly = process.WaitForExit((int)StartupSuccessWindow.TotalMilliseconds);
             WaitForProcessExit(process);
@@ -526,6 +546,11 @@ internal static class DirectRunDetachedCaptureCommand
             return false;
         }
 
+        if (string.Equals(options.EntryKind, "implement", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         var executableName = Path.GetFileNameWithoutExtension(providerExecutablePath.Trim());
         return string.Equals(executableName, "script", StringComparison.OrdinalIgnoreCase);
     }
@@ -537,7 +562,8 @@ internal static class DirectRunDetachedCaptureCommand
         ArgumentException.ThrowIfNullOrWhiteSpace(providerExecutablePath);
         ArgumentNullException.ThrowIfNull(options);
 
-        if (!string.Equals(options.EntryKind, "fix", StringComparison.Ordinal))
+        if (!string.Equals(options.EntryKind, "fix", StringComparison.Ordinal)
+            && !string.Equals(options.EntryKind, "implement", StringComparison.Ordinal))
         {
             return false;
         }
@@ -546,7 +572,9 @@ internal static class DirectRunDetachedCaptureCommand
         return string.Equals(executableName, "script", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void SchedulePreservedStandardInputClosure(StreamWriter preservedStandardInput)
+    private static void SchedulePreservedStandardInputClosure(
+        StreamWriter preservedStandardInput,
+        TimeSpan gracePeriod)
     {
         ArgumentNullException.ThrowIfNull(preservedStandardInput);
 
@@ -554,7 +582,7 @@ internal static class DirectRunDetachedCaptureCommand
         {
             try
             {
-                await Task.Delay(FixStandardInputGracePeriod).ConfigureAwait(false);
+                await Task.Delay(gracePeriod).ConfigureAwait(false);
                 preservedStandardInput.Dispose();
             }
             catch (ObjectDisposedException)
@@ -564,6 +592,69 @@ internal static class DirectRunDetachedCaptureCommand
             {
             }
         });
+    }
+
+    private static void ScheduleImplementStandardInputClosure(
+        StreamWriter preservedStandardInput,
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        ArgumentNullException.ThrowIfNull(preservedStandardInput);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+
+        _ = Task.Run(async () =>
+        {
+            var deadline = DateTimeOffset.UtcNow + ImplementProgressObservationWindow;
+            try
+            {
+                while (DateTimeOffset.UtcNow < deadline)
+                {
+                    if (HasImplementProgressSignal(providerEventLogPath, providerSessionId, launchedAt)
+                        || DirectRunSessionBoundary.HasBackendExitEvent(providerEventLogPath, providerSessionId, launchedAt))
+                    {
+                        break;
+                    }
+
+                    await Task.Delay(ImplementProgressPollInterval).ConfigureAwait(false);
+                }
+
+                preservedStandardInput.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        });
+    }
+
+    private static bool HasImplementProgressSignal(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            var currentProviderEvents = DirectRunSessionBoundary.SelectEvents(providerEvents, providerSessionId, launchedAt);
+            return DirectRunFixOutcomeSupport.HasBoundedProgressSignal(currentProviderEvents);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     private static string? TryResolveScriptExecutable(DirectRunDetachedCaptureOptions options)
