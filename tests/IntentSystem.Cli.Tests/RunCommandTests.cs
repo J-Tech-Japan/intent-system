@@ -4576,6 +4576,77 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenLegacyBlockedFixSessionWithMeaningfulWorktreeProgress_RehydratesClarificationRequired()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G226"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(
+                CreateQueueState(
+                    CreateQueueItem(QueueItemState.Blocked) with
+                    {
+                        BlockedBy =
+                        [
+                            "Worker session 'pid:76095' for 'G226' exited with backend exit code 1 after bounded fix progress and left meaningful execution-unit worktree changes. Changed paths: src/ToyCalc/Calculator.cs, src/ToyCalc/CommandLine.cs, tests/ToyCalc.Tests/CalculatorTests.cs."
+                        ]
+                    })));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G226.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "G226",
+                WorkerEntry = RunSupervisionWorkerEntry.Fix,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "G226"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-226-g226",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2",
+                HandoffArtifactRef = ".intent-cli/fix/G226.request.md",
+                RetryCount = 3,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T12:20:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T12:20:00Z"),
+                LastInterruptionReason = "backend exit code 1"
+            }));
+        var originalGitCommandRunnerFactory = RunCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            RunCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                """
+                 M src/ToyCalc/Calculator.cs
+                 M src/ToyCalc/CommandLine.cs
+                 M tests/ToyCalc.Tests/CalculatorTests.cs
+                """);
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("clarification-required", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Contains("meaningful execution-unit worktree changes", result.Detail, StringComparison.Ordinal);
+            Assert.Contains("src/ToyCalc/Calculator.cs", result.Detail, StringComparison.Ordinal);
+            Assert.Contains("post_fix_worktree_progress_policy", result.Detail, StringComparison.Ordinal);
+            Assert.Empty(result.Actions);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G226.session.json")));
+            Assert.True(session.RequiresPostFixWorktreeProgressDecision);
+            Assert.Contains("meaningful execution-unit worktree changes", session.LastInterruptionReason, StringComparison.Ordinal);
+            Assert.Contains("src/ToyCalc/Calculator.cs", session.LastInterruptionReason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenMultipleInProgressItems_StopsWithParallelWorkDetected()
     {
         using var tempDirectory = new TemporaryDirectory();
