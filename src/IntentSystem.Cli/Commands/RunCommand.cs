@@ -22,6 +22,7 @@ internal static class RunCommand
     private const string ParentIntentUpdateRequiredStopReason = "parent-intent-update-required";
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
     private const string NonRetryableFailureStopReason = "non-retryable-failure";
+    private const string ReviewContinuationWaitingStopReason = "review-continuation-waiting";
 
     public static Func<CliContext, string, QueueDispatchCommandResult> QueueDispatchExecutor { get; set; } =
         QueueDispatchCommand.ExecuteCore;
@@ -290,7 +291,7 @@ internal static class RunCommand
                         return CreateMonitoringStopResult(actions, inProgressItem.ExecutionUnit, superviseResult);
                     }
 
-                    if (!ArtifactExists(context, ReviewArtifactPathResolver.Resolve(inProgressItem.ExecutionUnit)))
+                    if (ShouldLaunchReviewRun(context, inProgressItem.ExecutionUnit))
                     {
                         ExecuteAction(
                             context,
@@ -336,6 +337,15 @@ internal static class RunCommand
                     {
                         return CreateStopResult(
                             DeterministicContractGapStopReason,
+                            actions,
+                            inProgressItem.ExecutionUnit,
+                            reviewDecision.Detail);
+                    }
+
+                    if (ShouldReportReviewContinuationWaiting(reviewDecision))
+                    {
+                        return CreateStopResult(
+                            ReviewContinuationWaitingStopReason,
                             actions,
                             inProgressItem.ExecutionUnit,
                             reviewDecision.Detail);
@@ -1246,6 +1256,21 @@ internal static class RunCommand
         return null;
     }
 
+    private static bool ShouldLaunchReviewRun(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (!ArtifactExists(context, ReviewArtifactPathResolver.Resolve(executionUnit)))
+        {
+            return true;
+        }
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        return requestArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "review", StringComparison.Ordinal);
+    }
+
     private static RunReviewDecision ResolveReviewDecision(CliContext context, string executionUnit)
     {
         var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
@@ -1473,6 +1498,21 @@ internal static class RunCommand
             Kind = RunReviewDecisionKind.Waiting,
             Detail = $"Review direct run for '{executionUnit}' is '{runStatus}'."
         };
+    }
+
+    private static bool ShouldReportReviewContinuationWaiting(RunReviewDecision reviewDecision)
+    {
+        ArgumentNullException.ThrowIfNull(reviewDecision);
+
+        if (reviewDecision.Kind != RunReviewDecisionKind.Waiting
+            || string.IsNullOrWhiteSpace(reviewDecision.Detail))
+        {
+            return false;
+        }
+
+        return reviewDecision.Detail.Contains("no direct run request boundary is available yet", StringComparison.Ordinal)
+            || reviewDecision.Detail.Contains("no direct run result is available yet", StringComparison.Ordinal)
+            || reviewDecision.Detail.Contains("does not match the current launched request boundary", StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> EnsureCurrentSessionTerminalProviderEvent(
