@@ -1553,6 +1553,32 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public void ShouldStartDetachedProviderExitMonitor_GivenHelperAndDifferentResolvedProviderPid_ReturnsTrue()
+    {
+        var shouldStart = DirectRunLauncher.ShouldStartDetachedProviderExitMonitor(
+            usesDetachedCaptureHelper: true,
+            startedProcessId: 1234,
+            providerSessionId: "pid:5678",
+            out var providerProcessId);
+
+        Assert.True(shouldStart);
+        Assert.Equal(5678, providerProcessId);
+    }
+
+    [Fact]
+    public void ShouldStartDetachedProviderExitMonitor_GivenResolvedProviderPidMatchesHelperPid_ReturnsFalse()
+    {
+        var shouldStart = DirectRunLauncher.ShouldStartDetachedProviderExitMonitor(
+            usesDetachedCaptureHelper: true,
+            startedProcessId: 1234,
+            providerSessionId: "pid:1234",
+            out var providerProcessId);
+
+        Assert.False(shouldStart);
+        Assert.Equal(1234, providerProcessId);
+    }
+
+    [Fact]
     public void Launch_GivenWrappedCodexProcessTerminates_AppendsBackendExitProviderEvent()
     {
         if (OperatingSystem.IsWindows())

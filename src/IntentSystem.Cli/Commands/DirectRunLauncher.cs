@@ -184,7 +184,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 launchedAt,
                 providerSessionId);
             StartDetachedProviderExitMonitorIfNeeded(
-                processInvocation.StartedProcessCarriesProviderSession,
+                processInvocation.UsesDetachedCaptureHelper,
+                process.ProcessId,
                 absoluteProviderEventLogPath,
                 executionUnit,
                 entryKind,
@@ -670,7 +671,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
     }
 
     private static void StartDetachedProviderExitMonitorIfNeeded(
-        bool startedProcessCarriesProviderSession,
+        bool usesDetachedCaptureHelper,
+        int startedProcessId,
         string providerEventLogPath,
         string executionUnit,
         string entryKind,
@@ -678,8 +680,11 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         string providerSessionId,
         DateTimeOffset launchedAt)
     {
-        if (startedProcessCarriesProviderSession
-            || !TryParseProcessId(providerSessionId, out var processId))
+        if (!ShouldStartDetachedProviderExitMonitor(
+                usesDetachedCaptureHelper,
+                startedProcessId,
+                providerSessionId,
+                out var processId))
         {
             return;
         }
@@ -693,6 +698,19 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             provider,
             providerSessionId,
             launchedAt);
+    }
+
+    internal static bool ShouldStartDetachedProviderExitMonitor(
+        bool usesDetachedCaptureHelper,
+        int startedProcessId,
+        string providerSessionId,
+        out int providerProcessId)
+    {
+        providerProcessId = default;
+        return usesDetachedCaptureHelper
+            && startedProcessId > 0
+            && TryParseProcessId(providerSessionId, out providerProcessId)
+            && providerProcessId != startedProcessId;
     }
 
     private static void BestEffortAppendBackendExitIfProcessExitedSoon(
