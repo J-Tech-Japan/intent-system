@@ -146,12 +146,16 @@ internal static class DirectRunCommandSupport
             upstreamRequestRef,
             launchedAt,
             launchResult);
+        var effectiveProviderSessionId = DirectRunTerminalArtifactUpdater.SynchronizeArtifactsToLatestSessionIfCurrent(
+            absoluteProviderEventLogPath,
+            launchResult.ProviderSessionId,
+            launchedAt);
         var effectiveRunStatus = DirectRunTerminalArtifactUpdater.FinalizeDeadFixSessionIfCurrent(
             absoluteProviderEventLogPath,
             executionUnit,
             entryKindValue,
             launchResult.Provider,
-            launchResult.ProviderSessionId,
+            effectiveProviderSessionId,
             launchedAt,
             synthesis.RunStatus);
         StartDeferredFixExitMonitorIfNeeded(
@@ -159,13 +163,14 @@ internal static class DirectRunCommandSupport
             executionUnit,
             entryKindValue,
             launchResult.Provider,
-            launchResult.ProviderSessionId,
+            effectiveProviderSessionId,
             launchedAt,
             effectiveRunStatus);
 
         return launchResult with
         {
             ResultArtifactPath = synthesis.ResultArtifactPath,
+            ProviderSessionId = effectiveProviderSessionId,
             RunStatus = effectiveRunStatus
         };
     }

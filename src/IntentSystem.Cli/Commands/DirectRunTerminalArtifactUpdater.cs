@@ -9,6 +9,71 @@ internal static class DirectRunTerminalArtifactUpdater
 {
     private static readonly TimeSpan DeadSessionExitGracePeriod = TimeSpan.FromMilliseconds(250);
 
+    public static string SynchronizeArtifactsToLatestSessionIfCurrent(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+
+        if (!TryResolveLatestSessionId(providerEventLogPath, launchedAt, out var latestSessionId)
+            || string.IsNullOrWhiteSpace(latestSessionId)
+            || string.Equals(latestSessionId, providerSessionId, StringComparison.Ordinal)
+            || !TryResolveSiblingArtifactPath(providerEventLogPath, ".provider.jsonl", ".request.json", out var requestArtifactPath)
+            || !File.Exists(requestArtifactPath))
+        {
+            return providerSessionId;
+        }
+
+        try
+        {
+            var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+            if (!string.Equals(requestArtifact.ProviderSessionId, providerSessionId, StringComparison.Ordinal)
+                || !DateTimeOffset.TryParse(
+                    requestArtifact.LaunchedAt,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind,
+                    out var requestLaunchedAt)
+                || requestLaunchedAt != launchedAt)
+            {
+                return providerSessionId;
+            }
+
+            File.WriteAllText(
+                requestArtifactPath,
+                DirectRunRequestArtifactJson.Serialize(requestArtifact with
+                {
+                    ProviderSessionId = latestSessionId
+                }));
+
+            if (TryResolveSiblingArtifactPath(providerEventLogPath, ".provider.jsonl", ".result.json", out var resultArtifactPath)
+                && File.Exists(resultArtifactPath))
+            {
+                var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                if (string.Equals(resultArtifact.SessionId, providerSessionId, StringComparison.Ordinal))
+                {
+                    File.WriteAllText(
+                        resultArtifactPath,
+                        DirectRunResultArtifactJson.Serialize(resultArtifact with
+                        {
+                            SessionId = latestSessionId
+                        }));
+                }
+            }
+
+            return latestSessionId;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or JsonException)
+        {
+            return providerSessionId;
+        }
+    }
+
     public static void PersistTerminalRunStatusIfCurrent(
         string providerEventLogPath,
         string providerSessionId,
@@ -264,6 +329,48 @@ internal static class DirectRunTerminalArtifactUpdater
             var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
             currentProviderEvents = DirectRunSessionBoundary.SelectEvents(providerEvents, providerSessionId, launchedAt);
             return true;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryResolveLatestSessionId(
+        string providerEventLogPath,
+        DateTimeOffset launchedAt,
+        out string latestSessionId)
+    {
+        latestSessionId = string.Empty;
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            foreach (var providerEvent in providerEvents)
+            {
+                if (string.IsNullOrWhiteSpace(providerEvent.SessionId)
+                    || !DateTimeOffset.TryParse(
+                        providerEvent.Timestamp,
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind,
+                        out var providerEventTimestamp)
+                    || providerEventTimestamp < launchedAt)
+                {
+                    continue;
+                }
+
+                latestSessionId = providerEvent.SessionId;
+            }
+
+            return latestSessionId.Length > 0;
         }
         catch (Exception exception) when (
             exception is IOException
