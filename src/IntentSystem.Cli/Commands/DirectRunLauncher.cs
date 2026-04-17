@@ -643,31 +643,32 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             provider,
             providerSessionId,
             launchedAt);
+        StartDetachedExitMonitorProcess(monitorStartInfo);
+    }
 
-        var launcherStartInfo = new ProcessStartInfo
+    private static void StartDetachedExitMonitorProcess(ProcessStartInfo monitorStartInfo)
+    {
+        ArgumentNullException.ThrowIfNull(monitorStartInfo);
+
+        var monitor = Process.Start(monitorStartInfo);
+        if (monitor is null)
         {
-            FileName = "/bin/sh",
-            UseShellExecute = false,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false
-        };
-        launcherStartInfo.ArgumentList.Add("-c");
-        launcherStartInfo.ArgumentList.Add(
-            """
-            if command -v nohup >/dev/null 2>&1; then
-                nohup "$@" >/dev/null 2>&1 </dev/null &
-            else
-                "$@" >/dev/null 2>&1 </dev/null &
-            fi
-            """);
-        launcherStartInfo.ArgumentList.Add("direct-run-exit-monitor-launcher");
-        launcherStartInfo.ArgumentList.Add(monitorStartInfo.FileName);
-        foreach (var argument in monitorStartInfo.ArgumentList)
-        {
-            launcherStartInfo.ArgumentList.Add(argument);
+            return;
         }
 
-        using var launcher = Process.Start(launcherStartInfo);
+        using (monitor)
+        {
+            try
+            {
+                monitor.StandardInput.Close();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            monitor.StandardOutput.Dispose();
+            monitor.StandardError.Dispose();
+        }
     }
 
     private static void StartDetachedProviderExitMonitorIfNeeded(
