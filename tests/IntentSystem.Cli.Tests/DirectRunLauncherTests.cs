@@ -1525,6 +1525,177 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task DirectRunExitMonitorCommand_GivenDeepProgressAndSuccessfulBackendExit_PreservesSucceededResult()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var externalProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 1" }
+        });
+        Assert.NotNull(externalProcess);
+        externalProcess!.WaitForExit();
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b-success.provider.jsonl");
+        var requestArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-success.request.json");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-success.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(providerEventLogPath)!);
+
+        var launchedAt = DateTimeOffset.UtcNow;
+        var providerSessionId = $"pid:{externalProcess.Id}";
+        File.WriteAllText(
+            requestArtifactPath,
+            DirectRunRequestArtifactJson.Serialize(new DirectRunRequestArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-success",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-success.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                Transport = "responses",
+                LaunchedAt = launchedAt.ToString("O"),
+                ProviderSessionId = providerSessionId,
+                TransportSummary = "launched via helper"
+            }));
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(new DirectRunResultArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-success",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-success.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                SessionId = providerSessionId,
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G14b-success.provider.jsonl",
+                PacketRef = ".intent-cli/issues/G14b-success/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G14b-success/review-context.md",
+                Worktree = new DirectRunWorktreeContext
+                {
+                    Path = "/repo/.intent-cli/worktrees/G14b-success"
+                }
+            }));
+        File.WriteAllText(
+            providerEventLogPath,
+            string.Join(
+                Environment.NewLine,
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "session-metadata",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new { model = "gpt-5.4-mini" })
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(50).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/G14b-success.request.md' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(100).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(150).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(200).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'dotnet test' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(250).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 0
+                    })
+                }),
+                string.Empty));
+
+        using var monitor = Process.Start(DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            externalProcess.Id,
+            providerEventLogPath,
+            "G14b-success",
+            "fix",
+            "Codex",
+            providerSessionId,
+            launchedAt));
+        Assert.NotNull(monitor);
+        monitor!.StandardInput.Close();
+        monitor.StandardOutput.Dispose();
+        monitor.StandardError.Dispose();
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(resultArtifactPath))
+                {
+                    return false;
+                }
+
+                var artifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                return string.Equals(artifact.RunStatus, "succeeded", StringComparison.Ordinal);
+            },
+            TimeSpan.FromSeconds(5));
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal(providerSessionId, resultArtifact.SessionId);
+        Assert.Equal("succeeded", resultArtifact.RunStatus);
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, providerSessionId, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void FinalizeDeadFixSessionIfCurrent_GivenStartupOnlyDeadSession_AppendsBackendExitAndFailsResult()
     {
         if (OperatingSystem.IsWindows())

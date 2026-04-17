@@ -266,6 +266,7 @@ internal static class DirectRunFixOutcomeSupport
         reason = string.Empty;
 
         if (providerSessionAlive
+            || HasSuccessfulBackendExit(providerEvents)
             || FindFailingBackendExitIndex(providerEvents) >= 0
             || !HasDeepExecutionProgressSignal(providerEvents))
         {
@@ -296,6 +297,7 @@ internal static class DirectRunFixOutcomeSupport
 
         var observedRequestReread = providerEvents.Any(providerEvent => ContainsRequestArtifactRead(providerEvent.Payload));
         if (!observedRequestReread
+            || HasSuccessfulBackendExit(providerEvents)
             || HasSpecAndProductReadProgressSignal(providerEvents))
         {
             return false;
@@ -396,6 +398,19 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return -1;
+    }
+
+    private static bool HasSuccessfulBackendExit(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        return providerEvents.Any(providerEvent =>
+        {
+            var payload = providerEvent.Payload;
+            return payload.ValueKind == JsonValueKind.Object
+                && TryReadString(payload, "type", out var type)
+                && string.Equals(type, "backend-exit", StringComparison.Ordinal)
+                && TryReadInt32(payload, "exit_code", out var exitCode)
+                && exitCode == 0;
+        });
     }
 
     private static bool HasExplicitContractGap(IReadOnlyList<DirectRunProviderEvent> providerEvents)

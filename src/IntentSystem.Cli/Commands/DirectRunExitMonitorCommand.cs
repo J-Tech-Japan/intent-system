@@ -174,6 +174,14 @@ internal static class DirectRunExitMonitorCommand
 
     private static bool ShouldAwaitResolvedSession(DirectRunExitMonitorOptions options)
     {
+        if (DirectRunSessionBoundary.HasBackendExitEvent(
+                options.ProviderEventLogPath,
+                options.ProviderSessionId,
+                options.LaunchedAt))
+        {
+            return false;
+        }
+
         if (!TryResolveSiblingArtifactPath(options.ProviderEventLogPath, ".provider.jsonl", ".request.json", out var requestArtifactPath)
             || !File.Exists(requestArtifactPath))
         {
