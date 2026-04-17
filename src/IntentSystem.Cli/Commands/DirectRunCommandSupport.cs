@@ -32,6 +32,8 @@ internal static class DirectRunCommandSupport
     private const string LifecycleEventName = "provider-lifecycle";
     private const string ReviewCompletionWaitWindowEnvVar = "INTENT_DIRECT_RUN_REVIEW_COMPLETION_WAIT_MS";
     private const string ReviewSessionMaxWaitWindowEnvVar = "INTENT_DIRECT_RUN_REVIEW_SESSION_MAX_WAIT_MS";
+    private static readonly TimeSpan FixBoundaryObservationWindow = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan FixBoundaryPostTerminationWaitWindow = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan DefaultReviewCompletionWaitWindow = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DefaultReviewSessionMaxWaitWindow = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ReviewCompletionPollInterval = TimeSpan.FromMilliseconds(250);
@@ -126,6 +128,17 @@ internal static class DirectRunCommandSupport
                 launchResult.ProviderSessionId);
         }
 
+        if (ShouldAwaitFixBoundary(entryKind, launcher, policy.Command))
+        {
+            AwaitFixBoundary(
+                absoluteProviderEventLogPath,
+                executionUnit,
+                entryKindValue,
+                launchResult.Provider,
+                launchResult.ProviderSessionId,
+                launchedAt);
+        }
+
         var synthesis = SynthesizeAndPersistResult(
             context,
             executionUnit,
@@ -149,6 +162,18 @@ internal static class DirectRunCommandSupport
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
         return entryKind == DirectRunEntryKind.Review
+            && launcher is DirectRunLauncher
+            && IsCodexLikeCommand(command);
+    }
+
+    private static bool ShouldAwaitFixBoundary(
+        DirectRunEntryKind entryKind,
+        IDirectRunLauncher launcher,
+        string command)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+
+        return entryKind == DirectRunEntryKind.Fix
             && launcher is DirectRunLauncher
             && IsCodexLikeCommand(command);
     }
@@ -252,6 +277,125 @@ internal static class DirectRunCommandSupport
             provider,
             providerSessionId,
             1));
+    }
+
+    private static void AwaitFixBoundary(
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        var deadline = DateTimeOffset.UtcNow + FixBoundaryObservationWindow;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (TryReadCurrentProviderEvents(
+                providerEventLogPath,
+                providerSessionId,
+                launchedAt,
+                out var currentProviderEvents)
+                && (DirectRunFixOutcomeSupport.HasSpecAndProductReadProgressSignal(currentProviderEvents)
+                    || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(currentProviderEvents, executionUnit, out _)
+                    || TryResolveBackendExitCode(currentProviderEvents, out _)))
+            {
+                return;
+            }
+
+            if (!IsProviderSessionAlive(providerSessionId))
+            {
+                WaitForFixBoundaryAfterSessionTermination(
+                    providerEventLogPath,
+                    executionUnit,
+                    entryKind,
+                    provider,
+                    providerSessionId,
+                    launchedAt);
+                return;
+            }
+
+            Thread.Sleep(ReviewCompletionPollInterval);
+        }
+    }
+
+    private static void WaitForFixBoundaryAfterSessionTermination(
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        var deadline = DateTimeOffset.UtcNow + FixBoundaryPostTerminationWaitWindow;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (TryReadCurrentProviderEvents(
+                providerEventLogPath,
+                providerSessionId,
+                launchedAt,
+                out var currentProviderEvents)
+                && (DirectRunFixOutcomeSupport.HasSpecAndProductReadProgressSignal(currentProviderEvents)
+                    || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(currentProviderEvents, executionUnit, out _)
+                    || TryResolveBackendExitCode(currentProviderEvents, out _)))
+            {
+                return;
+            }
+
+            Thread.Sleep(ReviewCompletionPollInterval);
+        }
+
+        ClassifyMissingFixBoundary(
+            providerEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            launchedAt);
+    }
+
+    private static void ClassifyMissingFixBoundary(
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (!TryReadCurrentProviderEvents(
+                providerEventLogPath,
+                providerSessionId,
+                launchedAt,
+                out var currentProviderEvents))
+        {
+            return;
+        }
+
+        var timestamp = DateTimeOffset.UtcNow;
+        var boundaryEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            currentProviderEvents,
+            timestamp,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            providerSessionAlive: false);
+        if (boundaryEvent is null)
+        {
+            return;
+        }
+
+        var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+        writer.Append(boundaryEvent);
+        if (!DirectRunSessionBoundary.HasBackendExitEvent(providerEventLogPath, providerSessionId, launchedAt))
+        {
+            writer.Append(DirectRunProviderEventFactory.CreateBackendExitEvent(
+                timestamp,
+                executionUnit,
+                entryKind,
+                provider,
+                providerSessionId,
+                1));
+        }
     }
 
     private static void TryTerminateProviderSession(string providerSessionId)
@@ -697,13 +841,15 @@ internal static class DirectRunCommandSupport
         var model = ResolveModel(currentProviderEvents, launchResult.Model);
         var sessionId = ResolveSessionId(currentProviderEvents, launchResult.ProviderSessionId);
         var provider = ResolveProvider(currentProviderEvents, launchResult.Provider);
+        var providerSessionAlive = IsProviderSessionAlive(sessionId);
         var fixContractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
             currentProviderEvents,
             DateTimeOffset.UtcNow,
             executionUnit,
             entryKind,
             provider,
-            sessionId);
+            sessionId,
+            providerSessionAlive);
         if (fixContractGapEvent is not null)
         {
             var writer = new DirectRunProviderEventWriter(providerEventLogPath);
