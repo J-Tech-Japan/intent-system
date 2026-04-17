@@ -173,6 +173,15 @@ internal static class DirectRunFixOutcomeSupport
         return providerEvents.Any(providerEvent => ContainsBoundedFixProgressSignal(providerEvent.Payload));
     }
 
+    public static bool HasPlanningProgressSignalBeyondInitialInventory(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        return providerEvents.Any(providerEvent =>
+            !IsIgnorableStartupPreamble(providerEvent.Payload)
+            && ContainsPlanningFixProgressSignal(providerEvent.Payload));
+    }
+
     private static bool TryResolveInspectionOnlyFailureDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
@@ -381,6 +390,29 @@ internal static class DirectRunFixOutcomeSupport
                 || normalized.Contains("ls ", StringComparison.Ordinal)
                 || normalized.Contains("cat ", StringComparison.Ordinal)
                 || normalized.Contains("sed -n", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsPlanningFixProgressSignal(JsonElement payload)
+    {
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            var normalized = value.Trim().ToLowerInvariant();
+            if (normalized.Contains("apply_patch", StringComparison.Ordinal)
+                || normalized.Contains("dotnet test", StringComparison.Ordinal)
+                || normalized.Contains("git diff", StringComparison.Ordinal)
+                || normalized.Contains("git status", StringComparison.Ordinal)
+                || normalized.Contains("cat ", StringComparison.Ordinal)
+                || normalized.Contains("sed -n", StringComparison.Ordinal)
+                || normalized.Contains("head ", StringComparison.Ordinal)
+                || normalized.Contains("tail ", StringComparison.Ordinal)
+                || (normalized.Contains("rg ", StringComparison.Ordinal)
+                    && !normalized.Contains("rg --files", StringComparison.Ordinal)))
             {
                 return true;
             }
