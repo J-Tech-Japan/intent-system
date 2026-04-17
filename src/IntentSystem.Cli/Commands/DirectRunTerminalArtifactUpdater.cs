@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -49,7 +50,11 @@ internal static class DirectRunTerminalArtifactUpdater
             return;
         }
 
-        var terminalStatus = exitCode == 0 ? "succeeded" : "failed";
+        var terminalStatus = ResolveEffectiveTerminalRunStatus(
+            providerEventLogPath,
+            providerSessionId,
+            launchedAt,
+            exitCode);
         if (string.Equals(resultArtifact.RunStatus, terminalStatus, StringComparison.Ordinal))
         {
             return;
@@ -70,6 +75,80 @@ internal static class DirectRunTerminalArtifactUpdater
             or InvalidOperationException)
         {
         }
+    }
+
+    private static string ResolveEffectiveTerminalRunStatus(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt,
+        int exitCode)
+    {
+        try
+        {
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            var currentProviderEvents = DirectRunSessionBoundary.SelectEvents(
+                providerEvents,
+                providerSessionId,
+                launchedAt);
+            if (currentProviderEvents.Any(providerEvent => IsExplicitFailureBoundary(providerEvent.Payload)))
+            {
+                return "failed";
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or JsonException)
+        {
+        }
+
+        return exitCode == 0 ? "succeeded" : "failed";
+    }
+
+    private static bool IsExplicitFailureBoundary(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (TryReadString(payload, "run_status", out var runStatus)
+            && string.Equals(runStatus, "failed", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (TryReadString(payload, "status", out var status)
+            && string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (TryReadString(payload, "disposition", out var disposition))
+        {
+            var normalized = disposition.Trim().ToLowerInvariant();
+            if (normalized is "comment" or "commented" or "fix-requested" or "changes-requested" or "failed")
+            {
+                return true;
+            }
+        }
+
+        return TryReadString(payload, "type", out var type)
+            && string.Equals(type, "contract-gap", StringComparison.Ordinal);
+    }
+
+    private static bool TryReadString(JsonElement payload, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (!payload.TryGetProperty(propertyName, out var element)
+            || element.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = element.GetString() ?? string.Empty;
+        return value.Length > 0;
     }
 
     private static bool TryResolveSiblingArtifactPath(
