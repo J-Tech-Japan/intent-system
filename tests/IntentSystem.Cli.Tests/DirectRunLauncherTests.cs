@@ -1241,6 +1241,774 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task DirectRunExitMonitorCommand_GivenResolvedProviderSession_RewritesArtifactsAndFinalizesCurrentSession()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var helperProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 1" }
+        });
+        using var providerProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 2" }
+        });
+        Assert.NotNull(helperProcess);
+        Assert.NotNull(providerProcess);
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b-resolved.provider.jsonl");
+        var requestArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-resolved.request.json");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-resolved.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(providerEventLogPath)!);
+
+        var launchedAt = DateTimeOffset.UtcNow;
+        var helperSessionId = $"pid:{helperProcess!.Id}";
+        var providerSessionId = $"pid:{providerProcess!.Id}";
+        File.WriteAllText(
+            requestArtifactPath,
+            DirectRunRequestArtifactJson.Serialize(new DirectRunRequestArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-resolved",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-resolved.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                Transport = "responses",
+                LaunchedAt = launchedAt.ToString("O"),
+                ProviderSessionId = helperSessionId,
+                TransportSummary = "launched via helper"
+            }));
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(new DirectRunResultArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-resolved",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-resolved.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                SessionId = helperSessionId,
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G14b-resolved.provider.jsonl",
+                PacketRef = ".intent-cli/issues/G14b-resolved/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G14b-resolved/review-context.md",
+                Worktree = new DirectRunWorktreeContext
+                {
+                    Path = "/repo/.intent-cli/worktrees/G14b-resolved"
+                }
+            }));
+        File.WriteAllText(
+            providerEventLogPath,
+            string.Join(
+                Environment.NewLine,
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.ToString("O"),
+                    ExecutionUnit = "G14b-resolved",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = helperSessionId,
+                    Kind = "session-metadata",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new { model = "gpt-5.4-mini" })
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(50).ToString("O"),
+                    ExecutionUnit = "G14b-resolved",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new { type = "ready" })
+                }),
+                string.Empty));
+
+        using var monitor = Process.Start(DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            helperProcess.Id,
+            providerEventLogPath,
+            "G14b-resolved",
+            "fix",
+            "Codex",
+            helperSessionId,
+            launchedAt));
+        Assert.NotNull(monitor);
+        monitor!.StandardInput.Close();
+        monitor.StandardOutput.Dispose();
+        monitor.StandardError.Dispose();
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(resultArtifactPath))
+                {
+                    return false;
+                }
+
+                var artifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                return string.Equals(artifact.SessionId, providerSessionId, StringComparison.Ordinal)
+                    && string.Equals(artifact.RunStatus, "failed", StringComparison.Ordinal);
+            },
+            TimeSpan.FromSeconds(8));
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal(providerSessionId, resultArtifact.SessionId);
+        Assert.Equal("failed", resultArtifact.RunStatus);
+
+        var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+        Assert.Equal(providerSessionId, requestArtifact.ProviderSessionId);
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, providerSessionId, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DirectRunExitMonitorCommand_GivenDelayedResolvedProviderSession_WaitsAndFinalizesCurrentSession()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var helperProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 1" }
+        });
+        using var providerProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 3" }
+        });
+        Assert.NotNull(helperProcess);
+        Assert.NotNull(providerProcess);
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b-delayed.provider.jsonl");
+        var requestArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-delayed.request.json");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-delayed.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(providerEventLogPath)!);
+
+        var launchedAt = DateTimeOffset.UtcNow;
+        var helperSessionId = $"pid:{helperProcess!.Id}";
+        var providerSessionId = $"pid:{providerProcess!.Id}";
+        File.WriteAllText(
+            requestArtifactPath,
+            DirectRunRequestArtifactJson.Serialize(new DirectRunRequestArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-delayed",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-delayed.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                Transport = "responses",
+                LaunchedAt = launchedAt.ToString("O"),
+                ProviderSessionId = helperSessionId,
+                TransportSummary = "launched via helper"
+            }));
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(new DirectRunResultArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-delayed",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-delayed.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                SessionId = helperSessionId,
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G14b-delayed.provider.jsonl",
+                PacketRef = ".intent-cli/issues/G14b-delayed/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G14b-delayed/review-context.md",
+                Worktree = new DirectRunWorktreeContext
+                {
+                    Path = "/repo/.intent-cli/worktrees/G14b-delayed"
+                }
+            }));
+        File.WriteAllText(
+            providerEventLogPath,
+            string.Join(
+                Environment.NewLine,
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.ToString("O"),
+                    ExecutionUnit = "G14b-delayed",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = helperSessionId,
+                    Kind = "session-metadata",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new { model = "gpt-5.4-mini" })
+                }),
+                string.Empty));
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(1500));
+            File.AppendAllText(
+                providerEventLogPath,
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddSeconds(2).ToString("O"),
+                    ExecutionUnit = "G14b-delayed",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new { type = "ready" })
+                }) + Environment.NewLine);
+        });
+
+        using var monitor = Process.Start(DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            helperProcess.Id,
+            providerEventLogPath,
+            "G14b-delayed",
+            "fix",
+            "Codex",
+            helperSessionId,
+            launchedAt));
+        Assert.NotNull(monitor);
+        monitor!.StandardInput.Close();
+        monitor.StandardOutput.Dispose();
+        monitor.StandardError.Dispose();
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(resultArtifactPath))
+                {
+                    return false;
+                }
+
+                var artifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                return string.Equals(artifact.SessionId, providerSessionId, StringComparison.Ordinal)
+                    && string.Equals(artifact.RunStatus, "failed", StringComparison.Ordinal);
+            },
+            TimeSpan.FromSeconds(10));
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal(providerSessionId, resultArtifact.SessionId);
+        Assert.Equal("failed", resultArtifact.RunStatus);
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, providerSessionId, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DirectRunExitMonitorCommand_GivenDeepProgressAndSuccessfulBackendExit_PreservesSucceededResult()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var externalProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 1" }
+        });
+        Assert.NotNull(externalProcess);
+        externalProcess!.WaitForExit();
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b-success.provider.jsonl");
+        var requestArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-success.request.json");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-success.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(providerEventLogPath)!);
+
+        var launchedAt = DateTimeOffset.UtcNow;
+        var providerSessionId = $"pid:{externalProcess.Id}";
+        File.WriteAllText(
+            requestArtifactPath,
+            DirectRunRequestArtifactJson.Serialize(new DirectRunRequestArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-success",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-success.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                Transport = "responses",
+                LaunchedAt = launchedAt.ToString("O"),
+                ProviderSessionId = providerSessionId,
+                TransportSummary = "launched via helper"
+            }));
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(new DirectRunResultArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-success",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-success.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                SessionId = providerSessionId,
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G14b-success.provider.jsonl",
+                PacketRef = ".intent-cli/issues/G14b-success/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G14b-success/review-context.md",
+                Worktree = new DirectRunWorktreeContext
+                {
+                    Path = "/repo/.intent-cli/worktrees/G14b-success"
+                }
+            }));
+        File.WriteAllText(
+            providerEventLogPath,
+            string.Join(
+                Environment.NewLine,
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "session-metadata",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new { model = "gpt-5.4-mini" })
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(50).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/G14b-success.request.md' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(100).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(150).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(200).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'dotnet test' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(225).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("- Updated src/ToyCalc/Program.cs and tests/ToyCalc.Tests/CalculatorTests.cs to preserve successful multiply output.")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(250).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 0
+                    })
+                }),
+                string.Empty));
+
+        using var monitor = Process.Start(DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            externalProcess.Id,
+            providerEventLogPath,
+            "G14b-success",
+            "fix",
+            "Codex",
+            providerSessionId,
+            launchedAt));
+        Assert.NotNull(monitor);
+        monitor!.StandardInput.Close();
+        monitor.StandardOutput.Dispose();
+        monitor.StandardError.Dispose();
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(resultArtifactPath))
+                {
+                    return false;
+                }
+
+                var artifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                return string.Equals(artifact.RunStatus, "succeeded", StringComparison.Ordinal);
+            },
+            TimeSpan.FromSeconds(5));
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal(providerSessionId, resultArtifact.SessionId);
+        Assert.Equal("succeeded", resultArtifact.RunStatus);
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, providerSessionId, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FinalizeDeadFixSessionIfCurrent_GivenStartupOnlyDeadSession_AppendsBackendExitAndFailsResult()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var externalProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 1" }
+        });
+        Assert.NotNull(externalProcess);
+        externalProcess!.WaitForExit();
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b-rescue.provider.jsonl");
+        var requestArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-rescue.request.json");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-rescue.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(providerEventLogPath)!);
+
+        var launchedAt = DateTimeOffset.UtcNow;
+        var providerSessionId = $"pid:{externalProcess.Id}";
+        File.WriteAllText(
+            requestArtifactPath,
+            DirectRunRequestArtifactJson.Serialize(new DirectRunRequestArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-rescue",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-rescue.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                Transport = "responses",
+                LaunchedAt = launchedAt.ToString("O"),
+                ProviderSessionId = providerSessionId,
+                TransportSummary = "launched via wrapper"
+            }));
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(new DirectRunResultArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-rescue",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-rescue.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                SessionId = providerSessionId,
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G14b-rescue.provider.jsonl",
+                PacketRef = ".intent-cli/issues/G14b-rescue/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G14b-rescue/review-context.md",
+                Worktree = new DirectRunWorktreeContext
+                {
+                    Path = "/repo/.intent-cli/worktrees/G14b-rescue"
+                }
+            }));
+
+        var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+        writer.Append(new DirectRunProviderEvent
+        {
+            Timestamp = launchedAt.ToString("O"),
+            ExecutionUnit = "G14b-rescue",
+            Provider = "Codex",
+            EntryKind = "fix",
+            SessionId = providerSessionId,
+            Kind = "provider-event",
+            Payload = System.Text.Json.JsonSerializer.SerializeToElement(
+                "2026-04-17T08:10:00.000000Z  WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt")
+        });
+
+        var updatedRunStatus = DirectRunTerminalArtifactUpdater.FinalizeDeadFixSessionIfCurrent(
+            providerEventLogPath,
+            "G14b-rescue",
+            "fix",
+            "Codex",
+            providerSessionId,
+            launchedAt,
+            "running");
+
+        Assert.Equal("failed", updatedRunStatus);
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal("failed", resultArtifact.RunStatus);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Contains(providerEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+            && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+            && exitCodeElement.GetInt32() == 1);
+    }
+
+    [Fact]
+    public void FinalizeDeadFixSessionIfCurrent_GivenDeepProgressDeadSession_AppendsContractGapAndFailsResult()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var externalProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            ArgumentList = { "-c", "sleep 1" }
+        });
+        Assert.NotNull(externalProcess);
+        externalProcess!.WaitForExit();
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b-rescue-deep.provider.jsonl");
+        var requestArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-rescue-deep.request.json");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-rescue-deep.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(providerEventLogPath)!);
+
+        var launchedAt = DateTimeOffset.UtcNow;
+        var providerSessionId = $"pid:{externalProcess.Id}";
+        File.WriteAllText(
+            requestArtifactPath,
+            DirectRunRequestArtifactJson.Serialize(new DirectRunRequestArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-rescue-deep",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-rescue-deep.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                Transport = "responses",
+                LaunchedAt = launchedAt.ToString("O"),
+                ProviderSessionId = providerSessionId,
+                TransportSummary = "launched via wrapper"
+            }));
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(new DirectRunResultArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-rescue-deep",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-rescue-deep.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                SessionId = providerSessionId,
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G14b-rescue-deep.provider.jsonl",
+                PacketRef = ".intent-cli/issues/G14b-rescue-deep/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G14b-rescue-deep/review-context.md",
+                Worktree = new DirectRunWorktreeContext
+                {
+                    Path = "/repo/.intent-cli/worktrees/G14b-rescue-deep"
+                }
+            }));
+
+        var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+        foreach (var payload in new[]
+                 {
+                     "exec",
+                     "/bin/zsh -lc \"sed -n '1,220p' '/repo/.intent-cli/fix/G14b-rescue-deep.request.md'\"",
+                     "exec",
+                     "/bin/zsh -lc \"pwd && rg --files . | sed -n '1,200p'\"",
+                     "exec",
+                     "/bin/zsh -lc \"sed -n '1,220p' 'src/ToyCalc/Program.cs'\"",
+                     "exec",
+                     "/bin/zsh -lc \"dotnet test\""
+                 })
+        {
+            writer.Append(new DirectRunProviderEvent
+            {
+                Timestamp = launchedAt.ToString("O"),
+                ExecutionUnit = "G14b-rescue-deep",
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = providerSessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(payload)
+            });
+        }
+
+        var updatedRunStatus = DirectRunTerminalArtifactUpdater.FinalizeDeadFixSessionIfCurrent(
+            providerEventLogPath,
+            "G14b-rescue-deep",
+            "fix",
+            "Codex",
+            providerSessionId,
+            launchedAt,
+            "running");
+
+        Assert.Equal("failed", updatedRunStatus);
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal("failed", resultArtifact.RunStatus);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Contains(providerEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal));
+        Assert.Contains(providerEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SynchronizeArtifactsToLatestSessionIfCurrent_GivenLaterCurrentSession_RewritesRequestAndResultArtifacts()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b-sync.provider.jsonl");
+        var requestArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-sync.request.json");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-sync.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(providerEventLogPath)!);
+
+        var launchedAt = DateTimeOffset.UtcNow;
+        const string helperSessionId = "pid:1111";
+        const string providerSessionId = "pid:2222";
+        File.WriteAllText(
+            requestArtifactPath,
+            DirectRunRequestArtifactJson.Serialize(new DirectRunRequestArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-sync",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-sync.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                Transport = "responses",
+                LaunchedAt = launchedAt.ToString("O"),
+                ProviderSessionId = helperSessionId,
+                TransportSummary = "launched via helper"
+            }));
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(new DirectRunResultArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-sync",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-sync.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                SessionId = helperSessionId,
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G14b-sync.provider.jsonl",
+                PacketRef = ".intent-cli/issues/G14b-sync/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G14b-sync/review-context.md",
+                Worktree = new DirectRunWorktreeContext
+                {
+                    Path = "/repo/.intent-cli/worktrees/G14b-sync"
+                }
+            }));
+
+        File.WriteAllText(
+            providerEventLogPath,
+            string.Join(
+                Environment.NewLine,
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.ToString("O"),
+                    ExecutionUnit = "G14b-sync",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = helperSessionId,
+                    Kind = "session-metadata",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new { model = "gpt-5.4-mini" })
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(50).ToString("O"),
+                    ExecutionUnit = "G14b-sync",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "session-metadata",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new { model = "gpt-5.4-mini" })
+                }),
+                string.Empty));
+
+        var synchronizedSessionId = DirectRunTerminalArtifactUpdater.SynchronizeArtifactsToLatestSessionIfCurrent(
+            providerEventLogPath,
+            helperSessionId,
+            launchedAt);
+
+        Assert.Equal(providerSessionId, synchronizedSessionId);
+
+        var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+        Assert.Equal(providerSessionId, requestArtifact.ProviderSessionId);
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal(providerSessionId, resultArtifact.SessionId);
+    }
+
+    [Fact]
     public async Task DirectRunExitMonitorCommand_GivenStaleBackendExitForSamePid_AppendsFreshBackendExit()
     {
         if (OperatingSystem.IsWindows())
@@ -1335,6 +2103,32 @@ public sealed class DirectRunLauncherTests
         {
             Assert.Equal("__direct-run-exit-monitor", startInfo.ArgumentList[0]);
         }
+    }
+
+    [Fact]
+    public void ShouldStartDetachedProviderExitMonitor_GivenHelperAndDifferentResolvedProviderPid_ReturnsTrue()
+    {
+        var shouldStart = DirectRunLauncher.ShouldStartDetachedProviderExitMonitor(
+            usesDetachedCaptureHelper: true,
+            startedProcessId: 1234,
+            providerSessionId: "pid:5678",
+            out var providerProcessId);
+
+        Assert.True(shouldStart);
+        Assert.Equal(5678, providerProcessId);
+    }
+
+    [Fact]
+    public void ShouldStartDetachedProviderExitMonitor_GivenResolvedProviderPidMatchesHelperPid_ReturnsFalse()
+    {
+        var shouldStart = DirectRunLauncher.ShouldStartDetachedProviderExitMonitor(
+            usesDetachedCaptureHelper: true,
+            startedProcessId: 1234,
+            providerSessionId: "pid:1234",
+            out var providerProcessId);
+
+        Assert.False(shouldStart);
+        Assert.Equal(1234, providerProcessId);
     }
 
     [Fact]

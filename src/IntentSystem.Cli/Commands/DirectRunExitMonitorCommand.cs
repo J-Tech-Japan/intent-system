@@ -10,6 +10,7 @@ internal static class DirectRunExitMonitorCommand
     private const string CommandName = "__direct-run-exit-monitor";
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ExitGracePeriod = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan DetachedSessionResolutionWaitWindow = TimeSpan.FromSeconds(10);
 
     public static bool TryExecute(string[] args, out int exitCode)
     {
@@ -84,6 +85,9 @@ internal static class DirectRunExitMonitorCommand
     {
         WaitForProcessExit(options.ProcessId);
         Thread.Sleep(ExitGracePeriod);
+        options = ResolveEffectiveOptions(options);
+
+        AppendDeterministicFixBoundaryIfNeeded(options);
 
         if (DirectRunSessionBoundary.HasBackendExitEvent(options.ProviderEventLogPath, options.ProviderSessionId, options.LaunchedAt))
         {
@@ -117,6 +121,122 @@ internal static class DirectRunExitMonitorCommand
             exitCode: 1);
 
         return 0;
+    }
+
+    private static DirectRunExitMonitorOptions ResolveEffectiveOptions(DirectRunExitMonitorOptions options)
+    {
+        var effectiveSessionId = options.ProviderSessionId;
+        if (ShouldAwaitResolvedSession(options))
+        {
+            var deadline = DateTimeOffset.UtcNow + DetachedSessionResolutionWaitWindow;
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                effectiveSessionId = DirectRunTerminalArtifactUpdater.SynchronizeArtifactsToLatestSessionIfCurrent(
+                    options.ProviderEventLogPath,
+                    effectiveSessionId,
+                    options.LaunchedAt);
+                if (!string.Equals(effectiveSessionId, options.ProviderSessionId, StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                Thread.Sleep(PollInterval);
+            }
+        }
+        else
+        {
+            effectiveSessionId = DirectRunTerminalArtifactUpdater.SynchronizeArtifactsToLatestSessionIfCurrent(
+                options.ProviderEventLogPath,
+                effectiveSessionId,
+                options.LaunchedAt);
+        }
+
+        if (!TryParseSessionProcessId(effectiveSessionId, out var effectiveProcessId))
+        {
+            return options with
+            {
+                ProviderSessionId = effectiveSessionId
+            };
+        }
+
+        if (effectiveProcessId != options.ProcessId)
+        {
+            WaitForProcessExit(effectiveProcessId);
+            Thread.Sleep(ExitGracePeriod);
+        }
+
+        return options with
+        {
+            ProcessId = effectiveProcessId,
+            ProviderSessionId = effectiveSessionId
+        };
+    }
+
+    private static bool ShouldAwaitResolvedSession(DirectRunExitMonitorOptions options)
+    {
+        if (DirectRunSessionBoundary.HasBackendExitEvent(
+                options.ProviderEventLogPath,
+                options.ProviderSessionId,
+                options.LaunchedAt))
+        {
+            return false;
+        }
+
+        if (!TryResolveSiblingArtifactPath(options.ProviderEventLogPath, ".provider.jsonl", ".request.json", out var requestArtifactPath)
+            || !File.Exists(requestArtifactPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+            return string.Equals(requestArtifact.ProviderSessionId, options.ProviderSessionId, StringComparison.Ordinal)
+                && DateTimeOffset.TryParse(
+                    requestArtifact.LaunchedAt,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind,
+                    out var launchedAt)
+                && launchedAt == options.LaunchedAt
+                && requestArtifact.TransportSummary.IndexOf("helper", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void AppendDeterministicFixBoundaryIfNeeded(DirectRunExitMonitorOptions options)
+    {
+        if (!string.Equals(options.EntryKind, "fix", StringComparison.Ordinal)
+            || !TryReadCurrentProviderEvents(
+                options.ProviderEventLogPath,
+                options.ProviderSessionId,
+                options.LaunchedAt,
+                out var currentProviderEvents))
+        {
+            return;
+        }
+
+        var boundaryEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            currentProviderEvents,
+            DateTimeOffset.UtcNow,
+            options.ExecutionUnit,
+            options.EntryKind,
+            options.Provider,
+            options.ProviderSessionId,
+            providerSessionAlive: false);
+        if (boundaryEvent is null)
+        {
+            return;
+        }
+
+        var eventWriter = new DirectRunProviderEventWriter(options.ProviderEventLogPath);
+        eventWriter.Append(boundaryEvent);
     }
 
     private static void WaitForProcessExit(int processId)
@@ -160,6 +280,40 @@ internal static class DirectRunExitMonitorCommand
         return processState.IndexOf('Z') < 0;
     }
 
+    private static bool TryParseSessionProcessId(string providerSessionId, out int processId)
+    {
+        processId = default;
+        const string prefix = "pid:";
+        if (!providerSessionId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(
+            providerSessionId[prefix.Length..],
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out processId);
+    }
+
+    private static bool TryResolveSiblingArtifactPath(
+        string providerEventLogPath,
+        string currentSuffix,
+        string targetSuffix,
+        out string siblingArtifactPath)
+    {
+        siblingArtifactPath = string.Empty;
+        if (!providerEventLogPath.EndsWith(currentSuffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        siblingArtifactPath = string.Concat(
+            providerEventLogPath.AsSpan(0, providerEventLogPath.Length - currentSuffix.Length),
+            targetSuffix);
+        return true;
+    }
+
     private static string? TryReadUnixProcessState(int processId)
     {
         try
@@ -196,6 +350,37 @@ internal static class DirectRunExitMonitorCommand
             or InvalidOperationException)
         {
             return null;
+        }
+    }
+
+    private static bool TryReadCurrentProviderEvents(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt,
+        out IReadOnlyList<DirectRunProviderEvent> currentProviderEvents)
+    {
+        currentProviderEvents = [];
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            currentProviderEvents = DirectRunSessionBoundary.SelectEvents(
+                providerEvents,
+                providerSessionId,
+                launchedAt);
+            return currentProviderEvents.Count > 0;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or JsonException)
+        {
+            return false;
         }
     }
 

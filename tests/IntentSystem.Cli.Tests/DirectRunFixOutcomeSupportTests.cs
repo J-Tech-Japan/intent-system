@@ -216,6 +216,79 @@ public sealed class DirectRunFixOutcomeSupportTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenDeepProgressAndDeadSessionWithoutTerminalEvent_UsesDeepProgressMissingTerminalReason()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/specs/01-cli-surface.md'"),
+            CreateProviderEvent(" exited 1 in 0ms:"),
+            CreateProviderEvent("sed: intents/toy-calc/specs/01-cli-surface.md: No such file or directory"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs'"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs'"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateProviderEvent("exec /bin/zsh -lc 'dotnet test'"),
+            CreateProviderEvent(" succeeded in 0ms:")
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-17T07:40:00Z"),
+            "TOY-CALC-V0-01",
+            "fix",
+            "Codex",
+            "pid:6210",
+            providerSessionAlive: false);
+
+        Assert.NotNull(contractGapEvent);
+        Assert.Equal(
+            "fix-session-terminal-boundary-missing-after-deep-progress",
+            contractGapEvent!.Payload.GetProperty("reason").GetString());
+        Assert.Contains(
+            "product_source_or_test_read=True",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "dotnet_test=True",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenDeepProgressAndSuccessfulBackendExit_DoesNotCreateFailureBoundary()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/specs/01-cli-surface.md'"),
+            CreateProviderEvent(" exited 1 in 0ms:"),
+            CreateProviderEvent("sed: intents/toy-calc/specs/01-cli-surface.md: No such file or directory"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs'"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs'"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateProviderEvent("exec /bin/zsh -lc 'dotnet test'"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateProviderEvent("- Updated src/ToyCalc/Program.cs to preserve successful multiply output."),
+            CreateSuccessfulBackendExitEvent()
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-17T07:40:00Z"),
+            "TOY-CALC-V0-01",
+            "fix",
+            "Codex",
+            "pid:6210",
+            providerSessionAlive: false);
+
+        Assert.Null(contractGapEvent);
+    }
+
     private static IReadOnlyList<DirectRunProviderEvent> CreateIssue295CurrentSessionRawEvents(string? echoedRequest = null)
     {
         return
@@ -298,6 +371,24 @@ public sealed class DirectRunFixOutcomeSupportTests
             {
                 type = "backend-exit",
                 exit_code = 1
+            })
+        };
+    }
+
+    private static DirectRunProviderEvent CreateSuccessfulBackendExitEvent()
+    {
+        return new DirectRunProviderEvent
+        {
+            Timestamp = "2026-04-17T05:58:47.0000000+00:00",
+            ExecutionUnit = "TOY-CALC-V0-01",
+            Provider = "Codex",
+            EntryKind = "fix",
+            SessionId = "pid:97771",
+            Kind = "provider-event",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                type = "backend-exit",
+                exit_code = 0
             })
         };
     }

@@ -146,11 +146,32 @@ internal static class DirectRunCommandSupport
             upstreamRequestRef,
             launchedAt,
             launchResult);
+        var effectiveProviderSessionId = DirectRunTerminalArtifactUpdater.SynchronizeArtifactsToLatestSessionIfCurrent(
+            absoluteProviderEventLogPath,
+            launchResult.ProviderSessionId,
+            launchedAt);
+        var effectiveRunStatus = DirectRunTerminalArtifactUpdater.FinalizeDeadFixSessionIfCurrent(
+            absoluteProviderEventLogPath,
+            executionUnit,
+            entryKindValue,
+            launchResult.Provider,
+            effectiveProviderSessionId,
+            launchedAt,
+            synthesis.RunStatus);
+        StartDeferredFixExitMonitorIfNeeded(
+            absoluteProviderEventLogPath,
+            executionUnit,
+            entryKindValue,
+            launchResult.Provider,
+            effectiveProviderSessionId,
+            launchedAt,
+            effectiveRunStatus);
 
         return launchResult with
         {
             ResultArtifactPath = synthesis.ResultArtifactPath,
-            RunStatus = synthesis.RunStatus
+            ProviderSessionId = effectiveProviderSessionId,
+            RunStatus = effectiveRunStatus
         };
     }
 
@@ -288,6 +309,7 @@ internal static class DirectRunCommandSupport
         DateTimeOffset launchedAt)
     {
         var deadline = DateTimeOffset.UtcNow + FixBoundaryObservationWindow;
+        DateTimeOffset? deepProgressDeadline = null;
         while (DateTimeOffset.UtcNow < deadline)
         {
             if (TryReadCurrentProviderEvents(
@@ -295,11 +317,24 @@ internal static class DirectRunCommandSupport
                 providerSessionId,
                 launchedAt,
                 out var currentProviderEvents)
-                && (DirectRunFixOutcomeSupport.HasSpecAndProductReadProgressSignal(currentProviderEvents)
-                    || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(currentProviderEvents, executionUnit, out _)
+                && (DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(currentProviderEvents)
                     || TryResolveBackendExitCode(currentProviderEvents, out _)))
             {
                 return;
+            }
+
+            if (TryReadCurrentProviderEvents(
+                    providerEventLogPath,
+                    providerSessionId,
+                    launchedAt,
+                    out currentProviderEvents)
+                && DirectRunFixOutcomeSupport.HasDeepExecutionProgressSignal(currentProviderEvents))
+            {
+                deepProgressDeadline ??= DateTimeOffset.UtcNow + FixBoundaryPostTerminationWaitWindow;
+                if (deepProgressDeadline.Value > deadline)
+                {
+                    deadline = deepProgressDeadline.Value;
+                }
             }
 
             if (!IsProviderSessionAlive(providerSessionId))
@@ -334,8 +369,7 @@ internal static class DirectRunCommandSupport
                 providerSessionId,
                 launchedAt,
                 out var currentProviderEvents)
-                && (DirectRunFixOutcomeSupport.HasSpecAndProductReadProgressSignal(currentProviderEvents)
-                    || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(currentProviderEvents, executionUnit, out _)
+                && (DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(currentProviderEvents)
                     || TryResolveBackendExitCode(currentProviderEvents, out _)))
             {
                 return;
@@ -439,6 +473,66 @@ internal static class DirectRunCommandSupport
             System.Globalization.NumberStyles.Integer,
             System.Globalization.CultureInfo.InvariantCulture,
             out processId);
+    }
+
+    private static void StartDeferredFixExitMonitorIfNeeded(
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        DateTimeOffset launchedAt,
+        string runStatus)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runStatus);
+
+        if (OperatingSystem.IsWindows()
+            || !string.Equals(entryKind, "fix", StringComparison.Ordinal)
+            || !string.Equals(runStatus, "running", StringComparison.Ordinal)
+            || !TryParseSessionProcessId(providerSessionId, out var processId))
+        {
+            return;
+        }
+
+        var monitorStartInfo = DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            processId,
+            providerEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            launchedAt);
+        StartDeferredFixExitMonitor(monitorStartInfo);
+    }
+
+    private static void StartDeferredFixExitMonitor(ProcessStartInfo monitorStartInfo)
+    {
+        ArgumentNullException.ThrowIfNull(monitorStartInfo);
+
+        var monitor = Process.Start(monitorStartInfo);
+        if (monitor is null)
+        {
+            return;
+        }
+
+        using (monitor)
+        {
+            try
+            {
+                monitor.StandardInput.Close();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            monitor.StandardOutput.Dispose();
+            monitor.StandardError.Dispose();
+        }
     }
 
     private static bool WaitForReviewOutcomeAfterSessionTermination(
