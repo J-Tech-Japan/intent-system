@@ -344,7 +344,7 @@ internal static class RunCommand
                     if (ShouldReportReviewContinuationWaiting(reviewDecision))
                     {
                         return CreateStopResult(
-                            DeterministicContractGapStopReason,
+                            ClarificationRequiredStopReason,
                             actions,
                             inProgressItem.ExecutionUnit,
                             reviewDecision.Detail);
