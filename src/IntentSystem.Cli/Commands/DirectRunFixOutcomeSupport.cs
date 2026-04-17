@@ -8,6 +8,7 @@ internal static class DirectRunFixOutcomeSupport
     private const string InspectionOnlyExitReason = "fix-session-ended-after-initial-inspection";
     private const string ProviderBackendEndedBeforeSpecSourceReadReason = "fix-session-ended-before-spec-source-test-read";
     private const string MissingTerminalCaptureAfterRequestReadReason = "fix-session-terminal-boundary-missing-after-request-reread";
+    private const string MissingTerminalCaptureAfterDeepProgressReason = "fix-session-terminal-boundary-missing-after-deep-progress";
     private static readonly string[] StartupWarningMarkers =
     [
         "warn",
@@ -188,6 +189,13 @@ internal static class DirectRunFixOutcomeSupport
         return HasSpecAndProductReadProgressSignal(providerEvents);
     }
 
+    internal static bool HasExplicitContractGapSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        return HasExplicitContractGap(providerEvents);
+    }
+
     internal static bool HasSpecAndProductReadProgressSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
@@ -200,6 +208,22 @@ internal static class DirectRunFixOutcomeSupport
         return sawSpecRead && sawProductRead;
     }
 
+    internal static bool HasDeepExecutionProgressSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        var observedRequestReread = providerEvents.Any(providerEvent => ContainsRequestArtifactRead(providerEvent.Payload));
+        var observedProductRead = providerEvents.Any(providerEvent =>
+            !IsIgnorableStartupPreamble(providerEvent.Payload)
+            && ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
+        var observedDotNetTest = providerEvents.Any(providerEvent =>
+            !IsIgnorableStartupPreamble(providerEvent.Payload)
+            && ContainsDotNetTestAttempt(providerEvent.Payload));
+
+        return observedRequestReread
+            && (observedProductRead || observedDotNetTest);
+    }
+
     private static bool TryResolveCanonicalFailureDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
@@ -207,6 +231,16 @@ internal static class DirectRunFixOutcomeSupport
         out string reason,
         out string detail)
     {
+        if (TryResolveMissingTerminalAfterDeepProgressDetail(
+                providerEvents,
+                executionUnit,
+                providerSessionAlive,
+                out reason,
+                out detail))
+        {
+            return true;
+        }
+
         if (TryResolvePostRequestParityBoundaryDetail(
                 providerEvents,
                 executionUnit,
@@ -219,6 +253,35 @@ internal static class DirectRunFixOutcomeSupport
 
         reason = InspectionOnlyExitReason;
         return TryResolveInspectionOnlyFailureDetail(providerEvents, executionUnit, out detail);
+    }
+
+    private static bool TryResolveMissingTerminalAfterDeepProgressDetail(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        bool providerSessionAlive,
+        out string reason,
+        out string detail)
+    {
+        detail = string.Empty;
+        reason = string.Empty;
+
+        if (providerSessionAlive
+            || FindFailingBackendExitIndex(providerEvents) >= 0
+            || !HasDeepExecutionProgressSignal(providerEvents))
+        {
+            return false;
+        }
+
+        var observedRequestReread = providerEvents.Any(providerEvent => ContainsRequestArtifactRead(providerEvent.Payload));
+        var observedInventory = providerEvents.Any(providerEvent => ContainsInitialRepoInventory(providerEvent.Payload));
+        var observedSpecRead = HasSuccessfulRepoLocalSpecRead(providerEvents);
+        var observedProductRead = providerEvents.Any(providerEvent => ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
+        var observedDotNetTest = providerEvents.Any(providerEvent => ContainsDotNetTestAttempt(providerEvent.Payload));
+
+        reason = MissingTerminalCaptureAfterDeepProgressReason;
+        detail =
+            $"Fix direct run for '{executionUnit}' reached deeper bounded work before the provider session died, but no same-session terminal outcome was captured. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}, dotnet_test={observedDotNetTest}. The provider session is no longer alive, but neither backend-exit nor an explicit contract-gap was persisted for that same session, so the child runtime must synthesize a deterministic missing-terminal boundary instead of leaving run_status=running.";
+        return true;
     }
 
     private static bool TryResolvePostRequestParityBoundaryDetail(
@@ -585,6 +648,19 @@ internal static class DirectRunFixOutcomeSupport
 
             if (normalized.Contains("src/", StringComparison.Ordinal)
                 || normalized.Contains("tests/", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsDotNetTestAttempt(JsonElement payload)
+    {
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            if (value.Trim().ToLowerInvariant().Contains("dotnet test", StringComparison.Ordinal))
             {
                 return true;
             }

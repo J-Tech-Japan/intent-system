@@ -146,6 +146,14 @@ internal static class DirectRunCommandSupport
             upstreamRequestRef,
             launchedAt,
             launchResult);
+        StartDeferredFixExitMonitorIfNeeded(
+            absoluteProviderEventLogPath,
+            executionUnit,
+            entryKindValue,
+            launchResult.Provider,
+            launchResult.ProviderSessionId,
+            launchedAt,
+            synthesis.RunStatus);
 
         return launchResult with
         {
@@ -288,6 +296,7 @@ internal static class DirectRunCommandSupport
         DateTimeOffset launchedAt)
     {
         var deadline = DateTimeOffset.UtcNow + FixBoundaryObservationWindow;
+        DateTimeOffset? deepProgressDeadline = null;
         while (DateTimeOffset.UtcNow < deadline)
         {
             if (TryReadCurrentProviderEvents(
@@ -295,11 +304,24 @@ internal static class DirectRunCommandSupport
                 providerSessionId,
                 launchedAt,
                 out var currentProviderEvents)
-                && (DirectRunFixOutcomeSupport.HasSpecAndProductReadProgressSignal(currentProviderEvents)
-                    || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(currentProviderEvents, executionUnit, out _)
+                && (DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(currentProviderEvents)
                     || TryResolveBackendExitCode(currentProviderEvents, out _)))
             {
                 return;
+            }
+
+            if (TryReadCurrentProviderEvents(
+                    providerEventLogPath,
+                    providerSessionId,
+                    launchedAt,
+                    out currentProviderEvents)
+                && DirectRunFixOutcomeSupport.HasDeepExecutionProgressSignal(currentProviderEvents))
+            {
+                deepProgressDeadline ??= DateTimeOffset.UtcNow + FixBoundaryPostTerminationWaitWindow;
+                if (deepProgressDeadline.Value > deadline)
+                {
+                    deadline = deepProgressDeadline.Value;
+                }
             }
 
             if (!IsProviderSessionAlive(providerSessionId))
@@ -334,8 +356,7 @@ internal static class DirectRunCommandSupport
                 providerSessionId,
                 launchedAt,
                 out var currentProviderEvents)
-                && (DirectRunFixOutcomeSupport.HasSpecAndProductReadProgressSignal(currentProviderEvents)
-                    || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(currentProviderEvents, executionUnit, out _)
+                && (DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(currentProviderEvents)
                     || TryResolveBackendExitCode(currentProviderEvents, out _)))
             {
                 return;
@@ -439,6 +460,64 @@ internal static class DirectRunCommandSupport
             System.Globalization.NumberStyles.Integer,
             System.Globalization.CultureInfo.InvariantCulture,
             out processId);
+    }
+
+    private static void StartDeferredFixExitMonitorIfNeeded(
+        string providerEventLogPath,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        DateTimeOffset launchedAt,
+        string runStatus)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runStatus);
+
+        if (OperatingSystem.IsWindows()
+            || !string.Equals(entryKind, "fix", StringComparison.Ordinal)
+            || !string.Equals(runStatus, "running", StringComparison.Ordinal)
+            || !TryParseSessionProcessId(providerSessionId, out var processId))
+        {
+            return;
+        }
+
+        var monitorStartInfo = DirectRunExitMonitorCommand.CreateDetachedStartInfo(
+            processId,
+            providerEventLogPath,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            launchedAt);
+        var launcherStartInfo = new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            UseShellExecute = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false
+        };
+        launcherStartInfo.ArgumentList.Add("-c");
+        launcherStartInfo.ArgumentList.Add(
+            """
+            if command -v nohup >/dev/null 2>&1; then
+                nohup "$@" >/dev/null 2>&1 </dev/null &
+            else
+                "$@" >/dev/null 2>&1 </dev/null &
+            fi
+            """);
+        launcherStartInfo.ArgumentList.Add("direct-run-exit-monitor-launcher");
+        launcherStartInfo.ArgumentList.Add(monitorStartInfo.FileName);
+        foreach (var argument in monitorStartInfo.ArgumentList)
+        {
+            launcherStartInfo.ArgumentList.Add(argument);
+        }
+
+        using var launcher = Process.Start(launcherStartInfo);
     }
 
     private static bool WaitForReviewOutcomeAfterSessionTermination(

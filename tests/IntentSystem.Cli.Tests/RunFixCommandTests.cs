@@ -922,6 +922,154 @@ public sealed class RunFixCommandTests
     }
 
     [Fact]
+    public async Task Execute_GivenWrapperCodexFixCommandWithDeepProgress_FinalizesResultInsteadOfLeavingRunning()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateReviewCommentArtifactJson());
+        var providerBinaryPath = tempDirectory.CreateExecutableFile(
+            "bin/codex",
+            """
+            #!/bin/sh
+            printf '%s\n' 'exec'
+            printf '%s\n' '/bin/zsh -lc "sed -n '\''1,220p'\'' '\''/repo/.intent-cli/fix/G20.request.md'\''"'
+            printf '%s\n' ' succeeded in 0ms:'
+            printf '%s\n' 'exec'
+            printf '%s\n' '/bin/zsh -lc "pwd && rg --files . | sed -n '\''1,200p'\''"'
+            printf '%s\n' ' succeeded in 0ms:'
+            printf '%s\n' 'exec'
+            printf '%s\n' '/bin/zsh -lc "sed -n '\''1,220p'\'' '\''intents/toy-calc/specs/01-cli-surface.md'\''"'
+            printf '%s\n' ' exited 1 in 0ms:'
+            printf '%s\n' 'sed: intents/toy-calc/specs/01-cli-surface.md: No such file or directory'
+            printf '%s\n' 'exec'
+            printf '%s\n' '/bin/zsh -lc "sed -n '\''1,220p'\'' '\''src/ToyCalc/Program.cs'\''"'
+            printf '%s\n' ' succeeded in 0ms:'
+            printf '%s\n' 'exec'
+            printf '%s\n' '/bin/zsh -lc "sed -n '\''1,220p'\'' '\''tests/ToyCalc.Tests/CalculatorTests.cs'\''"'
+            printf '%s\n' ' succeeded in 0ms:'
+            printf '%s\n' 'exec'
+            printf '%s\n' '/bin/zsh -lc "dotnet test"'
+            printf '%s\n' ' succeeded in 0ms:'
+            sleep 12
+            exit 1
+            """);
+        var wrapperPath = tempDirectory.CreateExecutableFile(
+            "bin/codex-isolated",
+            $$"""
+            #!/bin/zsh
+            export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
+            exec {{providerBinaryPath}} "$@"
+            """);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunFixCommand.TimestampFactory;
+
+        try
+        {
+            RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-17T07:30:00Z");
+
+            var context = CreateContext(repoRoot) with
+            {
+                Config = CreateContext(repoRoot).Config with
+                {
+                    Roles = new RoleMappings
+                    {
+                        Implement = "Codex",
+                        Review = "Codex",
+                        Interview = "Claude",
+                        Clarify = "Codex"
+                    },
+                    DirectRun = new DirectRunConfig
+                    {
+                        Command = wrapperPath
+                    }
+                }
+            };
+
+            var exitCode = RunFixCommand.Execute(context, ["G20"], writer);
+
+            Assert.Equal(0, exitCode);
+
+            var resultArtifactPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.result.json");
+            var providerEventLogPath = Path.Combine(repoRoot, ".intent-cli", "runs", "G20.provider.jsonl");
+            var initialArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+            Assert.Equal("running", initialArtifact.RunStatus);
+
+            await WaitForConditionAsync(
+                () =>
+                {
+                    if (!File.Exists(providerEventLogPath) || !File.Exists(resultArtifactPath))
+                    {
+                        return false;
+                    }
+
+                    var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                    var hasTerminalFailureEvidence = providerEvents.Any(providerEvent =>
+                        providerEvent.Kind == "provider-event"
+                        && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && ((providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal))
+                            || (providerEvent.Payload.TryGetProperty("type", out var contractGapTypeElement)
+                                && string.Equals(contractGapTypeElement.GetString(), "contract-gap", StringComparison.Ordinal))));
+                    if (!hasTerminalFailureEvidence)
+                    {
+                        return false;
+                    }
+
+                    var updatedArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+                    return string.Equals(updatedArtifact.RunStatus, "failed", StringComparison.Ordinal);
+                },
+                TimeSpan.FromSeconds(25));
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+            Assert.Equal("failed", resultArtifact.RunStatus);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                && providerEvent.Payload.GetString()!.Contains("src/ToyCalc/Program.cs", StringComparison.Ordinal));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                && providerEvent.Payload.GetString()!.Contains("tests/ToyCalc.Tests/CalculatorTests.cs", StringComparison.Ordinal));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                && providerEvent.Payload.GetString()!.Contains("dotnet test", StringComparison.Ordinal));
+            Assert.Contains(providerEvents, providerEvent =>
+                providerEvent.Kind == "provider-event"
+                && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunFixCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public async Task Execute_GivenWrapperCodexFixCommand_PersistsBoundedRepoActivityForCurrentSession()
     {
         if (OperatingSystem.IsWindows())

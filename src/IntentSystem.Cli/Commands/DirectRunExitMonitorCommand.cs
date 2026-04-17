@@ -85,6 +85,8 @@ internal static class DirectRunExitMonitorCommand
         WaitForProcessExit(options.ProcessId);
         Thread.Sleep(ExitGracePeriod);
 
+        AppendDeterministicFixBoundaryIfNeeded(options);
+
         if (DirectRunSessionBoundary.HasBackendExitEvent(options.ProviderEventLogPath, options.ProviderSessionId, options.LaunchedAt))
         {
             var resolvedExitCode = DirectRunSessionBoundary.TryResolveBackendExitCode(
@@ -117,6 +119,35 @@ internal static class DirectRunExitMonitorCommand
             exitCode: 1);
 
         return 0;
+    }
+
+    private static void AppendDeterministicFixBoundaryIfNeeded(DirectRunExitMonitorOptions options)
+    {
+        if (!string.Equals(options.EntryKind, "fix", StringComparison.Ordinal)
+            || !TryReadCurrentProviderEvents(
+                options.ProviderEventLogPath,
+                options.ProviderSessionId,
+                options.LaunchedAt,
+                out var currentProviderEvents))
+        {
+            return;
+        }
+
+        var boundaryEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            currentProviderEvents,
+            DateTimeOffset.UtcNow,
+            options.ExecutionUnit,
+            options.EntryKind,
+            options.Provider,
+            options.ProviderSessionId,
+            providerSessionAlive: false);
+        if (boundaryEvent is null)
+        {
+            return;
+        }
+
+        var eventWriter = new DirectRunProviderEventWriter(options.ProviderEventLogPath);
+        eventWriter.Append(boundaryEvent);
     }
 
     private static void WaitForProcessExit(int processId)
@@ -196,6 +227,37 @@ internal static class DirectRunExitMonitorCommand
             or InvalidOperationException)
         {
             return null;
+        }
+    }
+
+    private static bool TryReadCurrentProviderEvents(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt,
+        out IReadOnlyList<DirectRunProviderEvent> currentProviderEvents)
+    {
+        currentProviderEvents = [];
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            currentProviderEvents = DirectRunSessionBoundary.SelectEvents(
+                providerEvents,
+                providerSessionId,
+                launchedAt);
+            return currentProviderEvents.Count > 0;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or JsonException)
+        {
+            return false;
         }
     }
 
