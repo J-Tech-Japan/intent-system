@@ -266,7 +266,7 @@ internal static class DirectRunFixOutcomeSupport
         reason = string.Empty;
 
         if (providerSessionAlive
-            || HasSuccessfulBackendExit(providerEvents)
+            || HasCapturedSuccessfulTerminalOutcome(providerEvents)
             || FindFailingBackendExitIndex(providerEvents) >= 0
             || !HasDeepExecutionProgressSignal(providerEvents))
         {
@@ -297,7 +297,7 @@ internal static class DirectRunFixOutcomeSupport
 
         var observedRequestReread = providerEvents.Any(providerEvent => ContainsRequestArtifactRead(providerEvent.Payload));
         if (!observedRequestReread
-            || HasSuccessfulBackendExit(providerEvents)
+            || HasCapturedSuccessfulTerminalOutcome(providerEvents)
             || HasSpecAndProductReadProgressSignal(providerEvents))
         {
             return false;
@@ -400,6 +400,12 @@ internal static class DirectRunFixOutcomeSupport
         return -1;
     }
 
+    private static bool HasCapturedSuccessfulTerminalOutcome(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        return HasSuccessfulBackendExit(providerEvents)
+            && providerEvents.Any(providerEvent => ContainsSuccessfulTerminalNarrative(providerEvent.Payload));
+    }
+
     private static bool HasSuccessfulBackendExit(IReadOnlyList<DirectRunProviderEvent> providerEvents)
     {
         return providerEvents.Any(providerEvent =>
@@ -411,6 +417,43 @@ internal static class DirectRunFixOutcomeSupport
                 && TryReadInt32(payload, "exit_code", out var exitCode)
                 && exitCode == 0;
         });
+    }
+
+    private static bool ContainsSuccessfulTerminalNarrative(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var value = payload.GetString();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Trim();
+        var lower = normalized.ToLowerInvariant();
+        if (IsIgnorableStartupPreamble(payload)
+            || IsIgnorableStartupNoise(payload)
+            || lower == "exec"
+            || lower == "tokens used"
+            || lower.StartsWith("succeeded in ", StringComparison.Ordinal)
+            || lower.StartsWith("failed in ", StringComparison.Ordinal)
+            || lower.StartsWith("exited ", StringComparison.Ordinal)
+            || lower.StartsWith("/bin/", StringComparison.Ordinal)
+            || lower.StartsWith("sed: ", StringComparison.Ordinal)
+            || lower.Contains("rg --files", StringComparison.Ordinal)
+            || lower.Contains("sed -n", StringComparison.Ordinal)
+            || lower.Contains("dotnet test", StringComparison.Ordinal)
+            || lower.Contains("git status", StringComparison.Ordinal)
+            || lower.Contains("git diff", StringComparison.Ordinal)
+            || lower.Contains("apply_patch", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static bool HasExplicitContractGap(IReadOnlyList<DirectRunProviderEvent> providerEvents)

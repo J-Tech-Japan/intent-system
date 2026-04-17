@@ -1642,6 +1642,16 @@ public sealed class DirectRunLauncherTests
                 }),
                 DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
                 {
+                    Timestamp = launchedAt.AddMilliseconds(225).ToString("O"),
+                    ExecutionUnit = "G14b-success",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("- Updated src/ToyCalc/Program.cs and tests/ToyCalc.Tests/CalculatorTests.cs to preserve successful multiply output.")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
                     Timestamp = launchedAt.AddMilliseconds(250).ToString("O"),
                     ExecutionUnit = "G14b-success",
                     Provider = "Codex",

@@ -273,6 +273,7 @@ public sealed class DirectRunFixOutcomeSupportTests
             CreateProviderEvent(" succeeded in 0ms:"),
             CreateProviderEvent("exec /bin/zsh -lc 'dotnet test'"),
             CreateProviderEvent(" succeeded in 0ms:"),
+            CreateProviderEvent("- Updated src/ToyCalc/Program.cs to preserve successful multiply output."),
             CreateSuccessfulBackendExitEvent()
         ];
 
