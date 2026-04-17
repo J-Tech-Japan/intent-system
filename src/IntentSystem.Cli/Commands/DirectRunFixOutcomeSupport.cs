@@ -6,6 +6,8 @@ internal static class DirectRunFixOutcomeSupport
 {
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
     private const string InspectionOnlyExitReason = "fix-session-ended-after-initial-inspection";
+    private const string ProviderBackendEndedBeforeSpecSourceReadReason = "fix-session-ended-before-spec-source-test-read";
+    private const string MissingTerminalCaptureAfterRequestReadReason = "fix-session-terminal-boundary-missing-after-request-reread";
     private static readonly string[] StartupWarningMarkers =
     [
         "warn",
@@ -50,7 +52,8 @@ internal static class DirectRunFixOutcomeSupport
         string executionUnit,
         string entryKind,
         string provider,
-        string providerSessionId)
+        string providerSessionId,
+        bool providerSessionAlive = true)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
@@ -60,7 +63,12 @@ internal static class DirectRunFixOutcomeSupport
 
         if (!string.Equals(entryKind, "fix", StringComparison.Ordinal)
             || HasExplicitContractGap(providerEvents)
-            || !TryResolveInspectionOnlyFailureDetail(providerEvents, executionUnit, out var detail))
+            || !TryResolveCanonicalFailureDetail(
+                providerEvents,
+                executionUnit,
+                providerSessionAlive,
+                out var reason,
+                out var detail))
         {
             return null;
         }
@@ -77,7 +85,7 @@ internal static class DirectRunFixOutcomeSupport
             {
                 type = "contract-gap",
                 stop_reason = DeterministicContractGapStopReason,
-                reason = InspectionOnlyExitReason,
+                reason,
                 detail,
                 run_status = "failed"
             })
@@ -177,9 +185,80 @@ internal static class DirectRunFixOutcomeSupport
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
 
-        return providerEvents.Any(providerEvent =>
-            !IsIgnorableStartupPreamble(providerEvent.Payload)
-            && ContainsPlanningFixProgressSignal(providerEvent.Payload));
+        return HasSpecAndProductReadProgressSignal(providerEvents);
+    }
+
+    internal static bool HasSpecAndProductReadProgressSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        var sawSpecRead = HasSuccessfulRepoLocalSpecRead(providerEvents);
+        var sawProductRead = providerEvents.Any(providerEvent =>
+                !IsIgnorableStartupPreamble(providerEvent.Payload)
+                && ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
+
+        return sawSpecRead && sawProductRead;
+    }
+
+    private static bool TryResolveCanonicalFailureDetail(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        bool providerSessionAlive,
+        out string reason,
+        out string detail)
+    {
+        if (TryResolvePostRequestParityBoundaryDetail(
+                providerEvents,
+                executionUnit,
+                providerSessionAlive,
+                out reason,
+                out detail))
+        {
+            return true;
+        }
+
+        reason = InspectionOnlyExitReason;
+        return TryResolveInspectionOnlyFailureDetail(providerEvents, executionUnit, out detail);
+    }
+
+    private static bool TryResolvePostRequestParityBoundaryDetail(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        bool providerSessionAlive,
+        out string reason,
+        out string detail)
+    {
+        detail = string.Empty;
+        reason = string.Empty;
+
+        var observedRequestReread = providerEvents.Any(providerEvent => ContainsRequestArtifactRead(providerEvent.Payload));
+        if (!observedRequestReread
+            || HasSpecAndProductReadProgressSignal(providerEvents))
+        {
+            return false;
+        }
+
+        var observedInventory = providerEvents.Any(providerEvent => ContainsInitialRepoInventory(providerEvent.Payload));
+        var observedSpecRead = HasSuccessfulRepoLocalSpecRead(providerEvents);
+        var observedProductRead = providerEvents.Any(providerEvent => ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
+        var failingBackendExitIndex = FindFailingBackendExitIndex(providerEvents);
+        if (failingBackendExitIndex >= 0)
+        {
+            reason = ProviderBackendEndedBeforeSpecSourceReadReason;
+            detail =
+                $"Fix direct run for '{executionUnit}' stopped before repo-local spec/source/test planning reads. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}. A failing backend-exit was captured before any repo-local spec or product source/test read, which indicates the provider backend itself exited before the next bounded read.";
+            return true;
+        }
+
+        if (providerSessionAlive)
+        {
+            return false;
+        }
+
+        reason = MissingTerminalCaptureAfterRequestReadReason;
+        detail =
+            $"Fix direct run for '{executionUnit}' stopped before repo-local spec/source/test planning reads. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}. The provider session is no longer alive, but no backend-exit or later bounded-read event was captured for the current session. This indicates the detached helper/current-session synthesis event capture dropped after the request reread layer rather than a completed repair attempt.";
+        return true;
     }
 
     private static bool TryResolveInspectionOnlyFailureDetail(
@@ -415,6 +494,141 @@ internal static class DirectRunFixOutcomeSupport
                     && !normalized.Contains("rg --files", StringComparison.Ordinal)))
             {
                 return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsRequestArtifactRead(JsonElement payload)
+    {
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            var normalized = value.Trim().ToLowerInvariant();
+            if (!ContainsReadCommand(normalized))
+            {
+                continue;
+            }
+
+            if (normalized.Contains(".intent-cli/fix/", StringComparison.Ordinal)
+                || normalized.Contains(".request.md", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsInitialRepoInventory(JsonElement payload)
+    {
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            if (value.Trim().ToLowerInvariant().Contains("rg --files", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsRepoLocalSpecReadAttempt(JsonElement payload)
+    {
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            var normalized = value.Trim().ToLowerInvariant();
+            if (!ContainsReadCommand(normalized))
+            {
+                continue;
+            }
+
+            if (normalized.Contains("/specs/", StringComparison.Ordinal)
+                || normalized.Contains("01-cli-surface.md", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasSuccessfulRepoLocalSpecRead(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        for (var index = 0; index < providerEvents.Count; index++)
+        {
+            if (IsIgnorableStartupPreamble(providerEvents[index].Payload)
+                || !ContainsRepoLocalSpecReadAttempt(providerEvents[index].Payload))
+            {
+                continue;
+            }
+
+            if (TryResolveCommandOutcome(providerEvents, index, out var succeeded)
+                && succeeded)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsProductSourceOrTestReadAttempt(JsonElement payload)
+    {
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            var normalized = value.Trim().ToLowerInvariant();
+            if (!ContainsReadCommand(normalized))
+            {
+                continue;
+            }
+
+            if (normalized.Contains("src/", StringComparison.Ordinal)
+                || normalized.Contains("tests/", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsReadCommand(string normalized)
+    {
+        return normalized.Contains("cat ", StringComparison.Ordinal)
+            || normalized.Contains("sed -n", StringComparison.Ordinal)
+            || normalized.Contains("head ", StringComparison.Ordinal)
+            || normalized.Contains("tail ", StringComparison.Ordinal);
+    }
+
+    private static bool TryResolveCommandOutcome(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        int commandIndex,
+        out bool succeeded)
+    {
+        succeeded = false;
+
+        for (var index = commandIndex + 1; index < providerEvents.Count; index++)
+        {
+            foreach (var value in EnumeratePayloadStrings(providerEvents[index].Payload))
+            {
+                var normalized = value.Trim().ToLowerInvariant();
+                if (normalized == "exec")
+                {
+                    return false;
+                }
+
+                if (normalized.StartsWith("succeeded in ", StringComparison.Ordinal))
+                {
+                    succeeded = true;
+                    return true;
+                }
+
+                if (normalized.StartsWith("failed in ", StringComparison.Ordinal))
+                {
+                    succeeded = false;
+                    return true;
+                }
             }
         }
 

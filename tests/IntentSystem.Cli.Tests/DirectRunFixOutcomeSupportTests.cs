@@ -53,7 +53,7 @@ public sealed class DirectRunFixOutcomeSupportTests
     }
 
     [Fact]
-    public void HasPlanningProgressSignalBeyondInitialInventory_GivenRequestReadAfterRepoListing_ReturnsTrue()
+    public void HasPlanningProgressSignalBeyondInitialInventory_GivenRequestReadAfterRepoListing_ReturnsFalse()
     {
         IReadOnlyList<DirectRunProviderEvent> providerEvents =
         [
@@ -65,7 +65,155 @@ public sealed class DirectRunFixOutcomeSupportTests
 
         var resolved = DirectRunFixOutcomeSupport.HasPlanningProgressSignalBeyondInitialInventory(providerEvents);
 
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void HasPlanningProgressSignalBeyondInitialInventory_GivenOnlyRepoLocalSpecRead_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("OpenAI Codex v0.118.0 (research preview)"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,160p'' .intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/specs/01-cli-surface.md' failed in 0ms")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasPlanningProgressSignalBeyondInitialInventory(providerEvents);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void HasPlanningProgressSignalBeyondInitialInventory_GivenSpecAndProductRead_ReturnsTrue()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("OpenAI Codex v0.118.0 (research preview)"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,160p'' .intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/specs/01-cli-surface.md'"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs' succeeded in 0ms")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasPlanningProgressSignalBeyondInitialInventory(providerEvents);
+
         Assert.True(resolved);
+    }
+
+    [Fact]
+    public void HasPlanningProgressSignalBeyondInitialInventory_GivenFailedSpecReadThenProductReads_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("OpenAI Codex v0.118.0 (research preview)"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,160p'' .intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/specs/01-cli-surface.md'"),
+            CreateProviderEvent(" failed in 0ms:"),
+            CreateProviderEvent("sed: intents/toy-calc/specs/01-cli-surface.md: No such file or directory"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs && printf ''\\n---\\n'' && sed -n ''1,220p'' src/ToyCalc/Calculator.cs'"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs'"),
+            CreateProviderEvent(" succeeded in 0ms:")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasPlanningProgressSignalBeyondInitialInventory(providerEvents);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenFailedSpecReadThenProductReads_ReportsSpecBoundaryMissing()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/specs/01-cli-surface.md'"),
+            CreateProviderEvent(" failed in 0ms:"),
+            CreateProviderEvent("sed: intents/toy-calc/specs/01-cli-surface.md: No such file or directory"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs && printf ''\\n---\\n'' && sed -n ''1,220p'' src/ToyCalc/Calculator.cs'"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs'"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateBackendExitEvent()
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-17T06:00:00Z"),
+            "TOY-CALC-V0-01",
+            "fix",
+            "Codex",
+            "pid:2579");
+
+        Assert.NotNull(contractGapEvent);
+        Assert.Equal("fix-session-ended-before-spec-source-test-read", contractGapEvent!.Payload.GetProperty("reason").GetString());
+        Assert.Contains(
+            "repo_local_spec_read=False",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "product_source_or_test_read=True",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenRequestRereadThenBackendExit_UsesPreSpecSourceBoundaryReason()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("2026-04-17T05:58:46.453938Z  WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt: maximum of 3 prompts is supported"),
+            CreateBackendExitEvent()
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-17T06:00:00Z"),
+            "TOY-CALC-V0-01",
+            "fix",
+            "Codex",
+            "pid:2579");
+
+        Assert.NotNull(contractGapEvent);
+        Assert.Equal("provider-event", contractGapEvent!.Kind);
+        Assert.Equal("fix-session-ended-before-spec-source-test-read", contractGapEvent.Payload.GetProperty("reason").GetString());
+        Assert.Contains(
+            "provider backend itself exited before the next bounded read",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenRequestRereadAndDeadSessionWithoutTerminalEvent_UsesMissingCaptureReason()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("2026-04-17T05:58:46.453938Z  WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt: maximum of 3 prompts is supported")
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-17T06:00:00Z"),
+            "TOY-CALC-V0-01",
+            "fix",
+            "Codex",
+            "pid:2579",
+            providerSessionAlive: false);
+
+        Assert.NotNull(contractGapEvent);
+        Assert.Equal("fix-session-terminal-boundary-missing-after-request-reread", contractGapEvent!.Payload.GetProperty("reason").GetString());
+        Assert.Contains(
+            "event capture dropped after the request reread layer",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> CreateIssue295CurrentSessionRawEvents(string? echoedRequest = null)
@@ -133,6 +281,24 @@ public sealed class DirectRunFixOutcomeSupportTests
             SessionId = "pid:97771",
             Kind = "provider-event",
             Payload = JsonSerializer.SerializeToElement(payload)
+        };
+    }
+
+    private static DirectRunProviderEvent CreateBackendExitEvent()
+    {
+        return new DirectRunProviderEvent
+        {
+            Timestamp = "2026-04-17T05:58:47.0000000+00:00",
+            ExecutionUnit = "TOY-CALC-V0-01",
+            Provider = "Codex",
+            EntryKind = "fix",
+            SessionId = "pid:97771",
+            Kind = "provider-event",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                type = "backend-exit",
+                exit_code = 1
+            })
         };
     }
 }
