@@ -484,7 +484,7 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(blockedItem);
 
         decisionResult = null;
-        if (!TryResolvePostFixWorktreeProgressDecisionSession(context, blockedItem.ExecutionUnit, out var session))
+        if (!TryResolvePostFixWorktreeProgressDecisionSession(context, blockedItem, out var session))
         {
             return false;
         }
@@ -508,16 +508,16 @@ internal static class RunCommand
 
     private static bool TryResolvePostFixWorktreeProgressDecisionSession(
         CliContext context,
-        string executionUnit,
+        QueueItem blockedItem,
         out RunSupervisionSession session)
     {
         ArgumentNullException.ThrowIfNull(context);
-        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(blockedItem);
 
         session = null!;
         var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
             context.Config.Supervision.ArtifactRoot,
-            executionUnit);
+            blockedItem.ExecutionUnit);
         var sessionArtifactPath = Path.GetFullPath(Path.Combine(
             context.RepoRoot,
             sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
@@ -527,9 +527,29 @@ internal static class RunCommand
         }
 
         session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
-        return session.WorkerEntry == RunSupervisionWorkerEntry.Fix
-            && session.Status == RunSupervisionSessionStatus.Blocked
-            && session.RequiresPostFixWorktreeProgressDecision;
+        if (session.WorkerEntry != RunSupervisionWorkerEntry.Fix
+            || session.Status != RunSupervisionSessionStatus.Blocked)
+        {
+            return false;
+        }
+
+        if (session.RequiresPostFixWorktreeProgressDecision)
+        {
+            return true;
+        }
+
+        if (!TryUpgradeLegacyPostFixWorktreeProgressDecisionSession(
+                context,
+                blockedItem,
+                sessionArtifactPath,
+                session,
+                out var upgradedSession))
+        {
+            return false;
+        }
+
+        session = upgradedSession;
+        return true;
     }
 
     private static string CreatePostFixWorktreeProgressClarificationDetail(
@@ -546,6 +566,80 @@ internal static class RunCommand
                $"To continue automatically on the next root run, set [run] " +
                $"{CliRuntimeContracts.PostFixWorktreeProgressPolicyKey} = " +
                $"\"{CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy}\" and rerun.";
+    }
+
+    private static bool TryUpgradeLegacyPostFixWorktreeProgressDecisionSession(
+        CliContext context,
+        QueueItem blockedItem,
+        string sessionArtifactPath,
+        RunSupervisionSession session,
+        out RunSupervisionSession upgradedSession)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionArtifactPath);
+        ArgumentNullException.ThrowIfNull(session);
+
+        upgradedSession = null!;
+        if (!blockedItem.BlockedBy.Any(reason =>
+                reason.Contains("meaningful execution-unit worktree changes", StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        var worktreePath = string.IsNullOrWhiteSpace(session.WorktreePath)
+            ? RunStartCommand.ResolveWorktreePath(context, blockedItem.ExecutionUnit)
+            : session.WorktreePath;
+        if (!Directory.Exists(worktreePath))
+        {
+            return false;
+        }
+
+        if (!RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                GitCommandRunnerFactory(),
+                worktreePath,
+                out var changedPaths))
+        {
+            return false;
+        }
+
+        var interruptionReason = ResolveLegacyPostFixWorktreeProgressReason(blockedItem, changedPaths);
+        upgradedSession = session with
+        {
+            QueueState = "blocked",
+            WorktreePath = worktreePath,
+            LastInterruptionReason = interruptionReason,
+            RequiresPostFixWorktreeProgressDecision = true,
+            UpdatedAt = TimestampFactory()
+        };
+
+        File.WriteAllText(
+            sessionArtifactPath,
+            RunSupervisionSessionArtifactJson.Serialize(upgradedSession));
+        return true;
+    }
+
+    private static string ResolveLegacyPostFixWorktreeProgressReason(
+        QueueItem blockedItem,
+        IReadOnlyList<string> changedPaths)
+    {
+        ArgumentNullException.ThrowIfNull(blockedItem);
+        ArgumentNullException.ThrowIfNull(changedPaths);
+
+        var blockedReason = blockedItem.BlockedBy.FirstOrDefault(reason =>
+            reason.Contains("meaningful execution-unit worktree changes", StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(blockedReason))
+        {
+            return $"Meaningful fix progress exists in the execution-unit worktree for '{blockedItem.ExecutionUnit}'. " +
+                   $"Changed paths: {RunWorktreeProgressSupport.SummarizePaths(changedPaths)}.";
+        }
+
+        if (blockedReason.Contains("Changed paths:", StringComparison.Ordinal))
+        {
+            return blockedReason;
+        }
+
+        return $"{blockedReason.TrimEnd()} Changed paths: {RunWorktreeProgressSupport.SummarizePaths(changedPaths)}.";
     }
 
     private static void ExecuteAutoContinuePostFixWorktreeProgress(
