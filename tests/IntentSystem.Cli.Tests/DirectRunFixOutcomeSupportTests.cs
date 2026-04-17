@@ -37,6 +37,37 @@ public sealed class DirectRunFixOutcomeSupportTests
         Assert.Contains("during provider startup", detail, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void HasPlanningProgressSignalBeyondInitialInventory_GivenOnlyRepoListing_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("OpenAI Codex v0.118.0 (research preview)"),
+            CreateProviderEvent("Use the request artifact at '/tmp/TOY-CALC-V0-01.request.md' as the bounded source of truth for this direct run. Continue beyond initial repository inspection even if the request mentions rg --files, git diff, or dotnet test, and do not stop after a single inspection command without producing one of those outcomes."),
+            CreateProviderEvent("exec /bin/zsh -lc 'rg --files' succeeded in 0ms")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasPlanningProgressSignalBeyondInitialInventory(providerEvents);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void HasPlanningProgressSignalBeyondInitialInventory_GivenRequestReadAfterRepoListing_ReturnsTrue()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("OpenAI Codex v0.118.0 (research preview)"),
+            CreateProviderEvent("Use the request artifact at '/tmp/TOY-CALC-V0-01.request.md' as the bounded source of truth for this direct run. Continue beyond initial repository inspection even if the request mentions rg --files, git diff, or dotnet test, and do not stop after a single inspection command without producing one of those outcomes."),
+            CreateProviderEvent("exec /bin/zsh -lc 'rg --files' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,160p'' .intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasPlanningProgressSignalBeyondInitialInventory(providerEvents);
+
+        Assert.True(resolved);
+    }
+
     private static IReadOnlyList<DirectRunProviderEvent> CreateIssue295CurrentSessionRawEvents(string? echoedRequest = null)
     {
         return

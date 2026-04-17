@@ -13,9 +13,8 @@ internal static class DirectRunDetachedCaptureCommand
     private static readonly TimeSpan ExitPollInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan OutputDrainGracePeriod = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ExitCodeResolutionGracePeriod = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan ImplementProgressObservationWindow = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan ImplementProgressPollInterval = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan FixStandardInputGracePeriod = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan StandardInputProgressObservationWindow = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan StandardInputProgressPollInterval = TimeSpan.FromMilliseconds(100);
 
     public static bool TryExecute(string[] args, out int exitCode)
     {
@@ -178,9 +177,11 @@ internal static class DirectRunDetachedCaptureCommand
                 }
                 else
                 {
-                    SchedulePreservedStandardInputClosure(
+                    ScheduleFixStandardInputClosure(
                         preservedStandardInput,
-                        FixStandardInputGracePeriod);
+                        options.ProviderEventLogPath,
+                        providerSessionId,
+                        options.LaunchedAt);
                 }
             }
 
@@ -572,28 +573,6 @@ internal static class DirectRunDetachedCaptureCommand
         return string.Equals(executableName, "script", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void SchedulePreservedStandardInputClosure(
-        StreamWriter preservedStandardInput,
-        TimeSpan gracePeriod)
-    {
-        ArgumentNullException.ThrowIfNull(preservedStandardInput);
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(gracePeriod).ConfigureAwait(false);
-                preservedStandardInput.Dispose();
-            }
-            catch (ObjectDisposedException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
-        });
-    }
-
     private static void ScheduleImplementStandardInputClosure(
         StreamWriter preservedStandardInput,
         string providerEventLogPath,
@@ -606,7 +585,7 @@ internal static class DirectRunDetachedCaptureCommand
 
         _ = Task.Run(async () =>
         {
-            var deadline = DateTimeOffset.UtcNow + ImplementProgressObservationWindow;
+            var deadline = DateTimeOffset.UtcNow + StandardInputProgressObservationWindow;
             try
             {
                 while (DateTimeOffset.UtcNow < deadline)
@@ -617,7 +596,44 @@ internal static class DirectRunDetachedCaptureCommand
                         break;
                     }
 
-                    await Task.Delay(ImplementProgressPollInterval).ConfigureAwait(false);
+                    await Task.Delay(StandardInputProgressPollInterval).ConfigureAwait(false);
+                }
+
+                preservedStandardInput.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        });
+    }
+
+    private static void ScheduleFixStandardInputClosure(
+        StreamWriter preservedStandardInput,
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        ArgumentNullException.ThrowIfNull(preservedStandardInput);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerEventLogPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+
+        _ = Task.Run(async () =>
+        {
+            var deadline = DateTimeOffset.UtcNow + StandardInputProgressObservationWindow;
+            try
+            {
+                while (DateTimeOffset.UtcNow < deadline)
+                {
+                    if (HasFixPlanningProgressSignal(providerEventLogPath, providerSessionId, launchedAt)
+                        || DirectRunSessionBoundary.HasBackendExitEvent(providerEventLogPath, providerSessionId, launchedAt))
+                    {
+                        break;
+                    }
+
+                    await Task.Delay(StandardInputProgressPollInterval).ConfigureAwait(false);
                 }
 
                 preservedStandardInput.Dispose();
@@ -646,6 +662,32 @@ internal static class DirectRunDetachedCaptureCommand
             var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
             var currentProviderEvents = DirectRunSessionBoundary.SelectEvents(providerEvents, providerSessionId, launchedAt);
             return DirectRunFixOutcomeSupport.HasBoundedProgressSignal(currentProviderEvents);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or InvalidOperationException
+            or ArgumentException
+            or System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasFixPlanningProgressSignal(
+        string providerEventLogPath,
+        string providerSessionId,
+        DateTimeOffset launchedAt)
+    {
+        if (!File.Exists(providerEventLogPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+            var currentProviderEvents = DirectRunSessionBoundary.SelectEvents(providerEvents, providerSessionId, launchedAt);
+            return DirectRunFixOutcomeSupport.HasPlanningProgressSignalBeyondInitialInventory(currentProviderEvents);
         }
         catch (Exception exception) when (
             exception is IOException
