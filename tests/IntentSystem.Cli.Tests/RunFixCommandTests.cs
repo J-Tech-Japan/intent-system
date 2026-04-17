@@ -62,7 +62,7 @@ public sealed class RunFixCommandTests
             Assert.Contains("Direct model: default", output, StringComparison.Ordinal);
             Assert.Contains("Direct transport: stdio", output, StringComparison.Ordinal);
             Assert.Contains("Provider session: pid:8765", output, StringComparison.Ordinal);
-            Assert.Contains("Run status: running", output, StringComparison.Ordinal);
+            Assert.Contains("Run status: failed", output, StringComparison.Ordinal);
 
             var artifactPath = Path.Combine(repoRoot, ".intent-cli", "fix", "G20.request.md");
             Assert.True(File.Exists(artifactPath));
@@ -94,7 +94,7 @@ public sealed class RunFixCommandTests
             Assert.Equal("Claude", resultArtifact.Provider);
             Assert.Equal("default", resultArtifact.Model);
             Assert.Equal("pid:8765", resultArtifact.SessionId);
-            Assert.Equal("running", resultArtifact.RunStatus);
+            Assert.Equal("failed", resultArtifact.RunStatus);
             Assert.Equal(".intent-cli/runs/G20.provider.jsonl", resultArtifact.RawLogRef);
             Assert.Equal(".intent-cli/issues/G20/packet.yaml", resultArtifact.PacketRef);
             Assert.Equal(".intent-cli/issues/G20/review-context.md", resultArtifact.ReviewContextRef);
