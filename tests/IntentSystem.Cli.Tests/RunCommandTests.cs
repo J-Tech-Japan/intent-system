@@ -3494,12 +3494,16 @@ public sealed class RunCommandTests
 
         var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-        Assert.Equal("parent-intent-update-required", result.StopReason);
+        Assert.Equal("non-retryable-failure", result.StopReason);
         Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Contains("Fix retry budget exhausted", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("after 3 failed attempts", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("pid:999999", result.Detail, StringComparison.Ordinal);
 
         var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
         var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
         Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+        Assert.Contains("Fix retry budget exhausted", selectedItem.BlockedBy[0], StringComparison.Ordinal);
         Assert.Contains("backend exit code 1", selectedItem.BlockedBy[0], StringComparison.Ordinal);
         Assert.DoesNotContain("no terminal provider event was captured", selectedItem.BlockedBy[0], StringComparison.Ordinal);
 
@@ -4331,13 +4335,16 @@ public sealed class RunCommandTests
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("parent-intent-update-required", result.StopReason);
+            Assert.Equal("non-retryable-failure", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Contains("Fix retry budget exhausted", result.Detail, StringComparison.Ordinal);
+            Assert.Contains("after 3 failed attempts", result.Detail, StringComparison.Ordinal);
             Assert.DoesNotContain("meaningful execution-unit worktree changes", result.Detail, StringComparison.Ordinal);
 
             var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
             var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
             Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("Fix retry budget exhausted", selectedItem.BlockedBy[0], StringComparison.Ordinal);
             Assert.Contains("backend exit code 1", selectedItem.BlockedBy[0], StringComparison.Ordinal);
             Assert.DoesNotContain("meaningful execution-unit worktree changes", selectedItem.BlockedBy[0], StringComparison.Ordinal);
 
@@ -4478,12 +4485,15 @@ public sealed class RunCommandTests
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
             await appendTask;
 
-            Assert.Equal("parent-intent-update-required", result.StopReason);
+            Assert.Equal("non-retryable-failure", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Contains("Fix retry budget exhausted", result.Detail, StringComparison.Ordinal);
+            Assert.Contains("after 3 failed attempts", result.Detail, StringComparison.Ordinal);
 
             var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
             var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
             Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("Fix retry budget exhausted", selectedItem.BlockedBy[0], StringComparison.Ordinal);
             Assert.Contains("backend exit code 1", selectedItem.BlockedBy[0], StringComparison.Ordinal);
             Assert.DoesNotContain("no terminal provider event was captured", selectedItem.BlockedBy[0], StringComparison.Ordinal);
 
