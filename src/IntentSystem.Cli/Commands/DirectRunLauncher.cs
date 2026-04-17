@@ -193,14 +193,16 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 launchedAt);
         }
 
-        if (string.Equals(entryKind, "fix", StringComparison.Ordinal)
+        if ((string.Equals(entryKind, "fix", StringComparison.Ordinal)
+                || string.Equals(entryKind, "implement", StringComparison.Ordinal))
             && processInvocation.StartedProcessCarriesProviderSession)
         {
-            WaitForFixProgressBoundary(
+            WaitForProgressBoundary(
                 absoluteProviderEventLogPath,
                 providerSessionId,
                 launchedAt,
-                process.ProcessId);
+                process.ProcessId,
+                entryKind);
         }
 
         if (process.ExitedEarly && process.ExitCode != 0)
@@ -419,7 +421,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
             command,
             arguments);
 
-        if (string.Equals(entryKind, "fix", StringComparison.Ordinal))
+        if (string.Equals(entryKind, "fix", StringComparison.Ordinal)
+            || string.Equals(entryKind, "implement", StringComparison.Ordinal))
         {
             return new ResolvedProcessInvocation
             {
@@ -427,7 +430,8 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
                 Arguments = helperStartInfo.ArgumentList.ToArray(),
                 RequiresPersistentExitMonitor = false,
                 InheritStandardInput = false,
-                KeepStandardInputOpen = true,
+                KeepStandardInputOpen = string.Equals(entryKind, "fix", StringComparison.Ordinal)
+                    || string.Equals(entryKind, "implement", StringComparison.Ordinal),
                 UsesDetachedCaptureHelper = true,
                 StartedProcessCarriesProviderSession = true
             };
@@ -491,11 +495,12 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         return launcherStartInfo;
     }
 
-    private static void WaitForFixProgressBoundary(
+    private static void WaitForProgressBoundary(
         string providerEventLogPath,
         string providerSessionId,
         DateTimeOffset launchedAt,
-        int processId)
+        int processId,
+        string entryKind)
     {
         if (string.IsNullOrWhiteSpace(providerSessionId))
         {
@@ -505,7 +510,7 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         var deadline = DateTimeOffset.UtcNow + FixProgressObservationWindow;
         while (DateTimeOffset.UtcNow < deadline)
         {
-            if (HasFixProgressSignal(providerEventLogPath, providerSessionId, launchedAt)
+            if (HasProgressSignal(providerEventLogPath, providerSessionId, launchedAt, entryKind)
                 || DirectRunSessionBoundary.HasBackendExitEvent(providerEventLogPath, providerSessionId, launchedAt)
                 || !IsProcessAlive(processId))
             {
@@ -516,10 +521,11 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         }
     }
 
-    private static bool HasFixProgressSignal(
+    private static bool HasProgressSignal(
         string providerEventLogPath,
         string providerSessionId,
-        DateTimeOffset launchedAt)
+        DateTimeOffset launchedAt,
+        string entryKind)
     {
         if (!File.Exists(providerEventLogPath))
         {
@@ -530,7 +536,13 @@ internal sealed class DirectRunLauncher : IDirectRunLauncher
         {
             var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
             var currentProviderEvents = DirectRunSessionBoundary.SelectEvents(providerEvents, providerSessionId, launchedAt);
-            return DirectRunFixOutcomeSupport.HasBoundedProgressSignal(currentProviderEvents);
+            if (string.Equals(entryKind, "fix", StringComparison.Ordinal)
+                || string.Equals(entryKind, "implement", StringComparison.Ordinal))
+            {
+                return DirectRunFixOutcomeSupport.HasBoundedProgressSignal(currentProviderEvents);
+            }
+
+            return false;
         }
         catch (Exception exception) when (
             exception is IOException

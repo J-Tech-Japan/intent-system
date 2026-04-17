@@ -831,6 +831,170 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public async Task Launch_GivenWrappedCodexImplementProcess_PreservesStandardInputLongEnoughForStartupActivity()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14implement-stdin.provider.jsonl");
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
+        var codexPath = tempDirectory.CreateExecutableFile(
+            "repo/codex-experimental",
+            """
+            #!/bin/sh
+            printf '%s\n' 'OpenAI Codex v0.118.0 (research preview)'
+            printf '%s\n' '--------'
+            printf '%s\n' "workdir: $PWD"
+            printf '%s\n' 'user'
+            /usr/bin/python3 -c 'import os,select,sys; fd = sys.stdin.fileno(); os.isatty(fd) or (print("tty-missing", flush=True), sys.exit(1)); readable, _, _ = select.select([sys.stdin], [], [], 0.2); data = os.read(fd, 1) if readable else None; data != b"" or (print("stdin-eof", flush=True), sys.exit(1)); print("pwd && rg --files .", flush=True); print("git status --short", flush=True)'
+            sleep 1
+            """);
+        var launcher = new DirectRunLauncher();
+
+        var result = launcher.Launch(
+            "G14implement-stdin",
+            "implement",
+            ".intent-cli/runs/G14implement-stdin.request.json",
+            ".intent-cli/runs/G14implement-stdin.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            codexPath,
+            ["exec", "test prompt"],
+            DateTimeOffset.Parse("2026-04-16T21:00:00Z"),
+            worktreePath,
+            tempDirectory.GetPath(".intent-cli/implement/G14implement-stdin.request.md"),
+            providerEventLogPath);
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(providerEventLogPath))
+                {
+                    return false;
+                }
+
+                var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                return events.Any(providerEvent =>
+                           providerEvent.Kind == "provider-event"
+                           && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                           && string.Equals(providerEvent.Payload.GetString(), "pwd && rg --files .", StringComparison.Ordinal)
+                           && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal))
+                       && events.Any(providerEvent =>
+                           providerEvent.Kind == "provider-event"
+                           && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                           && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                           && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                           && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            },
+            TimeSpan.FromSeconds(8));
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "stdin-eof", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "tty-missing", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "pwd && rg --files .", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "git status --short", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Launch_GivenWrappedCodexImplementProcess_PreservesStandardInputThroughDelayedStartup()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14implement-delayed.provider.jsonl");
+        var worktreePath = tempDirectory.GetPath("repo");
+        Directory.CreateDirectory(worktreePath);
+        var codexPath = tempDirectory.CreateExecutableFile(
+            "repo/codex-experimental",
+            """
+            #!/bin/sh
+            sleep 2
+            /usr/bin/python3 -c 'import os,select,sys; fd = sys.stdin.fileno(); os.isatty(fd) or (print("tty-missing", flush=True), sys.exit(1)); readable, _, _ = select.select([sys.stdin], [], [], 0.2); data = os.read(fd, 1) if readable else None; data != b"" or (print("stdin-eof", flush=True), sys.exit(1)); print("delayed-startup-ok", flush=True)'
+            sleep 1
+            """);
+        var launcher = new DirectRunLauncher();
+
+        var result = launcher.Launch(
+            "G14implement-delayed",
+            "implement",
+            ".intent-cli/runs/G14implement-delayed.request.json",
+            ".intent-cli/runs/G14implement-delayed.provider.jsonl",
+            "Codex",
+            "gpt-5.4-mini",
+            "responses",
+            codexPath,
+            ["exec", "test prompt"],
+            DateTimeOffset.Parse("2026-04-17T02:10:00Z"),
+            worktreePath,
+            tempDirectory.GetPath(".intent-cli/implement/G14implement-delayed.request.md"),
+            providerEventLogPath);
+
+        await TemporaryDirectory.WaitForConditionAsync(
+            () =>
+            {
+                if (!File.Exists(providerEventLogPath))
+                {
+                    return false;
+                }
+
+                var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+                return events.Any(providerEvent =>
+                           providerEvent.Kind == "provider-event"
+                           && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+                           && string.Equals(providerEvent.Payload.GetString(), "delayed-startup-ok", StringComparison.Ordinal)
+                           && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal))
+                       && events.Any(providerEvent =>
+                           providerEvent.Kind == "provider-event"
+                           && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                           && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                           && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                           && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+            },
+            TimeSpan.FromSeconds(10));
+
+        var events = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "stdin-eof", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.DoesNotContain(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "tty-missing", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+        Assert.Contains(events, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(providerEvent.Payload.GetString(), "delayed-startup-ok", StringComparison.Ordinal)
+            && string.Equals(providerEvent.SessionId, result.ProviderSessionId, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Launch_GivenWrappedCodexFixProcess_PreservesStandardInputLongEnoughForBoundedRepoActivity()
     {
         if (OperatingSystem.IsWindows())
