@@ -559,7 +559,7 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(blockedItem);
         ArgumentNullException.ThrowIfNull(session);
 
-        CommitPostFixWorktreeProgress(context, blockedItem);
+        var carryForwardCommit = CommitPostFixWorktreeProgress(context, blockedItem);
         var rollbackState = CapturePostFixProgressRollbackState(context, blockedItem.ExecutionUnit);
 
         try
@@ -581,6 +581,17 @@ internal static class RunCommand
         catch
         {
             RestorePostFixProgressRollbackState(rollbackState);
+            try
+            {
+                RollBackPostFixCarryForwardCommit(carryForwardCommit);
+            }
+            catch (InvalidOperationException rollbackException)
+            {
+                throw new RunDeterministicGapException(
+                    blockedItem.ExecutionUnit,
+                    $"Failed to roll back auto-continue carry-forward for '{blockedItem.ExecutionUnit}': {rollbackException.Message}");
+            }
+
             throw;
         }
 
@@ -639,7 +650,7 @@ internal static class RunCommand
             }));
     }
 
-    private static void CommitPostFixWorktreeProgress(CliContext context, QueueItem blockedItem)
+    private static PostFixCarryForwardCommit CommitPostFixWorktreeProgress(CliContext context, QueueItem blockedItem)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(blockedItem);
@@ -689,6 +700,24 @@ internal static class RunCommand
                 $"Current worktree branch '{currentBranch}' must match expected branch '{expectedBranchName}'.");
         }
 
+        var headResult = gitRunner.Run(worktreePath, ["rev-parse", "HEAD"]);
+        if (headResult.ExitCode != 0)
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                string.IsNullOrWhiteSpace(headResult.StdErr)
+                    ? "git rev-parse HEAD failed."
+                    : headResult.StdErr.Trim());
+        }
+
+        var originalHead = headResult.StdOut.Trim();
+        if (string.IsNullOrWhiteSpace(originalHead))
+        {
+            throw new RunDeterministicGapException(
+                blockedItem.ExecutionUnit,
+                "git rev-parse HEAD returned an empty commit id.");
+        }
+
         var addArguments = new List<string> { "add", "--" };
         addArguments.AddRange(changedPaths);
         var addResult = gitRunner.Run(worktreePath, addArguments);
@@ -728,6 +757,25 @@ internal static class RunCommand
                 string.IsNullOrWhiteSpace(commitResult.StdErr)
                     ? "git commit failed."
                     : commitResult.StdErr.Trim());
+        }
+
+        return new PostFixCarryForwardCommit(worktreePath, originalHead);
+    }
+
+    private static void RollBackPostFixCarryForwardCommit(PostFixCarryForwardCommit carryForwardCommit)
+    {
+        ArgumentNullException.ThrowIfNull(carryForwardCommit);
+
+        var gitRunner = GitCommandRunnerFactory();
+        var resetResult = gitRunner.Run(
+            carryForwardCommit.WorktreePath,
+            ["reset", "--mixed", carryForwardCommit.PreviousHead]);
+        if (resetResult.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(resetResult.StdErr)
+                    ? "git reset --mixed failed."
+                    : resetResult.StdErr.Trim());
         }
     }
 
@@ -1623,4 +1671,8 @@ internal static class RunCommand
         string SessionArtifactContent,
         string RunLogPath,
         string RunLogContent);
+
+    private sealed record PostFixCarryForwardCommit(
+        string WorktreePath,
+        string PreviousHead);
 }
