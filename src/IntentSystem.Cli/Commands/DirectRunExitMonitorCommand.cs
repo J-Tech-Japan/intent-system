@@ -84,6 +84,7 @@ internal static class DirectRunExitMonitorCommand
     {
         WaitForProcessExit(options.ProcessId);
         Thread.Sleep(ExitGracePeriod);
+        options = ResolveEffectiveOptions(options);
 
         AppendDeterministicFixBoundaryIfNeeded(options);
 
@@ -119,6 +120,31 @@ internal static class DirectRunExitMonitorCommand
             exitCode: 1);
 
         return 0;
+    }
+
+    private static DirectRunExitMonitorOptions ResolveEffectiveOptions(DirectRunExitMonitorOptions options)
+    {
+        var effectiveSessionId = DirectRunTerminalArtifactUpdater.SynchronizeArtifactsToLatestSessionIfCurrent(
+            options.ProviderEventLogPath,
+            options.ProviderSessionId,
+            options.LaunchedAt);
+        if (string.Equals(effectiveSessionId, options.ProviderSessionId, StringComparison.Ordinal)
+            || !TryParseSessionProcessId(effectiveSessionId, out var effectiveProcessId)
+            || effectiveProcessId == options.ProcessId)
+        {
+            return options with
+            {
+                ProviderSessionId = effectiveSessionId
+            };
+        }
+
+        WaitForProcessExit(effectiveProcessId);
+        Thread.Sleep(ExitGracePeriod);
+        return options with
+        {
+            ProcessId = effectiveProcessId,
+            ProviderSessionId = effectiveSessionId
+        };
     }
 
     private static void AppendDeterministicFixBoundaryIfNeeded(DirectRunExitMonitorOptions options)
@@ -189,6 +215,22 @@ internal static class DirectRunExitMonitorCommand
         }
 
         return processState.IndexOf('Z') < 0;
+    }
+
+    private static bool TryParseSessionProcessId(string providerSessionId, out int processId)
+    {
+        processId = default;
+        const string prefix = "pid:";
+        if (!providerSessionId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(
+            providerSessionId[prefix.Length..],
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out processId);
     }
 
     private static string? TryReadUnixProcessState(int processId)
