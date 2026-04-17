@@ -192,9 +192,7 @@ internal static class DirectRunFixOutcomeSupport
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
 
-        var sawSpecRead = providerEvents.Any(providerEvent =>
-            !IsIgnorableStartupPreamble(providerEvent.Payload)
-            && ContainsRepoLocalSpecReadAttempt(providerEvent.Payload));
+        var sawSpecRead = HasSuccessfulRepoLocalSpecRead(providerEvents);
         var sawProductRead = providerEvents.Any(providerEvent =>
                 !IsIgnorableStartupPreamble(providerEvent.Payload)
                 && ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
@@ -241,7 +239,7 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         var observedInventory = providerEvents.Any(providerEvent => ContainsInitialRepoInventory(providerEvent.Payload));
-        var observedSpecRead = providerEvents.Any(providerEvent => ContainsRepoLocalSpecReadAttempt(providerEvent.Payload));
+        var observedSpecRead = HasSuccessfulRepoLocalSpecRead(providerEvents);
         var observedProductRead = providerEvents.Any(providerEvent => ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
         var failingBackendExitIndex = FindFailingBackendExitIndex(providerEvents);
         if (failingBackendExitIndex >= 0)
@@ -555,6 +553,26 @@ internal static class DirectRunFixOutcomeSupport
         return false;
     }
 
+    private static bool HasSuccessfulRepoLocalSpecRead(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        for (var index = 0; index < providerEvents.Count; index++)
+        {
+            if (IsIgnorableStartupPreamble(providerEvents[index].Payload)
+                || !ContainsRepoLocalSpecReadAttempt(providerEvents[index].Payload))
+            {
+                continue;
+            }
+
+            if (TryResolveCommandOutcome(providerEvents, index, out var succeeded)
+                && succeeded)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool ContainsProductSourceOrTestReadAttempt(JsonElement payload)
     {
         foreach (var value in EnumeratePayloadStrings(payload))
@@ -581,6 +599,40 @@ internal static class DirectRunFixOutcomeSupport
             || normalized.Contains("sed -n", StringComparison.Ordinal)
             || normalized.Contains("head ", StringComparison.Ordinal)
             || normalized.Contains("tail ", StringComparison.Ordinal);
+    }
+
+    private static bool TryResolveCommandOutcome(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        int commandIndex,
+        out bool succeeded)
+    {
+        succeeded = false;
+
+        for (var index = commandIndex + 1; index < providerEvents.Count; index++)
+        {
+            foreach (var value in EnumeratePayloadStrings(providerEvents[index].Payload))
+            {
+                var normalized = value.Trim().ToLowerInvariant();
+                if (normalized == "exec")
+                {
+                    return false;
+                }
+
+                if (normalized.StartsWith("succeeded in ", StringComparison.Ordinal))
+                {
+                    succeeded = true;
+                    return true;
+                }
+
+                if (normalized.StartsWith("failed in ", StringComparison.Ordinal))
+                {
+                    succeeded = false;
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static IEnumerable<string> EnumeratePayloadStrings(JsonElement payload)
