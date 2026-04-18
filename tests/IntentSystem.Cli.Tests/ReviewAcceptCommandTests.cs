@@ -218,6 +218,59 @@ public sealed class ReviewAcceptCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenDraftLinkedPr_MarksReadyBeforeMergeAndCompletesCloseout()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "child-repo"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G12", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var client = new FakeAcceptClient
+        {
+            RequireReadyBeforeMerge = true
+        };
+        var gitRunner = new FakeGitRunner(headCommit: "abc123");
+
+        var originalClientFactory = ReviewAcceptCommand.AcceptClientFactory;
+        var originalGitFactory = ReviewAcceptCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = ReviewAcceptCommand.TimestampFactory;
+
+        try
+        {
+            ReviewAcceptCommand.AcceptClientFactory = () => client;
+            ReviewAcceptCommand.GitCommandRunnerFactory = () => gitRunner;
+            ReviewAcceptCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T01:02:03Z");
+
+            var exitCode = ReviewAcceptCommand.Execute(CreateContext(repoRoot), ["G12"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Review accepted for G12", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal(2, client.MergeAttempts);
+            Assert.Equal(["https://github.com/J-Tech-Japan/intent-system/pull/52"], client.ReadyMarkedPrs);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/52", client.LinkedPr);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/51", client.LinkedIssue);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Completed, queueState.Items.Single(item => item.ExecutionUnit == "G12").State);
+        }
+        finally
+        {
+            ReviewAcceptCommand.AcceptClientFactory = originalClientFactory;
+            ReviewAcceptCommand.GitCommandRunnerFactory = originalGitFactory;
+            ReviewAcceptCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -340,11 +393,28 @@ public sealed class ReviewAcceptCommandTests
 
         public Exception? MergeException { get; init; }
 
+        public bool RequireReadyBeforeMerge { get; init; }
+
+        public int MergeAttempts { get; private set; }
+
+        public List<string> ReadyMarkedPrs { get; } = [];
+
+        public void MarkPullRequestReady(string linkedPr)
+        {
+            ReadyMarkedPrs.Add(linkedPr);
+        }
+
         public string MergePullRequest(string linkedPr)
         {
+            MergeAttempts++;
             if (MergeException is not null)
             {
                 throw MergeException;
+            }
+
+            if (RequireReadyBeforeMerge && ReadyMarkedPrs.Count == 0)
+            {
+                throw new InvalidOperationException("gh: Pull Request is still a draft (HTTP 405)");
             }
 
             LinkedPr = linkedPr;

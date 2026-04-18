@@ -548,6 +548,149 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenAcceptedReviewDecisionWithDraftLinkedPr_ClosesOutWithoutDeterministicContractGap()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "child-repo"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            implementation_issue_packet:
+              issue_title: "[G226] Review Accept"
+              issue_kind: "feature"
+              source_execution_unit: "G226"
+              goal: "Close out accepted review."
+              in_scope:
+                - "review accept command"
+              out_of_scope:
+                - "review comment"
+              target_repo: "submodules/child-repo"
+              target_path: "."
+              target_part: "cli review accept command"
+              dependencies: []
+              technical_baseline:
+                - "C# / .NET"
+              project_local_guide:
+                - "AGENTS.md"
+              intent_baseline:
+                - "closeout stays thin"
+              intent_references:
+                - "ICL.P.PRODUCT_GOAL"
+              rules_and_specs:
+                - "intents/rules/issue-lifecycle-and-landing.md"
+              acceptance_criteria:
+                - "review accept merges and closes"
+              verification_evidence:
+                - "tests-passing"
+              review_mode: "deterministic-review"
+              completion_action: "wait-for-deterministic-review"
+              landing_policy: "merge-after-review"
+
+            review_context_packet:
+              source_execution_unit: "G226"
+              parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+              intent_references:
+                - "ICL.P.PRODUCT_GOAL"
+              rules_and_specs:
+                - "intents/rules/issue-lifecycle-and-landing.md"
+              acceptance_criteria:
+                - "review accept merges and closes"
+              deterministic_review_checks:
+                - "selected item only"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-03T10:00:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-03T10:10:00Z","execution_unit":"G226","event":"review-started","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
+            """ + Environment.NewLine);
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
+        WriteDirectRunResult(repoRoot, "G226", "review", "accepted");
+        var originalClientFactory = ReviewAcceptCommand.AcceptClientFactory;
+        var originalGitFactory = ReviewAcceptCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = ReviewAcceptCommand.TimestampFactory;
+        var client = new FakeReviewAcceptClient
+        {
+            RequireReadyBeforeMerge = true
+        };
+
+        try
+        {
+            ReviewAcceptCommand.AcceptClientFactory = () => client;
+            ReviewAcceptCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                new Dictionary<string, GitCommandResult>
+                {
+                    [FakeGitRunner.CreateCommandKey(["fetch", "origin", "main"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = string.Empty,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["switch", "main"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = string.Empty,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["merge", "--ff-only", "origin/main"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = string.Empty,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["rev-parse", "HEAD"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = "abc123" + Environment.NewLine,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["add", "submodules/child-repo"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = string.Empty,
+                        StdErr = string.Empty
+                    }
+                });
+            ReviewAcceptCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T01:02:03Z");
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Null(result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("review accept", action.Name);
+            Assert.Equal("G226", action.ExecutionUnit);
+            Assert.DoesNotContain("Pull Request is still a draft", result.Detail ?? string.Empty, StringComparison.Ordinal);
+            Assert.Equal(2, client.MergeAttempts);
+            Assert.Equal(["https://github.com/J-Tech-Japan/intent-system/pull/226"], client.ReadyMarkedPrs);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Completed, queueState.Items.Single(item => item.ExecutionUnit == "G226").State);
+
+            var runEvents = RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+            Assert.Equal("pr-merged", runEvents[^3].Event);
+            Assert.Equal("issue-closed", runEvents[^2].Event);
+            Assert.Equal("completed", runEvents[^1].Event);
+        }
+        finally
+        {
+            ReviewAcceptCommand.AcceptClientFactory = originalClientFactory;
+            ReviewAcceptCommand.GitCommandRunnerFactory = originalGitFactory;
+            ReviewAcceptCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenSucceededReviewDecisionWithoutExplicitOutcome_Waits()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -6610,6 +6753,35 @@ public sealed class RunCommandTests
         {
             CallCount++;
             return $"{linkedPr}#issuecomment-generated";
+        }
+    }
+
+    private sealed class FakeReviewAcceptClient : IReviewAcceptClient
+    {
+        public bool RequireReadyBeforeMerge { get; init; }
+
+        public int MergeAttempts { get; private set; }
+
+        public List<string> ReadyMarkedPrs { get; } = [];
+
+        public void MarkPullRequestReady(string linkedPr)
+        {
+            ReadyMarkedPrs.Add(linkedPr);
+        }
+
+        public string MergePullRequest(string linkedPr)
+        {
+            MergeAttempts++;
+            if (RequireReadyBeforeMerge && ReadyMarkedPrs.Count == 0)
+            {
+                throw new InvalidOperationException("gh: Pull Request is still a draft (HTTP 405)");
+            }
+
+            return "abc123";
+        }
+
+        public void CloseIssue(string linkedIssue)
+        {
         }
     }
 
