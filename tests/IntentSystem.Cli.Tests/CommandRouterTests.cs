@@ -5047,6 +5047,10 @@ recommended_updates:
 
     private sealed class FakeReviewAcceptClient : IReviewAcceptClient
     {
+        public void MarkPullRequestReady(string linkedPr)
+        {
+        }
+
         public string MergePullRequest(string linkedPr)
         {
             return "abc123";

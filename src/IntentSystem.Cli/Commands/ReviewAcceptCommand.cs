@@ -86,7 +86,17 @@ internal static class ReviewAcceptCommand
         }
 
         var acceptClient = AcceptClientFactory();
-        var mergedCommitSha = acceptClient.MergePullRequest(linkedPr);
+        string mergedCommitSha;
+        try
+        {
+            mergedCommitSha = acceptClient.MergePullRequest(linkedPr);
+        }
+        catch (InvalidOperationException exception) when (IsDraftPullRequestMergeFailure(exception))
+        {
+            acceptClient.MarkPullRequestReady(linkedPr);
+            mergedCommitSha = acceptClient.MergePullRequest(linkedPr);
+        }
+
         acceptClient.CloseIssue(linkedIssue);
 
         var gitRunner = GitCommandRunnerFactory();
@@ -106,6 +116,14 @@ internal static class ReviewAcceptCommand
             MergedPrRef = linkedPr,
             ClosedIssueRef = linkedIssue
         };
+    }
+
+    private static bool IsDraftPullRequestMergeFailure(InvalidOperationException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        return exception.Message.Contains("Pull Request is still a draft", StringComparison.Ordinal)
+            && exception.Message.Contains("HTTP 405", StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<RunEvent> CreateCloseoutEvents(

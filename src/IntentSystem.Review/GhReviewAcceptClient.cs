@@ -16,6 +16,28 @@ public sealed class GhReviewAcceptClient : IReviewAcceptClient
         this.commandRunner = commandRunner ?? throw new ArgumentNullException(nameof(commandRunner));
     }
 
+    public void MarkPullRequestReady(string linkedPr)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(linkedPr);
+
+        var pullRequest = GitHubPullRequestRef.Parse(linkedPr);
+        var result = commandRunner.Run(
+            [
+                "api",
+                $"repos/{pullRequest.Owner}/{pullRequest.Repo}/pulls/{pullRequest.PullNumber}/ready_for_review",
+                "--method",
+                "POST"
+            ]);
+
+        if (result.ExitCode != 0)
+        {
+            var error = string.IsNullOrWhiteSpace(result.StdErr)
+                ? "gh api pull request ready_for_review failed."
+                : result.StdErr.Trim();
+            throw new InvalidOperationException(error);
+        }
+    }
+
     public string MergePullRequest(string linkedPr)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(linkedPr);
