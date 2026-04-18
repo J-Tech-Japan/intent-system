@@ -132,6 +132,85 @@ public sealed class RunFixCommandTests
     }
 
     [Fact]
+    public void Execute_GivenStaleWorktreeRuntimeArtifacts_SyncsCurrentIssueArtifactsAndRemovesSupersededRunResult()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var worktreePath = tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "implementation.md"),
+            "# Current implementation");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "github-body.md"),
+            "# Current github body");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateReviewCommentArtifactJson());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "worktrees", "G20", ".intent-cli", "issues", "OLD-01", "packet.yaml"),
+            "stale-packet");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "worktrees", "G20", ".intent-cli", "run.result.json"),
+            RunRootResultArtifactJson.Serialize(new RunRootResultArtifact
+            {
+                SchemaVersion = "1",
+                StopReason = "deterministic-contract-gap",
+                TouchedExecutionUnits = ["OLD-01"],
+                ReusedChildCommandRefs = [],
+                ExecutionUnit = "OLD-01",
+                Detail = "stale worktree result"
+            }));
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunFixCommand.TimestampFactory;
+        var originalLauncherFactory = RunFixCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:25:00Z");
+            RunFixCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:8765",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G20' for provider 'Claude'.");
+
+            var exitCode = RunFixCommand.Execute(CreateContext(repoRoot), ["G20"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "G20", "packet.yaml")));
+            Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "G20", "review-context.md")));
+            Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "G20", "implementation.md")));
+            Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "G20", "github-body.md")));
+            Assert.Equal(
+                CreatePacketYaml(),
+                File.ReadAllText(Path.Combine(worktreePath, ".intent-cli", "issues", "G20", "packet.yaml")));
+            Assert.Equal(
+                CreateReviewContextMarkdown(),
+                File.ReadAllText(Path.Combine(worktreePath, ".intent-cli", "issues", "G20", "review-context.md")));
+            Assert.False(File.Exists(Path.Combine(worktreePath, ".intent-cli", "run.result.json")));
+            Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "OLD-01", "packet.yaml")));
+        }
+        finally
+        {
+            RunFixCommand.TimestampFactory = originalTimestampFactory;
+            RunFixCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenMissingExecutionUnit_ReturnsExitCodeOne()
     {
         using var writer = new StringWriter();
