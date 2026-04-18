@@ -16,7 +16,11 @@ internal static class RunCommand
         public string ExecutionUnit { get; } = executionUnit;
     }
 
-    private sealed record FreshFixContinuationState(DateTimeOffset Deadline, int RemainingPolls);
+    private sealed record FreshFixContinuationState(
+        DateTimeOffset TotalDeadline,
+        DateTimeOffset Deadline,
+        DateTimeOffset LastObservedActivityAt,
+        int RemainingPolls);
 
     private const int IterationBudget = 128;
     private const string NoActionableItemStopReason = "no-actionable-item";
@@ -65,7 +69,11 @@ internal static class RunCommand
 
     internal static TimeSpan FreshFixContinuationWindow { get; set; } = TimeSpan.FromSeconds(30);
 
-    internal static TimeSpan FreshFixContinuationPollInterval { get; set; } = TimeSpan.FromMilliseconds(200);
+    internal static TimeSpan FreshFixContinuationActivityWindow { get; set; } = TimeSpan.FromSeconds(45);
+
+    internal static TimeSpan FreshFixContinuationTotalWindow { get; set; } = TimeSpan.FromSeconds(90);
+
+    internal static TimeSpan FreshFixContinuationPollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
     internal static int FreshFixContinuationMaxPolls { get; set; } = 120;
 
@@ -304,6 +312,7 @@ internal static class RunCommand
                             () => RunSuperviseExecutor(context, inProgressItem.ExecutionUnit));
 
                         if (ShouldContinueFreshFixSupervision(
+                                context,
                                 freshFixContinuationStates,
                                 inProgressItem.ExecutionUnit,
                                 superviseResult))
@@ -1091,7 +1100,9 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(continuationStates);
 
         continuationStates.Remove(executionUnit);
-        if (FreshFixContinuationWindow <= TimeSpan.Zero || FreshFixContinuationMaxPolls <= 0)
+        if (FreshFixContinuationWindow <= TimeSpan.Zero
+            || FreshFixContinuationTotalWindow <= TimeSpan.Zero
+            || FreshFixContinuationMaxPolls <= 0)
         {
             return;
         }
@@ -1103,22 +1114,32 @@ internal static class RunCommand
             && DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var parsedLaunchedAt)
                 ? parsedLaunchedAt
                 : now;
+        var totalDeadline = launchedAt + FreshFixContinuationTotalWindow;
         var deadline = launchedAt + FreshFixContinuationWindow;
+        if (deadline > totalDeadline)
+        {
+            deadline = totalDeadline;
+        }
+
         if (deadline <= now)
         {
             return;
         }
 
         continuationStates[executionUnit] = new FreshFixContinuationState(
+            totalDeadline,
             deadline,
+            launchedAt,
             FreshFixContinuationMaxPolls);
     }
 
     private static bool ShouldContinueFreshFixSupervision(
+        CliContext context,
         IDictionary<string, FreshFixContinuationState> continuationStates,
         string executionUnit,
         RunSuperviseResult superviseResult)
     {
+        ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuationStates);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentNullException.ThrowIfNull(superviseResult);
@@ -1137,6 +1158,12 @@ internal static class RunCommand
             continuationStates.Remove(executionUnit);
             return false;
         }
+
+        continuationState = RefreshFreshFixContinuationActivity(
+            continuationStates,
+            executionUnit,
+            continuationState,
+            context);
 
         if (TimestampFactory() >= continuationState.Deadline || continuationState.RemainingPolls <= 0)
         {
@@ -1157,6 +1184,41 @@ internal static class RunCommand
         }
 
         return true;
+    }
+
+    private static FreshFixContinuationState RefreshFreshFixContinuationActivity(
+        IDictionary<string, FreshFixContinuationState> continuationStates,
+        string executionUnit,
+        FreshFixContinuationState continuationState,
+        CliContext? context)
+    {
+        if (context is null || FreshFixContinuationActivityWindow <= TimeSpan.Zero)
+        {
+            return continuationState;
+        }
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        var latestActivityAt = TryResolveCurrentFixSessionLatestActivityAt(context, executionUnit, requestArtifact);
+        if (latestActivityAt is null || latestActivityAt <= continuationState.LastObservedActivityAt)
+        {
+            return continuationState;
+        }
+
+        var extendedDeadline = latestActivityAt.Value + FreshFixContinuationActivityWindow;
+        if (extendedDeadline > continuationState.TotalDeadline)
+        {
+            extendedDeadline = continuationState.TotalDeadline;
+        }
+
+        continuationState = continuationState with
+        {
+            Deadline = extendedDeadline > continuationState.Deadline
+                ? extendedDeadline
+                : continuationState.Deadline,
+            LastObservedActivityAt = latestActivityAt.Value
+        };
+        continuationStates[executionUnit] = continuationState;
+        return continuationState;
     }
 
     private static void SleepFreshFixContinuationPollInterval()
@@ -1301,6 +1363,48 @@ internal static class RunCommand
         return DirectRunFixOutcomeSupport.TryResolveContractGapDetail(providerEvents, executionUnit, out var detail)
             ? detail
             : null;
+    }
+
+    private static DateTimeOffset? TryResolveCurrentFixSessionLatestActivityAt(
+        CliContext context,
+        string executionUnit,
+        DirectRunRequestArtifact? requestArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (requestArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "fix", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
+        if (providerEvents.Count == 0)
+        {
+            return null;
+        }
+
+        providerEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        DateTimeOffset? latestActivityAt = null;
+        foreach (var providerEvent in providerEvents)
+        {
+            if (!DateTimeOffset.TryParse(providerEvent.Timestamp, out var parsedTimestamp))
+            {
+                continue;
+            }
+
+            if (latestActivityAt is null || parsedTimestamp > latestActivityAt.Value)
+            {
+                latestActivityAt = parsedTimestamp;
+            }
+        }
+
+        return latestActivityAt;
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> TryReadDirectRunProviderEvents(CliContext context, string executionUnit)
