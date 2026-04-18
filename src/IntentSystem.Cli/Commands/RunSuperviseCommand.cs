@@ -966,8 +966,7 @@ internal static class RunSuperviseCommand
             return true;
         }
 
-        if (!DirectRunFixOutcomeSupport.HasDeepExecutionProgressSignal(providerEvents)
-            || !RunWorktreeProgressSupport.TryResolveOutOfScopeRuntimeArtifactDiffPaths(
+        if (!RunWorktreeProgressSupport.TryResolveOutOfScopeRuntimeArtifactDiffPaths(
                 gitCommandRunner,
                 worktreePath,
                 out var runtimeArtifactPaths))
@@ -976,7 +975,7 @@ internal static class RunSuperviseCommand
         }
 
         failure = new WorkerSessionFailure(
-            $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode} after bounded deep fix progress but left only out-of-scope runtime-artifact drift under '.intent-cli/**' and no product changes under 'src/**' or 'tests/**'. Changed paths: {RunWorktreeProgressSupport.SummarizePaths(runtimeArtifactPaths)}.",
+            $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode} after bounded fix progress but left only out-of-scope runtime-artifact drift under '.intent-cli/**' and no product changes under 'src/**' or 'tests/**'. Changed paths: {RunWorktreeProgressSupport.SummarizePaths(runtimeArtifactPaths)}.",
             ReportAsNonRetryableFailure: true);
         return true;
     }
