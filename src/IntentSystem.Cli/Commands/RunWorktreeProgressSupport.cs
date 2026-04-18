@@ -13,62 +13,43 @@ internal static class RunWorktreeProgressSupport
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
 
         changedPaths = [];
-        GitCommandResult statusResult;
-        try
-        {
-            statusResult = gitCommandRunner.Run(
+        if (!TryClassifyWorktreeDiffPaths(
+                gitCommandRunner,
                 worktreePath,
-                ["status", "--short", "--untracked-files=all"]);
-        }
-        catch (Exception exception) when (
-            exception is InvalidOperationException
-            or IOException
-            or ArgumentException
-            or DirectoryNotFoundException
-            or System.ComponentModel.Win32Exception)
+                out var meaningfulPaths,
+                out _))
         {
             return false;
         }
 
-        if (statusResult.ExitCode != 0 || string.IsNullOrWhiteSpace(statusResult.StdOut))
+        if (meaningfulPaths.Count == 0)
         {
             return false;
         }
 
-        var paths = new List<string>();
-        foreach (var rawLine in statusResult.StdOut.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            var line = rawLine.TrimEnd();
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
+        changedPaths = meaningfulPaths;
+        return true;
+    }
 
-            var pathText = line.Length > 3 ? line[3..].Trim() : line.Trim();
-            if (string.IsNullOrWhiteSpace(pathText))
-            {
-                continue;
-            }
+    public static bool TryResolveOutOfScopeRuntimeArtifactDiffPaths(
+        IGitCommandRunner gitCommandRunner,
+        string worktreePath,
+        out IReadOnlyList<string> changedPaths)
+    {
+        ArgumentNullException.ThrowIfNull(gitCommandRunner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
 
-            var normalizedPath = pathText.Contains(" -> ", StringComparison.Ordinal)
-                ? pathText[(pathText.LastIndexOf(" -> ", StringComparison.Ordinal) + 4)..].Trim()
-                : pathText;
-            normalizedPath = normalizedPath.Trim().Trim('"').Replace('\\', '/');
-            if (string.IsNullOrWhiteSpace(normalizedPath)
-                || IsIgnoredWorktreeArtifactPath(normalizedPath))
-            {
-                continue;
-            }
-
-            paths.Add(normalizedPath);
-        }
-
-        if (paths.Count == 0)
+        changedPaths = [];
+        if (!TryClassifyWorktreeDiffPaths(
+                gitCommandRunner,
+                worktreePath,
+                out _,
+                out var runtimeArtifactPaths))
         {
             return false;
         }
 
-        changedPaths = paths;
+        changedPaths = runtimeArtifactPaths;
         return true;
     }
 
@@ -108,5 +89,104 @@ internal static class RunWorktreeProgressSupport
             || string.Equals(segment, "obj", StringComparison.Ordinal)
             || string.Equals(segment, "TestResults", StringComparison.Ordinal)
             || string.Equals(segment, ".vs", StringComparison.Ordinal));
+    }
+
+    private static bool TryClassifyWorktreeDiffPaths(
+        IGitCommandRunner gitCommandRunner,
+        string worktreePath,
+        out IReadOnlyList<string> meaningfulPaths,
+        out IReadOnlyList<string> runtimeArtifactPaths)
+    {
+        meaningfulPaths = [];
+        runtimeArtifactPaths = [];
+
+        GitCommandResult statusResult;
+        try
+        {
+            statusResult = gitCommandRunner.Run(
+                worktreePath,
+                ["status", "--short", "--untracked-files=all"]);
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+            or IOException
+            or ArgumentException
+            or DirectoryNotFoundException
+            or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+
+        if (statusResult.ExitCode != 0 || string.IsNullOrWhiteSpace(statusResult.StdOut))
+        {
+            return false;
+        }
+
+        var meaningful = new List<string>();
+        var runtimeArtifacts = new List<string>();
+        foreach (var rawLine in statusResult.StdOut.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var normalizedPath = TryNormalizeStatusPath(rawLine);
+            if (string.IsNullOrWhiteSpace(normalizedPath))
+            {
+                continue;
+            }
+
+            if (IsOutOfScopeRuntimeArtifactPath(normalizedPath))
+            {
+                runtimeArtifacts.Add(normalizedPath);
+                continue;
+            }
+
+            if (IsIgnoredWorktreeArtifactPath(normalizedPath))
+            {
+                continue;
+            }
+
+            meaningful.Add(normalizedPath);
+        }
+
+        if (meaningful.Count > 0)
+        {
+            meaningfulPaths = meaningful;
+            return true;
+        }
+
+        if (runtimeArtifacts.Count > 0)
+        {
+            runtimeArtifactPaths = runtimeArtifacts;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string? TryNormalizeStatusPath(string rawLine)
+    {
+        var line = rawLine.TrimEnd();
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return null;
+        }
+
+        var pathText = line.Length > 3 ? line[3..].Trim() : line.Trim();
+        if (string.IsNullOrWhiteSpace(pathText))
+        {
+            return null;
+        }
+
+        var normalizedPath = pathText.Contains(" -> ", StringComparison.Ordinal)
+            ? pathText[(pathText.LastIndexOf(" -> ", StringComparison.Ordinal) + 4)..].Trim()
+            : pathText;
+        normalizedPath = normalizedPath.Trim().Trim('"').Replace('\\', '/');
+        return string.IsNullOrWhiteSpace(normalizedPath) ? null : normalizedPath;
+    }
+
+    private static bool IsOutOfScopeRuntimeArtifactPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        return path.Replace('\\', '/').TrimStart('/')
+            .StartsWith(".intent-cli/", StringComparison.Ordinal);
     }
 }
