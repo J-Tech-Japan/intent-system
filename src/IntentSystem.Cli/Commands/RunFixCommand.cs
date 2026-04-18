@@ -107,6 +107,13 @@ internal static class RunFixCommand
             throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
         }
 
+        PrepareWorktreeRuntimeContext(
+            context,
+            queueItem,
+            packetPath,
+            reviewContextPath,
+            worktreePath);
+
         ChildWorkTargetGuard.EnsureTargetAllowed(
             executionUnit,
             context.RepoRoot,
@@ -165,6 +172,77 @@ internal static class RunFixCommand
             ArtifactPath = relativeArtifactPath,
             DirectRun = directRun
         };
+    }
+
+    private static void PrepareWorktreeRuntimeContext(
+        CliContext context,
+        QueueItem queueItem,
+        string packetPath,
+        string reviewContextPath,
+        string worktreePath)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueItem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(packetPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reviewContextPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+
+        SyncCurrentIssueArtifactsToWorktree(queueItem.ExecutionUnit, packetPath, worktreePath);
+        SyncCurrentIssueArtifactsToWorktree(queueItem.ExecutionUnit, reviewContextPath, worktreePath);
+        RemoveStaleWorktreeRootResultArtifact(context, queueItem.ExecutionUnit, worktreePath);
+    }
+
+    private static void SyncCurrentIssueArtifactsToWorktree(
+        string executionUnit,
+        string sourceArtifactPath,
+        string worktreePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceArtifactPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+
+        var sourceIssueDirectory = Path.GetDirectoryName(sourceArtifactPath)
+            ?? throw new InvalidOperationException("Issue artifact path did not contain a directory.");
+        if (!Directory.Exists(sourceIssueDirectory))
+        {
+            throw new InvalidOperationException($"Issue artifact directory was not found at {sourceIssueDirectory}");
+        }
+
+        var targetIssueDirectory = Path.Combine(worktreePath, ".intent-cli", "issues", executionUnit);
+        Directory.CreateDirectory(targetIssueDirectory);
+
+        foreach (var sourceFilePath in Directory.GetFiles(sourceIssueDirectory))
+        {
+            var targetFilePath = Path.Combine(targetIssueDirectory, Path.GetFileName(sourceFilePath));
+            File.Copy(sourceFilePath, targetFilePath, overwrite: true);
+        }
+    }
+
+    private static void RemoveStaleWorktreeRootResultArtifact(
+        CliContext context,
+        string executionUnit,
+        string worktreePath)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+
+        var worktreeRunResultPath = Path.Combine(
+            worktreePath,
+            RunRootResultArtifactPathResolver.Resolve(context).Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(worktreeRunResultPath))
+        {
+            return;
+        }
+
+        var artifact = RunRootResultArtifactJson.Deserialize(File.ReadAllText(worktreeRunResultPath));
+        if (string.IsNullOrWhiteSpace(artifact.ExecutionUnit)
+            || string.Equals(artifact.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        File.Delete(worktreeRunResultPath);
     }
 
     private static RunFixRequest BuildRequest(
