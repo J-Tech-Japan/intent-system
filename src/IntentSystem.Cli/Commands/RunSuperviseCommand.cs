@@ -946,12 +946,13 @@ internal static class RunSuperviseCommand
 
         failure = null!;
         if (!TryFindFailingBackendExitCode(providerEvents, out var exitCode)
-            || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(providerEvents, executionUnit, out _)
             || !DirectRunFixOutcomeSupport.HasBoundedProgressSignal(providerEvents)
             )
         {
             return false;
         }
+
+        var hasExplicitContractGapSignal = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
 
         var gitCommandRunner = GitCommandRunnerFactory();
         if (RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
@@ -971,6 +972,11 @@ internal static class RunSuperviseCommand
                 worktreePath,
                 out var runtimeArtifactPaths))
         {
+            if (hasExplicitContractGapSignal)
+            {
+                return false;
+            }
+
             return false;
         }
 
