@@ -252,6 +252,28 @@ internal static class RunCommand
                         }
 
                         var fixRunStatus = fixResultArtifact?.RunStatus;
+                        if (TryReconcileBlockedFixSupervisionState(
+                                context,
+                                actions,
+                                inProgressItem,
+                                out var blockedFixResult))
+                        {
+                            freshFixContinuationStates.Remove(inProgressItem.ExecutionUnit);
+                            return blockedFixResult;
+                        }
+
+                        if (TryReconcileStaleFailedFixResultState(
+                                context,
+                                actions,
+                                inProgressItem,
+                                fixRequestArtifact,
+                                fixResultArtifact,
+                                out var staleFailedFixResult))
+                        {
+                            freshFixContinuationStates.Remove(inProgressItem.ExecutionUnit);
+                            return staleFailedFixResult;
+                        }
+
                         var currentFixSessionContractGap = TryResolveCurrentFixSessionContractGap(
                             context,
                             inProgressItem.ExecutionUnit,
@@ -599,6 +621,128 @@ internal static class RunCommand
             blockedItem.ExecutionUnit,
             session.LastInterruptionReason);
         return true;
+    }
+
+    private static bool TryReconcileBlockedFixSupervisionState(
+        CliContext context,
+        IReadOnlyList<RunCommandAction> actions,
+        QueueItem fixingItem,
+        out RunCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(actions);
+        ArgumentNullException.ThrowIfNull(fixingItem);
+
+        result = null!;
+        var latestFixRequestedAt = TryResolveLatestFixRequestedTimestamp(context, fixingItem.ExecutionUnit);
+        if (!TryResolveBlockedFixSupervisionSession(
+                context,
+                fixingItem.ExecutionUnit,
+                latestFixRequestedAt,
+                out var session))
+        {
+            return false;
+        }
+
+        var interruptionReason = string.IsNullOrWhiteSpace(session.LastInterruptionReason)
+            ? $"Supervisor blocked '{fixingItem.ExecutionUnit}' after non-retryable failure."
+            : session.LastInterruptionReason;
+        PersistBlockedFixQueueState(context, fixingItem, interruptionReason);
+        AppendRunEvent(
+            context.GetRunLogPath(),
+            new RunEvent
+            {
+                Ts = TimestampFactory(),
+                ExecutionUnit = fixingItem.ExecutionUnit,
+                Event = "blocked",
+                By = "intent-cli",
+                LinkedPr = session.LinkedPr,
+                CommentRef = session.CommentRef,
+                Reason = interruptionReason
+            });
+
+        result = CreateStopResult(
+            NonRetryableFailureStopReason,
+            actions,
+            fixingItem.ExecutionUnit,
+            interruptionReason);
+        return true;
+    }
+
+    private static bool TryReconcileStaleFailedFixResultState(
+        CliContext context,
+        IReadOnlyList<RunCommandAction> actions,
+        QueueItem fixingItem,
+        DirectRunRequestArtifact? requestArtifact,
+        DirectRunResultArtifact? resultArtifact,
+        out RunCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(actions);
+        ArgumentNullException.ThrowIfNull(fixingItem);
+
+        result = null!;
+        if (requestArtifact is null
+            || resultArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "fix", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.RunStatus, "failed", StringComparison.Ordinal)
+            || !MatchesCurrentDirectRunRequestBoundary(requestArtifact, resultArtifact)
+            || !DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var launchedAt)
+            || !TryReadBlockedFixSupervisionSession(context, fixingItem.ExecutionUnit, out var session)
+            || session.UpdatedAt >= launchedAt)
+        {
+            return false;
+        }
+
+        var failureReason = $"Fix direct run failed for '{fixingItem.ExecutionUnit}'.";
+        PersistBlockedFixQueueState(context, fixingItem, failureReason);
+        AppendRunEvent(
+            context.GetRunLogPath(),
+            new RunEvent
+            {
+                Ts = TimestampFactory(),
+                ExecutionUnit = fixingItem.ExecutionUnit,
+                Event = "blocked",
+                By = "intent-cli",
+                LinkedPr = session.LinkedPr,
+                CommentRef = session.CommentRef,
+                Reason = failureReason
+            });
+
+        result = CreateStopResult(
+            NonRetryableFailureStopReason,
+            actions,
+            fixingItem.ExecutionUnit,
+            failureReason);
+        return true;
+    }
+
+    private static void PersistBlockedFixQueueState(
+        CliContext context,
+        QueueItem queueItem,
+        string interruptionReason)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueItem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(interruptionReason);
+
+        var queueState = LoadQueueStateOrThrow(context);
+        var queueStatePath = context.GetQueueStatePath();
+        var now = TimestampFactory();
+        var updatedState = queueState with
+        {
+            UpdatedAt = now,
+            Items = queueState.Items.Select(item =>
+                string.Equals(item.ExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal)
+                    ? item with
+                    {
+                        State = QueueItemState.Blocked,
+                        BlockedBy = [interruptionReason]
+                    }
+                    : item).ToArray()
+        };
+
+        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
     }
 
     private static bool TryResolvePostFixWorktreeProgressDecisionSession(
@@ -1237,6 +1381,15 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
+        if (TryResolveBlockedFixSupervisionSession(
+                context,
+                executionUnit,
+                latestFixRequestedAt,
+                out _))
+        {
+            return true;
+        }
+
         var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
             context.Config.Supervision.ArtifactRoot,
             executionUnit);
@@ -1250,10 +1403,62 @@ internal static class RunCommand
 
         var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
         if (session.WorkerEntry == RunSupervisionWorkerEntry.Fix
-            && session.Status == RunSupervisionSessionStatus.Blocked
-            && latestFixRequestedAt is not null
-            && latestFixRequestedAt > session.UpdatedAt)
+            && session.Status == RunSupervisionSessionStatus.Blocked)
         {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryReadBlockedFixSupervisionSession(
+        CliContext context,
+        string executionUnit,
+        out RunSupervisionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        session = null!;
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            executionUnit);
+        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(sessionArtifactPath))
+        {
+            return false;
+        }
+
+        session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
+        if (session.WorkerEntry != RunSupervisionWorkerEntry.Fix
+            || session.Status != RunSupervisionSessionStatus.Blocked)
+        {
+            session = null!;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryResolveBlockedFixSupervisionSession(
+        CliContext context,
+        string executionUnit,
+        DateTimeOffset? latestFixRequestedAt,
+        out RunSupervisionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (!TryReadBlockedFixSupervisionSession(context, executionUnit, out session))
+        {
+            return false;
+        }
+
+        if (latestFixRequestedAt is not null && latestFixRequestedAt > session.UpdatedAt)
+        {
+            session = null!;
             return false;
         }
 

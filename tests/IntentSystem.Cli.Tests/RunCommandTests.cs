@@ -5819,6 +5819,125 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenFixingItemWithStaleBlockedSupervisionAndTerminalFailedFixResult_ReconcilesGenericFailureWithoutReusingPlanningSentence()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G226"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Fixing))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            runLogPath,
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"G226","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
+            {"ts":"2026-04-10T10:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"contract mismatch"}
+            {"ts":"2026-04-10T11:55:00Z","execution_unit":"G226","event":"blocked","by":"intent-cli","reason":"backend exit code 1"}
+            {"ts":"2026-04-10T12:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"retry after preserved failure"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            execution_unit: "G226"
+
+            implementation_issue:
+              issue_title: "[G226] Root Run Orchestration Command"
+              goal: "Coordinate the root run loop."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/G226/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.comment.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G226.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G226.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "G226",
+                WorkerEntry = RunSupervisionWorkerEntry.Fix,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "G226"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-226-g226",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2",
+                HandoffArtifactRef = ".intent-cli/fix/G226.request.md",
+                RetryCount = 2,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastInterruptionReason = "Worker session 'pid:2750' for 'G226' exited with backend exit code 1."
+            }));
+        WriteDirectRunRequest(
+            repoRoot,
+            "G226",
+            "fix",
+            "pid:29569",
+            provider: "Codex",
+            launchedAt: "2026-04-10T12:20:00.0000000+00:00");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "fix",
+            "failed",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:01:00.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = "pid:29569",
+                    Kind = "assistant-message",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        role = "assistant",
+                        content = "I’m opening the request artifact and the review context to decide whether this is a repair or a contract-gap refusal."
+                    })
+                }
+            ],
+            sessionId: "pid:29569",
+            provider: "Codex");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("non-retryable-failure", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("Fix direct run failed for 'G226'.", result.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("I’m opening the request artifact", result.Detail, StringComparison.Ordinal);
+
+        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
+        Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+        Assert.Contains("Fix direct run failed for 'G226'.", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        Assert.Equal("blocked", runEvents[^1].Event);
+        var lastRunEventReason = Assert.IsType<string>(runEvents[^1].Reason);
+        Assert.Contains("Fix direct run failed for 'G226'.", lastRunEventReason, StringComparison.Ordinal);
+        Assert.DoesNotContain("I’m opening the request artifact", lastRunEventReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExecuteCore_GivenClarifyBlockedItem_StopsWithClarificationRequired()
     {
         using var tempDirectory = new TemporaryDirectory();
