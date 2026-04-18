@@ -29,13 +29,31 @@ public sealed class GhReviewAcceptClient : IReviewAcceptClient
                 "POST"
             ]);
 
-        if (result.ExitCode != 0)
+        if (result.ExitCode == 0)
         {
-            var error = string.IsNullOrWhiteSpace(result.StdErr)
-                ? "gh api pull request ready_for_review failed."
-                : result.StdErr.Trim();
-            throw new InvalidOperationException(error);
+            return;
         }
+
+        if (IsNotFound(result.StdErr))
+        {
+            var fallbackResult = commandRunner.Run(
+                [
+                    "pr",
+                    "ready",
+                    pullRequest.PullNumber.ToString(),
+                    "--repo",
+                    $"{pullRequest.Owner}/{pullRequest.Repo}"
+                ]);
+
+            if (fallbackResult.ExitCode == 0)
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(GetErrorMessage(fallbackResult.StdErr, "gh pr ready failed."));
+        }
+
+        throw new InvalidOperationException(GetErrorMessage(result.StdErr, "gh api pull request ready_for_review failed."));
     }
 
     public string MergePullRequest(string linkedPr)
@@ -94,5 +112,18 @@ public sealed class GhReviewAcceptClient : IReviewAcceptClient
                 : result.StdErr.Trim();
             throw new InvalidOperationException(error);
         }
+    }
+
+    private static bool IsNotFound(string stdErr)
+    {
+        return !string.IsNullOrWhiteSpace(stdErr)
+            && stdErr.Contains("HTTP 404", StringComparison.Ordinal);
+    }
+
+    private static string GetErrorMessage(string stdErr, string fallbackMessage)
+    {
+        return string.IsNullOrWhiteSpace(stdErr)
+            ? fallbackMessage
+            : stdErr.Trim();
     }
 }
