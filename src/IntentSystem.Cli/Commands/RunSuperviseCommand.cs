@@ -946,20 +946,43 @@ internal static class RunSuperviseCommand
 
         failure = null!;
         if (!TryFindFailingBackendExitCode(providerEvents, out var exitCode)
-            || DirectRunFixOutcomeSupport.TryResolveContractGapDetail(providerEvents, executionUnit, out _)
             || !DirectRunFixOutcomeSupport.HasBoundedProgressSignal(providerEvents)
-            || !RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
-                GitCommandRunnerFactory(),
-                worktreePath,
-                out var changedPaths))
+            )
         {
             return false;
         }
 
+        var hasExplicitContractGapSignal = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
+
+        var gitCommandRunner = GitCommandRunnerFactory();
+        if (RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                gitCommandRunner,
+                worktreePath,
+                out var changedPaths))
+        {
+            failure = new WorkerSessionFailure(
+                $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode} after bounded fix progress and left meaningful execution-unit worktree changes. Changed paths: {RunWorktreeProgressSupport.SummarizePaths(changedPaths)}.",
+                ReportAsNonRetryableFailure: true,
+                RequiresPostFixWorktreeProgressDecision: true);
+            return true;
+        }
+
+        if (!RunWorktreeProgressSupport.TryResolveOutOfScopeRuntimeArtifactDiffPaths(
+                gitCommandRunner,
+                worktreePath,
+                out var runtimeArtifactPaths))
+        {
+            if (hasExplicitContractGapSignal)
+            {
+                return false;
+            }
+
+            return false;
+        }
+
         failure = new WorkerSessionFailure(
-            $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode} after bounded fix progress and left meaningful execution-unit worktree changes. Changed paths: {RunWorktreeProgressSupport.SummarizePaths(changedPaths)}.",
-            ReportAsNonRetryableFailure: true,
-            RequiresPostFixWorktreeProgressDecision: true);
+            $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode} after bounded fix progress but left only out-of-scope runtime-artifact drift under '.intent-cli/**' and no product changes under 'src/**' or 'tests/**'. Changed paths: {RunWorktreeProgressSupport.SummarizePaths(runtimeArtifactPaths)}.",
+            ReportAsNonRetryableFailure: true);
         return true;
     }
 

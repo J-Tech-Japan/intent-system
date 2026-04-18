@@ -1507,6 +1507,226 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenDeadFixWorkerSessionWithOnlyOutOfScopeRuntimeArtifactDiff_BlocksWithoutConsumingRetryBudget()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        WriteDeadFixDirectRunArtifacts(repoRoot, "pid:999999");
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                CreateRuntimeArtifactOnlyFixProgressEvents("G25", "pid:999999")
+                    .Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                """
+                 M .intent-cli/intake/toy-calc.concept.yaml
+                 M .intent-cli/intake/toy-calc.execution.md
+                 M .intent-cli/intake/toy-calc.patch.md
+                """);
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("out-of-scope runtime-artifact drift", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains(".intent-cli/intake/toy-calc.concept.yaml", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("Fix retry budget exhausted", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.False(session.RequiresPostFixWorktreeProgressDecision);
+            Assert.Contains("out-of-scope runtime-artifact drift", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.result.json")));
+            Assert.Equal("failed", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("out-of-scope runtime-artifact drift", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenDeadFixWorkerSessionWithToyCalcReplayShapeAndOnlyRuntimeArtifactDiff_BlocksWithoutConsumingRetryBudget()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        WriteDeadFixDirectRunArtifacts(repoRoot, "pid:999999");
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                CreateToyCalcReplayRuntimeArtifactOnlyFixProgressEvents("G25", "pid:999999")
+                    .Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                """
+                 M .intent-cli/intake/toy-calc.concept.yaml
+                 M .intent-cli/intake/toy-calc.execution.md
+                 M .intent-cli/intake/toy-calc.patch.md
+                """);
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("out-of-scope runtime-artifact drift", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains(".intent-cli/intake/toy-calc.concept.yaml", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.Contains("out-of-scope runtime-artifact drift", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("out-of-scope runtime-artifact drift", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenDeadFixWorkerSessionWithToyCalcMixedReplayShapeAndOnlyRuntimeArtifactDiff_BlocksWithoutConsumingRetryBudget()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        WriteDeadFixDirectRunArtifacts(repoRoot, "pid:999999");
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                CreateToyCalcMixedReplayRuntimeArtifactOnlyFixProgressEvents("G25", "pid:999999")
+                    .Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                """
+                 M .intent-cli/intake/toy-calc.concept.yaml
+                 M .intent-cli/intake/toy-calc.execution.md
+                 M .intent-cli/intake/toy-calc.patch.md
+                """);
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("out-of-scope runtime-artifact drift", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains(".intent-cli/intake/toy-calc.concept.yaml", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("backend exit code 1.", selectedItem.BlockedBy[0], StringComparison.OrdinalIgnoreCase);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.Contains("out-of-scope runtime-artifact drift", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("out-of-scope runtime-artifact drift", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenNonRetryableAutoResumeFailure_BlocksSelectedItemAndAppendsTerminalEvents()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -2236,6 +2456,16 @@ public sealed class RunSuperviseCommandTests
         [
             new DirectRunProviderEvent
             {
+                Timestamp = "2026-04-08T10:20:00.0500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/G25.request.md' succeeded in 0ms")
+            },
+            new DirectRunProviderEvent
+            {
                 Timestamp = "2026-04-08T10:20:00.1000000+00:00",
                 ExecutionUnit = executionUnit,
                 Provider = "Claude",
@@ -2259,6 +2489,369 @@ public sealed class RunSuperviseCommandTests
                 Timestamp = "2026-04-08T10:20:01.0000000+00:00",
                 ExecutionUnit = executionUnit,
                 Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    type = "backend-exit",
+                    exit_code = 1
+                })
+            }
+        ];
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateRuntimeArtifactOnlyFixProgressEvents(string executionUnit, string sessionId)
+    {
+        return
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.1000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' .intent-cli/fix/G25.request.md' succeeded in 0ms")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.2000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/README.md' succeeded in 0ms")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.3000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Calculator.cs' succeeded in 0ms")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.4000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'dotnet test' succeeded in 0ms")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.5000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("Passed!  - Failed:     0, Passed:     9, Skipped:     0, Total:     9")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:01.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    type = "backend-exit",
+                    exit_code = 1
+                })
+            }
+        ];
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateToyCalcReplayRuntimeArtifactOnlyFixProgressEvents(string executionUnit, string sessionId)
+    {
+        return
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2369770+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("## Execution Contract")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2370090+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("- Continue beyond initial repository inspection; do not stop after a single listing/read-only command.")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2427050+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2428840+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("/bin/zsh -lc \"pwd && rg --files -g '!node_modules*' -g '!dist*' -g '!build*' | sed -n '1,220p'\" in /repo/.intent-cli/worktrees/G25")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2429790+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(" succeeded in 0ms:")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2431360+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("src/ToyCalc/Program.cs")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2431740+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("src/ToyCalc/Calculator.cs")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2432870+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("intents/toy-calc/clarifications/open.md")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2434640+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("tests/ToyCalc.Tests/CalculatorTests.cs")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:29:47.2463570+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("2026-04-17T05:29:47.246315Z  WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt: prompt must be at most 128 characters")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-17T05:30:36.3739630+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    type = "backend-exit",
+                    exit_code = 1
+                })
+            }
+        ];
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateToyCalcMixedReplayRuntimeArtifactOnlyFixProgressEvents(string executionUnit, string sessionId)
+    {
+        return
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:18.4211970+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("/bin/zsh -lc \"sed -n '1,220p' '/repo/.intent-cli/fix/G25.request.md'\" in /repo/.intent-cli/worktrees/G25")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:18.4212630+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(" succeeded in 0ms:")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:18.4213240+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("# Repair Worker Handoff")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:25.9131420+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:25.9134060+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("/bin/zsh -lc \"sed -n '1,220p' intents/toy-calc/specs/01-cli-surface.md\" in /repo/.intent-cli/worktrees/G25")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:25.9135080+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(" exited 1 in 0ms:")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:25.9135740+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("sed: intents/toy-calc/specs/01-cli-surface.md: No such file or directory")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:25.9167470+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:25.9168690+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("/bin/zsh -lc \"sed -n '1,220p' src/ToyCalc/Program.cs && printf '\\n---\\n' && sed -n '1,220p' src/ToyCalc/CommandLine.cs && printf '\\n---\\n' && sed -n '1,220p' src/ToyCalc/Calculator.cs\" in /repo/.intent-cli/worktrees/G25")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:25.9169560+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:25.9170390+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("/bin/zsh -lc \"sed -n '1,220p' tests/ToyCalc.Tests/CalculatorTests.cs && printf '\\n---\\n' && sed -n '1,220p' tests/ToyCalc.Tests/ToyCalc.Tests.csproj && printf '\\n---\\n' && sed -n '1,220p' src/ToyCalc/ToyCalc.csproj\" in /repo/.intent-cli/worktrees/G25")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:25.9171110+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(" succeeded in 0ms:")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:35.4885360+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("I've found a likely contract-gap: the canonical spec file referenced by the artifact is not present in this worktree, but the actual code currently uses `int` parsing and arithmetic already, which matches the review comment's requested fix. I'm running the test suite now to distinguish \"already fixed\" from \"needs a small local repair.\"")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:36.0546370+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:36.0548610+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("/bin/zsh -lc 'dotnet test ToyCalc.sln' in /repo/.intent-cli/worktrees/G25")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-16T20:43:40.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
                 EntryKind = "fix",
                 SessionId = sessionId,
                 Kind = "provider-event",
