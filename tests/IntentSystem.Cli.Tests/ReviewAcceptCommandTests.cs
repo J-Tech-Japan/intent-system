@@ -271,6 +271,130 @@ public sealed class ReviewAcceptCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenDraftLinkedPrAndReadyApi404_FallsBackToPrReadyAndCompletesCloseout()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "child-repo"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G12", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-03T10:00:00Z","execution_unit":"G12","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/3"}
+            {"ts":"2026-04-03T10:10:00Z","execution_unit":"G12","event":"review-started","by":"intent-cli","linked_pr":"https://github.com/tomohisa/toy-calc-sample/pull/4"}
+            """ + Environment.NewLine);
+        using var writer = new StringWriter();
+        var reviewRunner = new ScriptedReviewCommandRunner(
+        [
+            new ExpectedReviewCommand(
+                [
+                    "api",
+                    "repos/tomohisa/toy-calc-sample/pulls/4/merge",
+                    "--method",
+                    "PUT",
+                    "-f",
+                    "merge_method=merge"
+                ],
+                new ReviewCommandResult
+                {
+                    ExitCode = 1,
+                    StdOut = string.Empty,
+                    StdErr = "gh: Pull Request is still a draft (HTTP 405)"
+                }),
+            new ExpectedReviewCommand(
+                [
+                    "api",
+                    "repos/tomohisa/toy-calc-sample/pulls/4/ready_for_review",
+                    "--method",
+                    "POST"
+                ],
+                new ReviewCommandResult
+                {
+                    ExitCode = 1,
+                    StdOut = string.Empty,
+                    StdErr = "gh: Not Found (HTTP 404)"
+                }),
+            new ExpectedReviewCommand(
+                [
+                    "pr",
+                    "ready",
+                    "4",
+                    "--repo",
+                    "tomohisa/toy-calc-sample"
+                ],
+                new ReviewCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                }),
+            new ExpectedReviewCommand(
+                [
+                    "api",
+                    "repos/tomohisa/toy-calc-sample/pulls/4/merge",
+                    "--method",
+                    "PUT",
+                    "-f",
+                    "merge_method=merge"
+                ],
+                new ReviewCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = """{"sha":"abc123"}""",
+                    StdErr = string.Empty
+                }),
+            new ExpectedReviewCommand(
+                [
+                    "api",
+                    "repos/tomohisa/toy-calc-sample/issues/3",
+                    "--method",
+                    "PATCH",
+                    "-f",
+                    "state=closed"
+                ],
+                new ReviewCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = """{"state":"closed"}""",
+                    StdErr = string.Empty
+                })
+        ]);
+        var gitRunner = new FakeGitRunner(headCommit: "abc123");
+
+        var originalClientFactory = ReviewAcceptCommand.AcceptClientFactory;
+        var originalGitFactory = ReviewAcceptCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = ReviewAcceptCommand.TimestampFactory;
+
+        try
+        {
+            ReviewAcceptCommand.AcceptClientFactory = () => new GhReviewAcceptClient(reviewRunner);
+            ReviewAcceptCommand.GitCommandRunnerFactory = () => gitRunner;
+            ReviewAcceptCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T01:02:03Z");
+
+            var exitCode = ReviewAcceptCommand.Execute(CreateContext(repoRoot), ["G12"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Review accepted for G12", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal(5, reviewRunner.Calls.Count);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Completed, queueState.Items.Single(item => item.ExecutionUnit == "G12").State);
+        }
+        finally
+        {
+            ReviewAcceptCommand.AcceptClientFactory = originalClientFactory;
+            ReviewAcceptCommand.GitCommandRunnerFactory = originalGitFactory;
+            ReviewAcceptCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -443,6 +567,25 @@ public sealed class ReviewAcceptCommandTests
                     : string.Empty,
                 StdErr = string.Empty
             };
+        }
+    }
+
+    private sealed record ExpectedReviewCommand(IReadOnlyList<string> Arguments, ReviewCommandResult Result);
+
+    private sealed class ScriptedReviewCommandRunner(IReadOnlyList<ExpectedReviewCommand> expectedCalls) : IReviewCommandRunner
+    {
+        private readonly Queue<ExpectedReviewCommand> expectedCalls = new(expectedCalls);
+
+        public List<IReadOnlyList<string>> Calls { get; } = [];
+
+        public ReviewCommandResult Run(IReadOnlyList<string> arguments)
+        {
+            Calls.Add(arguments.ToArray());
+
+            Assert.NotEmpty(expectedCalls);
+            var expected = expectedCalls.Dequeue();
+            Assert.Equal(expected.Arguments, arguments);
+            return expected.Result;
         }
     }
 
