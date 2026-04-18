@@ -952,7 +952,7 @@ internal static class DirectRunCommandSupport
             currentProviderEvents = [.. currentProviderEvents, fixContractGapEvent];
         }
 
-        var runStatus = ResolveRunStatus(currentProviderEvents);
+        var runStatus = ResolveRunStatus(entryKind, currentProviderEvents);
         if (string.Equals(entryKind, "review", StringComparison.Ordinal))
         {
             var capturedMessagePath = Path.GetFullPath(Path.Combine(
@@ -1159,8 +1159,14 @@ internal static class DirectRunCommandSupport
         return fallbackModel;
     }
 
-    private static string ResolveRunStatus(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    private static string ResolveRunStatus(string entryKind, IReadOnlyList<DirectRunProviderEvent> providerEvents)
     {
+        if (string.Equals(entryKind, "fix", StringComparison.Ordinal)
+            && DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents))
+        {
+            return "failed";
+        }
+
         for (var index = providerEvents.Count - 1; index >= 0; index--)
         {
             var payload = providerEvents[index].Payload;

@@ -5,6 +5,7 @@ namespace IntentSystem.Cli.Commands;
 internal static class DirectRunFixOutcomeSupport
 {
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
+    private const string ExplicitContractGapRefusalReason = "provider-explicit-contract-gap-refusal";
     private const string InspectionOnlyExitReason = "fix-session-ended-after-initial-inspection";
     private const string ProviderBackendEndedBeforeSpecSourceReadReason = "fix-session-ended-before-spec-source-test-read";
     private const string MissingTerminalCaptureAfterRequestReadReason = "fix-session-terminal-boundary-missing-after-request-reread";
@@ -63,8 +64,24 @@ internal static class DirectRunFixOutcomeSupport
         ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
 
         if (!string.Equals(entryKind, "fix", StringComparison.Ordinal)
-            || HasExplicitContractGap(providerEvents)
-            || !TryResolveCanonicalFailureDetail(
+            || HasCanonicalContractGap(providerEvents))
+        {
+            return null;
+        }
+
+        if (TryCreateExplicitContractGapEvent(
+                providerEvents,
+                timestamp,
+                executionUnit,
+                entryKind,
+                provider,
+                providerSessionId,
+                out var explicitContractGapEvent))
+        {
+            return explicitContractGapEvent;
+        }
+
+        if (!TryResolveCanonicalFailureDetail(
                 providerEvents,
                 executionUnit,
                 providerSessionAlive,
@@ -456,10 +473,76 @@ internal static class DirectRunFixOutcomeSupport
         return true;
     }
 
+    private static bool TryCreateExplicitContractGapEvent(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        DateTimeOffset timestamp,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        out DirectRunProviderEvent? providerEvent)
+    {
+        providerEvent = null;
+        if (!TryResolveExplicitContractGapDetail(providerEvents, executionUnit, out var detail))
+        {
+            return false;
+        }
+
+        providerEvent = new DirectRunProviderEvent
+        {
+            Timestamp = timestamp.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
+            SessionId = providerSessionId,
+            Kind = "provider-event",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                type = "contract-gap",
+                stop_reason = DeterministicContractGapStopReason,
+                reason = ExplicitContractGapRefusalReason,
+                detail,
+                run_status = "failed"
+            })
+        };
+
+        return true;
+    }
+
     private static bool HasExplicitContractGap(IReadOnlyList<DirectRunProviderEvent> providerEvents)
     {
         return providerEvents.Any(providerEvent =>
             TryResolveExplicitContractGapDetail(providerEvent.Payload, providerEvent.ExecutionUnit ?? "fix", out _));
+    }
+
+    private static bool HasCanonicalContractGap(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        return providerEvents.Any(providerEvent =>
+            providerEvent.Payload.ValueKind == JsonValueKind.Object
+            && ((TryReadString(providerEvent.Payload, "stop_reason", out var stopReason)
+                    && string.Equals(stopReason, DeterministicContractGapStopReason, StringComparison.Ordinal))
+                || (TryReadString(providerEvent.Payload, "type", out var type)
+                    && string.Equals(type, "contract-gap", StringComparison.Ordinal))));
+    }
+
+    private static bool TryResolveExplicitContractGapDetail(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        out string detail)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            if (TryResolveExplicitContractGapDetail(providerEvents[index].Payload, executionUnit, out detail))
+            {
+                return true;
+            }
+        }
+
+        detail = string.Empty;
+        return false;
     }
 
     private static bool TryResolveExplicitContractGapDetail(
@@ -468,6 +551,13 @@ internal static class DirectRunFixOutcomeSupport
         out string detail)
     {
         detail = string.Empty;
+        if (payload.ValueKind == JsonValueKind.String
+            && IsExplicitContractGapRefusalText(payload.GetString(), out var explicitDetail))
+        {
+            detail = explicitDetail;
+            return true;
+        }
+
         if (payload.ValueKind != JsonValueKind.Object)
         {
             return false;
@@ -492,6 +582,28 @@ internal static class DirectRunFixOutcomeSupport
                 detail = $"Fix direct run for '{executionUnit}' reported a deterministic contract gap.";
             }
 
+            return true;
+        }
+        return false;
+    }
+
+    private static bool IsExplicitContractGapRefusalText(string? value, out string detail)
+    {
+        detail = string.Empty;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Trim();
+        var lower = normalized.ToLowerInvariant();
+        if (lower.Contains("contract-gap refusal", StringComparison.Ordinal)
+            || lower.Contains("contract gap refusal", StringComparison.Ordinal)
+            || lower.Contains("stopped with a contract-gap explanation", StringComparison.Ordinal)
+            || lower.Contains("stopped with a contract gap explanation", StringComparison.Ordinal)
+            || lower.Contains("reported a deterministic contract gap", StringComparison.Ordinal))
+        {
+            detail = normalized;
             return true;
         }
 
