@@ -290,7 +290,7 @@ internal static class RunCommand
                         return CreateMonitoringStopResult(actions, inProgressItem.ExecutionUnit, superviseResult);
                     }
 
-                    if (!ArtifactExists(context, ReviewArtifactPathResolver.Resolve(inProgressItem.ExecutionUnit)))
+                    if (ShouldLaunchReviewRun(context, inProgressItem.ExecutionUnit))
                     {
                         ExecuteAction(
                             context,
@@ -1246,6 +1246,26 @@ internal static class RunCommand
         return null;
     }
 
+    private static bool ShouldLaunchReviewRun(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (!ArtifactExists(context, ReviewArtifactPathResolver.Resolve(executionUnit)))
+        {
+            return true;
+        }
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        if (requestArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "review", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return IsReviewRequestBoundaryStale(context, executionUnit, requestArtifact);
+    }
+
     private static RunReviewDecision ResolveReviewDecision(CliContext context, string executionUnit)
     {
         var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
@@ -1473,6 +1493,54 @@ internal static class RunCommand
             Kind = RunReviewDecisionKind.Waiting,
             Detail = $"Review direct run for '{executionUnit}' is '{runStatus}'."
         };
+    }
+
+    private static DateTimeOffset? TryResolveLatestReviewReentryTimestamp(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            return null;
+        }
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        for (var index = runEvents.Count - 1; index >= 0; index--)
+        {
+            var runEvent = runEvents[index];
+            if (!string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (string.Equals(runEvent.Event, "rereview", StringComparison.Ordinal)
+                || string.Equals(runEvent.Event, "review", StringComparison.Ordinal))
+            {
+                return runEvent.Ts;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsReviewRequestBoundaryStale(
+        CliContext context,
+        string executionUnit,
+        DirectRunRequestArtifact requestArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(requestArtifact);
+
+        if (!DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var launchedAt))
+        {
+            return false;
+        }
+
+        var latestReviewReentryAt = TryResolveLatestReviewReentryTimestamp(context, executionUnit);
+        return latestReviewReentryAt is not null && latestReviewReentryAt > launchedAt;
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> EnsureCurrentSessionTerminalProviderEvent(
