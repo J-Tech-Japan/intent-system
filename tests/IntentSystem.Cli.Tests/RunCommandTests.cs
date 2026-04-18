@@ -2047,6 +2047,301 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenFreshFixWorkerDiesAfterLongerLivedMonitoring_ContinuesSupervisionAndCapturesRuntimeArtifactBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G226"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Fixing))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"G226","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
+            {"ts":"2026-04-10T10:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"contract mismatch"}
+            {"ts":"2026-04-10T12:20:00Z","execution_unit":"G226","event":"blocked","by":"intent-cli","reason":"backend exit code 1"}
+            {"ts":"2026-04-18T04:24:37.3246270+00:00","execution_unit":"G226","event":"fix-requested","by":"intent-cli"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            execution_unit: "G226"
+
+            implementation_issue:
+              issue_title: "[G226] Root Run Orchestration Command"
+              goal: "Coordinate the root run loop."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/G226/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.comment.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G226.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G226.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "G226",
+                WorkerEntry = RunSupervisionWorkerEntry.Fix,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "G226"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-226-g226",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2",
+                HandoffArtifactRef = ".intent-cli/fix/G226.request.md",
+                RetryCount = 2,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T12:20:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T12:20:00Z"),
+                LastInterruptionReason = "backend exit code 1"
+            }));
+        WriteDirectRunRequest(
+            repoRoot,
+            "G226",
+            "fix",
+            "pid:57021",
+            provider: "Codex",
+            launchedAt: "2026-04-10T12:00:00.0000000+00:00");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "fix",
+            "failed",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = "pid:57021",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 1
+                    })
+                }
+            ],
+            sessionId: "pid:57021",
+            provider: "Codex");
+        var originalRunFixExecutor = RunCommand.RunFixExecutor;
+        var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var originalTimestampFactory = RunCommand.TimestampFactory;
+        var originalFreshFixContinuationPollInterval = RunCommand.FreshFixContinuationPollInterval;
+        var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
+        var superviseCallCount = 0;
+
+        try
+        {
+            RunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-18T04:24:51.2000000+00:00");
+            RunCommand.FreshFixContinuationPollInterval = TimeSpan.Zero;
+            RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                """
+                 M .intent-cli/intake/toy-calc.concept.yaml
+                 M .intent-cli/intake/toy-calc.execution.md
+                 M .intent-cli/intake/toy-calc.patch.md
+                """);
+            RunCommand.RunFixExecutor = (_, executionUnit) =>
+            {
+                WriteDirectRunRequest(
+                    repoRoot,
+                    executionUnit,
+                    "fix",
+                    "pid:999999",
+                    provider: "Codex",
+                    launchedAt: "2026-04-18T04:24:37.3246270+00:00");
+                WriteDirectRunResult(
+                    repoRoot,
+                    executionUnit,
+                    "fix",
+                    "running",
+                    providerEvents:
+                    [
+                        new DirectRunProviderEvent
+                        {
+                            Timestamp = "2026-04-18T04:24:37.3246270+00:00",
+                            ExecutionUnit = executionUnit,
+                            Provider = "Codex",
+                            EntryKind = "fix",
+                            SessionId = "pid:999999",
+                            Kind = "session-metadata",
+                            Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                            {
+                                model = "gpt-5.4-mini",
+                                transport = "responses",
+                                command = "codex"
+                            })
+                        }
+                    ],
+                    sessionId: "pid:999999",
+                    provider: "Codex");
+
+                File.WriteAllText(
+                    Path.Combine(repoRoot, ".intent-cli", "supervision", $"{executionUnit}.session.json"),
+                    RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+                    {
+                        ExecutionUnit = executionUnit,
+                        WorkerEntry = RunSupervisionWorkerEntry.Fix,
+                        Status = RunSupervisionSessionStatus.Monitoring,
+                        QueueState = "fixing",
+                        WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit),
+                        ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                        Branch = $"issue-226-{executionUnit.ToLowerInvariant()}",
+                        LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                        LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                        CommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2",
+                        HandoffArtifactRef = $".intent-cli/fix/{executionUnit}.request.md",
+                        RetryCount = 2,
+                        RetryBudget = 3,
+                        CreatedAt = DateTimeOffset.Parse("2026-04-18T04:24:37.3246270+00:00"),
+                        UpdatedAt = DateTimeOffset.Parse("2026-04-18T04:24:37.3246270+00:00"),
+                        LastHeartbeatAt = DateTimeOffset.Parse("2026-04-18T04:24:37.3246270+00:00")
+                    }));
+
+                return new RunFixResult
+                {
+                    Request = new RunFixRequest
+                    {
+                        ExecutionUnit = executionUnit,
+                        State = "fixing",
+                        ImplementRole = "Codex",
+                        QueueWorkerRole = "coder",
+                        QueueReviewRole = "reviewer",
+                        WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit),
+                        ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                        Branch = $"issue-226-{executionUnit.ToLowerInvariant()}",
+                        LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                        LatestLinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                        LatestCommentRef = "https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2",
+                        PacketRef = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                        ReviewContextRef = $".intent-cli/issues/{executionUnit}/review-context.md",
+                        ReviewCommentArtifactRef = $".intent-cli/reviews/{executionUnit}.comment.json",
+                        ReviewRequestRef = $".intent-cli/reviews/{executionUnit}.request.json",
+                        ReviewCommentBodyPath = $".intent-cli/reviews/{executionUnit}.comment.md",
+                        IssueTitle = "[G226] Root Run Orchestration Command",
+                        Goal = "Coordinate the root run loop.",
+                        TargetPart = "run command",
+                        TargetRepo = "submodules/intent-system",
+                        TargetPath = ".",
+                        InScope = [],
+                        OutOfScope = [],
+                        AcceptanceCriteria = [],
+                        DeterministicReviewChecks = [],
+                        ExpectedEvidence = []
+                    },
+                    ArtifactPath = $".intent-cli/fix/{executionUnit}.request.md",
+                    DirectRun = new DirectRunLaunchResult
+                    {
+                        RequestArtifactPath = $".intent-cli/runs/{executionUnit}.request.json",
+                        ProviderEventLogPath = $".intent-cli/runs/{executionUnit}.provider.jsonl",
+                        ResultArtifactPath = $".intent-cli/runs/{executionUnit}.result.json",
+                        Provider = "Codex",
+                        Model = "gpt-5.4-mini",
+                        Transport = "responses",
+                        ProviderSessionId = "pid:999999",
+                        RunStatus = "running",
+                        TransportSummary = "launched"
+                    }
+                };
+            };
+            RunCommand.RunSuperviseExecutor = (context, executionUnit) =>
+            {
+                superviseCallCount++;
+                if (superviseCallCount == 1)
+                {
+                    WriteDirectRunResult(
+                        repoRoot,
+                        executionUnit,
+                        "fix",
+                        "running",
+                        providerEvents: CreateToyCalcReplayRuntimeArtifactOnlyFixProgressProviderEvents(
+                            executionUnit,
+                            "pid:999999"),
+                        sessionId: "pid:999999",
+                        provider: "Codex");
+
+                    return new RunSuperviseResult
+                    {
+                        ExecutionUnit = executionUnit,
+                        SessionArtifactPath = $".intent-cli/supervision/{executionUnit}.session.json",
+                        WorkerEntry = RunSupervisionWorkerEntry.Fix,
+                        SessionStatus = RunSupervisionSessionStatus.Monitoring,
+                        RetryCount = 2,
+                        RetryBudget = 3,
+                        HandoffArtifactRef = $".intent-cli/fix/{executionUnit}.request.md"
+                    };
+                }
+
+                return RunSuperviseCommand.ExecuteCore(context, executionUnit);
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("non-retryable-failure", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Equal(3, result.Actions.Count);
+            Assert.Equal("run fix", result.Actions[0].Name);
+            Assert.Equal("run supervise", result.Actions[1].Name);
+            Assert.Equal("run supervise", result.Actions[2].Name);
+            Assert.Contains("out-of-scope runtime-artifact drift", result.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain("Worker remains under supervision.", result.Detail, StringComparison.Ordinal);
+            Assert.Equal(2, superviseCallCount);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("out-of-scope runtime-artifact drift", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G226.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(2, session.RetryCount);
+            Assert.Contains("out-of-scope runtime-artifact drift", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+            Assert.Equal("failed", resultArtifact.RunStatus);
+            Assert.Equal("pid:999999", resultArtifact.SessionId);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("out-of-scope runtime-artifact drift", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunCommand.RunFixExecutor = originalRunFixExecutor;
+            RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+            RunCommand.TimestampFactory = originalTimestampFactory;
+            RunCommand.FreshFixContinuationPollInterval = originalFreshFixContinuationPollInterval;
+            RunSuperviseCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenFixingItemWithSucceededFixResultAndExplicitContractGapRefusal_DoesNotAdvanceIntoReview()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -6134,7 +6429,8 @@ public sealed class RunCommandTests
         string executionUnit,
         string entryKind,
         string providerSessionId,
-        string provider = "ReviewBot")
+        string provider = "ReviewBot",
+        string launchedAt = "2026-04-10T12:00:00.0000000+00:00")
     {
         var runsDirectory = Path.Combine(repoRoot, ".intent-cli", "runs");
         Directory.CreateDirectory(runsDirectory);
@@ -6151,7 +6447,7 @@ public sealed class RunCommandTests
                     Provider = provider,
                     Model = "gpt-5.4-mini",
                     Transport = "responses",
-                    LaunchedAt = "2026-04-10T12:00:00.0000000+00:00",
+                    LaunchedAt = launchedAt,
                     ProviderSessionId = providerSessionId,
                     TransportSummary = "launched"
                 }));
