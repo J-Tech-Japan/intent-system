@@ -244,7 +244,7 @@ public sealed class RunCommandTests
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("clarification-required", result.StopReason);
+            Assert.Equal("no-actionable-item", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
             var action = Assert.Single(result.Actions);
             Assert.Equal("review run", action.Name);
@@ -258,7 +258,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenAutoContinuePostFixProgressAndRereviewWithoutReviewResult_StopsAtReviewContinuationWaiting()
+    public void ExecuteCore_GivenAutoContinuePostFixProgressAndRereviewWithStaleReviewRequest_LaunchesFreshReviewRun()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -304,6 +304,7 @@ public sealed class RunCommandTests
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "fix", "G226.request.md"),
             "# Repair Worker Handoff");
+        WriteDirectRunRequest(repoRoot, "G226", "review", "stale-review-session");
         WriteDirectRunRequest(repoRoot, "G226", "fix", "pid:999999", provider: "Claude");
         WriteDirectRunResult(
             repoRoot,
@@ -315,6 +316,7 @@ public sealed class RunCommandTests
             provider: "Claude");
         var originalRunResubmitExecutor = RunCommand.RunResubmitExecutor;
         var originalRunRereviewExecutor = RunCommand.RunRereviewExecutor;
+        var originalReviewRunExecutor = RunCommand.ReviewRunExecutor;
 
         try
         {
@@ -332,7 +334,16 @@ public sealed class RunCommandTests
                     queueItem => string.Equals(queueItem.ExecutionUnit, executionUnit, StringComparison.Ordinal)
                         ? queueItem with { State = QueueItemState.Review }
                         : queueItem);
-                WriteDirectRunRequest(context.RepoRoot, executionUnit, "review", "review-session");
+                File.AppendAllText(
+                    Path.Combine(context.RepoRoot, ".intent-cli", "runs.jsonl"),
+                    RunLogSerializer.SerializeLine(new RunEvent
+                    {
+                        Ts = DateTimeOffset.Parse("2026-04-10T13:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+                        ExecutionUnit = executionUnit,
+                        Event = "rereview",
+                        By = "intent-cli",
+                        LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226"
+                    }) + Environment.NewLine);
 
                 return new RunRereviewResult
                 {
@@ -340,21 +351,41 @@ public sealed class RunCommandTests
                     LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226"
                 };
             };
+            RunCommand.ReviewRunExecutor = (_, executionUnit) =>
+            {
+                WriteDirectRunRequest(repoRoot, executionUnit, "review", "review-session");
+                WriteDirectRunResult(
+                    repoRoot,
+                    executionUnit,
+                    "review",
+                    "running",
+                    providerEvents: [],
+                    sessionId: "review-session");
+
+                return new ReviewRunResult
+                {
+                    ExecutionUnit = executionUnit,
+                    ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json",
+                    DirectRun = CreateDirectRunLaunchResult(executionUnit, "review-session")
+                };
+            };
 
             var result = RunCommand.ExecuteCore(CreateContext(
                 repoRoot,
                 postFixWorktreeProgressPolicy: CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy));
 
-            Assert.Equal("clarification-required", result.StopReason);
+            Assert.Equal("no-actionable-item", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
-            Assert.Contains("no direct run result is available yet", result.Detail, StringComparison.Ordinal);
+            Assert.Contains("Review direct run for 'G226' is 'running'.", result.Detail, StringComparison.Ordinal);
             Assert.Contains(result.Actions, action => action.Name == "run resubmit" && action.ExecutionUnit == "G226");
             Assert.Contains(result.Actions, action => action.Name == "run rereview" && action.ExecutionUnit == "G226");
+            Assert.Contains(result.Actions, action => action.Name == "review run" && action.ExecutionUnit == "G226");
         }
         finally
         {
             RunCommand.RunResubmitExecutor = originalRunResubmitExecutor;
             RunCommand.RunRereviewExecutor = originalRunRereviewExecutor;
+            RunCommand.ReviewRunExecutor = originalReviewRunExecutor;
         }
     }
 
@@ -381,7 +412,7 @@ public sealed class RunCommandTests
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("clarification-required", result.StopReason);
+            Assert.Equal("no-actionable-item", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
             var action = Assert.Single(result.Actions);
             Assert.Equal("review run", action.Name);
@@ -443,7 +474,7 @@ public sealed class RunCommandTests
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("clarification-required", result.StopReason);
+            Assert.Equal("no-actionable-item", result.StopReason);
             Assert.Equal("G226", result.ExecutionUnit);
             Assert.Collection(
                 result.Actions,
@@ -1459,7 +1490,7 @@ public sealed class RunCommandTests
 
         var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-        Assert.Equal("clarification-required", result.StopReason);
+        Assert.Equal("no-actionable-item", result.StopReason);
         Assert.Equal("G226", result.ExecutionUnit);
         Assert.Empty(result.Actions);
         Assert.Contains("does not match the current launched request boundary", result.Detail, StringComparison.Ordinal);
@@ -1504,7 +1535,7 @@ public sealed class RunCommandTests
 
         var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-        Assert.Equal("clarification-required", result.StopReason);
+        Assert.Equal("no-actionable-item", result.StopReason);
         Assert.Equal("G226", result.ExecutionUnit);
         Assert.Empty(result.Actions);
         Assert.Contains("does not match the current launched request boundary", result.Detail, StringComparison.Ordinal);

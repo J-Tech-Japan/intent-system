@@ -341,15 +341,6 @@ internal static class RunCommand
                             reviewDecision.Detail);
                     }
 
-                    if (ShouldReportReviewContinuationWaiting(reviewDecision))
-                    {
-                        return CreateStopResult(
-                            ClarificationRequiredStopReason,
-                            actions,
-                            inProgressItem.ExecutionUnit,
-                            reviewDecision.Detail);
-                    }
-
                     return CreateStopResult(
                         NoActionableItemStopReason,
                         actions,
@@ -1266,8 +1257,13 @@ internal static class RunCommand
         }
 
         var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
-        return requestArtifact is null
-            || !string.Equals(requestArtifact.EntryKind, "review", StringComparison.Ordinal);
+        if (requestArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "review", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return IsReviewRequestBoundaryStale(context, executionUnit, requestArtifact);
     }
 
     private static RunReviewDecision ResolveReviewDecision(CliContext context, string executionUnit)
@@ -1499,19 +1495,52 @@ internal static class RunCommand
         };
     }
 
-    private static bool ShouldReportReviewContinuationWaiting(RunReviewDecision reviewDecision)
+    private static DateTimeOffset? TryResolveLatestReviewReentryTimestamp(CliContext context, string executionUnit)
     {
-        ArgumentNullException.ThrowIfNull(reviewDecision);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
-        if (reviewDecision.Kind != RunReviewDecisionKind.Waiting
-            || string.IsNullOrWhiteSpace(reviewDecision.Detail))
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            return null;
+        }
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        for (var index = runEvents.Count - 1; index >= 0; index--)
+        {
+            var runEvent = runEvents[index];
+            if (!string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (string.Equals(runEvent.Event, "rereview", StringComparison.Ordinal)
+                || string.Equals(runEvent.Event, "review", StringComparison.Ordinal))
+            {
+                return runEvent.Ts;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsReviewRequestBoundaryStale(
+        CliContext context,
+        string executionUnit,
+        DirectRunRequestArtifact requestArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(requestArtifact);
+
+        if (!DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var launchedAt))
         {
             return false;
         }
 
-        return reviewDecision.Detail.Contains("no direct run request boundary is available yet", StringComparison.Ordinal)
-            || reviewDecision.Detail.Contains("no direct run result is available yet", StringComparison.Ordinal)
-            || reviewDecision.Detail.Contains("does not match the current launched request boundary", StringComparison.Ordinal);
+        var latestReviewReentryAt = TryResolveLatestReviewReentryTimestamp(context, executionUnit);
+        return latestReviewReentryAt is not null && latestReviewReentryAt > launchedAt;
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> EnsureCurrentSessionTerminalProviderEvent(
