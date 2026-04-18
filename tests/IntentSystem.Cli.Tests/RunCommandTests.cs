@@ -2047,7 +2047,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenFreshFixWorkerDiesAfterImmediateMonitoring_ContinuesSupervisionAndCapturesRuntimeArtifactBoundary()
+    public void ExecuteCore_GivenFreshFixWorkerDiesAfterLongerLivedMonitoring_ContinuesSupervisionAndCapturesRuntimeArtifactBoundary()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -2066,7 +2066,7 @@ public sealed class RunCommandTests
             {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
             {"ts":"2026-04-10T10:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"contract mismatch"}
             {"ts":"2026-04-10T12:20:00Z","execution_unit":"G226","event":"blocked","by":"intent-cli","reason":"backend exit code 1"}
-            {"ts":"2026-04-17T05:29:47.0973580+00:00","execution_unit":"G226","event":"fix-requested","by":"intent-cli"}
+            {"ts":"2026-04-18T04:24:37.3246270+00:00","execution_unit":"G226","event":"fix-requested","by":"intent-cli"}
             """ + Environment.NewLine);
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
@@ -2150,18 +2150,14 @@ public sealed class RunCommandTests
         var originalRunFixExecutor = RunCommand.RunFixExecutor;
         var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
         var originalTimestampFactory = RunCommand.TimestampFactory;
-        var originalFreshFixContinuationWindow = RunCommand.FreshFixContinuationWindow;
         var originalFreshFixContinuationPollInterval = RunCommand.FreshFixContinuationPollInterval;
-        var originalFreshFixContinuationMaxPolls = RunCommand.FreshFixContinuationMaxPolls;
         var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
         var superviseCallCount = 0;
 
         try
         {
-            RunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-17T05:29:47.3000000+00:00");
-            RunCommand.FreshFixContinuationWindow = TimeSpan.FromSeconds(5);
+            RunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-18T04:24:51.2000000+00:00");
             RunCommand.FreshFixContinuationPollInterval = TimeSpan.Zero;
-            RunCommand.FreshFixContinuationMaxPolls = 1;
             RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
                 """
                  M .intent-cli/intake/toy-calc.concept.yaml
@@ -2176,7 +2172,7 @@ public sealed class RunCommandTests
                     "fix",
                     "pid:999999",
                     provider: "Codex",
-                    launchedAt: "2026-04-17T05:29:47.2369770+00:00");
+                    launchedAt: "2026-04-18T04:24:37.3246270+00:00");
                 WriteDirectRunResult(
                     repoRoot,
                     executionUnit,
@@ -2186,7 +2182,7 @@ public sealed class RunCommandTests
                     [
                         new DirectRunProviderEvent
                         {
-                            Timestamp = "2026-04-17T05:29:47.2369770+00:00",
+                            Timestamp = "2026-04-18T04:24:37.3246270+00:00",
                             ExecutionUnit = executionUnit,
                             Provider = "Codex",
                             EntryKind = "fix",
@@ -2220,9 +2216,9 @@ public sealed class RunCommandTests
                         HandoffArtifactRef = $".intent-cli/fix/{executionUnit}.request.md",
                         RetryCount = 2,
                         RetryBudget = 3,
-                        CreatedAt = DateTimeOffset.Parse("2026-04-17T05:29:47.2369770+00:00"),
-                        UpdatedAt = DateTimeOffset.Parse("2026-04-17T05:29:47.2369770+00:00"),
-                        LastHeartbeatAt = DateTimeOffset.Parse("2026-04-17T05:29:47.2369770+00:00")
+                        CreatedAt = DateTimeOffset.Parse("2026-04-18T04:24:37.3246270+00:00"),
+                        UpdatedAt = DateTimeOffset.Parse("2026-04-18T04:24:37.3246270+00:00"),
+                        LastHeartbeatAt = DateTimeOffset.Parse("2026-04-18T04:24:37.3246270+00:00")
                     }));
 
                 return new RunFixResult
@@ -2340,9 +2336,7 @@ public sealed class RunCommandTests
             RunCommand.RunFixExecutor = originalRunFixExecutor;
             RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
             RunCommand.TimestampFactory = originalTimestampFactory;
-            RunCommand.FreshFixContinuationWindow = originalFreshFixContinuationWindow;
             RunCommand.FreshFixContinuationPollInterval = originalFreshFixContinuationPollInterval;
-            RunCommand.FreshFixContinuationMaxPolls = originalFreshFixContinuationMaxPolls;
             RunSuperviseCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
         }
     }

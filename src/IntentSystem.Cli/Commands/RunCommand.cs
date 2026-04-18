@@ -63,11 +63,11 @@ internal static class RunCommand
 
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
 
-    internal static TimeSpan FreshFixContinuationWindow { get; set; } = TimeSpan.FromSeconds(3);
+    internal static TimeSpan FreshFixContinuationWindow { get; set; } = TimeSpan.FromSeconds(30);
 
     internal static TimeSpan FreshFixContinuationPollInterval { get; set; } = TimeSpan.FromMilliseconds(200);
 
-    internal static int FreshFixContinuationMaxPolls { get; set; } = 15;
+    internal static int FreshFixContinuationMaxPolls { get; set; } = 120;
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
