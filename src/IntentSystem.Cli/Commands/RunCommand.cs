@@ -232,6 +232,16 @@ internal static class RunCommand
                             fixRequestArtifact);
                         if (!string.IsNullOrWhiteSpace(currentFixSessionContractGap))
                         {
+                            if (fixResultArtifact is not null
+                                && !string.Equals(fixResultArtifact.RunStatus, "failed", StringComparison.Ordinal))
+                            {
+                                fixResultArtifact = fixResultArtifact with
+                                {
+                                    RunStatus = "failed"
+                                };
+                                PersistDirectRunResultArtifact(context, inProgressItem.ExecutionUnit, fixResultArtifact);
+                            }
+
                             return CreateStopResult(
                                 DeterministicContractGapStopReason,
                                 actions,

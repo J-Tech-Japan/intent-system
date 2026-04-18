@@ -289,6 +289,39 @@ public sealed class DirectRunFixOutcomeSupportTests
         Assert.Null(contractGapEvent);
     }
 
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenExplicitContractGapRefusalTextAndSuccessfulBackendExit_CreatesFailureBoundary()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/specs/01-cli-surface.md'"),
+            CreateProviderEvent(" exited 1 in 0ms:"),
+            CreateProviderEvent("sed: intents/toy-calc/specs/01-cli-surface.md: No such file or directory"),
+            CreateProviderEvent("I stopped with a contract-gap explanation rather than inventing a repair target because the deterministic review contract points at `intents/toy-calc/specs/01-cli-surface.md`, and that spec file does not exist in this worktree."),
+            CreateProviderEvent("2. Close this run as a completed contract-gap refusal."),
+            CreateSuccessfulBackendExitEvent()
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-17T07:40:00Z"),
+            "TOY-CALC-V0-01",
+            "fix",
+            "Codex",
+            "pid:6210",
+            providerSessionAlive: false);
+
+        Assert.NotNull(contractGapEvent);
+        Assert.Equal("failed", contractGapEvent!.Payload.GetProperty("run_status").GetString());
+        Assert.Equal("provider-explicit-contract-gap-refusal", contractGapEvent.Payload.GetProperty("reason").GetString());
+        Assert.Contains(
+            "contract-gap refusal",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     private static IReadOnlyList<DirectRunProviderEvent> CreateIssue295CurrentSessionRawEvents(string? echoedRequest = null)
     {
         return
