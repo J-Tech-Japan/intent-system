@@ -2047,7 +2047,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenFreshFixWorkerDiesAfterLongerLivedMonitoring_ContinuesSupervisionAndCapturesRuntimeArtifactBoundary()
+    public void ExecuteCore_GivenFreshFixWorkerProgressesPastInitialContinuationWindow_ContinuesSupervisionAndCapturesRuntimeArtifactBoundary()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -2066,7 +2066,7 @@ public sealed class RunCommandTests
             {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
             {"ts":"2026-04-10T10:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"contract mismatch"}
             {"ts":"2026-04-10T12:20:00Z","execution_unit":"G226","event":"blocked","by":"intent-cli","reason":"backend exit code 1"}
-            {"ts":"2026-04-18T04:24:37.3246270+00:00","execution_unit":"G226","event":"fix-requested","by":"intent-cli"}
+            {"ts":"2026-04-18T04:46:59.7953570+00:00","execution_unit":"G226","event":"fix-requested","by":"intent-cli"}
             """ + Environment.NewLine);
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
@@ -2153,10 +2153,17 @@ public sealed class RunCommandTests
         var originalFreshFixContinuationPollInterval = RunCommand.FreshFixContinuationPollInterval;
         var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
         var superviseCallCount = 0;
+        var timestampCallCount = 0;
 
         try
         {
-            RunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-18T04:24:51.2000000+00:00");
+            RunCommand.TimestampFactory = () =>
+            {
+                timestampCallCount++;
+                return timestampCallCount == 1
+                    ? DateTimeOffset.Parse("2026-04-18T04:46:59.9000000+00:00")
+                    : DateTimeOffset.Parse("2026-04-18T04:47:31.2000000+00:00");
+            };
             RunCommand.FreshFixContinuationPollInterval = TimeSpan.Zero;
             RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
                 """
@@ -2172,7 +2179,7 @@ public sealed class RunCommandTests
                     "fix",
                     "pid:999999",
                     provider: "Codex",
-                    launchedAt: "2026-04-18T04:24:37.3246270+00:00");
+                    launchedAt: "2026-04-18T04:46:59.7953570+00:00");
                 WriteDirectRunResult(
                     repoRoot,
                     executionUnit,
@@ -2182,7 +2189,7 @@ public sealed class RunCommandTests
                     [
                         new DirectRunProviderEvent
                         {
-                            Timestamp = "2026-04-18T04:24:37.3246270+00:00",
+                            Timestamp = "2026-04-18T04:46:59.7953570+00:00",
                             ExecutionUnit = executionUnit,
                             Provider = "Codex",
                             EntryKind = "fix",
@@ -2216,11 +2223,10 @@ public sealed class RunCommandTests
                         HandoffArtifactRef = $".intent-cli/fix/{executionUnit}.request.md",
                         RetryCount = 2,
                         RetryBudget = 3,
-                        CreatedAt = DateTimeOffset.Parse("2026-04-18T04:24:37.3246270+00:00"),
-                        UpdatedAt = DateTimeOffset.Parse("2026-04-18T04:24:37.3246270+00:00"),
-                        LastHeartbeatAt = DateTimeOffset.Parse("2026-04-18T04:24:37.3246270+00:00")
+                        CreatedAt = DateTimeOffset.Parse("2026-04-18T04:46:59.7953570+00:00"),
+                        UpdatedAt = DateTimeOffset.Parse("2026-04-18T04:46:59.7953570+00:00"),
+                        LastHeartbeatAt = DateTimeOffset.Parse("2026-04-18T04:46:59.7953570+00:00")
                     }));
-
                 return new RunFixResult
                 {
                     Request = new RunFixRequest
@@ -2277,9 +2283,10 @@ public sealed class RunCommandTests
                         executionUnit,
                         "fix",
                         "running",
-                        providerEvents: CreateToyCalcReplayRuntimeArtifactOnlyFixProgressProviderEvents(
+                        providerEvents: CreateToyCalcLongerLivedRuntimeArtifactOnlyFixProgressProviderEvents(
                             executionUnit,
-                            "pid:999999"),
+                            "pid:999999",
+                            includeBackendExit: false),
                         sessionId: "pid:999999",
                         provider: "Codex");
 
@@ -2295,6 +2302,17 @@ public sealed class RunCommandTests
                     };
                 }
 
+                WriteDirectRunResult(
+                    repoRoot,
+                    executionUnit,
+                    "fix",
+                    "running",
+                    providerEvents: CreateToyCalcLongerLivedRuntimeArtifactOnlyFixProgressProviderEvents(
+                        executionUnit,
+                        "pid:999999",
+                        includeBackendExit: true),
+                    sessionId: "pid:999999",
+                    provider: "Codex");
                 return RunSuperviseCommand.ExecuteCore(context, executionUnit);
             };
 
@@ -6249,6 +6267,105 @@ public sealed class RunCommandTests
                 })
             }
         ];
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateToyCalcLongerLivedRuntimeArtifactOnlyFixProgressProviderEvents(
+        string executionUnit,
+        string sessionId,
+        bool includeBackendExit)
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-18T04:46:59.7953570+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "session-metadata",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    model = "gpt-5.4-mini",
+                    transport = "responses",
+                    command = "codex"
+                })
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-18T04:47:29.8899000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-18T04:47:29.8901000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("/bin/zsh -lc \"sed -n '1,220p' tests/ToyCalc.Tests/CalculatorTests.cs && printf '\\n---\\n' && sed -n '1,220p' src/ToyCalc/Calculator.cs\" in /repo/.intent-cli/worktrees/G226")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-18T04:47:29.8903000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(" succeeded in 0ms:")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-18T04:47:29.8904000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("tests/ToyCalc.Tests/CalculatorTests.cs")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-18T04:47:29.8905140+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("src/ToyCalc/Calculator.cs")
+            }
+        ];
+
+        if (includeBackendExit)
+        {
+            providerEvents =
+            [
+                .. providerEvents,
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-18T04:48:05.0865860+00:00",
+                    ExecutionUnit = executionUnit,
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = sessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 1
+                    })
+                }
+            ];
+        }
+
+        return providerEvents;
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> CreateToyCalcMixedReplayRuntimeArtifactOnlyFixProgressProviderEvents(
