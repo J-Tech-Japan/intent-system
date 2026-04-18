@@ -5819,7 +5819,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenFixingItemWithBlockedSupervisionAndStaleFailedFixResult_ReconcilesBlockedStateWithoutReusingStaleFailureDetail()
+    public void ExecuteCore_GivenFixingItemWithStaleBlockedSupervisionAndTerminalFailedFixResult_ReconcilesGenericFailureWithoutReusingPlanningSentence()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -5837,6 +5837,8 @@ public sealed class RunCommandTests
             {"ts":"2026-04-10T10:00:00Z","execution_unit":"G226","event":"activated","by":"intent-cli"}
             {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/226"}
             {"ts":"2026-04-10T10:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"contract mismatch"}
+            {"ts":"2026-04-10T11:55:00Z","execution_unit":"G226","event":"blocked","by":"intent-cli","reason":"backend exit code 1"}
+            {"ts":"2026-04-10T12:15:00Z","execution_unit":"G226","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/226#issuecomment-2","reason":"retry after preserved failure"}
             """ + Environment.NewLine);
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
@@ -5879,10 +5881,9 @@ public sealed class RunCommandTests
                 RetryCount = 2,
                 RetryBudget = 3,
                 CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
-                UpdatedAt = DateTimeOffset.Parse("2026-04-10T12:05:00Z"),
-                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T12:05:00Z"),
-                LastInterruptionReason =
-                    "Worker session 'pid:29569' for 'G226' exited with backend exit code 1 after bounded fix progress and left only out-of-scope runtime-artifact drift under '.intent-cli/**'. Changed paths: .intent-cli/intake/toy-calc.execution.md."
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastInterruptionReason = "Worker session 'pid:2750' for 'G226' exited with backend exit code 1."
             }));
         WriteDirectRunRequest(
             repoRoot,
@@ -5890,7 +5891,7 @@ public sealed class RunCommandTests
             "fix",
             "pid:29569",
             provider: "Codex",
-            launchedAt: "2026-04-10T12:00:00.0000000+00:00");
+            launchedAt: "2026-04-10T12:20:00.0000000+00:00");
         WriteDirectRunResult(
             repoRoot,
             "G226",
@@ -5921,19 +5922,18 @@ public sealed class RunCommandTests
         Assert.Equal("non-retryable-failure", result.StopReason);
         Assert.Equal("G226", result.ExecutionUnit);
         Assert.Empty(result.Actions);
-        Assert.Contains("out-of-scope runtime-artifact drift", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("Fix direct run failed for 'G226'.", result.Detail, StringComparison.Ordinal);
         Assert.DoesNotContain("I’m opening the request artifact", result.Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("Fix direct run failed", result.Detail, StringComparison.Ordinal);
 
         var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
         var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
         Assert.Equal(QueueItemState.Blocked, selectedItem.State);
-        Assert.Contains("out-of-scope runtime-artifact drift", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+        Assert.Contains("Fix direct run failed for 'G226'.", selectedItem.BlockedBy[0], StringComparison.Ordinal);
 
         var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
         Assert.Equal("blocked", runEvents[^1].Event);
         var lastRunEventReason = Assert.IsType<string>(runEvents[^1].Reason);
-        Assert.Contains("out-of-scope runtime-artifact drift", lastRunEventReason, StringComparison.Ordinal);
+        Assert.Contains("Fix direct run failed for 'G226'.", lastRunEventReason, StringComparison.Ordinal);
         Assert.DoesNotContain("I’m opening the request artifact", lastRunEventReason, StringComparison.Ordinal);
     }
 

@@ -262,6 +262,18 @@ internal static class RunCommand
                             return blockedFixResult;
                         }
 
+                        if (TryReconcileStaleFailedFixResultState(
+                                context,
+                                actions,
+                                inProgressItem,
+                                fixRequestArtifact,
+                                fixResultArtifact,
+                                out var staleFailedFixResult))
+                        {
+                            freshFixContinuationStates.Remove(inProgressItem.ExecutionUnit);
+                            return staleFailedFixResult;
+                        }
+
                         var currentFixSessionContractGap = TryResolveCurrentFixSessionContractGap(
                             context,
                             inProgressItem.ExecutionUnit,
@@ -654,6 +666,54 @@ internal static class RunCommand
             actions,
             fixingItem.ExecutionUnit,
             interruptionReason);
+        return true;
+    }
+
+    private static bool TryReconcileStaleFailedFixResultState(
+        CliContext context,
+        IReadOnlyList<RunCommandAction> actions,
+        QueueItem fixingItem,
+        DirectRunRequestArtifact? requestArtifact,
+        DirectRunResultArtifact? resultArtifact,
+        out RunCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(actions);
+        ArgumentNullException.ThrowIfNull(fixingItem);
+
+        result = null!;
+        if (requestArtifact is null
+            || resultArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "fix", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.RunStatus, "failed", StringComparison.Ordinal)
+            || !MatchesCurrentDirectRunRequestBoundary(requestArtifact, resultArtifact)
+            || !DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var launchedAt)
+            || !TryReadBlockedFixSupervisionSession(context, fixingItem.ExecutionUnit, out var session)
+            || session.UpdatedAt >= launchedAt)
+        {
+            return false;
+        }
+
+        var failureReason = $"Fix direct run failed for '{fixingItem.ExecutionUnit}'.";
+        PersistBlockedFixQueueState(context, fixingItem, failureReason);
+        AppendRunEvent(
+            context.GetRunLogPath(),
+            new RunEvent
+            {
+                Ts = TimestampFactory(),
+                ExecutionUnit = fixingItem.ExecutionUnit,
+                Event = "blocked",
+                By = "intent-cli",
+                LinkedPr = session.LinkedPr,
+                CommentRef = session.CommentRef,
+                Reason = failureReason
+            });
+
+        result = CreateStopResult(
+            NonRetryableFailureStopReason,
+            actions,
+            fixingItem.ExecutionUnit,
+            failureReason);
         return true;
     }
 
@@ -1351,10 +1411,9 @@ internal static class RunCommand
         return true;
     }
 
-    private static bool TryResolveBlockedFixSupervisionSession(
+    private static bool TryReadBlockedFixSupervisionSession(
         CliContext context,
         string executionUnit,
-        DateTimeOffset? latestFixRequestedAt,
         out RunSupervisionSession session)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -1375,6 +1434,24 @@ internal static class RunCommand
         session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
         if (session.WorkerEntry != RunSupervisionWorkerEntry.Fix
             || session.Status != RunSupervisionSessionStatus.Blocked)
+        {
+            session = null!;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryResolveBlockedFixSupervisionSession(
+        CliContext context,
+        string executionUnit,
+        DateTimeOffset? latestFixRequestedAt,
+        out RunSupervisionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (!TryReadBlockedFixSupervisionSession(context, executionUnit, out session))
         {
             return false;
         }
