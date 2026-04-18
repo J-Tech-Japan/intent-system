@@ -317,9 +317,87 @@ public sealed class DirectRunFixOutcomeSupportTests
         Assert.Equal("failed", contractGapEvent!.Payload.GetProperty("run_status").GetString());
         Assert.Equal("provider-explicit-contract-gap-refusal", contractGapEvent.Payload.GetProperty("reason").GetString());
         Assert.Contains(
-            "contract-gap refusal",
+            "contract-gap explanation",
             contractGapEvent.Payload.GetProperty("detail").GetString(),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HasExplicitContractGapSignal_GivenPlanningPreambleMentionsCompletedContractGapRefusal_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("1. Re-read the packet and confirm the bounded target."),
+            CreateProviderEvent("2. Close this run as a completed contract-gap refusal.")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenPlanningPreambleMentionsCompletedContractGapRefusal_DoesNotCreateFailureBoundary()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("1. Re-read the packet and confirm the bounded target."),
+            CreateProviderEvent("2. Close this run as a completed contract-gap refusal."),
+            CreateSuccessfulBackendExitEvent()
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-18T06:00:00Z"),
+            "TOY-CALC-V0-01",
+            "fix",
+            "Codex",
+            "pid:3300",
+            providerSessionAlive: false);
+
+        Assert.Null(contractGapEvent);
+    }
+
+    [Fact]
+    public void HasExplicitContractGapSignal_GivenPlanningSentenceMentionsContractGapRefusalAndBoundedRepoActivity_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("I’m opening the request artifact and the repo-local packet first so I can decide whether this is a repair or a contract-gap refusal."),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs' succeeded in 0ms")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenPlanningSentenceMentionsContractGapRefusalAndBoundedRepoActivity_DoesNotCreateFailureBoundary()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-01.request.md' succeeded in 0ms"),
+            CreateProviderEvent("I’m opening the request artifact and the repo-local packet first so I can decide whether this is a repair or a contract-gap refusal."),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs' succeeded in 0ms"),
+            CreateSuccessfulBackendExitEvent()
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-18T06:10:00Z"),
+            "TOY-CALC-V0-01",
+            "fix",
+            "Codex",
+            "pid:3301",
+            providerSessionAlive: false);
+
+        Assert.Null(contractGapEvent);
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> CreateIssue295CurrentSessionRawEvents(string? echoedRequest = null)

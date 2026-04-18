@@ -2809,7 +2809,7 @@ public sealed class RunCommandTests
         Assert.Equal("deterministic-contract-gap", result.StopReason);
         Assert.Equal("G226", result.ExecutionUnit);
         Assert.Empty(result.Actions);
-        Assert.Contains("contract-gap refusal", result.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("contract-gap explanation", result.Detail, StringComparison.OrdinalIgnoreCase);
 
         var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
             Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
