@@ -16,6 +16,8 @@ internal static class RunCommand
         public string ExecutionUnit { get; } = executionUnit;
     }
 
+    private sealed record FreshFixContinuationState(DateTimeOffset Deadline, int RemainingPolls);
+
     private const int IterationBudget = 128;
     private const string NoActionableItemStopReason = "no-actionable-item";
     private const string ClarificationRequiredStopReason = "clarification-required";
@@ -61,6 +63,12 @@ internal static class RunCommand
 
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
 
+    internal static TimeSpan FreshFixContinuationWindow { get; set; } = TimeSpan.FromSeconds(3);
+
+    internal static TimeSpan FreshFixContinuationPollInterval { get; set; } = TimeSpan.FromMilliseconds(200);
+
+    internal static int FreshFixContinuationMaxPolls { get; set; } = 15;
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -92,6 +100,7 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(context);
 
         var actions = new List<RunCommandAction>();
+        var freshFixContinuationStates = new Dictionary<string, FreshFixContinuationState>(StringComparer.Ordinal);
 
         for (var iteration = 0; iteration < IterationBudget; iteration++)
         {
@@ -195,12 +204,17 @@ internal static class RunCommand
                                 "run fix",
                                 inProgressItem.ExecutionUnit,
                                 () => RunFixExecutor(context, inProgressItem.ExecutionUnit));
+                            TrackFreshFixContinuation(
+                                context,
+                                inProgressItem.ExecutionUnit,
+                                freshFixContinuationStates);
                             continue;
                         }
 
                         var currentFixTargetContractGap = TryResolveCurrentFixTargetContractGap(context, inProgressItem);
                         if (!string.IsNullOrWhiteSpace(currentFixTargetContractGap))
                         {
+                            freshFixContinuationStates.Remove(inProgressItem.ExecutionUnit);
                             return CreateStopResult(
                                 DeterministicContractGapStopReason,
                                 actions,
@@ -222,6 +236,10 @@ internal static class RunCommand
                                 "run fix",
                                 inProgressItem.ExecutionUnit,
                                 () => RunFixExecutor(context, inProgressItem.ExecutionUnit));
+                            TrackFreshFixContinuation(
+                                context,
+                                inProgressItem.ExecutionUnit,
+                                freshFixContinuationStates);
                             continue;
                         }
 
@@ -232,6 +250,7 @@ internal static class RunCommand
                             fixRequestArtifact);
                         if (!string.IsNullOrWhiteSpace(currentFixSessionContractGap))
                         {
+                            freshFixContinuationStates.Remove(inProgressItem.ExecutionUnit);
                             if (fixResultArtifact is not null
                                 && !string.Equals(fixResultArtifact.RunStatus, "failed", StringComparison.Ordinal))
                             {
@@ -251,6 +270,7 @@ internal static class RunCommand
 
                         if (string.Equals(fixRunStatus, "succeeded", StringComparison.Ordinal))
                         {
+                            freshFixContinuationStates.Remove(inProgressItem.ExecutionUnit);
                             ExecuteAction(
                                 context,
                                 actions,
@@ -268,6 +288,7 @@ internal static class RunCommand
 
                         if (string.Equals(fixRunStatus, "failed", StringComparison.Ordinal))
                         {
+                            freshFixContinuationStates.Remove(inProgressItem.ExecutionUnit);
                             return CreateStopResult(
                                 NonRetryableFailureStopReason,
                                 actions,
@@ -281,6 +302,17 @@ internal static class RunCommand
                             "run supervise",
                             inProgressItem.ExecutionUnit,
                             () => RunSuperviseExecutor(context, inProgressItem.ExecutionUnit));
+
+                        if (ShouldContinueFreshFixSupervision(
+                                freshFixContinuationStates,
+                                inProgressItem.ExecutionUnit,
+                                superviseResult))
+                        {
+                            SleepFreshFixContinuationPollInterval();
+                            continue;
+                        }
+
+                        freshFixContinuationStates.Remove(inProgressItem.ExecutionUnit);
 
                         if (superviseResult.Blocked)
                         {
@@ -1047,6 +1079,92 @@ internal static class RunCommand
         }
 
         return latestFixRequestedAt is not null && latestFixRequestedAt > launchedAt;
+    }
+
+    private static void TrackFreshFixContinuation(
+        CliContext context,
+        string executionUnit,
+        IDictionary<string, FreshFixContinuationState> continuationStates)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(continuationStates);
+
+        continuationStates.Remove(executionUnit);
+        if (FreshFixContinuationWindow <= TimeSpan.Zero || FreshFixContinuationMaxPolls <= 0)
+        {
+            return;
+        }
+
+        var now = TimestampFactory();
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        var launchedAt = requestArtifact is not null
+            && string.Equals(requestArtifact.EntryKind, "fix", StringComparison.Ordinal)
+            && DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var parsedLaunchedAt)
+                ? parsedLaunchedAt
+                : now;
+        var deadline = launchedAt + FreshFixContinuationWindow;
+        if (deadline <= now)
+        {
+            return;
+        }
+
+        continuationStates[executionUnit] = new FreshFixContinuationState(
+            deadline,
+            FreshFixContinuationMaxPolls);
+    }
+
+    private static bool ShouldContinueFreshFixSupervision(
+        IDictionary<string, FreshFixContinuationState> continuationStates,
+        string executionUnit,
+        RunSuperviseResult superviseResult)
+    {
+        ArgumentNullException.ThrowIfNull(continuationStates);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(superviseResult);
+
+        if (!continuationStates.TryGetValue(executionUnit, out var continuationState))
+        {
+            return false;
+        }
+
+        if (superviseResult.Blocked
+            || superviseResult.WorkerEntry != RunSupervisionWorkerEntry.Fix
+            || superviseResult.SessionStatus != RunSupervisionSessionStatus.Monitoring
+            || superviseResult.RetryScheduled
+            || superviseResult.AutoResumed)
+        {
+            continuationStates.Remove(executionUnit);
+            return false;
+        }
+
+        if (TimestampFactory() >= continuationState.Deadline || continuationState.RemainingPolls <= 0)
+        {
+            continuationStates.Remove(executionUnit);
+            return false;
+        }
+
+        if (continuationState.RemainingPolls == 1)
+        {
+            continuationStates.Remove(executionUnit);
+        }
+        else
+        {
+            continuationStates[executionUnit] = continuationState with
+            {
+                RemainingPolls = continuationState.RemainingPolls - 1
+            };
+        }
+
+        return true;
+    }
+
+    private static void SleepFreshFixContinuationPollInterval()
+    {
+        if (FreshFixContinuationPollInterval > TimeSpan.Zero)
+        {
+            Thread.Sleep(FreshFixContinuationPollInterval);
+        }
     }
 
     private static bool HasBlockingFixSupervisionSession(
