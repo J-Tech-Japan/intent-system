@@ -47,6 +47,13 @@ internal static class DirectRunFixOutcomeSupport
         "continue beyond initial repository inspection",
         "do not stop after a single inspection command"
     ];
+    private static readonly string[] PlanningPreambleContractGapPrefixes =
+    [
+        "close this run as",
+        "close the run as",
+        "mark this run as",
+        "mark the run as"
+    ];
 
     public static DirectRunProviderEvent? CreateCanonicalContractGapEventIfNeeded(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
@@ -597,6 +604,11 @@ internal static class DirectRunFixOutcomeSupport
 
         var normalized = value.Trim();
         var lower = normalized.ToLowerInvariant();
+        if (IsPlanningPreambleContractGapReference(lower))
+        {
+            return false;
+        }
+
         if (lower.Contains("contract-gap refusal", StringComparison.Ordinal)
             || lower.Contains("contract gap refusal", StringComparison.Ordinal)
             || lower.Contains("stopped with a contract-gap explanation", StringComparison.Ordinal)
@@ -608,6 +620,21 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return false;
+    }
+
+    private static bool IsPlanningPreambleContractGapReference(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+
+        var normalized = value.TrimStart();
+        while (normalized.Length > 0
+            && (char.IsDigit(normalized[0]) || normalized[0] is '.' or ')' or '-' or ':' || char.IsWhiteSpace(normalized[0])))
+        {
+            normalized = normalized[1..].TrimStart();
+        }
+
+        return PlanningPreambleContractGapPrefixes.Any(prefix =>
+            normalized.StartsWith(prefix, StringComparison.Ordinal));
     }
 
     private static bool ContainsSuccessfulInitialRepoInspection(JsonElement payload)
