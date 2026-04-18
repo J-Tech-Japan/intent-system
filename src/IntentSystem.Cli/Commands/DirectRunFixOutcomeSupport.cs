@@ -54,6 +54,12 @@ internal static class DirectRunFixOutcomeSupport
         "mark this run as",
         "mark the run as"
     ];
+    private static readonly string[] PlanningPreambleContractGapMarkers =
+    [
+        "opening the request artifact",
+        "decide whether this is a repair or a contract-gap refusal",
+        "decide whether this is a repair or a contract gap refusal"
+    ];
 
     public static DirectRunProviderEvent? CreateCanonicalContractGapEventIfNeeded(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
@@ -634,7 +640,9 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return PlanningPreambleContractGapPrefixes.Any(prefix =>
-            normalized.StartsWith(prefix, StringComparison.Ordinal));
+                normalized.StartsWith(prefix, StringComparison.Ordinal))
+            || PlanningPreambleContractGapMarkers.Any(marker =>
+                normalized.Contains(marker, StringComparison.Ordinal));
     }
 
     private static bool ContainsSuccessfulInitialRepoInspection(JsonElement payload)
