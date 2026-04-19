@@ -36,6 +36,12 @@ internal static class RunCommand
     public static Func<CliContext, string, RunStartResult> RunStartExecutor { get; set; } =
         RunStartCommand.ExecuteCore;
 
+    public static Func<string, string, IntakeIssueResult> IntakeIssueExecutor { get; set; } =
+        IntakeIssueCommand.ExecuteCore;
+
+    public static Func<CliContext, string, TextWriter, IntakeLaunchResult> IntakeLaunchExecutor { get; set; } =
+        IntakeLaunchCommand.ExecuteCore;
+
     public static Func<CliContext, string, RunImplementResult> RunImplementExecutor { get; set; } =
         RunImplementCommand.ExecuteCore;
 
@@ -493,6 +499,27 @@ internal static class RunCommand
                         $"Blocked item '{blockedItem.ExecutionUnit}' requires parent-side planning.");
                 }
 
+                if (TryResolveAutoContinueIntakeDomain(context, queueState, out var intakeDomain))
+                {
+                    ExecuteAction(
+                        context,
+                        actions,
+                        "intake issue",
+                        intakeDomain,
+                        () => IntakeIssueExecutor(context.RepoRoot, intakeDomain));
+                    ExecuteAction(
+                        context,
+                        actions,
+                        "intake launch",
+                        intakeDomain,
+                        () => IntakeLaunchExecutor(context, intakeDomain, TextWriter.Null));
+
+                    return CreateStopResult(
+                        NoActionableItemStopReason,
+                        actions,
+                        detail: $"Root run auto-continued into intake domain '{intakeDomain}'.");
+                }
+
                 return CreateStopResult(NoActionableItemStopReason, actions);
             }
             catch (RunDeterministicGapException exception)
@@ -509,6 +536,66 @@ internal static class RunCommand
             DeterministicContractGapStopReason,
             actions,
             detail: $"Run orchestration exceeded {IterationBudget} iterations.");
+    }
+
+    private static bool TryResolveAutoContinueIntakeDomain(
+        CliContext context,
+        QueueState queueState,
+        out string domain)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueState);
+
+        domain = string.Empty;
+
+        if (!queueState.Items.Any(item => item.State == QueueItemState.Completed))
+        {
+            return false;
+        }
+
+        var intakeDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "intake");
+        if (!Directory.Exists(intakeDirectory))
+        {
+            return false;
+        }
+
+        foreach (var artifactPath in Directory
+                     .EnumerateFiles(intakeDirectory, "*.execution.md", SearchOption.TopDirectoryOnly)
+                     .OrderBy(path => path, StringComparer.Ordinal))
+        {
+            IntakeExecutionRequest request;
+            try
+            {
+                request = IntakeExecutionArtifactMarkdown.Deserialize(File.ReadAllText(artifactPath));
+            }
+            catch (InvalidOperationException exception)
+            {
+                throw new RunDeterministicGapException(
+                    Path.GetFileName(artifactPath),
+                    $"Intake auto-continue could not read '{artifactPath}': {exception.Message}");
+            }
+
+            if (!request.ProposedExecutionUnits.Any(unit => IsAutoContinueLaunchable(queueState, unit.ExecutionUnitId)))
+            {
+                continue;
+            }
+
+            domain = request.Domain;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsAutoContinueLaunchable(QueueState queueState, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(queueState);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueItem = queueState.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+        return queueItem is null || queueItem.State == QueueItemState.Queued;
     }
 
     private static T ExecuteAction<T>(

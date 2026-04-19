@@ -223,6 +223,95 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenCompletedQueueAndLaunchableIntakeSlice_ReusesIntakeIssueAndLaunchBoundaries()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Completed))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            CreateIntakeExecutionArtifactMarkdown("auth", "AUTH-01", "AUTH-02"));
+        var originalIntakeIssueExecutor = RunCommand.IntakeIssueExecutor;
+        var originalIntakeLaunchExecutor = RunCommand.IntakeLaunchExecutor;
+        var invokedDomains = new List<string>();
+
+        try
+        {
+            RunCommand.IntakeIssueExecutor = (_, domain) =>
+            {
+                invokedDomains.Add($"issue:{domain}");
+                return new IntakeIssueResult
+                {
+                    Domain = domain,
+                    GeneratedExecutionUnits = ["AUTH-01", "AUTH-02"],
+                    ArtifactPaths = [],
+                    SkippedUnits = []
+                };
+            };
+            RunCommand.IntakeLaunchExecutor = (_, domain, _) =>
+            {
+                invokedDomains.Add($"launch:{domain}");
+                return new IntakeLaunchResult
+                {
+                    Domain = domain,
+                    LaunchedExecutionUnits = ["AUTH-01", "AUTH-02"],
+                    CreatedIssueRefs = [],
+                    WorktreePaths = [],
+                    SkippedUnits = []
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Null(result.ExecutionUnit);
+            Assert.Equal(["issue:auth", "launch:auth"], invokedDomains);
+            Assert.Collection(
+                result.Actions,
+                action =>
+                {
+                    Assert.Equal("intake issue", action.Name);
+                    Assert.Equal("auth", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("intake launch", action.Name);
+                    Assert.Equal("auth", action.ExecutionUnit);
+                });
+            Assert.Contains("auto-continued into intake domain 'auth'", result.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunCommand.IntakeIssueExecutor = originalIntakeIssueExecutor;
+            RunCommand.IntakeLaunchExecutor = originalIntakeLaunchExecutor;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenCompletedQueueAndOnlyCompletedIntakeUnits_DoesNotLoopBackIntoIntake()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(
+                CreateQueueState(
+                    CreateQueueItem(QueueItemState.Completed),
+                    CreateQueueItem(QueueItemState.Completed, executionUnit: "AUTH-01"))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            CreateIntakeExecutionArtifactMarkdown("auth", "AUTH-01"));
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("no-actionable-item", result.StopReason);
+        Assert.Empty(result.Actions);
+        Assert.Null(result.Detail);
+    }
+
+    [Fact]
     public void ExecuteCore_GivenReviewItemWithoutRequest_GeneratesReviewRequestAndStopsForReviewDecision()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -6824,6 +6913,32 @@ public sealed class RunCommandTests
             ReviewRole = "reviewer",
             Priority = "P1"
         };
+    }
+
+    private static string CreateIntakeExecutionArtifactMarkdown(string domain, params string[] executionUnits)
+    {
+        var sections = executionUnits.Select((executionUnit, index) => $$"""
+            ### `{{executionUnit}}`
+            source_file_path: intents/intent-cli/concepts/{{executionUnit.ToLowerInvariant()}}.md
+            target_part: concepts
+            dependencies:
+            - {{(index == 0 ? "none" : executionUnits[index - 1])}}
+            readiness_notes:
+            - Ready for issue cut
+            verification_hints:
+            - dotnet test IntentSystem.sln
+            """);
+
+        return $$"""
+            # Intake Execution Draft
+
+            ## Domain
+            `{{domain}}`
+
+            ## Proposed Execution Units
+
+            {{string.Join(Environment.NewLine + Environment.NewLine, sections)}}
+            """;
     }
 
     private static void PersistQueueState(string repoRoot, Func<QueueItem, QueueItem> update)
