@@ -218,6 +218,21 @@ internal static class RunSuperviseCommand
                 now);
         }
 
+        if (HasDeadWorkerSessionSucceeded(context, executionUnit, session.WorkerEntry))
+        {
+            var completedSession = session with
+            {
+                Status = RunSupervisionSessionStatus.Monitoring,
+                UpdatedAt = now,
+                LastHeartbeatAt = now,
+                NextRetryAt = null,
+                LastInterruptionReason = null
+            };
+
+            PersistSession(sessionArtifactPath, completedSession);
+            return CreateResult(sessionArtifactRef, completedSession);
+        }
+
         if (session.Status == RunSupervisionSessionStatus.RetryScheduled)
         {
             if (session.NextRetryAt is null)
@@ -766,6 +781,22 @@ internal static class RunSuperviseCommand
         var currentProviderEvents = SelectCurrentSessionEvents(providerEvents, requestArtifact.ProviderSessionId, requestArtifact.LaunchedAt);
 
         if (string.Equals(expectedEntryKind, "fix", StringComparison.Ordinal)
+            && DirectRunFixOutcomeSupport.TryResolveNoOpSuccessDetail(
+                currentProviderEvents,
+                executionUnit,
+                out _))
+        {
+            File.WriteAllText(
+                resultArtifactPath,
+                DirectRunResultArtifactJson.Serialize(resultArtifact with
+                {
+                    RunStatus = "succeeded"
+                }));
+
+            return false;
+        }
+
+        if (string.Equals(expectedEntryKind, "fix", StringComparison.Ordinal)
             && TryResolveFixWorktreeProgressFailure(
                 currentProviderEvents,
                 executionUnit,
@@ -1061,6 +1092,37 @@ internal static class RunSuperviseCommand
 
         exitCode = default;
         return false;
+    }
+
+    private static bool HasDeadWorkerSessionSucceeded(
+        CliContext context,
+        string executionUnit,
+        RunSupervisionWorkerEntry workerEntry)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var expectedEntryKind = ResolveDirectRunEntryKind(workerEntry);
+        var requestArtifactPath = ResolveDirectRunRequestArtifactPath(context, executionUnit);
+        var resultArtifactPath = ResolveDirectRunResultArtifactPath(context, executionUnit);
+        if (!File.Exists(requestArtifactPath) || !File.Exists(resultArtifactPath))
+        {
+            return false;
+        }
+
+        var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        if (!string.Equals(requestArtifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.SessionId, requestArtifact.ProviderSessionId, StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.RunStatus, "succeeded", StringComparison.Ordinal)
+            || !TryParseSessionProcessId(requestArtifact.ProviderSessionId, out var processId)
+            || IsProcessAlive(processId))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static string ResolveDirectRunRequestArtifactPath(CliContext context, string executionUnit)
