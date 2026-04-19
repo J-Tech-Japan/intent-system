@@ -219,6 +219,33 @@ internal static class DirectRunFixOutcomeSupport
         return HasSpecAndProductReadProgressSignal(providerEvents);
     }
 
+    public static bool TryResolveNoOpSuccessDetail(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        out string detail)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        detail = string.Empty;
+        if (!HasSuccessfulBackendExit(providerEvents))
+        {
+            return false;
+        }
+
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            if (!TryResolveNoOpSuccessDetail(providerEvents[index].Payload, out detail))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     internal static bool HasExplicitContractGapSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
@@ -483,6 +510,32 @@ internal static class DirectRunFixOutcomeSupport
             return false;
         }
 
+        return true;
+    }
+
+    private static bool TryResolveNoOpSuccessDetail(JsonElement payload, out string detail)
+    {
+        detail = string.Empty;
+        if (payload.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var value = payload.GetString();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Trim();
+        var lower = normalized.ToLowerInvariant();
+        if (!lower.Contains("without requiring code changes", StringComparison.Ordinal)
+            || !lower.Contains("already matches", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        detail = normalized;
         return true;
     }
 
