@@ -1226,12 +1226,25 @@ internal static class RunCommand
             return false;
         }
 
+        if (latestFixRequestedAt is null)
+        {
+            return false;
+        }
+
+        var latestActivityAt = TryResolveCurrentFixSessionLatestActivityAt(context, executionUnit, requestArtifact);
+        if (latestActivityAt is not null
+            && latestFixRequestedAt > latestActivityAt
+            && !TryReadBlockedFixSupervisionSession(context, executionUnit, out _))
+        {
+            return true;
+        }
+
         if (!DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var launchedAt))
         {
             return false;
         }
 
-        return latestFixRequestedAt is not null && latestFixRequestedAt > launchedAt;
+        return latestFixRequestedAt > launchedAt;
     }
 
     private static void TrackFreshFixContinuation(
