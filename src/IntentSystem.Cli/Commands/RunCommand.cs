@@ -28,6 +28,7 @@ internal static class RunCommand
     private const string ParentIntentUpdateRequiredStopReason = "parent-intent-update-required";
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
     private const string NonRetryableFailureStopReason = "non-retryable-failure";
+    private const string TransitionActor = "intent-cli";
 
     public static Func<CliContext, string, QueueDispatchCommandResult> QueueDispatchExecutor { get; set; } =
         QueueDispatchCommand.ExecuteCore;
@@ -64,6 +65,9 @@ internal static class RunCommand
 
     public static Func<IGitCommandRunner> GitCommandRunnerFactory { get; set; } =
         () => new GitCommandRunner();
+
+    public static Func<IGitHubCommandRunner> GitHubCommandRunnerFactory { get; set; } =
+        () => new GhCommandRunner();
 
     public static Func<DateTimeOffset> TimestampFactory { get; set; } = () => DateTimeOffset.UtcNow;
 
@@ -457,6 +461,16 @@ internal static class RunCommand
                 var blockedItem = queueState.Items.FirstOrDefault(item => item.State == QueueItemState.Blocked);
                 if (blockedItem is not null)
                 {
+                    if (TryReconcileExternallyCompletedBlockedItem(
+                            context,
+                            actions,
+                            queueState,
+                            blockedItem,
+                            out var externallyCompletedResult))
+                    {
+                        return externallyCompletedResult;
+                    }
+
                     if (TryHandlePostFixWorktreeProgressBoundary(context, actions, blockedItem, out var decisionResult))
                     {
                         if (decisionResult is not null)
@@ -621,6 +635,177 @@ internal static class RunCommand
             blockedItem.ExecutionUnit,
             session.LastInterruptionReason);
         return true;
+    }
+
+    private static bool TryReconcileExternallyCompletedBlockedItem(
+        CliContext context,
+        IReadOnlyList<RunCommandAction> actions,
+        QueueState queueState,
+        QueueItem blockedItem,
+        out RunCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(actions);
+        ArgumentNullException.ThrowIfNull(queueState);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+
+        result = null!;
+        if (!TryResolveBlockedItemExternalCompletion(context, blockedItem, out var linkedIssue, out var linkedPr))
+        {
+            return false;
+        }
+
+        var timestamp = TimestampFactory();
+        var transition = QueueManager.TransitionNonBlocking(
+            queueState,
+            blockedItem.ExecutionUnit,
+            QueueItemState.Completed,
+            TransitionActor,
+            timestamp);
+        var reconciledState = transition.UpdatedState with
+        {
+            Items = transition.UpdatedState.Items.Select(item =>
+                string.Equals(item.ExecutionUnit, blockedItem.ExecutionUnit, StringComparison.Ordinal)
+                    ? item with { BlockedBy = [] }
+                    : item).ToArray()
+        };
+        File.WriteAllText(context.GetQueueStatePath(), QueueStateSerializer.Serialize(reconciledState));
+
+        AppendRunEvent(
+            context.GetRunLogPath(),
+            new RunEvent
+            {
+                Ts = timestamp,
+                ExecutionUnit = blockedItem.ExecutionUnit,
+                Event = "pr-merged",
+                By = TransitionActor,
+                LinkedPr = linkedPr
+            });
+        AppendRunEvent(
+            context.GetRunLogPath(),
+            new RunEvent
+            {
+                Ts = timestamp,
+                ExecutionUnit = blockedItem.ExecutionUnit,
+                Event = "issue-closed",
+                By = TransitionActor,
+                LinkedIssue = linkedIssue
+            });
+        AppendRunEvent(context.GetRunLogPath(), transition.Event);
+
+        result = CreateStopResult(
+            NoActionableItemStopReason,
+            actions,
+            blockedItem.ExecutionUnit,
+            $"Execution unit '{blockedItem.ExecutionUnit}' was reconciled from externally completed linked child state.");
+        return true;
+    }
+
+    private static bool TryResolveBlockedItemExternalCompletion(
+        CliContext context,
+        QueueItem blockedItem,
+        out string linkedIssue,
+        out string linkedPr)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+
+        linkedIssue = null!;
+        linkedPr = null!;
+
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            linkedIssue = blockedItem.LinkedIssue?.Url
+                ?? LatestLinkedIssueResolver.Resolve(runEvents, blockedItem.ExecutionUnit);
+            linkedPr = LatestLinkedPrResolver.TryResolve(runEvents, blockedItem.ExecutionUnit) ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(linkedIssue) || string.IsNullOrWhiteSpace(linkedPr))
+            {
+                linkedIssue = null!;
+                linkedPr = null!;
+                return false;
+            }
+
+            var githubRunner = GitHubCommandRunnerFactory();
+            var issue = GitHubIssueRef.Parse(linkedIssue);
+            var issueResult = RunGitHub(
+                githubRunner,
+                [
+                    "issue",
+                    "view",
+                    issue.IssueNumber.ToString(),
+                    "--repo",
+                    $"{issue.Owner}/{issue.Repo}",
+                    "--json",
+                    "state"
+                ],
+                "gh issue view failed.");
+            using var issueDocument = JsonDocument.Parse(issueResult.StdOut);
+            var issueState = issueDocument.RootElement.GetProperty("state").GetString();
+            if (!string.Equals(issueState, "CLOSED", StringComparison.OrdinalIgnoreCase))
+            {
+                linkedIssue = null!;
+                linkedPr = null!;
+                return false;
+            }
+
+            var pullRequest = GitHubPullRequestRef.Parse(linkedPr);
+            var pullRequestResult = RunGitHub(
+                githubRunner,
+                [
+                    "pr",
+                    "view",
+                    pullRequest.PullNumber.ToString(),
+                    "--repo",
+                    $"{pullRequest.Owner}/{pullRequest.Repo}",
+                    "--json",
+                    "state,mergeCommit"
+                ],
+                "gh pr view failed.");
+            using var pullRequestDocument = JsonDocument.Parse(pullRequestResult.StdOut);
+            var isMerged = pullRequestDocument.RootElement.TryGetProperty("mergeCommit", out var mergeCommitElement)
+                && mergeCommitElement.ValueKind != JsonValueKind.Null;
+            if (!isMerged)
+            {
+                linkedIssue = null!;
+                linkedPr = null!;
+                return false;
+            }
+
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            linkedIssue = null!;
+            linkedPr = null!;
+            return false;
+        }
+    }
+
+    private static GitHubCommandResult RunGitHub(
+        IGitHubCommandRunner runner,
+        IReadOnlyList<string> arguments,
+        string defaultError)
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        var result = runner.Run(arguments);
+        if (result.ExitCode != 0)
+        {
+            var error = string.IsNullOrWhiteSpace(result.StdErr)
+                ? defaultError
+                : result.StdErr.Trim();
+            throw new InvalidOperationException(error);
+        }
+
+        return result;
     }
 
     private static bool TryReconcileBlockedFixSupervisionState(
