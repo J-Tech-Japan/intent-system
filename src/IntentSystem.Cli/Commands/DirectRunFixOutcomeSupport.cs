@@ -60,6 +60,17 @@ internal static class DirectRunFixOutcomeSupport
         "decide whether this is a repair or a contract-gap refusal",
         "decide whether this is a repair or a contract gap refusal"
     ];
+    private static readonly string[] NoOpEditFreeMarkers =
+    [
+        "without requiring code changes",
+        "no repair edits were needed"
+    ];
+    private static readonly string[] NoOpSatisfiedMarkers =
+    [
+        "already matches",
+        "already satisfies the bounded acceptance criteria",
+        "satisfies the bounded acceptance criteria"
+    ];
 
     public static DirectRunProviderEvent? CreateCanonicalContractGapEventIfNeeded(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
@@ -529,8 +540,8 @@ internal static class DirectRunFixOutcomeSupport
 
         var normalized = value.Trim();
         var lower = normalized.ToLowerInvariant();
-        if (!lower.Contains("without requiring code changes", StringComparison.Ordinal)
-            || !lower.Contains("already matches", StringComparison.Ordinal))
+        if (!NoOpEditFreeMarkers.Any(marker => lower.Contains(marker, StringComparison.Ordinal))
+            || !NoOpSatisfiedMarkers.Any(marker => lower.Contains(marker, StringComparison.Ordinal)))
         {
             return false;
         }

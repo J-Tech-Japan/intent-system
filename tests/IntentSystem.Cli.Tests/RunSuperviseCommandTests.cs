@@ -1007,6 +1007,134 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenDeadFixWorkerSessionWithVerificationHeavyNoOpSuccessAndBackendExitZero_MarksSucceededWithoutAutoResume()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession(workerEntry: RunSupervisionWorkerEntry.Fix)));
+        WriteDeadFixDirectRunArtifacts(repoRoot, "pid:999999");
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                new[]
+                {
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:00.5000000+00:00",
+                        "G25",
+                        "fix",
+                        "pid:999999",
+                        "provider-event",
+                        "No repair edits were needed. The Toy Calc slice in this worktree already satisfies the bounded acceptance criteria."),
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:00.6000000+00:00",
+                        "G25",
+                        "fix",
+                        "pid:999999",
+                        "provider-event",
+                        "Verification:"),
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:00.7000000+00:00",
+                        "G25",
+                        "fix",
+                        "pid:999999",
+                        "provider-event",
+                        "- dotnet test --no-restore passed: 9 tests, 0 failures."),
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:00.8000000+00:00",
+                        "G25",
+                        "fix",
+                        "pid:999999",
+                        "provider-event",
+                        "- dotnet run --project src/ToyCalc -- add 2 3 printed 5."),
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:00.9000000+00:00",
+                        "G25",
+                        "fix",
+                        "pid:999999",
+                        "provider-event",
+                        "- dotnet run --project src/ToyCalc -- sub 7 4 printed 3."),
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:00.9500000+00:00",
+                        "G25",
+                        "fix",
+                        "pid:999999",
+                        "provider-event",
+                        "- dotnet run --project src/ToyCalc -- multiply 2 3 returned exit code 1 and printed the usage line."),
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:00.9750000+00:00",
+                        "G25",
+                        "fix",
+                        "pid:999999",
+                        "provider-event",
+                        "- I did not touch the pre-existing .intent-cli/** runtime artifacts or make any repo changes."),
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:01.0000000+00:00",
+                        "G25",
+                        "fix",
+                        "pid:999999",
+                        "provider-event",
+                        new
+                        {
+                            type = "backend-exit",
+                            exit_code = 0
+                        })
+                }
+                .Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRunFixExecutor = RunSuperviseCommand.RunFixExecutor;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.RunFixExecutor = (_, _) =>
+                throw new InvalidOperationException("unexpected extra fix worker launch");
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Monitoring, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.Null(session.NextRetryAt);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.result.json")));
+            Assert.Equal("pid:999999", resultArtifact.SessionId);
+            Assert.Equal("succeeded", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "auto-resumed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.RunFixExecutor = originalRunFixExecutor;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenStartupOnlyDeadFixWorkerSession_BlocksWithoutConsumingRetryBudget()
     {
         using var tempDirectory = new TemporaryDirectory();
