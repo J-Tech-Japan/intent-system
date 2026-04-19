@@ -1196,7 +1196,7 @@ internal static class RunCommand
             DescribeSupervisionResult(superviseResult));
     }
 
-    private static bool ShouldLaunchFreshFixAttempt(
+    internal static bool ShouldLaunchFreshFixAttempt(
         CliContext context,
         string executionUnit,
         DirectRunRequestArtifact? requestArtifact,
@@ -1394,29 +1394,22 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
-        if (TryResolveBlockedFixSupervisionSession(
-                context,
-                executionUnit,
-                latestFixRequestedAt,
-                out _))
-        {
-            return true;
-        }
-
-        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
-            context.Config.Supervision.ArtifactRoot,
-            executionUnit);
-        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
-            context.RepoRoot,
-            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
-        if (!File.Exists(sessionArtifactPath))
+        if (!TryReadSupervisionSession(context, executionUnit, out var session))
         {
             return false;
         }
 
-        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
-        if (session.WorkerEntry == RunSupervisionWorkerEntry.Fix
-            && session.Status == RunSupervisionSessionStatus.Blocked)
+        if (session.WorkerEntry != RunSupervisionWorkerEntry.Fix)
+        {
+            return true;
+        }
+
+        if (session.Status == RunSupervisionSessionStatus.Blocked)
+        {
+            return latestFixRequestedAt is null || latestFixRequestedAt <= session.UpdatedAt;
+        }
+
+        if (IsStaleMonitoringFixSupervisionSession(session, latestFixRequestedAt))
         {
             return false;
         }
@@ -1424,7 +1417,7 @@ internal static class RunCommand
         return true;
     }
 
-    private static bool TryReadBlockedFixSupervisionSession(
+    private static bool TryReadSupervisionSession(
         CliContext context,
         string executionUnit,
         out RunSupervisionSession session)
@@ -1445,10 +1438,21 @@ internal static class RunCommand
         }
 
         session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
-        if (session.WorkerEntry != RunSupervisionWorkerEntry.Fix
+        return true;
+    }
+
+    private static bool TryReadBlockedFixSupervisionSession(
+        CliContext context,
+        string executionUnit,
+        out RunSupervisionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (!TryReadSupervisionSession(context, executionUnit, out session)
+            || session.WorkerEntry != RunSupervisionWorkerEntry.Fix
             || session.Status != RunSupervisionSessionStatus.Blocked)
         {
-            session = null!;
             return false;
         }
 
@@ -1476,6 +1480,18 @@ internal static class RunCommand
         }
 
         return true;
+    }
+
+    private static bool IsStaleMonitoringFixSupervisionSession(
+        RunSupervisionSession session,
+        DateTimeOffset? latestFixRequestedAt)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        return session.WorkerEntry == RunSupervisionWorkerEntry.Fix
+            && session.Status == RunSupervisionSessionStatus.Monitoring
+            && latestFixRequestedAt is not null
+            && latestFixRequestedAt > session.UpdatedAt;
     }
 
     private static string? TryReadDirectRunStatus(
