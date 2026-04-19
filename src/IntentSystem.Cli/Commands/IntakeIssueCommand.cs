@@ -71,12 +71,26 @@ internal static class IntakeIssueCommand
 
     internal static IntakeIssueResult ExecuteCore(string repoRoot, string domain)
     {
+        return ExecuteCore(repoRoot, domain, executionUnit: null);
+    }
+
+    internal static IntakeIssueResult ExecuteCore(string repoRoot, string domain, string? executionUnit)
+    {
         var baseline = LoadIssueBaseline(repoRoot);
         var units = LoadExecutionUnits(repoRoot, domain);
+        if (!string.IsNullOrWhiteSpace(executionUnit))
+        {
+            units = units
+                .Where(unit => string.Equals(unit.ExecutionUnitId, executionUnit, StringComparison.Ordinal))
+                .ToArray();
+        }
+
         if (units.Count == 0)
         {
             throw new InvalidOperationException(
-                $"No intake-origin issue-ready execution units were found for domain '{domain}'.");
+                string.IsNullOrWhiteSpace(executionUnit)
+                    ? $"No intake-origin issue-ready execution units were found for domain '{domain}'."
+                    : $"Execution unit '{executionUnit}' was not found in intake execution artifact for domain '{domain}'.");
         }
 
         return GenerateArtifacts(repoRoot, domain, units, baseline);
