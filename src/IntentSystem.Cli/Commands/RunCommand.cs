@@ -1414,6 +1414,11 @@ internal static class RunCommand
             return false;
         }
 
+        if (IsStaleMonitoringFixSupervisionSession(context, executionUnit, latestFixRequestedAt))
+        {
+            return false;
+        }
+
         var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
         if (session.WorkerEntry == RunSupervisionWorkerEntry.Fix
             && session.Status == RunSupervisionSessionStatus.Blocked)
@@ -1422,6 +1427,52 @@ internal static class RunCommand
         }
 
         return true;
+    }
+
+    private static bool IsStaleMonitoringFixSupervisionSession(
+        CliContext context,
+        string executionUnit,
+        DateTimeOffset? latestFixRequestedAt)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        if (latestFixRequestedAt is null
+            || requestArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "fix", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit, "fix");
+        if (resultArtifact is null
+            || !MatchesCurrentDirectRunRequestBoundary(requestArtifact, resultArtifact)
+            || string.Equals(resultArtifact.RunStatus, "running", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            executionUnit);
+        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(sessionArtifactPath))
+        {
+            return false;
+        }
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
+        if (session.WorkerEntry != RunSupervisionWorkerEntry.Fix
+            || session.Status != RunSupervisionSessionStatus.Monitoring)
+        {
+            return false;
+        }
+
+        var latestActivityAt = TryResolveCurrentFixSessionLatestActivityAt(context, executionUnit, requestArtifact);
+        return latestActivityAt is not null && latestFixRequestedAt > latestActivityAt;
     }
 
     private static bool TryReadBlockedFixSupervisionSession(
