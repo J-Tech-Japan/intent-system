@@ -3333,7 +3333,7 @@ public sealed class RunSuperviseCommandTests
     {
         public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
         {
-            Assert.Equal(["status", "--short", "--untracked-files=all"], arguments);
+            Assert.Equal(["status", "--porcelain=v1", "--untracked-files=all"], arguments);
             return new GitCommandResult
             {
                 ExitCode = 0,

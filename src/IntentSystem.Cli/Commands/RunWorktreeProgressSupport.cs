@@ -105,7 +105,7 @@ internal static class RunWorktreeProgressSupport
         {
             statusResult = gitCommandRunner.Run(
                 worktreePath,
-                ["status", "--short", "--untracked-files=all"]);
+                ["status", "--porcelain=v1", "--untracked-files=all"]);
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
