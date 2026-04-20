@@ -159,15 +159,6 @@ internal static class RunCommand
                             continue;
                         }
 
-                        if (string.Equals(implementRunStatus, "failed", StringComparison.Ordinal))
-                        {
-                            return CreateStopResult(
-                                NonRetryableFailureStopReason,
-                                actions,
-                                inProgressItem.ExecutionUnit,
-                                $"Implement direct run failed for '{inProgressItem.ExecutionUnit}'.");
-                        }
-
                         if (!ArtifactExists(context, RunImplementArtifactPathResolver.Resolve(inProgressItem.ExecutionUnit)))
                         {
                             ExecuteAction(

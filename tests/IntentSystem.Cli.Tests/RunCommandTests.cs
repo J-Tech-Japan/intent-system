@@ -4351,6 +4351,116 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenReactivatedImplementWithStaleFailedResult_ReclassifiesToInspectionBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "TOY-CALC-V0-02"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Active, executionUnit: "TOY-CALC-V0-02"))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            runLogPath,
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"TOY-CALC-V0-02","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"TOY-CALC-V0-02","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T11:55:00Z","execution_unit":"TOY-CALC-V0-02","event":"blocked","by":"intent-cli","reason":"Worker session 'pid:45803' for 'TOY-CALC-V0-02' exited with backend exit code 1."}
+            {"ts":"2026-04-10T12:15:00Z","execution_unit":"TOY-CALC-V0-02","event":"activated","by":"intent-cli"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "TOY-CALC-V0-02", "packet.yaml"),
+            """
+            execution_unit: "TOY-CALC-V0-02"
+
+            implementation_issue:
+              issue_title: "[G129] Preserve Detached Implement Bounded Progress After Initial Inventory"
+              goal: "Preserve detached implement progress boundaries."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/TOY-CALC-V0-02/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "TOY-CALC-V0-02.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "TOY-CALC-V0-02.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "TOY-CALC-V0-02",
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "TOY-CALC-V0-02"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-129-toy-calc-v0-02",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                HandoffArtifactRef = ".intent-cli/implement/TOY-CALC-V0-02.request.md",
+                RetryCount = 0,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastInterruptionReason = "Worker session 'pid:45803' for 'TOY-CALC-V0-02' exited with backend exit code 1."
+            }));
+        WriteDirectRunRequest(
+            repoRoot,
+            "TOY-CALC-V0-02",
+            "implement",
+            "pid:45803",
+            provider: "Codex",
+            launchedAt: "2026-04-10T12:20:00.0000000+00:00");
+        WriteDirectRunResult(
+            repoRoot,
+            "TOY-CALC-V0-02",
+            "implement",
+            "failed",
+            providerEvents: CreateInitialInventoryImplementProviderEvents("TOY-CALC-V0-02", "pid:45803"),
+            sessionId: "pid:45803",
+            provider: "Codex");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("non-retryable-failure", result.StopReason);
+        Assert.Equal("TOY-CALC-V0-02", result.ExecutionUnit);
+        var action = Assert.Single(result.Actions);
+        Assert.Equal("run supervise", action.Name);
+        Assert.Contains("initial repo-inspection command completed", result.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("Implement direct run failed for 'TOY-CALC-V0-02'.", result.Detail, StringComparison.Ordinal);
+
+        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "TOY-CALC-V0-02");
+        Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+        Assert.Contains("initial repo-inspection command completed", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "supervision", "TOY-CALC-V0-02.session.json")));
+        Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+        Assert.Contains("initial repo-inspection command completed", session.LastInterruptionReason, StringComparison.Ordinal);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "TOY-CALC-V0-02.provider.jsonl")));
+        Assert.Contains(
+            providerEvents,
+            providerEvent => providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("reason", out var reasonElement)
+                && string.Equals(reasonElement.GetString(), "implement-session-ended-after-initial-inspection", StringComparison.Ordinal));
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        Assert.Equal("blocked", runEvents[^1].Event);
+        Assert.Contains("initial repo-inspection command completed", runEvents[^1].Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ExecuteCore_GivenStartupOnlyDeadFixWorkerSessionWhenBackendExitLandsDuringRaceWindow_StopsWithNonRetryableFailureDetail()
     {
         using var tempDirectory = new TemporaryDirectory();

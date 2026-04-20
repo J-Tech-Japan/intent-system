@@ -761,10 +761,14 @@ internal static class RunSuperviseCommand
 
         var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
         var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        var canReclassifyStaleFailedImplementResult =
+            string.Equals(expectedEntryKind, "implement", StringComparison.Ordinal)
+            && string.Equals(resultArtifact.RunStatus, "failed", StringComparison.Ordinal);
         if (!string.Equals(requestArtifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
             || !string.Equals(resultArtifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
             || !string.Equals(resultArtifact.SessionId, requestArtifact.ProviderSessionId, StringComparison.Ordinal)
-            || !string.Equals(resultArtifact.RunStatus, "running", StringComparison.Ordinal)
+            || (!string.Equals(resultArtifact.RunStatus, "running", StringComparison.Ordinal)
+                && !canReclassifyStaleFailedImplementResult)
             || !TryParseSessionProcessId(requestArtifact.ProviderSessionId, out var processId)
             || IsProcessAlive(processId))
         {
