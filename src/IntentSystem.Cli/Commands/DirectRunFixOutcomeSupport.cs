@@ -60,6 +60,31 @@ internal static class DirectRunFixOutcomeSupport
         "decide whether this is a repair or a contract-gap refusal",
         "decide whether this is a repair or a contract gap refusal"
     ];
+    private static readonly string[] EvidenceOnlyReviewFollowUpMarkers =
+    [
+        "stronger verification",
+        "real process-boundary test",
+        "real process boundary test",
+        "process-boundary test",
+        "process boundary test",
+        "invalid-usage assertions",
+        "invalid usage assertions",
+        "exact exit 1",
+        "exact exit code",
+        "exit code == 1",
+        "empty stdout",
+        "canonical stderr"
+    ];
+    private static readonly string[] EvidenceOnlyReviewFollowUpContextMarkers =
+    [
+        "review asks",
+        "review comment asks",
+        "comment asks",
+        "narrower contract detail",
+        "repo-local intent/spec artifacts lag implementation",
+        "repo-local intent/spec artifacts",
+        "repo-local spec artifacts lag implementation"
+    ];
     private static readonly string[] NoOpEditFreeMarkers =
     [
         "without requiring code changes",
@@ -696,6 +721,11 @@ internal static class DirectRunFixOutcomeSupport
             {
                 detail = $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' reported a deterministic contract gap.";
             }
+            else if (IsEvidenceOnlyReviewFollowUpContractGapReference(detail))
+            {
+                detail = string.Empty;
+                return false;
+            }
 
             return true;
         }
@@ -706,6 +736,11 @@ internal static class DirectRunFixOutcomeSupport
             if (!TryReadString(payload, "detail", out detail))
             {
                 detail = $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' reported a deterministic contract gap.";
+            }
+            else if (IsEvidenceOnlyReviewFollowUpContractGapReference(detail))
+            {
+                detail = string.Empty;
+                return false;
             }
 
             return true;
@@ -728,6 +763,11 @@ internal static class DirectRunFixOutcomeSupport
             return false;
         }
 
+        if (IsEvidenceOnlyReviewFollowUpContractGapReference(lower))
+        {
+            return false;
+        }
+
         if (lower.Contains("contract-gap refusal", StringComparison.Ordinal)
             || lower.Contains("contract gap refusal", StringComparison.Ordinal)
             || lower.Contains("stopped with a contract-gap explanation", StringComparison.Ordinal)
@@ -739,6 +779,17 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return false;
+    }
+
+    private static bool IsEvidenceOnlyReviewFollowUpContractGapReference(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return EvidenceOnlyReviewFollowUpMarkers.Any(marker =>
+                normalized.Contains(marker, StringComparison.Ordinal))
+            && EvidenceOnlyReviewFollowUpContextMarkers.Any(marker =>
+                normalized.Contains(marker, StringComparison.Ordinal));
     }
 
     private static bool IsPlanningPreambleContractGapReference(string value)

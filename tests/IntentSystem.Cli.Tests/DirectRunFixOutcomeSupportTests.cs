@@ -428,6 +428,73 @@ public sealed class DirectRunFixOutcomeSupportTests
         Assert.Null(contractGapEvent);
     }
 
+    [Fact]
+    public void HasExplicitContractGapSignal_GivenEvidenceOnlyReviewFollowUpContractGapUncertainty_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("I cannot tell whether repo-local intent/spec artifacts lag implementation or whether the review comment asks for a narrower contract detail, but the comment asks for stronger verification: add a real process-boundary test and tighten invalid-usage assertions to exact exit code == 1, empty stdout, and canonical stderr."),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs' succeeded in 0ms")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenEvidenceOnlyReviewFollowUpContractGapUncertaintyAndSuccessfulBackendExit_DoesNotCreateFailureBoundary()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-02.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/ProgramBoundaryTests.cs' succeeded in 0ms"),
+            CreateProviderEvent("I cannot tell whether repo-local intent/spec artifacts lag implementation or whether the review asks for a narrower contract detail, but the comment asks for stronger verification: add a real process-boundary test and tighten invalid-usage assertions to exact exit code == 1, empty stdout, and canonical stderr."),
+            CreateProviderEvent("Verified direct process boundary evidence: invalid usage exits 1 with empty stdout and canonical stderr; success exits 0 with stdout 5."),
+            CreateSuccessfulBackendExitEvent()
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-20T04:10:00Z"),
+            "TOY-CALC-V0-02",
+            "fix",
+            "Codex",
+            "pid:11911",
+            providerSessionAlive: false);
+
+        Assert.Null(contractGapEvent);
+    }
+
+    [Fact]
+    public void HasExplicitContractGapSignal_GivenContractGapPayloadForEvidenceOnlyReviewFollowUp_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-02.request.md' succeeded in 0ms"),
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-20T04:09:59.0000000+00:00",
+                ExecutionUnit = "TOY-CALC-V0-02",
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = "pid:11911",
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    type = "contract-gap",
+                    stop_reason = "deterministic-contract-gap",
+                    detail = "Worker cannot tell whether repo-local intent/spec artifacts lag implementation or whether the review comment asks for a narrower contract detail, but the comment asks for stronger verification: add a real process-boundary test and tighten invalid-usage assertions to exact exit code == 1, empty stdout, and canonical stderr."
+                })
+            }
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
+
+        Assert.False(resolved);
+    }
+
     private static IReadOnlyList<DirectRunProviderEvent> CreateIssue295CurrentSessionRawEvents(string? echoedRequest = null)
     {
         return
