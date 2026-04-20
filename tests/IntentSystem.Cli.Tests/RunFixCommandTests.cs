@@ -69,8 +69,15 @@ public sealed class RunFixCommandTests
             var markdown = File.ReadAllText(artifactPath);
             Assert.Contains("- packet_ref: .intent-cli/issues/G20/packet.yaml", markdown, StringComparison.Ordinal);
             Assert.Contains("- review_context_ref: .intent-cli/issues/G20/review-context.md", markdown, StringComparison.Ordinal);
-            Assert.Contains("- review_comment_artifact_ref: .intent-cli/reviews/G20.comment.json", markdown, StringComparison.Ordinal);
-            Assert.Contains("- review_request_ref: .intent-cli/reviews/G20.request.json", markdown, StringComparison.Ordinal);
+            Assert.Contains(
+                $"- review_comment_artifact_ref: {Path.Combine(repoRoot, ".intent-cli", "reviews", "G20.comment.json")}",
+                markdown,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                $"- review_request_ref: {Path.Combine(repoRoot, ".intent-cli", "reviews", "G20.request.json")}",
+                markdown,
+                StringComparison.Ordinal);
+            Assert.Contains("- review_comment_body_path: /repo/prepared-comment.md", markdown, StringComparison.Ordinal);
             Assert.Contains("- latest_linked_pr: https://github.com/J-Tech-Japan/intent-system/pull/69", markdown, StringComparison.Ordinal);
             Assert.Contains("- latest_comment_ref: https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2", markdown, StringComparison.Ordinal);
 
@@ -202,6 +209,68 @@ public sealed class RunFixCommandTests
                 File.ReadAllText(Path.Combine(worktreePath, ".intent-cli", "issues", "G20", "review-context.md")));
             Assert.False(File.Exists(Path.Combine(worktreePath, ".intent-cli", "run.result.json")));
             Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "OLD-01", "packet.yaml")));
+        }
+        finally
+        {
+            RunFixCommand.TimestampFactory = originalTimestampFactory;
+            RunFixCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenRelativeReviewArtifacts_RendersAbsoluteRepairInputsForNestedWorktreeFixSession()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G20"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G20", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G20.comment.json"),
+            CreateReviewCommentArtifactJson(
+                reviewRequestRef: ".intent-cli/reviews/G20.request.json",
+                bodyPath: ".intent-cli/reviews/G20.comment.md"));
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunFixCommand.TimestampFactory;
+        var originalLauncherFactory = RunFixCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunFixCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:25:00Z");
+            RunFixCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:8765",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G20' for provider 'Claude'.");
+
+            var exitCode = RunFixCommand.Execute(CreateContext(repoRoot), ["G20"], writer);
+
+            Assert.Equal(0, exitCode);
+            var markdown = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "fix", "G20.request.md"));
+            Assert.Contains(
+                $"- review_comment_artifact_ref: {Path.Combine(repoRoot, ".intent-cli", "reviews", "G20.comment.json")}",
+                markdown,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                $"- review_request_ref: {Path.Combine(repoRoot, ".intent-cli", "reviews", "G20.request.json")}",
+                markdown,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                $"- review_comment_body_path: {Path.Combine(repoRoot, ".intent-cli", "reviews", "G20.comment.md")}",
+                markdown,
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -2173,15 +2242,17 @@ public sealed class RunFixCommandTests
 
     private static string CreateReviewCommentArtifactJson(
         string executionUnit = "G20",
-        string linkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/69")
+        string linkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/69",
+        string reviewRequestRef = ".intent-cli/reviews/G20.request.json",
+        string bodyPath = "/repo/prepared-comment.md")
     {
         return $$"""
         {
           "execution_unit": "{{executionUnit}}",
-          "review_request_ref": ".intent-cli/reviews/G20.request.json",
+          "review_request_ref": "{{reviewRequestRef}}",
           "linked_pr": "{{linkedPr}}",
           "comment_ref": "https://github.com/J-Tech-Japan/intent-system/pull/69#issuecomment-2",
-          "body_path": "/repo/prepared-comment.md"
+          "body_path": "{{bodyPath}}"
         }
         """;
     }
