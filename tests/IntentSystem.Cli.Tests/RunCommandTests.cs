@@ -4605,6 +4605,214 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenReactivatedImplementWithStaleFailedResultFromOlderSession_LaunchesFreshImplement()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "TOY-CALC-V0-02"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Active, executionUnit: "TOY-CALC-V0-02") with
+                {
+                    BlockedBy = ["Worker session 'pid:45803' for 'TOY-CALC-V0-02' exited with backend exit code 1."]
+                })));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            runLogPath,
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"TOY-CALC-V0-02","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"TOY-CALC-V0-02","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T12:05:00Z","execution_unit":"TOY-CALC-V0-02","event":"blocked","by":"intent-cli","reason":"Worker session 'pid:45803' for 'TOY-CALC-V0-02' exited with backend exit code 1."}
+            {"ts":"2026-04-10T12:15:00Z","execution_unit":"TOY-CALC-V0-02","event":"activated","by":"intent-cli"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "TOY-CALC-V0-02", "packet.yaml"),
+            """
+            execution_unit: "TOY-CALC-V0-02"
+
+            implementation_issue:
+              issue_title: "[G130] Re-Enter Fresh Implement Launch Instead Of Reusing Stale Failed Result"
+              goal: "Launch a fresh implement session after active re-entry."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/TOY-CALC-V0-02/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "TOY-CALC-V0-02.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "TOY-CALC-V0-02.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "TOY-CALC-V0-02",
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "TOY-CALC-V0-02"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-130-toy-calc-v0-02",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                HandoffArtifactRef = ".intent-cli/implement/TOY-CALC-V0-02.request.md",
+                RetryCount = 0,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T12:05:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T12:05:00Z"),
+                LastInterruptionReason = "Worker session 'pid:45803' for 'TOY-CALC-V0-02' exited with backend exit code 1."
+            }));
+        WriteDirectRunRequest(
+            repoRoot,
+            "TOY-CALC-V0-02",
+            "implement",
+            "pid:45803",
+            provider: "Codex",
+            launchedAt: "2026-04-10T12:00:00.0000000+00:00");
+        WriteDirectRunResult(
+            repoRoot,
+            "TOY-CALC-V0-02",
+            "implement",
+            "failed",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:05:00.0000000+00:00",
+                    ExecutionUnit = "TOY-CALC-V0-02",
+                    Provider = "Codex",
+                    EntryKind = "implement",
+                    SessionId = "pid:45803",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 1
+                    })
+                }
+            ],
+            sessionId: "pid:45803",
+            provider: "Codex");
+        var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
+        var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+
+        try
+        {
+            RunCommand.RunImplementExecutor = (_, executionUnit) =>
+            {
+                WriteDirectRunRequest(
+                    repoRoot,
+                    executionUnit,
+                    "implement",
+                    "pid:4242",
+                    provider: "Codex",
+                    launchedAt: "2026-04-10T12:21:00.0000000+00:00");
+                WriteDirectRunResult(
+                    repoRoot,
+                    executionUnit,
+                    "implement",
+                    "running",
+                    providerEvents:
+                    [
+                        new DirectRunProviderEvent
+                        {
+                            Timestamp = "2026-04-10T12:21:00.0000000+00:00",
+                            ExecutionUnit = executionUnit,
+                            Provider = "Codex",
+                            EntryKind = "implement",
+                            SessionId = "pid:4242",
+                            Kind = "session-metadata",
+                            Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                            {
+                                model = "gpt-5.4-mini",
+                                transport = "responses",
+                                command = "codex"
+                            })
+                        }
+                    ],
+                    sessionId: "pid:4242",
+                    provider: "Codex");
+                File.AppendAllText(
+                    runLogPath,
+                    RunLogSerializer.SerializeLine(new RunEvent
+                    {
+                        Ts = DateTimeOffset.Parse("2026-04-10T12:21:00Z"),
+                        ExecutionUnit = executionUnit,
+                        Event = "provider-lifecycle",
+                        By = "intent-cli",
+                        LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                        EntryKind = "implement",
+                        Provider = "Codex",
+                        Model = "gpt-5.4-mini",
+                        SessionId = "pid:4242",
+                        RunStatus = "running",
+                        RawLogRef = $".intent-cli/runs/{executionUnit}.provider.jsonl",
+                        ResultRef = $".intent-cli/runs/{executionUnit}.result.json",
+                        PacketRef = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                        ReviewContextRef = $".intent-cli/issues/{executionUnit}/review-context.md",
+                        WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit)
+                    }) + Environment.NewLine);
+
+                return new RunImplementResult
+                {
+                    Request = CreateRunImplementRequest(repoRoot, executionUnit),
+                    ArtifactPath = $".intent-cli/implement/{executionUnit}.request.md",
+                    DirectRun = CreateDirectRunLaunchResult(executionUnit, "pid:4242")
+                };
+            };
+            RunCommand.RunSuperviseExecutor = (_, executionUnit) => new RunSuperviseResult
+            {
+                ExecutionUnit = executionUnit,
+                SessionArtifactPath = $".intent-cli/supervision/{executionUnit}.session.json",
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                SessionStatus = RunSupervisionSessionStatus.Monitoring,
+                RetryCount = 0,
+                RetryBudget = 3,
+                HandoffArtifactRef = $".intent-cli/implement/{executionUnit}.request.md"
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal("TOY-CALC-V0-02", result.ExecutionUnit);
+            Assert.Equal(2, result.Actions.Count);
+            Assert.Equal("run implement", result.Actions[0].Name);
+            Assert.Equal("run supervise", result.Actions[1].Name);
+            Assert.Contains("under supervision", result.Detail, StringComparison.Ordinal);
+
+            var requestArtifact = DirectRunRequestArtifactJson.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "TOY-CALC-V0-02.request.json")));
+            Assert.Equal("pid:4242", requestArtifact.ProviderSessionId);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "TOY-CALC-V0-02.result.json")));
+            Assert.Equal("pid:4242", resultArtifact.SessionId);
+            Assert.Equal("running", resultArtifact.RunStatus);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "TOY-CALC-V0-02");
+            Assert.Equal(QueueItemState.Active, selectedItem.State);
+            Assert.Empty(selectedItem.BlockedBy);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Contains(runEvents, runEvent =>
+                string.Equals(runEvent.Event, "provider-lifecycle", StringComparison.Ordinal)
+                && string.Equals(runEvent.SessionId, "pid:4242", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunCommand.RunImplementExecutor = originalRunImplementExecutor;
+            RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteCore_GivenStartupOnlyDeadFixWorkerSessionWhenBackendExitLandsDuringRaceWindow_StopsWithNonRetryableFailureDetail()
     {
         using var tempDirectory = new TemporaryDirectory();
