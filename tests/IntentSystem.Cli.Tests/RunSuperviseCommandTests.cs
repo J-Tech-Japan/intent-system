@@ -2012,6 +2012,75 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenDeadFixWorkerSessionWithNestedWorktreeRuntimeArtifacts_DoesNotClassifyThemAsMeaningfulDiff()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Fixing)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateFixingRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "fix", "G25.request.md"),
+            "# Repair Worker Handoff");
+        WriteDeadFixDirectRunArtifacts(repoRoot, "pid:999999");
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                CreateToyCalcReplayRuntimeArtifactOnlyFixProgressEvents("G25", "pid:999999")
+                    .Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-20T09:30:00Z");
+            RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                """
+                 D .intent-cli/run.result.json
+                ?? .intent-cli/issues/G25/
+                """);
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("out-of-scope runtime-artifact drift", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains(".intent-cli/run.result.json", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains(".intent-cli/issues/G25/", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("meaningful execution-unit worktree changes", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Contains("out-of-scope runtime-artifact drift", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("out-of-scope runtime-artifact drift", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("meaningful execution-unit worktree changes", runEvents[^1].Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenDeadFixWorkerSessionWithToyCalcReplayShapeAndOnlyRuntimeArtifactDiff_BlocksWithoutConsumingRetryBudget()
     {
         using var tempDirectory = new TemporaryDirectory();
