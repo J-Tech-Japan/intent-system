@@ -58,7 +58,7 @@ public sealed class RunImplementCommandTests
             Assert.Contains("Direct model: default", output, StringComparison.Ordinal);
             Assert.Contains("Direct transport: stdio", output, StringComparison.Ordinal);
             Assert.Contains("Provider session: pid:4321", output, StringComparison.Ordinal);
-            Assert.Contains("Run status: running", output, StringComparison.Ordinal);
+            Assert.Contains("Run status: failed", output, StringComparison.Ordinal);
 
             var artifactPath = Path.Combine(repoRoot, ".intent-cli", "implement", "G19.request.md");
             Assert.True(File.Exists(artifactPath));
@@ -88,7 +88,7 @@ public sealed class RunImplementCommandTests
             Assert.Equal("Claude", resultArtifact.Provider);
             Assert.Equal("default", resultArtifact.Model);
             Assert.Equal("pid:4321", resultArtifact.SessionId);
-            Assert.Equal("running", resultArtifact.RunStatus);
+            Assert.Equal("failed", resultArtifact.RunStatus);
             Assert.Equal(".intent-cli/runs/G19.provider.jsonl", resultArtifact.RawLogRef);
             Assert.Equal(".intent-cli/issues/G19/packet.yaml", resultArtifact.PacketRef);
             Assert.Equal(".intent-cli/issues/G19/review-context.md", resultArtifact.ReviewContextRef);

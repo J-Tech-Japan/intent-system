@@ -617,6 +617,81 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenDeadImplementWorkerSessionAfterInitialInventory_BlocksWithoutAutoResume()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateActiveRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession()));
+        WriteDeadImplementDirectRunArtifacts(repoRoot, "pid:999999", includeBackendExit: true);
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                CreateInitialInventoryImplementProviderEvents("G25", "pid:999999")
+                    .Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("initial repo-inspection command completed", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.Contains("initial repo-inspection command completed", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl")));
+            Assert.Contains(
+                providerEvents,
+                providerEvent => providerEvent.Payload.ValueKind == JsonValueKind.Object
+                    && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                    && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal)
+                    && providerEvent.Payload.TryGetProperty("reason", out var reasonElement)
+                    && string.Equals(reasonElement.GetString(), "implement-session-ended-after-initial-inspection", StringComparison.Ordinal));
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("initial repo-inspection command completed", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public async Task Execute_GivenDeadImplementWorkerSessionAtRetryExhaustionWhenBackendExitLandsAfterPreviousRaceWindow_BlocksUsingBackendExitReason()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -2662,6 +2737,43 @@ public sealed class RunSuperviseCommandTests
             }) + Environment.NewLine);
         File.WriteAllText(Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.request.json"), DirectRunRequestArtifactJson.Serialize(requestArtifact));
         File.WriteAllText(Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.result.json"), DirectRunResultArtifactJson.Serialize(resultArtifact));
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateInitialInventoryImplementProviderEvents(string executionUnit, string sessionId)
+    {
+        return
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.2500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("Use the request artifact at '/repo/.intent-cli/implement/G25.request.md' as the bounded source of truth for this direct run.")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.5000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'rg --files' succeeded in 0ms")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-08T10:20:00.7500000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Claude",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement("warn plugin manifest falling_back after state db discrepancy on slow path")
+            }
+        ];
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> CreateMeaningfulFixWorktreeProgressEvents(string executionUnit, string sessionId)

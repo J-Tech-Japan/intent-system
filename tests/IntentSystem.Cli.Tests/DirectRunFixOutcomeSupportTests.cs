@@ -14,6 +14,7 @@ public sealed class DirectRunFixOutcomeSupportTests
         var resolved = DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
             providerEvents,
             "TOY-CALC-V0-01",
+            "fix",
             out var detail);
 
         Assert.True(resolved);
@@ -31,6 +32,7 @@ public sealed class DirectRunFixOutcomeSupportTests
         var resolved = DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
             providerEvents,
             "TOY-CALC-V0-01",
+            "fix",
             out var detail);
 
         Assert.True(resolved);
@@ -185,6 +187,32 @@ public sealed class DirectRunFixOutcomeSupportTests
         Assert.Equal("fix-session-ended-before-spec-source-test-read", contractGapEvent.Payload.GetProperty("reason").GetString());
         Assert.Contains(
             "provider backend itself exited before the next bounded read",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenImplementInventoryThenBackendExit_UsesInspectionOnlyReason()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("Use the request artifact at '/tmp/TOY-CALC-V0-02.request.md' as the bounded source of truth for this direct run.", entryKind: "implement"),
+            CreateProviderEvent("exec /bin/zsh -lc 'rg --files' succeeded in 0ms", entryKind: "implement"),
+            CreateBackendExitEvent(entryKind: "implement")
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-19T21:00:00Z"),
+            "TOY-CALC-V0-02",
+            "implement",
+            "Codex",
+            "pid:45803");
+
+        Assert.NotNull(contractGapEvent);
+        Assert.Equal("implement-session-ended-after-initial-inspection", contractGapEvent!.Payload.GetProperty("reason").GetString());
+        Assert.Contains(
+            "Implement direct run for 'TOY-CALC-V0-02' exited after the initial repo-inspection command completed",
             contractGapEvent.Payload.GetProperty("detail").GetString(),
             StringComparison.Ordinal);
     }
@@ -454,28 +482,28 @@ public sealed class DirectRunFixOutcomeSupportTests
         ];
     }
 
-    private static DirectRunProviderEvent CreateProviderEvent(string payload)
+    private static DirectRunProviderEvent CreateProviderEvent(string payload, string entryKind = "fix")
     {
         return new DirectRunProviderEvent
         {
             Timestamp = "2026-04-16T08:08:23.2829410+00:00",
             ExecutionUnit = "TOY-CALC-V0-01",
             Provider = "Codex",
-            EntryKind = "fix",
+            EntryKind = entryKind,
             SessionId = "pid:97771",
             Kind = "provider-event",
             Payload = JsonSerializer.SerializeToElement(payload)
         };
     }
 
-    private static DirectRunProviderEvent CreateBackendExitEvent()
+    private static DirectRunProviderEvent CreateBackendExitEvent(string entryKind = "fix")
     {
         return new DirectRunProviderEvent
         {
             Timestamp = "2026-04-17T05:58:47.0000000+00:00",
             ExecutionUnit = "TOY-CALC-V0-01",
             Provider = "Codex",
-            EntryKind = "fix",
+            EntryKind = entryKind,
             SessionId = "pid:97771",
             Kind = "provider-event",
             Payload = JsonSerializer.SerializeToElement(new

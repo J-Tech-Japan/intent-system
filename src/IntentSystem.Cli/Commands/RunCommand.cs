@@ -1949,7 +1949,7 @@ internal static class RunCommand
             requestArtifact.ProviderSessionId,
             requestArtifact.LaunchedAt);
 
-        return DirectRunFixOutcomeSupport.TryResolveContractGapDetail(providerEvents, executionUnit, out var detail)
+        return DirectRunFixOutcomeSupport.TryResolveContractGapDetail(providerEvents, executionUnit, "fix", out var detail)
             ? detail
             : null;
     }

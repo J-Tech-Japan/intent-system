@@ -162,7 +162,8 @@ internal static class DirectRunTerminalArtifactUpdater
         ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(currentRunStatus);
 
-        if (!string.Equals(entryKind, "fix", StringComparison.Ordinal)
+        if ((!string.Equals(entryKind, "fix", StringComparison.Ordinal)
+                && !string.Equals(entryKind, "implement", StringComparison.Ordinal))
             || !string.Equals(currentRunStatus, "running", StringComparison.Ordinal)
             || IsProviderSessionAlive(providerSessionId))
         {
