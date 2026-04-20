@@ -687,6 +687,143 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void Execute_GivenSucceededImplementRunWithRealLinkedWorktreeCarryForward_PersistsReviewArtifacts()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var childRepoPath = tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        var worktreeRoot = tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees"));
+        var worktreePath = Path.Combine(worktreeRoot, "G226");
+        var originPath = tempDirectory.CreateDirectory("origin.git");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Active))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            implementation_issue_packet:
+              issue_title: "[G226] Root Run Orchestration Command"
+              issue_kind: "feature"
+              source_execution_unit: "G226"
+              goal: "Coordinate the root run loop."
+              in_scope:
+                - "run orchestration"
+              out_of_scope:
+                - "review implementation details"
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+              technical_baseline:
+                - "C# / .NET"
+              project_local_guide:
+                - "AGENTS.md"
+              intent_baseline:
+                - "run remains the coordinator"
+              intent_references:
+                - "ICL.P.PRODUCT_GOAL"
+              rules_and_specs:
+                - "intents/intent-cli/specs/08-config-and-run-model.md"
+              acceptance_criteria:
+                - "successful submit transitions to review"
+              verification_evidence:
+                - "tests-passing"
+              review_mode: "deterministic-review"
+              completion_action: "wait-for-deterministic-review"
+              landing_policy: "merge-after-review"
+
+            review_context_packet:
+              source_execution_unit: "G226"
+              parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+              intent_references:
+                - "ICL.P.PRODUCT_GOAL"
+              rules_and_specs:
+                - "intents/intent-cli/specs/08-config-and-run-model.md"
+              acceptance_criteria:
+                - "successful submit transitions to review"
+              deterministic_review_checks:
+                - "run submit remains thin"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G226.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        WriteDirectRunResult(repoRoot, "G226", "implement", "succeeded");
+
+        InitializeRealRunSubmitTestRepo(childRepoPath, worktreePath, originPath, "issue-226-g226");
+        File.AppendAllText(
+            Path.Combine(worktreePath, "tests", "ToyCalc.Tests", "CalculatorTests.cs"),
+            Environment.NewLine + "// root-run carry-forward");
+
+        var originalRunSubmitGitFactory = RunSubmitCommand.GitCommandRunnerFactory;
+        var originalRunSubmitPublisherFactory = RunSubmitCommand.PublisherFactory;
+        var originalRunSubmitTimestampFactory = RunSubmitCommand.TimestampFactory;
+        var originalReviewRunExecutor = RunCommand.ReviewRunExecutor;
+        using var writer = new StringWriter();
+
+        try
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = () => new RealGitRunnerWithRemoteOriginOverride(
+                childRepoPath,
+                "git@github.com:J-Tech-Japan/intent-system.git");
+            RunSubmitCommand.PublisherFactory = () => new FakeRunSubmitPublisher();
+            RunSubmitCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-10T12:30:00Z");
+            RunCommand.ReviewRunExecutor = (_, executionUnit) =>
+            {
+                WriteDirectRunResult(repoRoot, executionUnit, "review", "running", sessionId: "pid:review");
+
+                return new ReviewRunResult
+                {
+                    ExecutionUnit = executionUnit,
+                    ArtifactPath = $".intent-cli/reviews/{executionUnit}.request.json",
+                    DirectRun = CreateDirectRunLaunchResult(executionUnit, "pid:review")
+                };
+            };
+
+            var exitCode = RunCommand.Execute(CreateContext(repoRoot), [], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Touched execution units: G226", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Reused child command refs: run submit, review run", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal(
+                "Carry forward succeeded implement progress for G226",
+                RunRealGitStdOut(worktreePath, "log", "-1", "--pretty=%s"));
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Review, Assert.Single(queueState.Items).State);
+
+            var rootArtifact = RunRootResultArtifactJson.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "run.result.json")));
+            Assert.Equal("no-actionable-item", rootArtifact.StopReason);
+            Assert.Equal(["G226"], rootArtifact.TouchedExecutionUnits);
+            Assert.Equal(["run submit", "review run"], rootArtifact.ReusedChildCommandRefs);
+
+            var currentResult = DirectRunResultArtifactJson.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+            Assert.Equal("review", currentResult.EntryKind);
+            Assert.Equal("running", currentResult.RunStatus);
+            Assert.Equal("pid:review", currentResult.SessionId);
+
+            var runEvents = RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+            var reviewEvent = Assert.Single(runEvents);
+            Assert.Equal("review", reviewEvent.Event);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/226", reviewEvent.LinkedPr);
+        }
+        finally
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = originalRunSubmitGitFactory;
+            RunSubmitCommand.PublisherFactory = originalRunSubmitPublisherFactory;
+            RunSubmitCommand.TimestampFactory = originalRunSubmitTimestampFactory;
+            RunCommand.ReviewRunExecutor = originalReviewRunExecutor;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenAcceptedReviewDecision_ReusesReviewAcceptBoundary()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -5379,7 +5516,7 @@ public sealed class RunCommandTests
             provider: "Claude");
         var gitRunner = new FakeGitRunner(new Dictionary<string, GitCommandResult>
         {
-            [FakeGitRunner.CreateCommandKey(["status", "--short", "--untracked-files=all"])] = new GitCommandResult
+            [FakeGitRunner.CreateCommandKey(["status", "--porcelain=v1", "--untracked-files=all"])] = new GitCommandResult
             {
                 ExitCode = 0,
                 StdOut =
@@ -5491,7 +5628,7 @@ public sealed class RunCommandTests
             Assert.False(session.RequiresPostFixWorktreeProgressDecision);
 
             Assert.Contains(gitRunner.Commands, command =>
-                command.SequenceEqual(["status", "--short", "--untracked-files=all"]));
+                command.SequenceEqual(["status", "--porcelain=v1", "--untracked-files=all"]));
             Assert.Contains(gitRunner.Commands, command =>
                 command.SequenceEqual(["rev-parse", "--abbrev-ref", "HEAD"]));
             Assert.Contains(gitRunner.Commands, command =>
@@ -5588,7 +5725,7 @@ public sealed class RunCommandTests
             provider: "Claude");
         var gitRunner = new FakeGitRunner(new Dictionary<string, GitCommandResult>
         {
-            [FakeGitRunner.CreateCommandKey(["status", "--short", "--untracked-files=all"])] = new GitCommandResult
+            [FakeGitRunner.CreateCommandKey(["status", "--porcelain=v1", "--untracked-files=all"])] = new GitCommandResult
             {
                 ExitCode = 0,
                 StdOut =
@@ -5759,7 +5896,7 @@ public sealed class RunCommandTests
             provider: "Claude");
         var gitRunner = new FakeGitRunner(new Dictionary<string, GitCommandResult>
         {
-            [FakeGitRunner.CreateCommandKey(["status", "--short", "--untracked-files=all"])] = new GitCommandResult
+            [FakeGitRunner.CreateCommandKey(["status", "--porcelain=v1", "--untracked-files=all"])] = new GitCommandResult
             {
                 ExitCode = 0,
                 StdOut =
@@ -7706,6 +7843,55 @@ public sealed class RunCommandTests
             string.Join(Environment.NewLine, providerEvents.Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
     }
 
+    private static void InitializeRealRunSubmitTestRepo(
+        string childRepoPath,
+        string worktreePath,
+        string originPath,
+        string branchName)
+    {
+        RunRealGit(childRepoPath, "init", "--initial-branch=main");
+        RunRealGit(childRepoPath, "config", "user.name", "Intent System Tests");
+        RunRealGit(childRepoPath, "config", "user.email", "intent-system-tests@example.com");
+
+        Directory.CreateDirectory(Path.Combine(childRepoPath, "tests", "ToyCalc.Tests"));
+        File.WriteAllText(
+            Path.Combine(childRepoPath, "tests", "ToyCalc.Tests", "CalculatorTests.cs"),
+            """
+            namespace ToyCalc.Tests;
+
+            public sealed class CalculatorTests
+            {
+            }
+            """);
+
+        RunRealGit(childRepoPath, "add", "--all");
+        RunRealGit(childRepoPath, "commit", "-m", "Initial commit");
+
+        RunRealGit(originPath, "init", "--bare", "--initial-branch=main");
+        RunRealGit(childRepoPath, "remote", "add", "origin", originPath);
+        RunRealGit(childRepoPath, "push", "-u", "origin", "main");
+        RunRealGit(childRepoPath, "branch", branchName);
+        RunRealGit(childRepoPath, "push", "-u", "origin", branchName);
+        RunRealGit(childRepoPath, "worktree", "add", worktreePath, branchName);
+    }
+
+    private static void RunRealGit(string workingDirectory, params string[] arguments)
+    {
+        var result = new GitCommandRunner().Run(workingDirectory, arguments);
+        Assert.True(
+            result.ExitCode == 0,
+            $"git {string.Join(' ', arguments)} failed in '{workingDirectory}' with stderr: {result.StdErr}");
+    }
+
+    private static string RunRealGitStdOut(string workingDirectory, params string[] arguments)
+    {
+        var result = new GitCommandRunner().Run(workingDirectory, arguments);
+        Assert.True(
+            result.ExitCode == 0,
+            $"git {string.Join(' ', arguments)} failed in '{workingDirectory}' with stderr: {result.StdErr}");
+        return result.StdOut.Trim();
+    }
+
     private static IReadOnlyList<DirectRunProviderEvent> CreateStartupOnlyFixProviderEvents(
         string executionUnit,
         string sessionId,
@@ -8639,6 +8825,14 @@ public sealed class RunCommandTests
         }
     }
 
+    private sealed class FakeRunSubmitPublisher : IRunSubmitPublisher
+    {
+        public string CreateDraftPullRequest(string targetRepo, string headBranch, string title, string body)
+        {
+            return "https://github.com/J-Tech-Japan/intent-system/pull/226";
+        }
+    }
+
     private sealed record ExpectedReviewCommand(IReadOnlyList<string> Arguments, ReviewCommandResult Result);
 
     private sealed record ExpectedGitHubCommand(IReadOnlyList<string> Arguments, GitHubCommandResult Result);
@@ -8670,6 +8864,27 @@ public sealed class RunCommandTests
             var expected = expectedCalls.Dequeue();
             Assert.Equal(expected.Arguments, arguments);
             return expected.Result;
+        }
+    }
+
+    private sealed class RealGitRunnerWithRemoteOriginOverride(string childRepoPath, string overriddenOriginUrl) : IGitCommandRunner
+    {
+        private readonly GitCommandRunner innerRunner = new();
+
+        public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            if (string.Equals(workingDirectory, childRepoPath, StringComparison.Ordinal)
+                && arguments.SequenceEqual(["remote", "get-url", "origin"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = overriddenOriginUrl + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            return innerRunner.Run(workingDirectory, arguments);
         }
     }
 
@@ -8705,7 +8920,7 @@ public sealed class RunCommandTests
                 return result;
             }
 
-            Assert.Equal(["status", "--short", "--untracked-files=all"], arguments);
+            Assert.Equal(["status", "--porcelain=v1", "--untracked-files=all"], arguments);
             return new GitCommandResult
             {
                 ExitCode = 0,

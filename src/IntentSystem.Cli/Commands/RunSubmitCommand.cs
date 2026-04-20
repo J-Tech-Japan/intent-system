@@ -205,7 +205,7 @@ internal static class RunSubmitCommand
             return;
         }
 
-        var addArguments = new List<string> { "add", "--" };
+        var addArguments = new List<string> { "add", "--all", "--" };
         addArguments.AddRange(changedPaths);
         var addResult = RunGit(
             gitRunner,
@@ -224,6 +224,15 @@ internal static class RunSubmitCommand
 
         if (diffResult.ExitCode == 0)
         {
+            if (RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                    gitRunner,
+                    worktreePath,
+                    out var remainingPaths))
+            {
+                throw new InvalidOperationException(
+                    $"Carry-forward staging did not materialize for '{executionUnit}'. Remaining worktree paths: {RunWorktreeProgressSupport.SummarizePaths(remainingPaths)}.");
+            }
+
             return;
         }
 
