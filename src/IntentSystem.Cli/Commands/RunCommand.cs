@@ -10,6 +10,8 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class RunCommand
 {
+    private sealed record AutoContinueIntakeCandidate(string Domain, string ExecutionUnit);
+
     private sealed class RunDeterministicGapException(string executionUnit, string message)
         : InvalidOperationException(message)
     {
@@ -35,6 +37,12 @@ internal static class RunCommand
 
     public static Func<CliContext, string, RunStartResult> RunStartExecutor { get; set; } =
         RunStartCommand.ExecuteCore;
+
+    public static Func<string, string, string, IntakeIssueResult> IntakeIssueExecutor { get; set; } =
+        IntakeIssueCommand.ExecuteCore;
+
+    public static Func<CliContext, string, int> QueueEnqueueExecutor { get; set; } =
+        ExecuteQueueEnqueue;
 
     public static Func<CliContext, string, RunImplementResult> RunImplementExecutor { get; set; } =
         RunImplementCommand.ExecuteCore;
@@ -493,6 +501,59 @@ internal static class RunCommand
                         $"Blocked item '{blockedItem.ExecutionUnit}' requires parent-side planning.");
                 }
 
+                if (TryResolveAutoContinueIntakeCandidate(context, queueState, out var intakeCandidate))
+                {
+                    var selectedIntakeCandidate = intakeCandidate
+                        ?? throw new InvalidOperationException("Auto-continue intake candidate was not resolved.");
+
+                    ExecuteAction(
+                        context,
+                        actions,
+                        "intake issue",
+                        selectedIntakeCandidate.ExecutionUnit,
+                        () => IntakeIssueExecutor(
+                            context.RepoRoot,
+                            selectedIntakeCandidate.Domain,
+                            selectedIntakeCandidate.ExecutionUnit));
+
+                    var launchQueueItem = TryLoadQueueItem(context, selectedIntakeCandidate.ExecutionUnit);
+                    if (launchQueueItem is null)
+                    {
+                        ExecuteAction(
+                            context,
+                            actions,
+                            "queue enqueue",
+                            selectedIntakeCandidate.ExecutionUnit,
+                            () => QueueEnqueueExecutor(context, selectedIntakeCandidate.ExecutionUnit));
+                        launchQueueItem = LoadQueueItemOrThrow(context, selectedIntakeCandidate.ExecutionUnit);
+                    }
+
+                    if (launchQueueItem.State != QueueItemState.Queued)
+                    {
+                        throw new RunDeterministicGapException(
+                            selectedIntakeCandidate.ExecutionUnit,
+                            $"Auto-continue intake target '{selectedIntakeCandidate.ExecutionUnit}' is in state '{FormatQueueItemState(launchQueueItem.State)}'.");
+                    }
+
+                    if (launchQueueItem.LinkedIssue is null)
+                    {
+                        ExecuteAction(
+                            context,
+                            actions,
+                            "queue dispatch",
+                            selectedIntakeCandidate.ExecutionUnit,
+                            () => QueueDispatchExecutor(context, selectedIntakeCandidate.ExecutionUnit));
+                    }
+
+                    ExecuteAction(
+                        context,
+                        actions,
+                        "run start",
+                        selectedIntakeCandidate.ExecutionUnit,
+                        () => RunStartExecutor(context, selectedIntakeCandidate.ExecutionUnit));
+                    continue;
+                }
+
                 return CreateStopResult(NoActionableItemStopReason, actions);
             }
             catch (RunDeterministicGapException exception)
@@ -509,6 +570,115 @@ internal static class RunCommand
             DeterministicContractGapStopReason,
             actions,
             detail: $"Run orchestration exceeded {IterationBudget} iterations.");
+    }
+
+    private static bool TryResolveAutoContinueIntakeCandidate(
+        CliContext context,
+        QueueState queueState,
+        out AutoContinueIntakeCandidate? candidate)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueState);
+
+        candidate = null;
+
+        if (!queueState.Items.Any(item => item.State == QueueItemState.Completed))
+        {
+            return false;
+        }
+
+        var intakeDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "intake");
+        if (!Directory.Exists(intakeDirectory))
+        {
+            return false;
+        }
+
+        foreach (var artifactPath in Directory
+                     .EnumerateFiles(intakeDirectory, "*.execution.md", SearchOption.TopDirectoryOnly)
+                     .OrderBy(path => path, StringComparer.Ordinal))
+        {
+            IntakeExecutionRequest request;
+            try
+            {
+                request = IntakeExecutionArtifactMarkdown.Deserialize(File.ReadAllText(artifactPath));
+            }
+            catch (InvalidOperationException exception)
+            {
+                throw new RunDeterministicGapException(
+                    Path.GetFileName(artifactPath),
+                    $"Intake auto-continue could not read '{artifactPath}': {exception.Message}");
+            }
+
+            foreach (var unit in request.ProposedExecutionUnits)
+            {
+                if (!IsAutoContinueLaunchable(queueState, unit.ExecutionUnitId))
+                {
+                    continue;
+                }
+
+                candidate = new AutoContinueIntakeCandidate(request.Domain, unit.ExecutionUnitId);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsAutoContinueLaunchable(QueueState queueState, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(queueState);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueItem = queueState.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+        return queueItem is null || queueItem.State == QueueItemState.Queued;
+    }
+
+    private static QueueItem? TryLoadQueueItem(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var queueState = LoadQueueStateOrThrow(context);
+        return queueState.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+    }
+
+    private static QueueItem LoadQueueItemOrThrow(CliContext context, string executionUnit)
+    {
+        return TryLoadQueueItem(context, executionUnit)
+               ?? throw new RunDeterministicGapException(
+                   executionUnit,
+                   $"Execution unit '{executionUnit}' was not found in queue state.");
+    }
+
+    private static int ExecuteQueueEnqueue(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        using var writer = new StringWriter();
+        var exitCode = QueueEnqueueCommand.Execute(context, [executionUnit], writer);
+        if (exitCode != 0)
+        {
+            var detail = writer.ToString().Trim();
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(detail)
+                    ? $"Queue enqueue failed for '{executionUnit}'."
+                    : detail);
+        }
+
+        return exitCode;
+    }
+
+    private static string FormatQueueItemState(QueueItemState state)
+    {
+        return state switch
+        {
+            QueueItemState.ClarifyBlocked => "clarify-blocked",
+            _ => state.ToString().ToLowerInvariant()
+        };
     }
 
     private static T ExecuteAction<T>(
