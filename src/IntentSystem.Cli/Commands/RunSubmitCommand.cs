@@ -97,6 +97,7 @@ internal static class RunSubmitCommand
         var branchName = RunStartCommand.ResolveBranchName(executionUnit, queueItem.LinkedIssue);
         var gitRunner = GitCommandRunnerFactory();
         EnsureBranchMatches(worktreePath, branchName, gitRunner);
+        EnsureCarryForwardCommit(executionUnit, worktreePath, branchName, gitRunner);
         PushBranch(worktreePath, branchName, gitRunner);
 
         var targetRepo = ResolveGitHubTargetRepo(childRepoPath, gitRunner);
@@ -188,6 +189,49 @@ internal static class RunSubmitCommand
             worktreePath,
             ["push", "-u", "origin", branchName],
             "git push failed.");
+    }
+
+    private static void EnsureCarryForwardCommit(
+        string executionUnit,
+        string worktreePath,
+        string branchName,
+        IGitCommandRunner gitRunner)
+    {
+        if (!RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                gitRunner,
+                worktreePath,
+                out var changedPaths))
+        {
+            return;
+        }
+
+        var addArguments = new List<string> { "add", "--" };
+        addArguments.AddRange(changedPaths);
+        var addResult = RunGit(
+            gitRunner,
+            worktreePath,
+            addArguments,
+            "git add failed.");
+
+        var diffResult = gitRunner.Run(worktreePath, ["diff", "--cached", "--quiet"]);
+        if (diffResult.ExitCode != 0 && diffResult.ExitCode != 1)
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(diffResult.StdErr)
+                    ? "git diff --cached --quiet failed."
+                    : diffResult.StdErr.Trim());
+        }
+
+        if (diffResult.ExitCode == 0)
+        {
+            return;
+        }
+
+        var commitResult = RunGit(
+            gitRunner,
+            worktreePath,
+            ["commit", "-m", $"Carry forward succeeded implement progress for {executionUnit}"],
+            "git commit failed.");
     }
 
     private static string ResolveGitHubTargetRepo(string childRepoPath, IGitCommandRunner gitRunner)

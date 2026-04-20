@@ -52,13 +52,11 @@ public sealed class RunSubmitCommandTests
             Assert.Equal(QueueItemState.Review, queueState.Items.Single(item => item.ExecutionUnit == "G14").State);
             Assert.Equal(QueueItemState.Blocked, queueState.Items.Single(item => item.ExecutionUnit == "G15").State);
 
-            Assert.Equal(
-                [
-                    $"{worktreePath}::rev-parse --abbrev-ref HEAD",
-                    $"{worktreePath}::push -u origin issue-56-g14",
-                    $"{childRepoPath}::remote get-url origin"
-                ],
-                gitRunner.Calls);
+            Assert.Contains($"{worktreePath}::rev-parse --abbrev-ref HEAD", gitRunner.Calls);
+            Assert.Contains($"{worktreePath}::push -u origin issue-56-g14", gitRunner.Calls);
+            Assert.Contains($"{childRepoPath}::remote get-url origin", gitRunner.Calls);
+            Assert.False(gitRunner.Calls.Any(c => c.Contains("add")));
+            Assert.False(gitRunner.Calls.Any(c => c.Contains("commit")));
 
             var runEvents = RunLogSerializer.DeserializeAll(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
@@ -282,6 +280,110 @@ public sealed class RunSubmitCommandTests
     }
 
     [Fact]
+    public void Execute_GivenSucceededImplementWithDirtyWorktree_StagesCommitsAndCreatesDraftPr()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var childRepoPath = tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        var worktreePath = tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G14"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var gitRunner = new FakeGitRunnerWithDirtyWorktree(branchName: "issue-56-g14");
+        var publisher = new FakePublisher();
+        var originalGitFactory = RunSubmitCommand.GitCommandRunnerFactory;
+        var originalPublisherFactory = RunSubmitCommand.PublisherFactory;
+        var originalTimestampFactory = RunSubmitCommand.TimestampFactory;
+
+        try
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = () => gitRunner;
+            RunSubmitCommand.PublisherFactory = () => publisher;
+            RunSubmitCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T10:15:00Z");
+
+            var exitCode = RunSubmitCommand.Execute(CreateContext(repoRoot), ["G14"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run submitted for G14", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal("J-Tech-Japan/intent-system", publisher.TargetRepo);
+            Assert.Equal("issue-56-g14", publisher.HeadBranch);
+
+            Assert.Contains($"{worktreePath}::add -- tests/ToyCalc.Tests/CalculatorTests.cs", gitRunner.Calls);
+            Assert.Contains($"{worktreePath}::commit -m Carry forward succeeded implement progress for G14", gitRunner.Calls);
+            Assert.Contains($"{worktreePath}::push -u origin issue-56-g14", gitRunner.Calls);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Review, queueState.Items.Single(item => item.ExecutionUnit == "G14").State);
+        }
+        finally
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunSubmitCommand.PublisherFactory = originalPublisherFactory;
+            RunSubmitCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenBranchAheadOfMainWithDirtyWorktree_StagesCommitsAndCreatesDraftPr()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var childRepoPath = tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        var worktreePath = tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G14"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var gitRunner = new FakeGitRunnerWithDirtyWorktreeAheadOfMain(branchName: "issue-56-g14", worktreePath: worktreePath);
+        var publisher = new FakePublisher();
+        var originalGitFactory = RunSubmitCommand.GitCommandRunnerFactory;
+        var originalPublisherFactory = RunSubmitCommand.PublisherFactory;
+        var originalTimestampFactory = RunSubmitCommand.TimestampFactory;
+
+        try
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = () => gitRunner;
+            RunSubmitCommand.PublisherFactory = () => publisher;
+            RunSubmitCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T10:15:00Z");
+
+            var exitCode = RunSubmitCommand.Execute(CreateContext(repoRoot), ["G14"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run submitted for G14", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal("J-Tech-Japan/intent-system", publisher.TargetRepo);
+            Assert.Equal("issue-56-g14", publisher.HeadBranch);
+
+            Assert.Contains($"{worktreePath}::add -- tests/ToyCalc.Tests/CalculatorTests.cs", gitRunner.Calls);
+            Assert.Contains($"{worktreePath}::commit -m Carry forward succeeded implement progress for G14", gitRunner.Calls);
+            Assert.Contains($"{worktreePath}::push -u origin issue-56-g14", gitRunner.Calls);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Review, queueState.Items.Single(item => item.ExecutionUnit == "G14").State);
+        }
+        finally
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunSubmitCommand.PublisherFactory = originalPublisherFactory;
+            RunSubmitCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void ResolvePullRequestTitle_GivenQueueItem_UsesQueueTitle()
     {
         var title = RunSubmitCommand.ResolvePullRequestTitle(CreateQueueState().Items[0]);
@@ -444,12 +546,254 @@ public sealed class RunSubmitCommandTests
                 };
             }
 
+            if (arguments.SequenceEqual(["rev-parse", "HEAD"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "def456" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["rev-parse", "origin/main"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "abc123" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
             if (arguments.SequenceEqual(["remote", "get-url", "origin"]))
             {
                 return new GitCommandResult
                 {
                     ExitCode = 0,
                     StdOut = "git@github.com:J-Tech-Japan/intent-system.git" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            return new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = string.Empty,
+                StdErr = string.Empty
+            };
+        }
+    }
+
+    private sealed class FakeGitRunnerWithDirtyWorktree(string branchName) : IGitCommandRunner
+    {
+        public List<string> Calls { get; } = [];
+
+        public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            Calls.Add($"{workingDirectory}::{string.Join(' ', arguments)}");
+
+            if (arguments.SequenceEqual(["rev-parse", "--abbrev-ref", "HEAD"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = branchName + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["rev-parse", "HEAD"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "abc123" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["rev-parse", "origin/main"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "abc123" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.Count >= 2
+                && arguments[0] == "add"
+                && arguments[1] == "--")
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["diff", "--cached", "--quiet"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 1,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["commit", "-m", "Carry forward succeeded implement progress for G14"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.Count >= 2
+                && arguments[0] == "push"
+                && arguments[1] == "-u")
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["remote", "get-url", "origin"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "git@github.com:J-Tech-Japan/intent-system.git" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["status", "--short", "--untracked-files=all"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = " M tests/ToyCalc.Tests/CalculatorTests.cs" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            return new GitCommandResult
+            {
+                ExitCode = 0,
+                StdOut = string.Empty,
+                StdErr = string.Empty
+            };
+        }
+    }
+
+    private sealed class FakeGitRunnerWithDirtyWorktreeAheadOfMain(string branchName, string worktreePath) : IGitCommandRunner
+    {
+        public List<string> Calls { get; } = [];
+
+        public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            Calls.Add($"{workingDirectory}::{string.Join(' ', arguments)}");
+
+            if (arguments.SequenceEqual(["rev-parse", "--abbrev-ref", "HEAD"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = branchName + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["rev-parse", "HEAD"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "def456" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["rev-parse", "origin/main"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "abc123" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.Count >= 2
+                && arguments[0] == "add"
+                && arguments[1] == "--")
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["diff", "--cached", "--quiet"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 1,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["commit", "-m", "Carry forward succeeded implement progress for G14"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.Count >= 2
+                && arguments[0] == "push"
+                && arguments[1] == "-u")
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["remote", "get-url", "origin"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "git@github.com:J-Tech-Japan/intent-system.git" + Environment.NewLine,
+                    StdErr = string.Empty
+                };
+            }
+
+            if (arguments.SequenceEqual(["status", "--short", "--untracked-files=all"]))
+            {
+                return new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = " M tests/ToyCalc.Tests/CalculatorTests.cs" + Environment.NewLine,
                     StdErr = string.Empty
                 };
             }
