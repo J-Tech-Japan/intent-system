@@ -232,6 +232,28 @@ internal static class RunSubmitCommand
             worktreePath,
             ["commit", "-m", $"Carry forward succeeded implement progress for {executionUnit}"],
             "git commit failed.");
+
+        var postCommitHead = RunGit(
+            gitRunner,
+            worktreePath,
+            ["rev-parse", "HEAD"],
+            "git rev-parse HEAD failed after commit.");
+
+        var postCommitBranchTip = postCommitHead.StdOut.Trim();
+
+        var mainResult = RunGit(
+            gitRunner,
+            worktreePath,
+            ["rev-parse", "origin/main"],
+            "git rev-parse origin/main failed.");
+
+        var mainTip = mainResult.StdOut.Trim();
+
+        if (string.Equals(postCommitBranchTip, mainTip, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Carry-forward commit for '{executionUnit}' was created but the branch tip still equals origin/main after commit. The carry-forward was not materialized.");
+        }
     }
 
     private static string ResolveGitHubTargetRepo(string childRepoPath, IGitCommandRunner gitRunner)
