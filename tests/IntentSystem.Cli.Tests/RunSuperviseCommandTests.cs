@@ -617,6 +617,145 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenAutoResumedImplementSessionThatDiesAfterInitialInventory_BlocksInsteadOfMonitoring()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateActiveRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession()));
+        WriteDeadImplementDirectRunArtifacts(repoRoot, "pid:999999");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRunImplementExecutor = RunSuperviseCommand.RunImplementExecutor;
+        var originalRaceWindow = RunSuperviseCommand.TerminalFailureRaceWindow;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.TerminalFailureRaceWindow = TimeSpan.Zero;
+            RunSuperviseCommand.RunImplementExecutor = (_, executionUnit) =>
+            {
+                WriteLiveImplementDirectRunArtifacts(repoRoot, executionUnit, "pid:4242");
+                File.AppendAllText(
+                    Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.provider.jsonl"),
+                    string.Join(
+                        Environment.NewLine,
+                        new[]
+                        {
+                            new DirectRunProviderEvent
+                            {
+                                Timestamp = "2026-04-08T10:30:00.2500000+00:00",
+                                ExecutionUnit = executionUnit,
+                                Provider = "Claude",
+                                EntryKind = "implement",
+                                SessionId = "pid:4242",
+                                Kind = "provider-event",
+                                Payload = JsonSerializer.SerializeToElement("Use the request artifact at '/repo/.intent-cli/implement/G25.request.md' as the bounded source of truth for this direct run.")
+                            },
+                            new DirectRunProviderEvent
+                            {
+                                Timestamp = "2026-04-08T10:30:00.5000000+00:00",
+                                ExecutionUnit = executionUnit,
+                                Provider = "Claude",
+                                EntryKind = "implement",
+                                SessionId = "pid:4242",
+                                Kind = "provider-event",
+                                Payload = JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'rg --files' succeeded in 0ms")
+                            },
+                            new DirectRunProviderEvent
+                            {
+                                Timestamp = "2026-04-08T10:30:00.7500000+00:00",
+                                ExecutionUnit = executionUnit,
+                                Provider = "Claude",
+                                EntryKind = "implement",
+                                SessionId = "pid:4242",
+                                Kind = "provider-event",
+                                Payload = JsonSerializer.SerializeToElement("warn plugin manifest falling_back after state db discrepancy on slow path")
+                            }
+                        }
+                            .Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+
+                return new RunImplementResult
+                {
+                    Request = new RunImplementRequest
+                    {
+                        ExecutionUnit = executionUnit,
+                        State = "active",
+                        ImplementRole = "Claude",
+                        QueueWorkerRole = "coder",
+                        QueueReviewRole = "reviewer",
+                        WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit),
+                        ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                        Branch = "issue-178-g25",
+                        LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/178",
+                        LatestLinkedPr = null,
+                        PacketRef = ".intent-cli/issues/G25/packet.yaml",
+                        ReviewContextRef = ".intent-cli/issues/G25/review-context.md",
+                        IssueTitle = "[G25] Run Supervise Command",
+                        Goal = "Supervise retryable run interruptions.",
+                        TargetPart = "cli run supervise command",
+                        TargetRepo = "submodules/intent-system",
+                        TargetPath = ".",
+                        InScope = [],
+                        OutOfScope = [],
+                        AcceptanceCriteria = [],
+                        DeterministicReviewChecks = [],
+                        ExpectedEvidence = []
+                    },
+                    ArtifactPath = ".intent-cli/implement/G25.request.md"
+                };
+            };
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("initial repo-inspection command completed", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(1, session.RetryCount);
+            Assert.Contains("initial repo-inspection command completed", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.result.json")));
+            Assert.Equal("pid:4242", resultArtifact.SessionId);
+            Assert.Equal("failed", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("retry-attempted", runEvents[^2].Event);
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "auto-resumed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.RunImplementExecutor = originalRunImplementExecutor;
+            RunSuperviseCommand.TerminalFailureRaceWindow = originalRaceWindow;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenDeadImplementWorkerSessionAfterInitialInventory_BlocksWithoutAutoResume()
     {
         using var tempDirectory = new TemporaryDirectory();

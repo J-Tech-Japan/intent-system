@@ -419,6 +419,34 @@ internal static class RunSuperviseCommand
             };
 
             PersistSession(sessionArtifactPath, resumedSession);
+
+            if (resumedSession.WorkerEntry == RunSupervisionWorkerEntry.Implement
+                && HasCurrentImplementBoundedProgressSignal(context, executionUnit)
+                && TryCaptureDeadWorkerSessionFailure(
+                    context,
+                    executionUnit,
+                    resumedSession.WorkerEntry,
+                    out var deadWorkerFailure)
+                && deadWorkerFailure.ReportAsNonRetryableFailure)
+            {
+                return BlockForTerminalFailure(
+                    context,
+                    queueState,
+                    executionUnit,
+                    sessionArtifactPath,
+                    sessionArtifactRef,
+                    runLogPath,
+                    resumedSession,
+                    now,
+                    deadWorkerFailure.Reason,
+                    incrementRetryCount: false,
+                    emitRetryExhaustedEvent: false,
+                    emitRetryAttemptedEvent: true,
+                    retryAttemptReason: session.LastInterruptionReason,
+                    reportAsNonRetryableFailure: true,
+                    requiresPostFixWorktreeProgressDecision: deadWorkerFailure.RequiresPostFixWorktreeProgressDecision);
+            }
+
             AppendRunEvents(
                 runLogPath,
                 [
@@ -917,6 +945,33 @@ internal static class RunSuperviseCommand
             requestArtifact.ProviderSessionId);
 
         return true;
+    }
+
+    private static bool HasCurrentImplementBoundedProgressSignal(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var requestArtifactPath = ResolveDirectRunRequestArtifactPath(context, executionUnit);
+        var providerLogPath = ResolveDirectRunProviderLogPath(context, executionUnit);
+        if (!File.Exists(requestArtifactPath) || !File.Exists(providerLogPath))
+        {
+            return false;
+        }
+
+        var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+        if (!string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath));
+        var currentProviderEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        return DirectRunFixOutcomeSupport.HasBoundedProgressSignal(currentProviderEvents);
     }
 
     private static void AppendDeterministicContractGapBoundaryIfNeeded(
