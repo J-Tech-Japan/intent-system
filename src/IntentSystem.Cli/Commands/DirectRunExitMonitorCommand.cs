@@ -212,7 +212,8 @@ internal static class DirectRunExitMonitorCommand
 
     private static void AppendDeterministicFixBoundaryIfNeeded(DirectRunExitMonitorOptions options)
     {
-        if (!string.Equals(options.EntryKind, "fix", StringComparison.Ordinal)
+        if ((!string.Equals(options.EntryKind, "fix", StringComparison.Ordinal)
+                && !string.Equals(options.EntryKind, "implement", StringComparison.Ordinal))
             || !TryReadCurrentProviderEvents(
                 options.ProviderEventLogPath,
                 options.ProviderSessionId,

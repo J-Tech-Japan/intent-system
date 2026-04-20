@@ -419,6 +419,34 @@ internal static class RunSuperviseCommand
             };
 
             PersistSession(sessionArtifactPath, resumedSession);
+
+            if (resumedSession.WorkerEntry == RunSupervisionWorkerEntry.Implement
+                && HasCurrentImplementBoundedProgressSignal(context, executionUnit)
+                && TryCaptureDeadWorkerSessionFailure(
+                    context,
+                    executionUnit,
+                    resumedSession.WorkerEntry,
+                    out var deadWorkerFailure)
+                && deadWorkerFailure.ReportAsNonRetryableFailure)
+            {
+                return BlockForTerminalFailure(
+                    context,
+                    queueState,
+                    executionUnit,
+                    sessionArtifactPath,
+                    sessionArtifactRef,
+                    runLogPath,
+                    resumedSession,
+                    now,
+                    deadWorkerFailure.Reason,
+                    incrementRetryCount: false,
+                    emitRetryExhaustedEvent: false,
+                    emitRetryAttemptedEvent: true,
+                    retryAttemptReason: session.LastInterruptionReason,
+                    reportAsNonRetryableFailure: true,
+                    requiresPostFixWorktreeProgressDecision: deadWorkerFailure.RequiresPostFixWorktreeProgressDecision);
+            }
+
             AppendRunEvents(
                 runLogPath,
                 [
@@ -761,10 +789,14 @@ internal static class RunSuperviseCommand
 
         var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
         var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        var canReclassifyStaleFailedImplementResult =
+            string.Equals(expectedEntryKind, "implement", StringComparison.Ordinal)
+            && string.Equals(resultArtifact.RunStatus, "failed", StringComparison.Ordinal);
         if (!string.Equals(requestArtifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
             || !string.Equals(resultArtifact.EntryKind, expectedEntryKind, StringComparison.Ordinal)
             || !string.Equals(resultArtifact.SessionId, requestArtifact.ProviderSessionId, StringComparison.Ordinal)
-            || !string.Equals(resultArtifact.RunStatus, "running", StringComparison.Ordinal)
+            || (!string.Equals(resultArtifact.RunStatus, "running", StringComparison.Ordinal)
+                && !canReclassifyStaleFailedImplementResult)
             || !TryParseSessionProcessId(requestArtifact.ProviderSessionId, out var processId)
             || IsProcessAlive(processId))
         {
@@ -821,6 +853,14 @@ internal static class RunSuperviseCommand
                 expectedEntryKind,
                 out failure))
         {
+            AppendDeterministicContractGapBoundaryIfNeeded(
+                providerLogPath,
+                currentProviderEvents,
+                executionUnit,
+                expectedEntryKind,
+                requestArtifact.Provider,
+                requestArtifact.ProviderSessionId);
+
             File.WriteAllText(
                 resultArtifactPath,
                 DirectRunResultArtifactJson.Serialize(resultArtifact with
@@ -880,21 +920,13 @@ internal static class RunSuperviseCommand
             {
                 return true;
             }
-
-            if (DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
-                    providerEventsWithSyntheticExit,
-                    executionUnit,
-                    out var startupOnlyDetail))
-            {
-                    failure = new WorkerSessionFailure(
-                        $"Worker session '{requestArtifact.ProviderSessionId}' for '{executionUnit}' exited with backend exit code 1. {startupOnlyDetail}",
-                        ReportAsNonRetryableFailure: true);
-                return true;
-            }
         }
 
+        var syntheticProviderEvents = new List<DirectRunProviderEvent>(currentProviderEvents.Count + 1);
+        syntheticProviderEvents.AddRange(currentProviderEvents);
+        syntheticProviderEvents.Add(backendExitEvent);
         if (!TryResolveTerminalFailureReason(
-                [backendExitEvent],
+                syntheticProviderEvents,
                 executionUnit,
                 requestArtifact.ProviderSessionId,
                 expectedEntryKind,
@@ -904,7 +936,73 @@ internal static class RunSuperviseCommand
                 $"Synthetic backend-exit for '{executionUnit}' did not resolve to a terminal failure reason.");
         }
 
+        AppendDeterministicContractGapBoundaryIfNeeded(
+            providerLogPath,
+            syntheticProviderEvents,
+            executionUnit,
+            expectedEntryKind,
+            requestArtifact.Provider,
+            requestArtifact.ProviderSessionId);
+
         return true;
+    }
+
+    private static bool HasCurrentImplementBoundedProgressSignal(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var requestArtifactPath = ResolveDirectRunRequestArtifactPath(context, executionUnit);
+        var providerLogPath = ResolveDirectRunProviderLogPath(context, executionUnit);
+        if (!File.Exists(requestArtifactPath) || !File.Exists(providerLogPath))
+        {
+            return false;
+        }
+
+        var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+        if (!string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath));
+        var currentProviderEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        return DirectRunFixOutcomeSupport.HasBoundedProgressSignal(currentProviderEvents);
+    }
+
+    private static void AppendDeterministicContractGapBoundaryIfNeeded(
+        string providerLogPath,
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerLogPath);
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+
+        var boundaryEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            entryKind,
+            provider,
+            providerSessionId,
+            providerSessionAlive: false);
+        if (boundaryEvent is null)
+        {
+            return;
+        }
+
+        new DirectRunProviderEventWriter(providerLogPath).Append(boundaryEvent);
     }
 
     private static bool TryAwaitTerminalFailureReason(
@@ -1030,6 +1128,34 @@ internal static class RunSuperviseCommand
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedEntryKind);
 
         failure = null!;
+        if ((string.Equals(expectedEntryKind, "fix", StringComparison.Ordinal)
+                || string.Equals(expectedEntryKind, "implement", StringComparison.Ordinal))
+            && DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
+                providerEvents,
+                executionUnit,
+                expectedEntryKind,
+                out var startupOnlyDetail))
+        {
+            failure = new WorkerSessionFailure(
+                startupOnlyDetail,
+                ReportAsNonRetryableFailure: true);
+            return true;
+        }
+
+        if ((string.Equals(expectedEntryKind, "fix", StringComparison.Ordinal)
+                || string.Equals(expectedEntryKind, "implement", StringComparison.Ordinal))
+            && DirectRunFixOutcomeSupport.TryResolveContractGapDetail(
+                providerEvents,
+                executionUnit,
+                expectedEntryKind,
+                out var contractGapDetail))
+        {
+            failure = new WorkerSessionFailure(
+                contractGapDetail,
+                ReportAsNonRetryableFailure: true);
+            return true;
+        }
+
         for (var index = providerEvents.Count - 1; index >= 0; index--)
         {
             var providerEvent = providerEvents[index];
@@ -1041,18 +1167,6 @@ internal static class RunSuperviseCommand
             if (providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
                 && exitCodeElement.TryGetInt32(out var exitCode))
             {
-                if (string.Equals(expectedEntryKind, "fix", StringComparison.Ordinal)
-                    && DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
-                        providerEvents,
-                        executionUnit,
-                        out var startupOnlyDetail))
-                {
-                    failure = new WorkerSessionFailure(
-                        $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode}. {startupOnlyDetail}",
-                        ReportAsNonRetryableFailure: true);
-                    return true;
-                }
-
                 failure = new WorkerSessionFailure(
                     $"Worker session '{providerSessionId}' for '{executionUnit}' exited with backend exit code {exitCode}.",
                     ReportAsNonRetryableFailure: false);
@@ -1386,6 +1500,7 @@ internal static class RunSuperviseCommand
         if (DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
                 currentSessionEvents,
                 executionUnit,
+                "fix",
                 out var startupOnlyDetail))
         {
             return startupOnlyDetail;

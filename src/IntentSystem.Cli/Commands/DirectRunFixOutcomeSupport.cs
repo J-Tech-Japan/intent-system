@@ -6,10 +6,10 @@ internal static class DirectRunFixOutcomeSupport
 {
     private const string DeterministicContractGapStopReason = "deterministic-contract-gap";
     private const string ExplicitContractGapRefusalReason = "provider-explicit-contract-gap-refusal";
-    private const string InspectionOnlyExitReason = "fix-session-ended-after-initial-inspection";
-    private const string ProviderBackendEndedBeforeSpecSourceReadReason = "fix-session-ended-before-spec-source-test-read";
-    private const string MissingTerminalCaptureAfterRequestReadReason = "fix-session-terminal-boundary-missing-after-request-reread";
-    private const string MissingTerminalCaptureAfterDeepProgressReason = "fix-session-terminal-boundary-missing-after-deep-progress";
+    private const string InspectionOnlyExitReasonSuffix = "session-ended-after-initial-inspection";
+    private const string ProviderBackendEndedBeforeSpecSourceReadReasonSuffix = "session-ended-before-spec-source-test-read";
+    private const string MissingTerminalCaptureAfterRequestReadReasonSuffix = "session-terminal-boundary-missing-after-request-reread";
+    private const string MissingTerminalCaptureAfterDeepProgressReasonSuffix = "session-terminal-boundary-missing-after-deep-progress";
     private static readonly string[] StartupWarningMarkers =
     [
         "warn",
@@ -87,14 +87,16 @@ internal static class DirectRunFixOutcomeSupport
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
         ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
 
-        if (!string.Equals(entryKind, "fix", StringComparison.Ordinal)
+        if (!SupportsEntryKind(entryKind)
             || HasCanonicalContractGap(providerEvents))
         {
             return null;
         }
 
+        var orderedProviderEvents = OrderEventsForAnalysis(providerEvents);
+
         if (TryCreateExplicitContractGapEvent(
-                providerEvents,
+                orderedProviderEvents,
                 timestamp,
                 executionUnit,
                 entryKind,
@@ -106,8 +108,9 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         if (!TryResolveCanonicalFailureDetail(
-                providerEvents,
+                orderedProviderEvents,
                 executionUnit,
+                entryKind,
                 providerSessionAlive,
                 out var reason,
                 out var detail))
@@ -137,14 +140,18 @@ internal static class DirectRunFixOutcomeSupport
     public static bool TryResolveContractGapDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
+        string entryKind,
         out string detail)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
 
-        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        var orderedProviderEvents = OrderEventsForAnalysis(providerEvents);
+
+        for (var index = orderedProviderEvents.Count - 1; index >= 0; index--)
         {
-            if (!TryResolveExplicitContractGapDetail(providerEvents[index].Payload, executionUnit, out detail))
+            if (!TryResolveExplicitContractGapDetail(orderedProviderEvents[index].Payload, executionUnit, entryKind, out detail))
             {
                 continue;
             }
@@ -152,19 +159,23 @@ internal static class DirectRunFixOutcomeSupport
             return true;
         }
 
-        return TryResolveInspectionOnlyFailureDetail(providerEvents, executionUnit, out detail);
+        return TryResolveInspectionOnlyFailureDetail(orderedProviderEvents, executionUnit, entryKind, out detail);
     }
 
     public static bool TryResolveStartupOnlyFailureDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
+        string entryKind,
         out string detail)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
+
+        var orderedProviderEvents = OrderEventsForAnalysis(providerEvents);
 
         detail = string.Empty;
-        var failingBackendExitIndex = FindFailingBackendExitIndex(providerEvents);
+        var failingBackendExitIndex = FindFailingBackendExitIndex(orderedProviderEvents);
         if (failingBackendExitIndex < 0)
         {
             return false;
@@ -173,34 +184,29 @@ internal static class DirectRunFixOutcomeSupport
         var sawStartupNoise = false;
         for (var index = 0; index < failingBackendExitIndex; index++)
         {
-            var providerEvent = providerEvents[index];
+            var providerEvent = orderedProviderEvents[index];
             if (providerEvent.Kind == "session-metadata"
-                || IsIgnorableReadyEvent(providerEvent.Payload))
+                || IsIgnorableReadyEvent(providerEvent.Payload)
+                || IsIgnorableStartupPreamble(providerEvent.Payload))
             {
                 continue;
-            }
-
-            if (TryResolveExplicitContractGapDetail(providerEvent.Payload, executionUnit, out _)
-                || ContainsSuccessfulInitialRepoInspection(providerEvent.Payload))
-            {
-                return false;
-            }
-
-            if (!sawStartupNoise
-                && IsIgnorableStartupPreamble(providerEvent.Payload))
-            {
-                continue;
-            }
-
-            if (ContainsBoundedFixProgressSignal(providerEvent.Payload))
-            {
-                return false;
             }
 
             if (IsIgnorableStartupNoise(providerEvent.Payload))
             {
                 sawStartupNoise = true;
                 continue;
+            }
+
+            if (TryResolveExplicitContractGapDetail(providerEvent.Payload, executionUnit, entryKind, out _)
+                || ContainsSuccessfulInitialRepoInspection(providerEvent.Payload))
+            {
+                return false;
+            }
+
+            if (ContainsBoundedFixProgressSignal(providerEvent.Payload))
+            {
+                return false;
             }
 
             return false;
@@ -212,7 +218,7 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         detail =
-            $"Fix direct run for '{executionUnit}' exited during provider startup before any bounded repo inspection, edit, test, refusal, or contract-gap output was emitted. Current-session provider output only contained startup warnings or noise before the backend exit.";
+            $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' exited during provider startup before any bounded repo inspection, edit, test, refusal, or contract-gap output was emitted. Current-session provider output only contained startup warnings or noise before the backend exit.";
         return true;
     }
 
@@ -238,15 +244,17 @@ internal static class DirectRunFixOutcomeSupport
         ArgumentNullException.ThrowIfNull(providerEvents);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
+        var orderedProviderEvents = OrderEventsForAnalysis(providerEvents);
+
         detail = string.Empty;
-        if (!HasSuccessfulBackendExit(providerEvents))
+        if (!HasSuccessfulBackendExit(orderedProviderEvents))
         {
             return false;
         }
 
-        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        for (var index = orderedProviderEvents.Count - 1; index >= 0; index--)
         {
-            if (!TryResolveNoOpSuccessDetail(providerEvents[index].Payload, out detail))
+            if (!TryResolveNoOpSuccessDetail(orderedProviderEvents[index].Payload, out detail))
             {
                 continue;
             }
@@ -295,6 +303,7 @@ internal static class DirectRunFixOutcomeSupport
     private static bool TryResolveCanonicalFailureDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
+        string entryKind,
         bool providerSessionAlive,
         out string reason,
         out string detail)
@@ -302,6 +311,7 @@ internal static class DirectRunFixOutcomeSupport
         if (TryResolveMissingTerminalAfterDeepProgressDetail(
                 providerEvents,
                 executionUnit,
+                entryKind,
                 providerSessionAlive,
                 out reason,
                 out detail))
@@ -312,6 +322,7 @@ internal static class DirectRunFixOutcomeSupport
         if (TryResolvePostRequestParityBoundaryDetail(
                 providerEvents,
                 executionUnit,
+                entryKind,
                 providerSessionAlive,
                 out reason,
                 out detail))
@@ -319,13 +330,14 @@ internal static class DirectRunFixOutcomeSupport
             return true;
         }
 
-        reason = InspectionOnlyExitReason;
-        return TryResolveInspectionOnlyFailureDetail(providerEvents, executionUnit, out detail);
+        reason = ResolveReason(entryKind, InspectionOnlyExitReasonSuffix);
+        return TryResolveInspectionOnlyFailureDetail(providerEvents, executionUnit, entryKind, out detail);
     }
 
     private static bool TryResolveMissingTerminalAfterDeepProgressDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
+        string entryKind,
         bool providerSessionAlive,
         out string reason,
         out string detail)
@@ -347,15 +359,16 @@ internal static class DirectRunFixOutcomeSupport
         var observedProductRead = providerEvents.Any(providerEvent => ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
         var observedDotNetTest = providerEvents.Any(providerEvent => ContainsDotNetTestAttempt(providerEvent.Payload));
 
-        reason = MissingTerminalCaptureAfterDeepProgressReason;
+        reason = ResolveReason(entryKind, MissingTerminalCaptureAfterDeepProgressReasonSuffix);
         detail =
-            $"Fix direct run for '{executionUnit}' reached deeper bounded work before the provider session died, but no same-session terminal outcome was captured. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}, dotnet_test={observedDotNetTest}. The provider session is no longer alive, but neither backend-exit nor an explicit contract-gap was persisted for that same session, so the child runtime must synthesize a deterministic missing-terminal boundary instead of leaving run_status=running.";
+            $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' reached deeper bounded work before the provider session died, but no same-session terminal outcome was captured. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}, dotnet_test={observedDotNetTest}. The provider session is no longer alive, but neither backend-exit nor an explicit contract-gap was persisted for that same session, so the child runtime must synthesize a deterministic missing-terminal boundary instead of leaving run_status=running.";
         return true;
     }
 
     private static bool TryResolvePostRequestParityBoundaryDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
+        string entryKind,
         bool providerSessionAlive,
         out string reason,
         out string detail)
@@ -377,9 +390,9 @@ internal static class DirectRunFixOutcomeSupport
         var failingBackendExitIndex = FindFailingBackendExitIndex(providerEvents);
         if (failingBackendExitIndex >= 0)
         {
-            reason = ProviderBackendEndedBeforeSpecSourceReadReason;
+            reason = ResolveReason(entryKind, ProviderBackendEndedBeforeSpecSourceReadReasonSuffix);
             detail =
-                $"Fix direct run for '{executionUnit}' stopped before repo-local spec/source/test planning reads. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}. A failing backend-exit was captured before any repo-local spec or product source/test read, which indicates the provider backend itself exited before the next bounded read.";
+                $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' stopped before repo-local spec/source/test planning reads. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}. A failing backend-exit was captured before any repo-local spec or product source/test read, which indicates the provider backend itself exited before the next bounded read.";
             return true;
         }
 
@@ -388,15 +401,16 @@ internal static class DirectRunFixOutcomeSupport
             return false;
         }
 
-        reason = MissingTerminalCaptureAfterRequestReadReason;
+        reason = ResolveReason(entryKind, MissingTerminalCaptureAfterRequestReadReasonSuffix);
         detail =
-            $"Fix direct run for '{executionUnit}' stopped before repo-local spec/source/test planning reads. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}. The provider session is no longer alive, but no backend-exit or later bounded-read event was captured for the current session. This indicates the detached helper/current-session synthesis event capture dropped after the request reread layer rather than a completed repair attempt.";
+            $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' stopped before repo-local spec/source/test planning reads. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}. The provider session is no longer alive, but no backend-exit or later bounded-read event was captured for the current session. This indicates the detached helper/current-session synthesis event capture dropped after the request reread layer rather than a completed repair attempt.";
         return true;
     }
 
     private static bool TryResolveInspectionOnlyFailureDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
+        string entryKind,
         out string detail)
     {
         detail = string.Empty;
@@ -412,12 +426,14 @@ internal static class DirectRunFixOutcomeSupport
         {
             var providerEvent = providerEvents[index];
             if (providerEvent.Kind == "session-metadata"
-                || IsIgnorableReadyEvent(providerEvent.Payload))
+                || IsIgnorableReadyEvent(providerEvent.Payload)
+                || IsIgnorableStartupPreamble(providerEvent.Payload)
+                || IsIgnorableStartupNoise(providerEvent.Payload))
             {
                 continue;
             }
 
-            if (TryResolveExplicitContractGapDetail(providerEvent.Payload, executionUnit, out _))
+            if (TryResolveExplicitContractGapDetail(providerEvent.Payload, executionUnit, entryKind, out _))
             {
                 return false;
             }
@@ -442,8 +458,34 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         detail =
-            $"Fix direct run for '{executionUnit}' exited after the initial repo-inspection command completed without any repair, test, refusal, or contract-gap outcome.";
+            $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' exited after the initial repo-inspection command completed without any repair, test, refusal, or contract-gap outcome.";
         return true;
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> OrderEventsForAnalysis(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        return providerEvents
+            .Select(
+                (providerEvent, index) => new
+                {
+                    Event = providerEvent,
+                    Index = index,
+                    ParsedTimestamp = DateTimeOffset.TryParse(
+                        providerEvent.Timestamp,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.RoundtripKind,
+                        out var parsedTimestamp)
+                        ? parsedTimestamp
+                        : (DateTimeOffset?)null
+                })
+            .OrderBy(item => item.ParsedTimestamp is null ? 1 : 0)
+            .ThenBy(item => item.ParsedTimestamp)
+            .ThenBy(item => item.Index)
+            .Select(item => item.Event)
+            .ToArray();
     }
 
     private static int FindFailingBackendExitIndex(IReadOnlyList<DirectRunProviderEvent> providerEvents)
@@ -560,7 +602,7 @@ internal static class DirectRunFixOutcomeSupport
         out DirectRunProviderEvent? providerEvent)
     {
         providerEvent = null;
-        if (!TryResolveExplicitContractGapDetail(providerEvents, executionUnit, out var detail))
+        if (!TryResolveExplicitContractGapDetail(providerEvents, executionUnit, entryKind, out var detail))
         {
             return false;
         }
@@ -589,7 +631,11 @@ internal static class DirectRunFixOutcomeSupport
     private static bool HasExplicitContractGap(IReadOnlyList<DirectRunProviderEvent> providerEvents)
     {
         return providerEvents.Any(providerEvent =>
-            TryResolveExplicitContractGapDetail(providerEvent.Payload, providerEvent.ExecutionUnit ?? "fix", out _));
+            TryResolveExplicitContractGapDetail(
+                providerEvent.Payload,
+                providerEvent.ExecutionUnit ?? "fix",
+                providerEvent.EntryKind ?? "fix",
+                out _));
     }
 
     private static bool HasCanonicalContractGap(IReadOnlyList<DirectRunProviderEvent> providerEvents)
@@ -605,14 +651,16 @@ internal static class DirectRunFixOutcomeSupport
     private static bool TryResolveExplicitContractGapDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
+        string entryKind,
         out string detail)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
 
         for (var index = providerEvents.Count - 1; index >= 0; index--)
         {
-            if (TryResolveExplicitContractGapDetail(providerEvents[index].Payload, executionUnit, out detail))
+            if (TryResolveExplicitContractGapDetail(providerEvents[index].Payload, executionUnit, entryKind, out detail))
             {
                 return true;
             }
@@ -625,6 +673,7 @@ internal static class DirectRunFixOutcomeSupport
     private static bool TryResolveExplicitContractGapDetail(
         JsonElement payload,
         string executionUnit,
+        string entryKind,
         out string detail)
     {
         detail = string.Empty;
@@ -645,7 +694,7 @@ internal static class DirectRunFixOutcomeSupport
         {
             if (!TryReadString(payload, "detail", out detail))
             {
-                detail = $"Fix direct run for '{executionUnit}' reported a deterministic contract gap.";
+                detail = $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' reported a deterministic contract gap.";
             }
 
             return true;
@@ -656,7 +705,7 @@ internal static class DirectRunFixOutcomeSupport
         {
             if (!TryReadString(payload, "detail", out detail))
             {
-                detail = $"Fix direct run for '{executionUnit}' reported a deterministic contract gap.";
+                detail = $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' reported a deterministic contract gap.";
             }
 
             return true;
@@ -707,6 +756,35 @@ internal static class DirectRunFixOutcomeSupport
                 normalized.StartsWith(prefix, StringComparison.Ordinal))
             || PlanningPreambleContractGapMarkers.Any(marker =>
                 normalized.Contains(marker, StringComparison.Ordinal));
+    }
+
+    private static bool SupportsEntryKind(string entryKind)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
+
+        return string.Equals(entryKind, "fix", StringComparison.Ordinal)
+            || string.Equals(entryKind, "implement", StringComparison.Ordinal);
+    }
+
+    private static string ResolveEntryLabel(string entryKind)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
+
+        return string.Equals(entryKind, "implement", StringComparison.Ordinal)
+            ? "Implement"
+            : "Fix";
+    }
+
+    private static string ResolveReason(string entryKind, string suffix)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(suffix);
+
+        var prefix = string.Equals(entryKind, "implement", StringComparison.Ordinal)
+            ? "implement"
+            : "fix";
+
+        return $"{prefix}-{suffix}";
     }
 
     private static bool ContainsSuccessfulInitialRepoInspection(JsonElement payload)

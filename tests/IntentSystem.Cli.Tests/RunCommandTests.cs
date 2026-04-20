@@ -3521,6 +3521,150 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenAutoResumedImplementSessionThatDiesAfterInitialInventory_StopsWithNonRetryableFailure()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G226"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Active))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            runLogPath,
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"G226","event":"activated","by":"intent-cli"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            execution_unit: "G226"
+
+            implementation_issue:
+              issue_title: "[G226] Root Run Orchestration Command"
+              goal: "Coordinate the root run loop."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/G226/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G226.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G226.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "G226",
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                Status = RunSupervisionSessionStatus.Monitoring,
+                QueueState = "active",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "G226"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-226-g226",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                LinkedPr = null,
+                CommentRef = null,
+                HandoffArtifactRef = ".intent-cli/implement/G226.request.md",
+                RetryCount = 0,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z")
+            }));
+        WriteDirectRunRequest(repoRoot, "G226", "implement", "pid:999999", provider: "Claude");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "implement",
+            "running",
+            providerEvents:
+            [
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:00.0000000+00:00",
+                    ExecutionUnit = "G226",
+                    Provider = "Claude",
+                    EntryKind = "implement",
+                    SessionId = "pid:999999",
+                    Kind = "session-metadata",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        model = "sonnet",
+                        transport = "sdk",
+                        command = "claude"
+                    })
+                }
+            ],
+            sessionId: "pid:999999",
+            provider: "Claude");
+        var originalRunImplementExecutor = RunSuperviseCommand.RunImplementExecutor;
+        var originalRaceWindow = RunSuperviseCommand.TerminalFailureRaceWindow;
+
+        try
+        {
+            RunSuperviseCommand.TerminalFailureRaceWindow = TimeSpan.Zero;
+            RunSuperviseCommand.RunImplementExecutor = (_, executionUnit) =>
+            {
+                WriteDirectRunRequest(repoRoot, executionUnit, "implement", "pid:4242", provider: "Claude");
+                WriteDirectRunResult(
+                    repoRoot,
+                    executionUnit,
+                    "implement",
+                    "running",
+                    providerEvents: CreateInitialInventoryImplementProviderEvents(executionUnit, "pid:4242", includeBackendExit: false),
+                    sessionId: "pid:4242",
+                    provider: "Claude");
+
+                return new RunImplementResult
+                {
+                    Request = CreateRunImplementRequest(repoRoot, executionUnit) with
+                    {
+                        ImplementRole = "Claude"
+                    },
+                    ArtifactPath = $".intent-cli/implement/{executionUnit}.request.md"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("non-retryable-failure", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("run supervise", action.Name);
+            Assert.Contains("initial repo-inspection command completed", result.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain("auto-resumed", result.Detail, StringComparison.OrdinalIgnoreCase);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("initial repo-inspection command completed", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G226.result.json")));
+            Assert.Equal("pid:4242", resultArtifact.SessionId);
+            Assert.Equal("failed", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("retry-attempted", runEvents[^2].Event);
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "auto-resumed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.RunImplementExecutor = originalRunImplementExecutor;
+            RunSuperviseCommand.TerminalFailureRaceWindow = originalRaceWindow;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenDeadImplementWorkerSessionWithCapturedBackendExit_DoesNotReportMissingTerminalEvent()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -4256,6 +4400,208 @@ public sealed class RunCommandTests
         Assert.Equal("blocked", runEvents[^1].Event);
         Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
         Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenImplementSessionThatDiesAfterInitialInventory_StopsWithNonRetryableFailureDetail()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G226"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Active))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"G226","event":"activated","by":"intent-cli"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            execution_unit: "G226"
+
+            implementation_issue:
+              issue_title: "[G226] Root Run Orchestration Command"
+              goal: "Coordinate the root run loop."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/G226/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G226.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G226.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "G226",
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                Status = RunSupervisionSessionStatus.Monitoring,
+                QueueState = "active",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "G226"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-226-g226",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                HandoffArtifactRef = ".intent-cli/implement/G226.request.md",
+                RetryCount = 0,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z")
+            }));
+        WriteDirectRunRequest(repoRoot, "G226", "implement", "pid:45803", provider: "Codex");
+        WriteDirectRunResult(
+            repoRoot,
+            "G226",
+            "implement",
+            "running",
+            providerEvents: CreateInitialInventoryImplementProviderEvents("G226", "pid:45803"),
+            sessionId: "pid:45803",
+            provider: "Codex");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("non-retryable-failure", result.StopReason);
+        Assert.Equal("G226", result.ExecutionUnit);
+        var action = Assert.Single(result.Actions);
+        Assert.Equal("run supervise", action.Name);
+        Assert.Contains("initial repo-inspection command completed", result.Detail, StringComparison.Ordinal);
+
+        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G226");
+        Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+        Assert.Contains("initial repo-inspection command completed", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "supervision", "G226.session.json")));
+        Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+        Assert.Equal(0, session.RetryCount);
+        Assert.Contains("initial repo-inspection command completed", session.LastInterruptionReason, StringComparison.Ordinal);
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        Assert.Equal("blocked", runEvents[^1].Event);
+        Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+        Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenReactivatedImplementWithStaleFailedResult_ReclassifiesToInspectionBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "TOY-CALC-V0-02"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Active, executionUnit: "TOY-CALC-V0-02"))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            runLogPath,
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"TOY-CALC-V0-02","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"TOY-CALC-V0-02","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T11:55:00Z","execution_unit":"TOY-CALC-V0-02","event":"blocked","by":"intent-cli","reason":"Worker session 'pid:45803' for 'TOY-CALC-V0-02' exited with backend exit code 1."}
+            {"ts":"2026-04-10T12:15:00Z","execution_unit":"TOY-CALC-V0-02","event":"activated","by":"intent-cli"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "TOY-CALC-V0-02", "packet.yaml"),
+            """
+            execution_unit: "TOY-CALC-V0-02"
+
+            implementation_issue:
+              issue_title: "[G129] Preserve Detached Implement Bounded Progress After Initial Inventory"
+              goal: "Preserve detached implement progress boundaries."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/TOY-CALC-V0-02/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "TOY-CALC-V0-02.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "TOY-CALC-V0-02.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "TOY-CALC-V0-02",
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "TOY-CALC-V0-02"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-129-toy-calc-v0-02",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                HandoffArtifactRef = ".intent-cli/implement/TOY-CALC-V0-02.request.md",
+                RetryCount = 0,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastInterruptionReason = "Worker session 'pid:45803' for 'TOY-CALC-V0-02' exited with backend exit code 1."
+            }));
+        WriteDirectRunRequest(
+            repoRoot,
+            "TOY-CALC-V0-02",
+            "implement",
+            "pid:45803",
+            provider: "Codex",
+            launchedAt: "2026-04-10T12:20:00.0000000+00:00");
+        WriteDirectRunResult(
+            repoRoot,
+            "TOY-CALC-V0-02",
+            "implement",
+            "failed",
+            providerEvents: CreateInitialInventoryImplementProviderEvents("TOY-CALC-V0-02", "pid:45803"),
+            sessionId: "pid:45803",
+            provider: "Codex");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("non-retryable-failure", result.StopReason);
+        Assert.Equal("TOY-CALC-V0-02", result.ExecutionUnit);
+        var action = Assert.Single(result.Actions);
+        Assert.Equal("run supervise", action.Name);
+        Assert.Contains("initial repo-inspection command completed", result.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("Implement direct run failed for 'TOY-CALC-V0-02'.", result.Detail, StringComparison.Ordinal);
+
+        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "TOY-CALC-V0-02");
+        Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+        Assert.Contains("initial repo-inspection command completed", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "supervision", "TOY-CALC-V0-02.session.json")));
+        Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+        Assert.Contains("initial repo-inspection command completed", session.LastInterruptionReason, StringComparison.Ordinal);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "TOY-CALC-V0-02.provider.jsonl")));
+        Assert.Contains(
+            providerEvents,
+            providerEvent => providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("reason", out var reasonElement)
+                && string.Equals(reasonElement.GetString(), "implement-session-ended-after-initial-inspection", StringComparison.Ordinal));
+
+        var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        Assert.Equal("blocked", runEvents[^1].Event);
+        Assert.Contains("initial repo-inspection command completed", runEvents[^1].Reason, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -7337,6 +7683,81 @@ public sealed class RunCommandTests
                     })
                 }
             ];
+        }
+
+        return providerEvents;
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateInitialInventoryImplementProviderEvents(
+        string executionUnit,
+        string sessionId,
+        bool includeBackendExit = true)
+    {
+        var providerEvents = new List<DirectRunProviderEvent>
+        {
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "session-metadata",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    model = "gpt-5.4-mini",
+                    transport = "sdk",
+                    command = "codex"
+                })
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.3000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("Use the request artifact at '/repo/.intent-cli/implement/G226.request.md' as the bounded source of truth for this direct run.")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.6000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'rg --files' succeeded in 0ms")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:00.8000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("warn plugin manifest falling_back after state db discrepancy on slow path")
+            }
+        };
+
+        if (includeBackendExit)
+        {
+            providerEvents.Add(new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:00:01.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    type = "backend-exit",
+                    exit_code = 1
+                })
+            });
         }
 
         return providerEvents;

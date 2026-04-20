@@ -194,7 +194,7 @@ internal static class DirectRunCommandSupport
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
-        return entryKind == DirectRunEntryKind.Fix
+        return (entryKind == DirectRunEntryKind.Fix || entryKind == DirectRunEntryKind.Implement)
             && launcher is DirectRunLauncher
             && IsCodexLikeCommand(command);
     }
@@ -492,7 +492,8 @@ internal static class DirectRunCommandSupport
         ArgumentException.ThrowIfNullOrWhiteSpace(runStatus);
 
         if (OperatingSystem.IsWindows()
-            || !string.Equals(entryKind, "fix", StringComparison.Ordinal)
+            || (!string.Equals(entryKind, "fix", StringComparison.Ordinal)
+                && !string.Equals(entryKind, "implement", StringComparison.Ordinal))
             || !string.Equals(runStatus, "running", StringComparison.Ordinal)
             || !TryParseSessionProcessId(providerSessionId, out var processId))
         {
