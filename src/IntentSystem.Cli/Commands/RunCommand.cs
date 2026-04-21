@@ -120,6 +120,7 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(context);
 
         var actions = new List<RunCommandAction>();
+        var freshImplementContinuationStates = new Dictionary<string, FreshFixContinuationState>(StringComparer.Ordinal);
         var freshFixContinuationStates = new Dictionary<string, FreshFixContinuationState>(StringComparer.Ordinal);
 
         for (var iteration = 0; iteration < IterationBudget; iteration++)
@@ -150,6 +151,7 @@ internal static class RunCommand
                             "implement");
                         if (string.Equals(implementRunStatus, "succeeded", StringComparison.Ordinal))
                         {
+                            freshImplementContinuationStates.Remove(inProgressItem.ExecutionUnit);
                             ExecuteAction(
                                 context,
                                 actions,
@@ -188,6 +190,10 @@ internal static class RunCommand
                                 "run implement",
                                 inProgressItem.ExecutionUnit,
                                 () => RunImplementExecutor(context, inProgressItem.ExecutionUnit));
+                            TrackFreshImplementContinuation(
+                                context,
+                                inProgressItem.ExecutionUnit,
+                                freshImplementContinuationStates);
                             continue;
                         }
 
@@ -197,6 +203,18 @@ internal static class RunCommand
                             "run supervise",
                             inProgressItem.ExecutionUnit,
                             () => RunSuperviseExecutor(context, inProgressItem.ExecutionUnit));
+
+                        if (ShouldContinueFreshImplementSupervision(
+                                context,
+                                freshImplementContinuationStates,
+                                inProgressItem.ExecutionUnit,
+                                superviseResult))
+                        {
+                            SleepFreshFixContinuationPollInterval();
+                            continue;
+                        }
+
+                        freshImplementContinuationStates.Remove(inProgressItem.ExecutionUnit);
 
                         if (superviseResult.Blocked)
                         {
@@ -501,6 +519,19 @@ internal static class RunCommand
                         continue;
                     }
 
+                    if (TryAutoContinueBlockedImplementRecoveredSpecBoundary(
+                            context,
+                            queueState,
+                            blockedItem))
+                    {
+                        continue;
+                    }
+
+                    if (TryResolveBlockedImplementSessionFailureResult(context, actions, blockedItem, out var blockedImplementResult))
+                    {
+                        return blockedImplementResult;
+                    }
+
                     if (TryResolveBlockedFixRetryExhaustionResult(context, actions, blockedItem, out var blockedFixResult))
                     {
                         return blockedFixResult;
@@ -781,6 +812,46 @@ internal static class RunCommand
         return true;
     }
 
+    private static bool TryAutoContinueBlockedImplementRecoveredSpecBoundary(
+        CliContext context,
+        QueueState queueState,
+        QueueItem blockedItem)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueState);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+
+        if (!TryReadSupervisionSession(context, blockedItem.ExecutionUnit, out var session)
+            || session.WorkerEntry != RunSupervisionWorkerEntry.Implement
+            || session.Status != RunSupervisionSessionStatus.Blocked)
+        {
+            return false;
+        }
+
+        if (!HasCurrentBlockedImplementRecoveredSpecBoundary(context, blockedItem.ExecutionUnit))
+        {
+            return false;
+        }
+
+        var timestamp = TimestampFactory();
+        var transition = QueueManager.TransitionNonBlocking(
+            queueState,
+            blockedItem.ExecutionUnit,
+            QueueItemState.Active,
+            TransitionActor,
+            timestamp);
+        var updatedState = transition.UpdatedState with
+        {
+            Items = transition.UpdatedState.Items.Select(item =>
+                string.Equals(item.ExecutionUnit, blockedItem.ExecutionUnit, StringComparison.Ordinal)
+                    ? item with { BlockedBy = [] }
+                    : item).ToArray()
+        };
+        File.WriteAllText(context.GetQueueStatePath(), QueueStateSerializer.Serialize(updatedState));
+        AppendRunEvent(context.GetRunLogPath(), transition.Event);
+        return true;
+    }
+
     private static bool TryResolveBlockedFixRetryExhaustionResult(
         CliContext context,
         IReadOnlyList<RunCommandAction> actions,
@@ -817,6 +888,49 @@ internal static class RunCommand
             actions,
             blockedItem.ExecutionUnit,
             session.LastInterruptionReason);
+        return true;
+    }
+
+    private static bool TryResolveBlockedImplementSessionFailureResult(
+        CliContext context,
+        IReadOnlyList<RunCommandAction> actions,
+        QueueItem blockedItem,
+        out RunCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(actions);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+
+        result = null!;
+        var sessionArtifactRef = RunSupervisionSessionArtifactPathResolver.Resolve(
+            context.Config.Supervision.ArtifactRoot,
+            blockedItem.ExecutionUnit);
+        var sessionArtifactPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            sessionArtifactRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!File.Exists(sessionArtifactPath))
+        {
+            return false;
+        }
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
+        if (session.WorkerEntry != RunSupervisionWorkerEntry.Implement
+            || session.Status != RunSupervisionSessionStatus.Blocked)
+        {
+            return false;
+        }
+
+        var detail = TryResolveCurrentImplementSessionFailureDetail(context, blockedItem.ExecutionUnit);
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            return false;
+        }
+
+        result = CreateStopResult(
+            NonRetryableFailureStopReason,
+            actions,
+            blockedItem.ExecutionUnit,
+            detail);
         return true;
     }
 
@@ -1718,6 +1832,49 @@ internal static class RunCommand
             FreshFixContinuationMaxPolls);
     }
 
+    private static void TrackFreshImplementContinuation(
+        CliContext context,
+        string executionUnit,
+        IDictionary<string, FreshFixContinuationState> continuationStates)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(continuationStates);
+
+        continuationStates.Remove(executionUnit);
+        if (FreshFixContinuationWindow <= TimeSpan.Zero
+            || FreshFixContinuationTotalWindow <= TimeSpan.Zero
+            || FreshFixContinuationMaxPolls <= 0)
+        {
+            return;
+        }
+
+        var now = TimestampFactory();
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        var launchedAt = requestArtifact is not null
+            && string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            && DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var parsedLaunchedAt)
+                ? parsedLaunchedAt
+                : now;
+        var totalDeadline = launchedAt + FreshFixContinuationTotalWindow;
+        var deadline = launchedAt + FreshFixContinuationWindow;
+        if (deadline > totalDeadline)
+        {
+            deadline = totalDeadline;
+        }
+
+        if (deadline <= now)
+        {
+            return;
+        }
+
+        continuationStates[executionUnit] = new FreshFixContinuationState(
+            totalDeadline,
+            deadline,
+            launchedAt,
+            FreshFixContinuationMaxPolls);
+    }
+
     private static bool ShouldContinueFreshFixSupervision(
         CliContext context,
         IDictionary<string, FreshFixContinuationState> continuationStates,
@@ -1771,6 +1928,59 @@ internal static class RunCommand
         return true;
     }
 
+    private static bool ShouldContinueFreshImplementSupervision(
+        CliContext context,
+        IDictionary<string, FreshFixContinuationState> continuationStates,
+        string executionUnit,
+        RunSuperviseResult superviseResult)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(continuationStates);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(superviseResult);
+
+        if (!continuationStates.TryGetValue(executionUnit, out var continuationState))
+        {
+            return false;
+        }
+
+        if (superviseResult.Blocked
+            || superviseResult.WorkerEntry != RunSupervisionWorkerEntry.Implement
+            || superviseResult.SessionStatus != RunSupervisionSessionStatus.Monitoring
+            || superviseResult.RetryScheduled
+            || superviseResult.AutoResumed)
+        {
+            continuationStates.Remove(executionUnit);
+            return false;
+        }
+
+        continuationState = RefreshFreshImplementContinuationActivity(
+            continuationStates,
+            executionUnit,
+            continuationState,
+            context);
+
+        if (TimestampFactory() >= continuationState.Deadline || continuationState.RemainingPolls <= 0)
+        {
+            continuationStates.Remove(executionUnit);
+            return false;
+        }
+
+        if (continuationState.RemainingPolls == 1)
+        {
+            continuationStates.Remove(executionUnit);
+        }
+        else
+        {
+            continuationStates[executionUnit] = continuationState with
+            {
+                RemainingPolls = continuationState.RemainingPolls - 1
+            };
+        }
+
+        return true;
+    }
+
     private static FreshFixContinuationState RefreshFreshFixContinuationActivity(
         IDictionary<string, FreshFixContinuationState> continuationStates,
         string executionUnit,
@@ -1784,6 +1994,41 @@ internal static class RunCommand
 
         var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
         var latestActivityAt = TryResolveCurrentFixSessionLatestActivityAt(context, executionUnit, requestArtifact);
+        if (latestActivityAt is null || latestActivityAt <= continuationState.LastObservedActivityAt)
+        {
+            return continuationState;
+        }
+
+        var extendedDeadline = latestActivityAt.Value + FreshFixContinuationActivityWindow;
+        if (extendedDeadline > continuationState.TotalDeadline)
+        {
+            extendedDeadline = continuationState.TotalDeadline;
+        }
+
+        continuationState = continuationState with
+        {
+            Deadline = extendedDeadline > continuationState.Deadline
+                ? extendedDeadline
+                : continuationState.Deadline,
+            LastObservedActivityAt = latestActivityAt.Value
+        };
+        continuationStates[executionUnit] = continuationState;
+        return continuationState;
+    }
+
+    private static FreshFixContinuationState RefreshFreshImplementContinuationActivity(
+        IDictionary<string, FreshFixContinuationState> continuationStates,
+        string executionUnit,
+        FreshFixContinuationState continuationState,
+        CliContext? context)
+    {
+        if (context is null || FreshFixContinuationActivityWindow <= TimeSpan.Zero)
+        {
+            return continuationState;
+        }
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        var latestActivityAt = TryResolveCurrentImplementSessionLatestActivityAt(context, executionUnit, requestArtifact);
         if (latestActivityAt is null || latestActivityAt <= continuationState.LastObservedActivityAt)
         {
             return continuationState;
@@ -2051,6 +2296,115 @@ internal static class RunCommand
         return DirectRunFixOutcomeSupport.TryResolveContractGapDetail(providerEvents, executionUnit, "fix", out var detail)
             ? detail
             : null;
+    }
+
+    private static string? TryResolveCurrentImplementSessionFailureDetail(
+        CliContext context,
+        string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit, "implement");
+        if (requestArtifact is null
+            || resultArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.RunStatus, "failed", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.SessionId, requestArtifact.ProviderSessionId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
+        if (providerEvents.Count == 0)
+        {
+            return null;
+        }
+
+        providerEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        if (DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
+                providerEvents,
+                executionUnit,
+                "implement",
+                out var startupOnlyDetail))
+        {
+            return startupOnlyDetail;
+        }
+
+        if (DirectRunFixOutcomeSupport.TryResolveContractGapDetail(
+                providerEvents,
+                executionUnit,
+                "implement",
+                out var contractGapDetail))
+        {
+            return contractGapDetail;
+        }
+
+        var canonicalBoundaryEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            "implement",
+            requestArtifact.Provider,
+            requestArtifact.ProviderSessionId,
+            providerSessionAlive: false);
+        if (canonicalBoundaryEvent is null)
+        {
+            return null;
+        }
+
+        var providerLogRef = ResolveDirectRunProviderLogRef(context, executionUnit);
+        var providerLogPath = Path.GetFullPath(Path.Combine(
+            context.RepoRoot,
+            providerLogRef.Replace('/', Path.DirectorySeparatorChar)));
+        var writer = new DirectRunProviderEventWriter(providerLogPath);
+        writer.Append(canonicalBoundaryEvent);
+        providerEvents = [.. providerEvents, canonicalBoundaryEvent];
+
+        return DirectRunFixOutcomeSupport.TryResolveContractGapDetail(
+            providerEvents,
+            executionUnit,
+            "implement",
+            out var synthesizedContractGapDetail)
+            ? synthesizedContractGapDetail
+            : null;
+    }
+
+    private static bool HasCurrentBlockedImplementRecoveredSpecBoundary(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit, "implement");
+        if (requestArtifact is null
+            || resultArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.RunStatus, "failed", StringComparison.Ordinal)
+            || !MatchesCurrentDirectRunRequestBoundary(requestArtifact, resultArtifact))
+        {
+            return false;
+        }
+
+        var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
+        if (providerEvents.Count == 0)
+        {
+            return false;
+        }
+
+        providerEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        return DirectRunFixOutcomeSupport.HasRecoveredSpecWithoutProductReadSignal(providerEvents);
     }
 
     private static DateTimeOffset? TryResolveCurrentFixSessionLatestActivityAt(

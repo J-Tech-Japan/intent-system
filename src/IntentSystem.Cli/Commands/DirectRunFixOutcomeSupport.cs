@@ -348,6 +348,20 @@ internal static class DirectRunFixOutcomeSupport
         return sawSpecRead && sawProductRead;
     }
 
+    internal static bool HasRecoveredSpecWithoutProductReadSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        var orderedProviderEvents = OrderEventsForAnalysis(providerEvents);
+        var sawRequestReread = orderedProviderEvents.Any(providerEvent => ContainsRequestArtifactRead(providerEvent.Payload));
+        var sawSpecRead = HasSuccessfulRepoLocalSpecRead(orderedProviderEvents);
+        var sawProductRead = orderedProviderEvents.Any(providerEvent =>
+            !IsIgnorableStartupPreamble(providerEvent.Payload)
+            && ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
+
+        return sawRequestReread && sawSpecRead && !sawProductRead;
+    }
+
     internal static bool HasDeepExecutionProgressSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
     {
         ArgumentNullException.ThrowIfNull(providerEvents);
