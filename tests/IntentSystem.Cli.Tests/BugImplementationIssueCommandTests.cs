@@ -12,6 +12,15 @@ public sealed class BugImplementationIssueCommandTests
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.report.yaml"),
+            BugReportArtifactYaml.Serialize(CreateBugReportArtifact()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.triage.yaml"),
+            BugTriageArtifactYaml.Serialize(CreateBugTriageArtifact()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.plan.yaml"),
+            BugExecutionArtifactYaml.Serialize(CreateBugExecutionArtifact()));
+        tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "bugs", "BUG-123.implementation-repair.yaml"),
             BugImplementationRepairArtifactYaml.Serialize(CreateRepairArtifact(readyToIssueCut: true)));
         tempDirectory.CreateFile(
@@ -21,10 +30,11 @@ public sealed class BugImplementationIssueCommandTests
         using var writer = new StringWriter();
         var originalPublisherFactory = BugImplementationIssueCommand.PublisherFactory;
         var originalGitRunnerFactory = BugImplementationIssueCommand.GitCommandRunnerFactory;
+        var publisher = new CapturingPublisher();
 
         try
         {
-            BugImplementationIssueCommand.PublisherFactory = () => new FakePublisher();
+            BugImplementationIssueCommand.PublisherFactory = () => publisher;
             BugImplementationIssueCommand.GitCommandRunnerFactory = () => new FakeGitCommandRunner();
 
             var exitCode = BugImplementationIssueCommand.Execute(CreateContext(repoRoot), ["BUG-123"], writer);
@@ -39,6 +49,36 @@ public sealed class BugImplementationIssueCommandTests
             Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/53", artifact.CreatedIssueUrl);
             Assert.Equal(53, artifact.CreatedIssueNumber);
             Assert.Equal([".intent-cli/issues/G25/packet.yaml"], artifact.ImplementationRepairTargets);
+
+            Assert.Equal("J-Tech-Japan/intent-system", publisher.TargetRepo);
+            Assert.Equal("Implementation repair: OAuth callback loop (BUG-123)", publisher.Title);
+            Assert.NotNull(publisher.Body);
+            Assert.Contains("## Goal", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Background", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Reproduction or Current Observed State", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Actual Result", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Expected Repaired Result", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Narrowest Acceptable Repair Direction", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Accepted Baseline You May Assume", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Dependencies", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Target Repo / Path / Part", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## In Scope", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Out Of Scope", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Acceptance Criteria", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Verification", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Relevant Links", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("Problem statement: Observed callback loop after login.", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("Suspected failure locus: OAuth callback state is not reset after the redirect.", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("Repair callback flow so the OAuth redirect completes exactly once without looping.", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("repo 'submodules/intent-system', path '.', part 'auth callback'.", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- G24", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- C# / .NET", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- AGENTS.md", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- keep repair deterministic", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- ICL.P.PRODUCT_GOAL", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- intents/rules/issue-lifecycle-and-landing.md", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("accept callback responses without looping", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("dotnet test IntentSystem.sln --nologo", publisher.Body, StringComparison.Ordinal);
         }
         finally
         {
@@ -108,6 +148,67 @@ public sealed class BugImplementationIssueCommandTests
         };
     }
 
+    private static BugReportArtifact CreateBugReportArtifact(string bugId = "BUG-123")
+    {
+        return new BugReportArtifact
+        {
+            DomainSlug = "auth",
+            BugId = bugId,
+            Title = "OAuth callback loop",
+            ReportSource = "from-file",
+            ProblemStatement = "Observed callback loop after login.",
+            SuspectedFailureLocus = "OAuth callback state is not reset after the redirect.",
+            OriginalInstructionRefs = ["ICL.P.PRODUCT_GOAL"],
+            AffectedIntentRefs = ["intents/intent-cli/means/auth.md"],
+            AffectedRuleSpecRefs = ["intents/intent-cli/specs/12-bug-fix-and-intent-repair.md"],
+            ClarificationCandidates = ["Should the callback token be consumed on first successful redirect?"],
+            LinkedExecutionUnits = ["G25"],
+            LinkedIssueRefs = ["https://github.com/J-Tech-Japan/intent-system/issues/369"],
+            LinkedPrRefs = ["https://github.com/J-Tech-Japan/intent-system/pull/370"],
+            LinkedReviewRefs = ["https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1"]
+        };
+    }
+
+    private static BugTriageArtifact CreateBugTriageArtifact(string bugId = "BUG-123")
+    {
+        return new BugTriageArtifact
+        {
+            BugId = bugId,
+            ReportRef = $".intent-cli/bugs/{bugId}.report.yaml",
+            TriageClassification = "implementation-mismatch",
+            DownstreamAction = "dual-track",
+            ClarificationRequired = false,
+            ClarificationReasons = [],
+            OriginalInstructionRootRefs = ["ICL.P.PRODUCT_GOAL"],
+            LinkedReviewRefs = ["https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1"],
+            ResolvedExecutionUnits = ["G25"],
+            ResolvedImplementationRefs = [".intent-cli/issues/G25/implementation.md"],
+            ResolvedReviewContextRefs = [".intent-cli/issues/G25/review-context.md"],
+            ResolvedPacketRefs = [".intent-cli/issues/G25/packet.yaml"],
+            UnresolvedExecutionUnits = [],
+            ImplementationRepairCandidates = ["G25"],
+            IntentRepairCandidates = ["intents/intent-cli/means/auth.md"]
+        };
+    }
+
+    private static BugExecutionArtifact CreateBugExecutionArtifact(string bugId = "BUG-123")
+    {
+        return new BugExecutionArtifact
+        {
+            BugId = bugId,
+            ReportRef = $".intent-cli/bugs/{bugId}.report.yaml",
+            TriageRef = $".intent-cli/bugs/{bugId}.triage.yaml",
+            DownstreamAction = "dual-track",
+            ResolvedImplementationRefs = [".intent-cli/issues/G25/implementation.md"],
+            ResolvedReviewContextRefs = [".intent-cli/issues/G25/review-context.md"],
+            ResolvedPacketRefs = [".intent-cli/issues/G25/packet.yaml"],
+            ImplementationTaskCandidates = ["G25"],
+            IntentTaskCandidates = ["intents/intent-cli/means/auth.md"],
+            ClarificationRequired = false,
+            ReadyToLaunch = true
+        };
+    }
+
     private static string CreatePacketYaml()
     {
         return """
@@ -115,15 +216,17 @@ public sealed class BugImplementationIssueCommandTests
           issue_title: "[G25] Repair callback flow"
           issue_kind: "bugfix"
           source_execution_unit: "G25"
-          goal: "Repair callback flow."
+          goal: "Repair callback flow so the OAuth redirect completes exactly once without looping."
           in_scope:
             - "callback flow"
+            - "OAuth redirect state handling"
           out_of_scope:
             - "review flow"
           target_repo: "submodules/intent-system"
           target_path: "."
           target_part: "auth callback"
-          dependencies: []
+          dependencies:
+            - "G24"
           technical_baseline:
             - "C# / .NET"
           project_local_guide:
@@ -135,9 +238,9 @@ public sealed class BugImplementationIssueCommandTests
           rules_and_specs:
             - "intents/rules/issue-lifecycle-and-landing.md"
           acceptance_criteria:
-            - "repair issue created"
+            - "accept callback responses without looping"
           verification_evidence:
-            - "tests-passing"
+            - "dotnet test IntentSystem.sln --nologo"
           review_mode: "deterministic-review"
           completion_action: "wait-for-deterministic-review"
           landing_policy: "merge-after-review"
@@ -173,10 +276,19 @@ public sealed class BugImplementationIssueCommandTests
         };
     }
 
-    private sealed class FakePublisher : IQueueDispatchPublisher
+    private sealed class CapturingPublisher : IQueueDispatchPublisher
     {
+        public string? TargetRepo { get; private set; }
+
+        public string? Title { get; private set; }
+
+        public string? Body { get; private set; }
+
         public LinkedIssue CreateIssue(string targetRepo, string title, string body)
         {
+            TargetRepo = targetRepo;
+            Title = title;
+            Body = body;
             return new LinkedIssue
             {
                 Repo = targetRepo,
