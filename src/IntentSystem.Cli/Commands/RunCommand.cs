@@ -120,6 +120,7 @@ internal static class RunCommand
         ArgumentNullException.ThrowIfNull(context);
 
         var actions = new List<RunCommandAction>();
+        var freshImplementContinuationStates = new Dictionary<string, FreshFixContinuationState>(StringComparer.Ordinal);
         var freshFixContinuationStates = new Dictionary<string, FreshFixContinuationState>(StringComparer.Ordinal);
 
         for (var iteration = 0; iteration < IterationBudget; iteration++)
@@ -150,6 +151,7 @@ internal static class RunCommand
                             "implement");
                         if (string.Equals(implementRunStatus, "succeeded", StringComparison.Ordinal))
                         {
+                            freshImplementContinuationStates.Remove(inProgressItem.ExecutionUnit);
                             ExecuteAction(
                                 context,
                                 actions,
@@ -188,6 +190,10 @@ internal static class RunCommand
                                 "run implement",
                                 inProgressItem.ExecutionUnit,
                                 () => RunImplementExecutor(context, inProgressItem.ExecutionUnit));
+                            TrackFreshImplementContinuation(
+                                context,
+                                inProgressItem.ExecutionUnit,
+                                freshImplementContinuationStates);
                             continue;
                         }
 
@@ -197,6 +203,18 @@ internal static class RunCommand
                             "run supervise",
                             inProgressItem.ExecutionUnit,
                             () => RunSuperviseExecutor(context, inProgressItem.ExecutionUnit));
+
+                        if (ShouldContinueFreshImplementSupervision(
+                                context,
+                                freshImplementContinuationStates,
+                                inProgressItem.ExecutionUnit,
+                                superviseResult))
+                        {
+                            SleepFreshFixContinuationPollInterval();
+                            continue;
+                        }
+
+                        freshImplementContinuationStates.Remove(inProgressItem.ExecutionUnit);
 
                         if (superviseResult.Blocked)
                         {
@@ -1814,6 +1832,49 @@ internal static class RunCommand
             FreshFixContinuationMaxPolls);
     }
 
+    private static void TrackFreshImplementContinuation(
+        CliContext context,
+        string executionUnit,
+        IDictionary<string, FreshFixContinuationState> continuationStates)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(continuationStates);
+
+        continuationStates.Remove(executionUnit);
+        if (FreshFixContinuationWindow <= TimeSpan.Zero
+            || FreshFixContinuationTotalWindow <= TimeSpan.Zero
+            || FreshFixContinuationMaxPolls <= 0)
+        {
+            return;
+        }
+
+        var now = TimestampFactory();
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        var launchedAt = requestArtifact is not null
+            && string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            && DirectRunSessionBoundary.TryParseLaunchedAt(requestArtifact.LaunchedAt, out var parsedLaunchedAt)
+                ? parsedLaunchedAt
+                : now;
+        var totalDeadline = launchedAt + FreshFixContinuationTotalWindow;
+        var deadline = launchedAt + FreshFixContinuationWindow;
+        if (deadline > totalDeadline)
+        {
+            deadline = totalDeadline;
+        }
+
+        if (deadline <= now)
+        {
+            return;
+        }
+
+        continuationStates[executionUnit] = new FreshFixContinuationState(
+            totalDeadline,
+            deadline,
+            launchedAt,
+            FreshFixContinuationMaxPolls);
+    }
+
     private static bool ShouldContinueFreshFixSupervision(
         CliContext context,
         IDictionary<string, FreshFixContinuationState> continuationStates,
@@ -1867,6 +1928,59 @@ internal static class RunCommand
         return true;
     }
 
+    private static bool ShouldContinueFreshImplementSupervision(
+        CliContext context,
+        IDictionary<string, FreshFixContinuationState> continuationStates,
+        string executionUnit,
+        RunSuperviseResult superviseResult)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(continuationStates);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(superviseResult);
+
+        if (!continuationStates.TryGetValue(executionUnit, out var continuationState))
+        {
+            return false;
+        }
+
+        if (superviseResult.Blocked
+            || superviseResult.WorkerEntry != RunSupervisionWorkerEntry.Implement
+            || superviseResult.SessionStatus != RunSupervisionSessionStatus.Monitoring
+            || superviseResult.RetryScheduled
+            || superviseResult.AutoResumed)
+        {
+            continuationStates.Remove(executionUnit);
+            return false;
+        }
+
+        continuationState = RefreshFreshImplementContinuationActivity(
+            continuationStates,
+            executionUnit,
+            continuationState,
+            context);
+
+        if (TimestampFactory() >= continuationState.Deadline || continuationState.RemainingPolls <= 0)
+        {
+            continuationStates.Remove(executionUnit);
+            return false;
+        }
+
+        if (continuationState.RemainingPolls == 1)
+        {
+            continuationStates.Remove(executionUnit);
+        }
+        else
+        {
+            continuationStates[executionUnit] = continuationState with
+            {
+                RemainingPolls = continuationState.RemainingPolls - 1
+            };
+        }
+
+        return true;
+    }
+
     private static FreshFixContinuationState RefreshFreshFixContinuationActivity(
         IDictionary<string, FreshFixContinuationState> continuationStates,
         string executionUnit,
@@ -1880,6 +1994,41 @@ internal static class RunCommand
 
         var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
         var latestActivityAt = TryResolveCurrentFixSessionLatestActivityAt(context, executionUnit, requestArtifact);
+        if (latestActivityAt is null || latestActivityAt <= continuationState.LastObservedActivityAt)
+        {
+            return continuationState;
+        }
+
+        var extendedDeadline = latestActivityAt.Value + FreshFixContinuationActivityWindow;
+        if (extendedDeadline > continuationState.TotalDeadline)
+        {
+            extendedDeadline = continuationState.TotalDeadline;
+        }
+
+        continuationState = continuationState with
+        {
+            Deadline = extendedDeadline > continuationState.Deadline
+                ? extendedDeadline
+                : continuationState.Deadline,
+            LastObservedActivityAt = latestActivityAt.Value
+        };
+        continuationStates[executionUnit] = continuationState;
+        return continuationState;
+    }
+
+    private static FreshFixContinuationState RefreshFreshImplementContinuationActivity(
+        IDictionary<string, FreshFixContinuationState> continuationStates,
+        string executionUnit,
+        FreshFixContinuationState continuationState,
+        CliContext? context)
+    {
+        if (context is null || FreshFixContinuationActivityWindow <= TimeSpan.Zero)
+        {
+            return continuationState;
+        }
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        var latestActivityAt = TryResolveCurrentImplementSessionLatestActivityAt(context, executionUnit, requestArtifact);
         if (latestActivityAt is null || latestActivityAt <= continuationState.LastObservedActivityAt)
         {
             return continuationState;
