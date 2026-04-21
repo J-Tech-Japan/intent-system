@@ -236,6 +236,14 @@ internal static class RunCommand
 
                     if (inProgressItem.State == QueueItemState.Fixing)
                     {
+                        if (TryAutoContinueFixingImplementRecoveredSpecBoundary(
+                                context,
+                                queueState,
+                                inProgressItem))
+                        {
+                            continue;
+                        }
+
                         if (!ArtifactExists(context, ReviewCommentArtifactPathResolver.Resolve(inProgressItem.ExecutionUnit)))
                         {
                             return CreateStopResult(
@@ -833,23 +841,66 @@ internal static class RunCommand
             return false;
         }
 
+        TransitionQueueItemToActive(context, queueState, blockedItem.ExecutionUnit);
+        return true;
+    }
+
+    private static bool TryAutoContinueFixingImplementRecoveredSpecBoundary(
+        CliContext context,
+        QueueState queueState,
+        QueueItem fixingItem)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueState);
+        ArgumentNullException.ThrowIfNull(fixingItem);
+
+        if (ArtifactExists(context, ReviewCommentArtifactPathResolver.Resolve(fixingItem.ExecutionUnit))
+            || ArtifactExists(context, RunFixArtifactPathResolver.Resolve(fixingItem.ExecutionUnit)))
+        {
+            return false;
+        }
+
+        if (!TryReadSupervisionSession(context, fixingItem.ExecutionUnit, out var session)
+            || session.WorkerEntry != RunSupervisionWorkerEntry.Implement
+            || session.Status != RunSupervisionSessionStatus.Blocked)
+        {
+            return false;
+        }
+
+        if (!HasCurrentBlockedImplementRecoveredSpecBoundary(context, fixingItem.ExecutionUnit))
+        {
+            return false;
+        }
+
+        TransitionQueueItemToActive(context, queueState, fixingItem.ExecutionUnit);
+        return true;
+    }
+
+    private static void TransitionQueueItemToActive(
+        CliContext context,
+        QueueState queueState,
+        string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueState);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
         var timestamp = TimestampFactory();
         var transition = QueueManager.TransitionNonBlocking(
             queueState,
-            blockedItem.ExecutionUnit,
+            executionUnit,
             QueueItemState.Active,
             TransitionActor,
             timestamp);
         var updatedState = transition.UpdatedState with
         {
             Items = transition.UpdatedState.Items.Select(item =>
-                string.Equals(item.ExecutionUnit, blockedItem.ExecutionUnit, StringComparison.Ordinal)
+                string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal)
                     ? item with { BlockedBy = [] }
                     : item).ToArray()
         };
         File.WriteAllText(context.GetQueueStatePath(), QueueStateSerializer.Serialize(updatedState));
         AppendRunEvent(context.GetRunLogPath(), transition.Event);
-        return true;
     }
 
     private static bool TryResolveBlockedFixRetryExhaustionResult(
