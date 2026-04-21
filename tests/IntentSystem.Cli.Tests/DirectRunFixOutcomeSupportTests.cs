@@ -428,6 +428,178 @@ public sealed class DirectRunFixOutcomeSupportTests
         Assert.Null(contractGapEvent);
     }
 
+    [Fact]
+    public void HasExplicitContractGapSignal_GivenStartupPlanningSentenceMentionsConcreteContractGapRefusal_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("I’m reading the request artifact first, then I’ll inspect the smallest set of repository files needed to validate the bounded fix and either patch it or give a concrete contract-gap refusal."),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-02.request.md' succeeded in 0ms")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenStartupPlanningSentenceMentionsConcreteContractGapRefusalWhileSessionIsAlive_DoesNotCreateFailureBoundary()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-02.request.md' succeeded in 0ms"),
+            CreateProviderEvent("I’m reading the request artifact first, then I’ll inspect the smallest set of repository files needed to validate the bounded fix and either patch it or give a concrete contract-gap refusal.")
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-21T01:10:00Z"),
+            "TOY-CALC-V0-02",
+            "fix",
+            "Codex",
+            "pid:8053",
+            providerSessionAlive: true);
+
+        Assert.Null(contractGapEvent);
+    }
+
+    [Fact]
+    public void HasExplicitContractGapSignal_GivenStartupPlanningSentenceWithDeterministicContractGapRefusalIfUnderspecified_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("I’m reading the request artifact first to pin down the bounded scope, then I’ll inspect the minimum repo surface needed to reproduce and repair it. After that I’ll either implement the fix and verify it, or give a deterministic contract-gap refusal if the artifact is underspecified."),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-02.request.md' succeeded in 0ms")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenStartupPlanningSentenceWithDeterministicContractGapRefusalIfUnderspecifiedWhileSessionIsAlive_DoesNotCreateFailureBoundary()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-02.request.md' succeeded in 0ms"),
+            CreateProviderEvent("I’m reading the request artifact first to pin down the bounded scope, then I’ll inspect the minimum repo surface needed to reproduce and repair it. After that I’ll either implement the fix and verify it, or give a deterministic contract-gap refusal if the artifact is underspecified.")
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-21T02:15:00Z"),
+            "TOY-CALC-V0-02",
+            "fix",
+            "Codex",
+            "pid:8054",
+            providerSessionAlive: true);
+
+        Assert.Null(contractGapEvent);
+    }
+
+    [Fact]
+    public void HasExplicitContractGapSignal_GivenEvidenceOnlyReviewFollowUpContractGapUncertainty_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("I cannot tell whether repo-local intent/spec artifacts lag implementation or whether the review comment asks for a narrower contract detail, but the comment asks for stronger verification: add a real process-boundary test and tighten invalid-usage assertions to exact exit code == 1, empty stdout, and canonical stderr."),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs' succeeded in 0ms")
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenEvidenceOnlyReviewFollowUpContractGapUncertaintyAndSuccessfulBackendExitWithoutBoundedOutcome_CreatesFailureBoundary()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-02.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/ProgramBoundaryTests.cs' succeeded in 0ms"),
+            CreateProviderEvent("I cannot tell whether repo-local intent/spec artifacts lag implementation or whether the review asks for a narrower contract detail, but the comment asks for stronger verification: add a real process-boundary test and tighten invalid-usage assertions to exact exit code == 1, empty stdout, and canonical stderr."),
+            CreateSuccessfulBackendExitEvent()
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-20T04:10:00Z"),
+            "TOY-CALC-V0-02",
+            "fix",
+            "Codex",
+            "pid:11911",
+            providerSessionAlive: false);
+
+        Assert.NotNull(contractGapEvent);
+        Assert.Equal(
+            "fix-evidence-only-review-follow-up-ended-without-bounded-repair-outcome",
+            contractGapEvent!.Payload.GetProperty("reason").GetString());
+        Assert.Contains(
+            "bounded repair outcome",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenEvidenceOnlyReviewFollowUpContractGapUncertaintyAndSuccessfulBackendExitWithVerificationCommand_DoesNotCreateFailureBoundary()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-02.request.md' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/ProgramBoundaryTests.cs' succeeded in 0ms"),
+            CreateProviderEvent("I cannot tell whether repo-local intent/spec artifacts lag implementation or whether the review asks for a narrower contract detail, but the comment asks for stronger verification: add a real process-boundary test and tighten invalid-usage assertions to exact exit code == 1, empty stdout, and canonical stderr."),
+            CreateProviderEvent("/bin/zsh -lc './bin/Debug/net10.0/toycalc --bad-args' in /repo/.intent-cli/worktrees/TOY-CALC-V0-02"),
+            CreateProviderEvent(" exited 1 in 0ms:"),
+            CreateProviderEvent("Usage: toycalc <left> <op> <right>"),
+            CreateProviderEvent("/bin/zsh -lc './bin/Debug/net10.0/toycalc 2 + 3' in /repo/.intent-cli/worktrees/TOY-CALC-V0-02"),
+            CreateProviderEvent(" succeeded in 0ms:"),
+            CreateSuccessfulBackendExitEvent()
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-20T04:10:00Z"),
+            "TOY-CALC-V0-02",
+            "fix",
+            "Codex",
+            "pid:11911",
+            providerSessionAlive: false);
+
+        Assert.Null(contractGapEvent);
+    }
+
+    [Fact]
+    public void HasExplicitContractGapSignal_GivenContractGapPayloadForEvidenceOnlyReviewFollowUp_ReturnsFalse()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/TOY-CALC-V0-02.request.md' succeeded in 0ms"),
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-20T04:09:59.0000000+00:00",
+                ExecutionUnit = "TOY-CALC-V0-02",
+                Provider = "Codex",
+                EntryKind = "fix",
+                SessionId = "pid:11911",
+                Kind = "provider-event",
+                Payload = JsonSerializer.SerializeToElement(new
+                {
+                    type = "contract-gap",
+                    stop_reason = "deterministic-contract-gap",
+                    detail = "Worker cannot tell whether repo-local intent/spec artifacts lag implementation or whether the review comment asks for a narrower contract detail, but the comment asks for stronger verification: add a real process-boundary test and tighten invalid-usage assertions to exact exit code == 1, empty stdout, and canonical stderr."
+                })
+            }
+        ];
+
+        var resolved = DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents);
+
+        Assert.False(resolved);
+    }
+
     private static IReadOnlyList<DirectRunProviderEvent> CreateIssue295CurrentSessionRawEvents(string? echoedRequest = null)
     {
         return

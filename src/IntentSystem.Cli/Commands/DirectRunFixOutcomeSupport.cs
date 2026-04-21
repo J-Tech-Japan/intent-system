@@ -10,6 +10,7 @@ internal static class DirectRunFixOutcomeSupport
     private const string ProviderBackendEndedBeforeSpecSourceReadReasonSuffix = "session-ended-before-spec-source-test-read";
     private const string MissingTerminalCaptureAfterRequestReadReasonSuffix = "session-terminal-boundary-missing-after-request-reread";
     private const string MissingTerminalCaptureAfterDeepProgressReasonSuffix = "session-terminal-boundary-missing-after-deep-progress";
+    private const string EvidenceOnlyReviewFollowUpMissingOutcomeReasonSuffix = "evidence-only-review-follow-up-ended-without-bounded-repair-outcome";
     private static readonly string[] StartupWarningMarkers =
     [
         "warn",
@@ -60,6 +61,57 @@ internal static class DirectRunFixOutcomeSupport
         "decide whether this is a repair or a contract-gap refusal",
         "decide whether this is a repair or a contract gap refusal"
     ];
+    private static readonly string[] StartupPlanningContractGapReadMarkers =
+    [
+        "i’m reading the request artifact first",
+        "i'm reading the request artifact first"
+    ];
+    private static readonly string[] StartupPlanningContractGapActionMarkers =
+    [
+        "i’ll inspect",
+        "i'll inspect",
+        "after that i’ll either",
+        "after that i'll either",
+        "either patch it",
+        "either implement the fix and verify it",
+        "pin down the bounded scope",
+        "reproduce and repair it",
+        "validate the bounded fix"
+    ];
+    private static readonly string[] StartupPlanningContractGapDecisionMarkers =
+    [
+        "either patch it or give a concrete contract-gap refusal",
+        "either patch it or give a concrete contract gap refusal",
+        "give a deterministic contract-gap refusal if",
+        "give a deterministic contract gap refusal if",
+        "give a concrete contract-gap refusal if",
+        "give a concrete contract gap refusal if"
+    ];
+    private static readonly string[] EvidenceOnlyReviewFollowUpMarkers =
+    [
+        "stronger verification",
+        "real process-boundary test",
+        "real process boundary test",
+        "process-boundary test",
+        "process boundary test",
+        "invalid-usage assertions",
+        "invalid usage assertions",
+        "exact exit 1",
+        "exact exit code",
+        "exit code == 1",
+        "empty stdout",
+        "canonical stderr"
+    ];
+    private static readonly string[] EvidenceOnlyReviewFollowUpContextMarkers =
+    [
+        "review asks",
+        "review comment asks",
+        "comment asks",
+        "narrower contract detail",
+        "repo-local intent/spec artifacts lag implementation",
+        "repo-local intent/spec artifacts",
+        "repo-local spec artifacts lag implementation"
+    ];
     private static readonly string[] NoOpEditFreeMarkers =
     [
         "without requiring code changes",
@@ -105,6 +157,18 @@ internal static class DirectRunFixOutcomeSupport
                 out var explicitContractGapEvent))
         {
             return explicitContractGapEvent;
+        }
+
+        if (TryCreateEvidenceOnlyReviewFollowUpFailureEvent(
+                orderedProviderEvents,
+                timestamp,
+                executionUnit,
+                entryKind,
+                provider,
+                providerSessionId,
+                out var evidenceOnlyReviewFollowUpFailureEvent))
+        {
+            return evidenceOnlyReviewFollowUpFailureEvent;
         }
 
         if (!TryResolveCanonicalFailureDetail(
@@ -628,6 +692,53 @@ internal static class DirectRunFixOutcomeSupport
         return true;
     }
 
+    private static bool TryCreateEvidenceOnlyReviewFollowUpFailureEvent(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        DateTimeOffset timestamp,
+        string executionUnit,
+        string entryKind,
+        string provider,
+        string providerSessionId,
+        out DirectRunProviderEvent? providerEvent)
+    {
+        providerEvent = null;
+        if (!string.Equals(entryKind, "fix", StringComparison.Ordinal)
+            || !HasSuccessfulBackendExit(providerEvents)
+            || !HasEvidenceOnlyReviewFollowUpContractGapReference(providerEvents)
+            || TryResolveNoOpSuccessDetail(providerEvents, executionUnit, out _)
+            || HasBoundedRepairOutcomeSignal(providerEvents))
+        {
+            return false;
+        }
+
+        var observedRequestReread = providerEvents.Any(providerEvent => ContainsRequestArtifactRead(providerEvent.Payload));
+        var observedInventory = providerEvents.Any(providerEvent => ContainsInitialRepoInventory(providerEvent.Payload));
+        var observedRepoLocalSpecRead = HasSuccessfulRepoLocalSpecRead(providerEvents);
+        var observedProductSourceOrTestRead = providerEvents.Any(providerEvent => ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
+        var observedBoundedRepairOutcome = HasBoundedRepairOutcomeSignal(providerEvents);
+
+        providerEvent = new DirectRunProviderEvent
+        {
+            Timestamp = timestamp.ToString("O"),
+            ExecutionUnit = executionUnit,
+            Provider = provider,
+            EntryKind = entryKind,
+            SessionId = providerSessionId,
+            Kind = "provider-event",
+            Payload = JsonSerializer.SerializeToElement(new
+            {
+                type = "contract-gap",
+                stop_reason = DeterministicContractGapStopReason,
+                reason = ResolveReason(entryKind, EvidenceOnlyReviewFollowUpMissingOutcomeReasonSuffix),
+                detail =
+                    $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' ended after evidence-only review-follow-up ambiguity without a bounded repair outcome. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedRepoLocalSpecRead}, product_source_or_test_read={observedProductSourceOrTestRead}, bounded_repair_outcome={observedBoundedRepairOutcome}. The session emitted evidence-only uncertainty about whether repo-local intent/spec artifacts lag implementation or whether the review asks for a narrower contract detail, then exited successfully without a same-session repair, verification command, no-op success boundary, or explicit refusal. Root runtime handling must preserve this as a bounded repair failure instead of silently treating exit_code=0 as success.",
+                run_status = "failed"
+            })
+        };
+
+        return true;
+    }
+
     private static bool HasExplicitContractGap(IReadOnlyList<DirectRunProviderEvent> providerEvents)
     {
         return providerEvents.Any(providerEvent =>
@@ -696,6 +807,11 @@ internal static class DirectRunFixOutcomeSupport
             {
                 detail = $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' reported a deterministic contract gap.";
             }
+            else if (IsEvidenceOnlyReviewFollowUpContractGapReference(detail))
+            {
+                detail = string.Empty;
+                return false;
+            }
 
             return true;
         }
@@ -706,6 +822,11 @@ internal static class DirectRunFixOutcomeSupport
             if (!TryReadString(payload, "detail", out detail))
             {
                 detail = $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' reported a deterministic contract gap.";
+            }
+            else if (IsEvidenceOnlyReviewFollowUpContractGapReference(detail))
+            {
+                detail = string.Empty;
+                return false;
             }
 
             return true;
@@ -728,6 +849,11 @@ internal static class DirectRunFixOutcomeSupport
             return false;
         }
 
+        if (IsEvidenceOnlyReviewFollowUpContractGapReference(lower))
+        {
+            return false;
+        }
+
         if (lower.Contains("contract-gap refusal", StringComparison.Ordinal)
             || lower.Contains("contract gap refusal", StringComparison.Ordinal)
             || lower.Contains("stopped with a contract-gap explanation", StringComparison.Ordinal)
@@ -739,6 +865,42 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return false;
+    }
+
+    private static bool IsEvidenceOnlyReviewFollowUpContractGapReference(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return EvidenceOnlyReviewFollowUpMarkers.Any(marker =>
+                normalized.Contains(marker, StringComparison.Ordinal))
+            && EvidenceOnlyReviewFollowUpContextMarkers.Any(marker =>
+                normalized.Contains(marker, StringComparison.Ordinal));
+    }
+
+    private static bool HasEvidenceOnlyReviewFollowUpContractGapReference(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        foreach (var providerEvent in providerEvents)
+        {
+            foreach (var value in EnumeratePayloadStrings(providerEvent.Payload))
+            {
+                if (IsEvidenceOnlyReviewFollowUpContractGapReference(value))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasBoundedRepairOutcomeSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        return providerEvents.Any(providerEvent => ContainsBoundedRepairOutcomeSignal(providerEvent.Payload));
     }
 
     private static bool IsPlanningPreambleContractGapReference(string value)
@@ -755,7 +917,13 @@ internal static class DirectRunFixOutcomeSupport
         return PlanningPreambleContractGapPrefixes.Any(prefix =>
                 normalized.StartsWith(prefix, StringComparison.Ordinal))
             || PlanningPreambleContractGapMarkers.Any(marker =>
-                normalized.Contains(marker, StringComparison.Ordinal));
+                normalized.Contains(marker, StringComparison.Ordinal))
+            || (StartupPlanningContractGapReadMarkers.Any(marker =>
+                    normalized.Contains(marker, StringComparison.Ordinal))
+                && StartupPlanningContractGapActionMarkers.Any(marker =>
+                    normalized.Contains(marker, StringComparison.Ordinal))
+                && StartupPlanningContractGapDecisionMarkers.Any(marker =>
+                    normalized.Contains(marker, StringComparison.Ordinal)));
     }
 
     private static bool SupportsEntryKind(string entryKind)
@@ -1016,12 +1184,49 @@ internal static class DirectRunFixOutcomeSupport
         return false;
     }
 
+    private static bool ContainsBoundedRepairOutcomeSignal(JsonElement payload)
+    {
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            var normalized = value.Trim().ToLowerInvariant();
+            if (normalized.Contains("apply_patch", StringComparison.Ordinal)
+                || normalized.Contains("dotnet test", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (!LooksLikeCommandInvocation(normalized)
+                || ContainsReadCommand(normalized)
+                || normalized.Contains("rg --files", StringComparison.Ordinal)
+                || normalized.Contains("git status", StringComparison.Ordinal)
+                || normalized.Contains("git diff", StringComparison.Ordinal)
+                || normalized.Contains("pwd", StringComparison.Ordinal)
+                || normalized.Contains("ls ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool ContainsReadCommand(string normalized)
     {
         return normalized.Contains("cat ", StringComparison.Ordinal)
             || normalized.Contains("sed -n", StringComparison.Ordinal)
             || normalized.Contains("head ", StringComparison.Ordinal)
             || normalized.Contains("tail ", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeCommandInvocation(string normalized)
+    {
+        return normalized.StartsWith("/bin/", StringComparison.Ordinal)
+            || normalized.StartsWith("exec /bin/", StringComparison.Ordinal)
+            || normalized.Contains(" -lc ", StringComparison.Ordinal)
+            || normalized.Contains("dotnet ", StringComparison.Ordinal)
+            || normalized.Contains("dnx ", StringComparison.Ordinal);
     }
 
     private static bool TryResolveCommandOutcome(

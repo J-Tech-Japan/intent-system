@@ -119,10 +119,33 @@ internal static class DirectRunTerminalArtifactUpdater
             return;
         }
 
+        IReadOnlyList<DirectRunProviderEvent> currentProviderEvents = [];
+        if (TryReadCurrentProviderEvents(
+                providerEventLogPath,
+                providerSessionId,
+                launchedAt,
+                out var resolvedCurrentProviderEvents))
+        {
+            currentProviderEvents = resolvedCurrentProviderEvents;
+            if ((string.Equals(resultArtifact.EntryKind, "fix", StringComparison.Ordinal)
+                    || string.Equals(resultArtifact.EntryKind, "implement", StringComparison.Ordinal))
+                && DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+                    currentProviderEvents,
+                    DateTimeOffset.UtcNow,
+                    resultArtifact.ExecutionUnit,
+                    resultArtifact.EntryKind,
+                    resultArtifact.Provider,
+                    providerSessionId,
+                    providerSessionAlive: true) is { } boundaryEvent)
+            {
+                var writer = new DirectRunProviderEventWriter(providerEventLogPath);
+                writer.Append(boundaryEvent);
+                currentProviderEvents = [.. currentProviderEvents, boundaryEvent];
+            }
+        }
+
         var terminalStatus = ResolveEffectiveTerminalRunStatus(
-            providerEventLogPath,
-            providerSessionId,
-            launchedAt,
+            currentProviderEvents,
             exitCode);
         if (string.Equals(resultArtifact.RunStatus, terminalStatus, StringComparison.Ordinal))
         {
@@ -224,29 +247,12 @@ internal static class DirectRunTerminalArtifactUpdater
     }
 
     private static string ResolveEffectiveTerminalRunStatus(
-        string providerEventLogPath,
-        string providerSessionId,
-        DateTimeOffset launchedAt,
+        IReadOnlyList<DirectRunProviderEvent> currentProviderEvents,
         int exitCode)
     {
-        try
+        if (currentProviderEvents.Any(providerEvent => IsExplicitFailureBoundary(providerEvent.Payload)))
         {
-            var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
-            var currentProviderEvents = DirectRunSessionBoundary.SelectEvents(
-                providerEvents,
-                providerSessionId,
-                launchedAt);
-            if (currentProviderEvents.Any(providerEvent => IsExplicitFailureBoundary(providerEvent.Payload)))
-            {
-                return "failed";
-            }
-        }
-        catch (Exception exception) when (
-            exception is IOException
-            or InvalidOperationException
-            or ArgumentException
-            or JsonException)
-        {
+            return "failed";
         }
 
         return exitCode == 0 ? "succeeded" : "failed";

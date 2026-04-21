@@ -1921,6 +1921,122 @@ public sealed class DirectRunLauncherTests
     }
 
     [Fact]
+    public void PersistTerminalRunStatusIfCurrent_GivenEvidenceOnlyReviewFollowUpAmbiguityAndSuccessfulExit_AppendsFailureBoundaryAndFailsResult()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var providerEventLogPath = tempDirectory.GetPath(".intent-cli/runs/G14b-evidence.provider.jsonl");
+        var requestArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-evidence.request.json");
+        var resultArtifactPath = tempDirectory.GetPath(".intent-cli/runs/G14b-evidence.result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(providerEventLogPath)!);
+
+        var launchedAt = DateTimeOffset.Parse("2026-04-20T23:40:00Z");
+        const string providerSessionId = "pid:11911";
+        File.WriteAllText(
+            requestArtifactPath,
+            DirectRunRequestArtifactJson.Serialize(new DirectRunRequestArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-evidence",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-evidence.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                Transport = "responses",
+                LaunchedAt = launchedAt.ToString("O"),
+                ProviderSessionId = providerSessionId,
+                TransportSummary = "launched via wrapper"
+            }));
+        File.WriteAllText(
+            resultArtifactPath,
+            DirectRunResultArtifactJson.Serialize(new DirectRunResultArtifact
+            {
+                SchemaVersion = "1",
+                ExecutionUnit = "G14b-evidence",
+                EntryKind = "fix",
+                UpstreamRequestRef = ".intent-cli/fix/G14b-evidence.request.md",
+                Provider = "Codex",
+                Model = "gpt-5.4-mini",
+                SessionId = providerSessionId,
+                RunStatus = "running",
+                RawLogRef = ".intent-cli/runs/G14b-evidence.provider.jsonl",
+                PacketRef = ".intent-cli/issues/G14b-evidence/packet.yaml",
+                ReviewContextRef = ".intent-cli/issues/G14b-evidence/review-context.md",
+                Worktree = new DirectRunWorktreeContext
+                {
+                    Path = "/repo/.intent-cli/worktrees/G14b-evidence"
+                }
+            }));
+
+        File.WriteAllText(
+            providerEventLogPath,
+            string.Join(
+                Environment.NewLine,
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.ToString("O"),
+                    ExecutionUnit = "G14b-evidence",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/fix/G14b-evidence.request.md' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(10).ToString("O"),
+                    ExecutionUnit = "G14b-evidence",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(20).ToString("O"),
+                    ExecutionUnit = "G14b-evidence",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement("I cannot tell whether repo-local intent/spec artifacts lag implementation or whether the review comment asks for a narrower contract detail, but the comment asks for stronger verification: add a real process-boundary test and tighten invalid-usage assertions to exact exit code == 1, empty stdout, and canonical stderr.")
+                }),
+                DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
+                {
+                    Timestamp = launchedAt.AddMilliseconds(30).ToString("O"),
+                    ExecutionUnit = "G14b-evidence",
+                    Provider = "Codex",
+                    EntryKind = "fix",
+                    SessionId = providerSessionId,
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "backend-exit",
+                        exit_code = 0
+                    })
+                }),
+                string.Empty));
+
+        DirectRunTerminalArtifactUpdater.PersistTerminalRunStatusIfCurrent(
+            providerEventLogPath,
+            providerSessionId,
+            launchedAt,
+            exitCode: 0);
+
+        var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(resultArtifactPath));
+        Assert.Equal("failed", resultArtifact.RunStatus);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerEventLogPath));
+        Assert.Contains(providerEvents, providerEvent =>
+            providerEvent.Kind == "provider-event"
+            && providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+            && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+            && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal)
+            && providerEvent.Payload.TryGetProperty("reason", out var reasonElement)
+            && string.Equals(reasonElement.GetString(), "fix-evidence-only-review-follow-up-ended-without-bounded-repair-outcome", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void SynchronizeArtifactsToLatestSessionIfCurrent_GivenLaterCurrentSession_RewritesRequestAndResultArtifacts()
     {
         using var tempDirectory = new TemporaryDirectory();
