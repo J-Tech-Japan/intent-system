@@ -8076,6 +8076,115 @@ public sealed class RunCommandTests
         }
     }
 
+    [Fact]
+    public void ExecuteCore_GivenBlockedImplementSessionWithFallbackSpecRecovery_RehydratesNonRetryableFailure()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "TOY-CALC-V0-04"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Blocked, executionUnit: "TOY-CALC-V0-04") with
+                {
+                    BlockedBy = ["Blocked item 'TOY-CALC-V0-04' requires parent-side planning."]
+                })));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            runLogPath,
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"TOY-CALC-V0-04","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/226"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"TOY-CALC-V0-04","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T12:30:00Z","execution_unit":"TOY-CALC-V0-04","event":"blocked","by":"intent-cli","reason":"Blocked item 'TOY-CALC-V0-04' requires parent-side planning."}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "TOY-CALC-V0-04", "packet.yaml"),
+            """
+            execution_unit: "TOY-CALC-V0-04"
+
+            implementation_issue:
+              issue_title: "[G136] Repair Implement Progress After Nested-Worktree Handoff Fallback"
+              goal: "Repair implement progression after nested-worktree handoff fallback."
+              target_repo: "submodules/intent-system"
+              target_path: "."
+              target_part: "run command"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/TOY-CALC-V0-04/review-context.md"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "TOY-CALC-V0-04.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "TOY-CALC-V0-04.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "TOY-CALC-V0-04",
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "TOY-CALC-V0-04"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "intent-system"),
+                Branch = "issue-136-toy-calc-v0-04",
+                LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                HandoffArtifactRef = ".intent-cli/implement/TOY-CALC-V0-04.request.md",
+                RetryCount = 0,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T12:30:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T12:30:00Z"),
+                LastInterruptionReason = "Blocked item 'TOY-CALC-V0-04' requires parent-side planning."
+            }));
+        WriteDirectRunRequest(
+            repoRoot,
+            "TOY-CALC-V0-04",
+            "implement",
+            "pid:27654",
+            provider: "Codex",
+            launchedAt: "2026-04-10T12:20:00.0000000+00:00");
+        WriteDirectRunResult(
+            repoRoot,
+            "TOY-CALC-V0-04",
+            "implement",
+            "failed",
+            providerEvents: CreateFallbackSpecRecoveryImplementProviderEvents("TOY-CALC-V0-04", "pid:27654"),
+            sessionId: "pid:27654",
+            provider: "Codex");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("non-retryable-failure", result.StopReason);
+        Assert.Equal("TOY-CALC-V0-04", result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("repo_local_spec_read=True", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("product_source_or_test_read=False", result.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("requires parent-side planning", result.Detail, StringComparison.Ordinal);
+
+        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "TOY-CALC-V0-04");
+        Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+        Assert.Contains("requires parent-side planning", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "supervision", "TOY-CALC-V0-04.session.json")));
+        Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+        Assert.Contains("requires parent-side planning", session.LastInterruptionReason, StringComparison.Ordinal);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "TOY-CALC-V0-04.provider.jsonl")));
+        Assert.Contains(
+            providerEvents,
+            providerEvent => providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("reason", out var reasonElement)
+                && string.Equals(reasonElement.GetString(), "implement-session-ended-before-spec-source-test-read", StringComparison.Ordinal));
+    }
+
     private static CliContext CreateContext(
         string repoRoot,
         string postFixWorktreeProgressPolicy = CliRuntimeContracts.DefaultPostFixWorktreeProgressPolicy)
@@ -8627,6 +8736,164 @@ public sealed class RunCommandTests
         }
 
         return providerEvents;
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateFallbackSpecRecoveryImplementProviderEvents(
+        string executionUnit,
+        string sessionId)
+    {
+        return
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "session-metadata",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    model = "gpt-5.4-mini",
+                    transport = "responses",
+                    command = "codex"
+                })
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.1000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.2000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("/bin/zsh -lc \"sed -n '1,220p' /repo/.intent-cli/implement/TOY-CALC-V0-04.request.md\" in /repo/.intent-cli/worktrees/TOY-CALC-V0-04")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.3000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(" succeeded in 0ms:")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.4000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("# Execution Worker Handoff")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.5000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.6000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("/bin/zsh -lc \"rg --files . | rg 'packet.yaml|04-max-command.md|intents/toy-calc|cli|max'\" in /repo/.intent-cli/worktrees/TOY-CALC-V0-04")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.7000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(" succeeded in 0ms:")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.8000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("intents/toy-calc/specs/04-max-command.md")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:00.9000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:01.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("/bin/zsh -lc \"sed -n '1,240p' /repo/intents/toy-calc/specs/04-max-command.md\" in /repo/.intent-cli/worktrees/TOY-CALC-V0-04")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:01.1000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(" succeeded in 0ms:")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:01.2000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("## Max command")
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:20:02.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    type = "backend-exit",
+                    exit_code = 1
+                })
+            }
+        ];
     }
 
     private static IReadOnlyList<DirectRunProviderEvent> CreateMeaningfulFixWorktreeProgressProviderEvents(
