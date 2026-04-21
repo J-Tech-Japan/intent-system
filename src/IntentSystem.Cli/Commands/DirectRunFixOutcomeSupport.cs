@@ -61,6 +61,16 @@ internal static class DirectRunFixOutcomeSupport
         "decide whether this is a repair or a contract-gap refusal",
         "decide whether this is a repair or a contract gap refusal"
     ];
+    private static readonly string[] StartupPlanningContractGapReadMarkers =
+    [
+        "i’m reading the request artifact first",
+        "i'm reading the request artifact first"
+    ];
+    private static readonly string[] StartupPlanningContractGapDecisionMarkers =
+    [
+        "either patch it or give a concrete contract-gap refusal",
+        "either patch it or give a concrete contract gap refusal"
+    ];
     private static readonly string[] EvidenceOnlyReviewFollowUpMarkers =
     [
         "stronger verification",
@@ -891,7 +901,11 @@ internal static class DirectRunFixOutcomeSupport
         return PlanningPreambleContractGapPrefixes.Any(prefix =>
                 normalized.StartsWith(prefix, StringComparison.Ordinal))
             || PlanningPreambleContractGapMarkers.Any(marker =>
-                normalized.Contains(marker, StringComparison.Ordinal));
+                normalized.Contains(marker, StringComparison.Ordinal))
+            || (StartupPlanningContractGapReadMarkers.Any(marker =>
+                    normalized.Contains(marker, StringComparison.Ordinal))
+                && StartupPlanningContractGapDecisionMarkers.Any(marker =>
+                    normalized.Contains(marker, StringComparison.Ordinal)));
     }
 
     private static bool SupportsEntryKind(string entryKind)
