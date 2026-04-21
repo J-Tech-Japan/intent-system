@@ -99,6 +99,8 @@ internal static class RunImplementCommand
             throw new InvalidOperationException($"Worktree path was not found at {worktreePath}");
         }
 
+        SyncCurrentIssueArtifactsToWorktree(packetPath, worktreePath);
+
         ChildWorkTargetGuard.EnsureTargetAllowed(
             executionUnit,
             context.RepoRoot,
@@ -194,6 +196,36 @@ internal static class RunImplementCommand
     private static string ResolveArtifactPath(string repoRoot, string artifactRef)
     {
         return Path.GetFullPath(Path.Combine(repoRoot, artifactRef.Replace('/', Path.DirectorySeparatorChar)));
+    }
+
+    private static void SyncCurrentIssueArtifactsToWorktree(
+        string sourceArtifactPath,
+        string worktreePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceArtifactPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+
+        var sourceIssueDirectory = Path.GetDirectoryName(sourceArtifactPath)
+            ?? throw new InvalidOperationException("Issue artifact path did not contain a directory.");
+        if (!Directory.Exists(sourceIssueDirectory))
+        {
+            throw new InvalidOperationException($"Issue artifact directory was not found at {sourceIssueDirectory}");
+        }
+
+        var executionUnit = Path.GetFileName(sourceIssueDirectory);
+        if (string.IsNullOrWhiteSpace(executionUnit))
+        {
+            throw new InvalidOperationException("Issue artifact directory did not contain an execution unit name.");
+        }
+
+        var targetIssueDirectory = Path.Combine(worktreePath, ".intent-cli", "issues", executionUnit);
+        Directory.CreateDirectory(targetIssueDirectory);
+
+        foreach (var sourceFilePath in Directory.GetFiles(sourceIssueDirectory))
+        {
+            var targetFilePath = Path.Combine(targetIssueDirectory, Path.GetFileName(sourceFilePath));
+            File.Copy(sourceFilePath, targetFilePath, overwrite: true);
+        }
     }
 
     private static string ResolveChildRepoPath(string repoRoot, string childRepoRef)
