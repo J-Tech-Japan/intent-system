@@ -8,6 +8,7 @@ internal static class DirectRunFixOutcomeSupport
     private const string ExplicitContractGapRefusalReason = "provider-explicit-contract-gap-refusal";
     private const string InspectionOnlyExitReasonSuffix = "session-ended-after-initial-inspection";
     private const string ProviderBackendEndedBeforeSpecSourceReadReasonSuffix = "session-ended-before-spec-source-test-read";
+    private const string ImplementBackendEndedAfterProductReadReasonSuffix = "session-ended-after-product-source-test-read";
     private const string MissingTerminalCaptureAfterRequestReadReasonSuffix = "session-terminal-boundary-missing-after-request-reread";
     private const string MissingTerminalCaptureAfterDeepProgressReasonSuffix = "session-terminal-boundary-missing-after-deep-progress";
     private const string EvidenceOnlyReviewFollowUpMissingOutcomeReasonSuffix = "evidence-only-review-follow-up-ended-without-bounded-repair-outcome";
@@ -397,6 +398,16 @@ internal static class DirectRunFixOutcomeSupport
             return true;
         }
 
+        if (TryResolveImplementBackendExitAfterProductReadDetail(
+                providerEvents,
+                executionUnit,
+                entryKind,
+                out reason,
+                out detail))
+        {
+            return true;
+        }
+
         if (TryResolvePostRequestParityBoundaryDetail(
                 providerEvents,
                 executionUnit,
@@ -482,6 +493,39 @@ internal static class DirectRunFixOutcomeSupport
         reason = ResolveReason(entryKind, MissingTerminalCaptureAfterRequestReadReasonSuffix);
         detail =
             $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' stopped before repo-local spec/source/test planning reads. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}. The provider session is no longer alive, but no backend-exit or later bounded-read event was captured for the current session. This indicates the detached helper/current-session synthesis event capture dropped after the request reread layer rather than a completed repair attempt.";
+        return true;
+    }
+
+    private static bool TryResolveImplementBackendExitAfterProductReadDetail(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        string entryKind,
+        out string reason,
+        out string detail)
+    {
+        detail = string.Empty;
+        reason = string.Empty;
+
+        if (!string.Equals(entryKind, "implement", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var observedRequestReread = providerEvents.Any(providerEvent => ContainsRequestArtifactRead(providerEvent.Payload));
+        var observedInventory = providerEvents.Any(providerEvent => ContainsInitialRepoInventory(providerEvent.Payload));
+        var observedSpecRead = HasSuccessfulRepoLocalSpecRead(providerEvents);
+        var observedProductRead = providerEvents.Any(providerEvent => ContainsProductSourceOrTestReadAttempt(providerEvent.Payload));
+        if (!observedRequestReread
+            || !observedProductRead
+            || HasCapturedSuccessfulTerminalOutcome(providerEvents)
+            || FindFailingBackendExitIndex(providerEvents) < 0)
+        {
+            return false;
+        }
+
+        reason = ResolveReason(entryKind, ImplementBackendEndedAfterProductReadReasonSuffix);
+        detail =
+            $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' ended after current-session product source/test read activity but before a bounded repair outcome. Current-session evidence observed request_reread={observedRequestReread}, repo_inventory={observedInventory}, repo_local_spec_read={observedSpecRead}, product_source_or_test_read={observedProductRead}. A failing backend-exit was captured after product source/test read activity, so the normalized failure must preserve that later evidence rather than collapsing it into an earlier pre-read backend-exit boundary.";
         return true;
     }
 
