@@ -594,7 +594,8 @@ internal static class RunCommand
 
         candidate = null;
 
-        if (!queueState.Items.Any(item => item.State == QueueItemState.Completed))
+        if (queueState.Items.Count != 0 &&
+            !queueState.Items.Any(item => item.State == QueueItemState.Completed))
         {
             return false;
         }

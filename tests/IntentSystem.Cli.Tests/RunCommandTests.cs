@@ -388,6 +388,171 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenEmptyQueueAndLaunchableIntakeSlice_BootstrapsFirstExecutionUnit()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "auth.execution.md"),
+            CreateIntakeExecutionArtifactMarkdown("auth", "AUTH-01", "AUTH-02"));
+        var originalIntakeIssueExecutor = RunCommand.IntakeIssueExecutor;
+        var originalQueueEnqueueExecutor = RunCommand.QueueEnqueueExecutor;
+        var originalQueueDispatchExecutor = RunCommand.QueueDispatchExecutor;
+        var originalRunStartExecutor = RunCommand.RunStartExecutor;
+        var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
+        var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var invokedSteps = new List<string>();
+
+        try
+        {
+            RunCommand.IntakeIssueExecutor = (_, domain, executionUnit) =>
+            {
+                invokedSteps.Add($"issue:{domain}:{executionUnit}");
+                return new IntakeIssueResult
+                {
+                    Domain = domain,
+                    GeneratedExecutionUnits = [executionUnit],
+                    ArtifactPaths = [],
+                    SkippedUnits = []
+                };
+            };
+            RunCommand.QueueEnqueueExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"enqueue:{executionUnit}");
+                AppendQueueItem(context.RepoRoot, CreateQueueItem(QueueItemState.Queued, executionUnit: executionUnit, withLinkedIssue: false));
+                return 0;
+            };
+            RunCommand.QueueDispatchExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"dispatch:{executionUnit}");
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => string.Equals(queueItem.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                        ? queueItem with
+                        {
+                            LinkedIssue = new LinkedIssue
+                            {
+                                Repo = "J-Tech-Japan/intent-system",
+                                Number = 401,
+                                Url = "https://github.com/J-Tech-Japan/intent-system/issues/401"
+                            }
+                        }
+                        : queueItem);
+
+                return new QueueDispatchCommandResult
+                {
+                    ExecutionUnit = executionUnit,
+                    LinkedIssueUrl = "https://github.com/J-Tech-Japan/intent-system/issues/401",
+                    ReusedExistingIssue = false
+                };
+            };
+            RunCommand.RunStartExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"start:{executionUnit}");
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => string.Equals(queueItem.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                        ? queueItem with { State = QueueItemState.Active }
+                        : queueItem);
+
+                return new RunStartResult
+                {
+                    ExecutionUnit = executionUnit,
+                    WorktreePath = Path.Combine(context.RepoRoot, ".intent-cli", "worktrees", executionUnit),
+                    BranchName = $"issue-401-{executionUnit.ToLowerInvariant()}"
+                };
+            };
+            RunCommand.RunImplementExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"implement:{executionUnit}");
+                tempDirectory.CreateFile(
+                    Path.Combine("repo", ".intent-cli", "implement", $"{executionUnit}.request.md"),
+                    "# Execution Worker Handoff");
+
+                return new RunImplementResult
+                {
+                    Request = CreateRunImplementRequest(repoRoot, executionUnit),
+                    ArtifactPath = $".intent-cli/implement/{executionUnit}.request.md"
+                };
+            };
+            RunCommand.RunSuperviseExecutor = (_, executionUnit) =>
+            {
+                invokedSteps.Add($"supervise:{executionUnit}");
+                return new RunSuperviseResult
+                {
+                    ExecutionUnit = executionUnit,
+                    SessionArtifactPath = $".intent-cli/supervision/{executionUnit}.session.json",
+                    WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                    SessionStatus = RunSupervisionSessionStatus.Monitoring,
+                    RetryCount = 0,
+                    RetryBudget = 3,
+                    HandoffArtifactRef = $".intent-cli/implement/{executionUnit}.request.md"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal("AUTH-01", result.ExecutionUnit);
+            Assert.Equal(
+                [
+                    "issue:auth:AUTH-01",
+                    "enqueue:AUTH-01",
+                    "dispatch:AUTH-01",
+                    "start:AUTH-01",
+                    "implement:AUTH-01",
+                    "supervise:AUTH-01"
+                ],
+                invokedSteps);
+            Assert.Collection(
+                result.Actions,
+                action =>
+                {
+                    Assert.Equal("intake issue", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("queue enqueue", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("queue dispatch", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("run start", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("run implement", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("run supervise", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                });
+            Assert.DoesNotContain(invokedSteps, step => step.Contains("AUTH-02", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunCommand.IntakeIssueExecutor = originalIntakeIssueExecutor;
+            RunCommand.QueueEnqueueExecutor = originalQueueEnqueueExecutor;
+            RunCommand.QueueDispatchExecutor = originalQueueDispatchExecutor;
+            RunCommand.RunStartExecutor = originalRunStartExecutor;
+            RunCommand.RunImplementExecutor = originalRunImplementExecutor;
+            RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenCompletedQueueAndOnlyCompletedIntakeUnits_DoesNotLoopBackIntoIntake()
     {
         using var tempDirectory = new TemporaryDirectory();
