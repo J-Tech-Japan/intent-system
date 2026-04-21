@@ -10,6 +10,12 @@ internal static class BugImplementationIssueCommand
         string TargetRepo,
         string TargetPath,
         string TargetPart,
+        IReadOnlyList<string> Dependencies,
+        IReadOnlyList<string> TechnicalBaseline,
+        IReadOnlyList<string> ProjectLocalGuide,
+        IReadOnlyList<string> IntentBaseline,
+        IReadOnlyList<string> IntentReferences,
+        IReadOnlyList<string> RulesAndSpecs,
         IReadOnlyList<string> InScope,
         IReadOnlyList<string> OutOfScope,
         IReadOnlyList<string> AcceptanceCriteria,
@@ -199,6 +205,14 @@ internal static class BugImplementationIssueCommand
         AppendListOrFallback(lines, ResolveRepairDirectionLines(context), "Limit the change to the selected implementation target and preserve current issue creation behavior.");
 
         lines.Add(string.Empty);
+        lines.Add("## Accepted Baseline You May Assume");
+        AppendListOrFallback(lines, ResolveAcceptedBaselineLines(context), "No additional packet baseline assumptions were provided.");
+
+        lines.Add(string.Empty);
+        lines.Add("## Dependencies");
+        AppendListOrFallback(lines, ResolveDependencyLines(context), "No execution-unit dependencies were declared for the selected repair target.");
+
+        lines.Add(string.Empty);
         lines.Add("## Target Repo / Path / Part");
         AppendListOrFallback(lines, ResolveTargetLines(context), "Target packet data was not available.");
 
@@ -320,6 +334,22 @@ internal static class BugImplementationIssueCommand
         return lines;
     }
 
+    private static IEnumerable<string> ResolveAcceptedBaselineLines(StandaloneIssueBodyContext context)
+    {
+        var lines = new List<string>();
+        lines.AddRange(DistinctPreserveOrder(context.Targets.SelectMany(target => target.TechnicalBaseline)));
+        lines.AddRange(DistinctPreserveOrder(context.Targets.SelectMany(target => target.ProjectLocalGuide)));
+        lines.AddRange(DistinctPreserveOrder(context.Targets.SelectMany(target => target.IntentBaseline)));
+        lines.AddRange(DistinctPreserveOrder(context.Targets.SelectMany(target => target.IntentReferences)));
+        lines.AddRange(DistinctPreserveOrder(context.Targets.SelectMany(target => target.RulesAndSpecs)));
+        return lines;
+    }
+
+    private static IEnumerable<string> ResolveDependencyLines(StandaloneIssueBodyContext context)
+    {
+        return DistinctPreserveOrder(context.Targets.SelectMany(target => target.Dependencies));
+    }
+
     private static IEnumerable<string> ResolveTargetLines(StandaloneIssueBodyContext context)
     {
         return context.Targets.Select(target =>
@@ -370,6 +400,12 @@ internal static class BugImplementationIssueCommand
                 packet.ImplementationIssuePacket.TargetRepo,
                 packet.ImplementationIssuePacket.TargetPath,
                 packet.ImplementationIssuePacket.TargetPart,
+                packet.ImplementationIssuePacket.Dependencies,
+                packet.ImplementationIssuePacket.TechnicalBaseline,
+                packet.ImplementationIssuePacket.ProjectLocalGuide,
+                packet.ImplementationIssuePacket.IntentBaseline,
+                packet.ImplementationIssuePacket.IntentReferences,
+                packet.ImplementationIssuePacket.RulesAndSpecs,
                 packet.ImplementationIssuePacket.InScope,
                 packet.ImplementationIssuePacket.OutOfScope,
                 packet.ImplementationIssuePacket.AcceptanceCriteria,
@@ -488,6 +524,12 @@ internal static class BugImplementationIssueCommand
             GetRequiredLegacyScalar(implementationIssue, "target_repo"),
             GetLegacyScalarOrDefault(implementationIssue, "target_path", "."),
             GetLegacyScalarOrDefault(implementationIssue, "target_part", GetRequiredLegacyScalar(implementationIssue, "issue_title")),
+            GetLegacyList(implementationIssue, "dependencies"),
+            GetLegacyList(implementationIssue, "technical_baseline"),
+            GetLegacyList(implementationIssue, "project_local_guide"),
+            GetLegacyList(implementationIssue, "intent_baseline"),
+            GetLegacyList(implementationIssue, "intent_references"),
+            GetLegacyList(implementationIssue, "rules_and_specs"),
             GetLegacyList(implementationIssue, "in_scope"),
             GetLegacyList(implementationIssue, "out_of_scope"),
             GetLegacyList(implementationIssue, "acceptance_criteria"),

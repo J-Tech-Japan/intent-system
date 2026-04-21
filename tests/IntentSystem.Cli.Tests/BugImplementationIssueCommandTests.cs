@@ -59,6 +59,8 @@ public sealed class BugImplementationIssueCommandTests
             Assert.Contains("## Actual Result", publisher.Body, StringComparison.Ordinal);
             Assert.Contains("## Expected Repaired Result", publisher.Body, StringComparison.Ordinal);
             Assert.Contains("## Narrowest Acceptable Repair Direction", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Accepted Baseline You May Assume", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("## Dependencies", publisher.Body, StringComparison.Ordinal);
             Assert.Contains("## Target Repo / Path / Part", publisher.Body, StringComparison.Ordinal);
             Assert.Contains("## In Scope", publisher.Body, StringComparison.Ordinal);
             Assert.Contains("## Out Of Scope", publisher.Body, StringComparison.Ordinal);
@@ -69,6 +71,12 @@ public sealed class BugImplementationIssueCommandTests
             Assert.Contains("Suspected failure locus: OAuth callback state is not reset after the redirect.", publisher.Body, StringComparison.Ordinal);
             Assert.Contains("Repair callback flow so the OAuth redirect completes exactly once without looping.", publisher.Body, StringComparison.Ordinal);
             Assert.Contains("repo 'submodules/intent-system', path '.', part 'auth callback'.", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- G24", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- C# / .NET", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- AGENTS.md", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- keep repair deterministic", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- ICL.P.PRODUCT_GOAL", publisher.Body, StringComparison.Ordinal);
+            Assert.Contains("- intents/rules/issue-lifecycle-and-landing.md", publisher.Body, StringComparison.Ordinal);
             Assert.Contains("accept callback responses without looping", publisher.Body, StringComparison.Ordinal);
             Assert.Contains("dotnet test IntentSystem.sln --nologo", publisher.Body, StringComparison.Ordinal);
         }
@@ -217,7 +225,8 @@ public sealed class BugImplementationIssueCommandTests
           target_repo: "submodules/intent-system"
           target_path: "."
           target_part: "auth callback"
-          dependencies: []
+          dependencies:
+            - "G24"
           technical_baseline:
             - "C# / .NET"
           project_local_guide:
