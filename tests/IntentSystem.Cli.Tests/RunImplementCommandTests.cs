@@ -153,6 +153,66 @@ public sealed class RunImplementCommandTests
         Assert.DoesNotContain("latest_linked_pr", File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "implement", "G19.request.md")), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_GivenNestedWorktree_SyncsCurrentIssueArtifactsBeforeLaunch()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var worktreePath = tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G19"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "review-context.md"),
+            CreateReviewContextMarkdown());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "implementation.md"),
+            "# Current implementation");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "github-body.md"),
+            "# Current github body");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunImplementCommand.TimestampFactory;
+        var originalLauncherFactory = RunImplementCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunImplementCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:15:00Z");
+            RunImplementCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:4321",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G19' for provider 'Claude'.");
+
+            var exitCode = RunImplementCommand.Execute(CreateContext(repoRoot), ["G19"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "G19", "packet.yaml")));
+            Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "G19", "review-context.md")));
+            Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "G19", "implementation.md")));
+            Assert.True(File.Exists(Path.Combine(worktreePath, ".intent-cli", "issues", "G19", "github-body.md")));
+            Assert.Equal(
+                CreatePacketYaml(),
+                File.ReadAllText(Path.Combine(worktreePath, ".intent-cli", "issues", "G19", "packet.yaml")));
+            Assert.Equal(
+                CreateReviewContextMarkdown(),
+                File.ReadAllText(Path.Combine(worktreePath, ".intent-cli", "issues", "G19", "review-context.md")));
+        }
+        finally
+        {
+            RunImplementCommand.TimestampFactory = originalTimestampFactory;
+            RunImplementCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
     private sealed class FakeDirectRunLauncher(
         string providerSessionId,
         string provider,
