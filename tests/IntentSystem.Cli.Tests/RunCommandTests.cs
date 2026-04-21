@@ -1015,6 +1015,181 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenAcceptedReviewDecisionWithAcceptedWorktreeChangesThatWouldBeOverwrittenByMerge_ClosesOutWithoutDeterministicContractGap()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "child-repo"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(CreateQueueItem(QueueItemState.Review))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "reviews", "G226.request.json"),
+            "{}");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G226", "packet.yaml"),
+            """
+            implementation_issue_packet:
+              issue_title: "[G226] Review Accept"
+              issue_kind: "feature"
+              source_execution_unit: "G226"
+              goal: "Close out accepted review."
+              in_scope:
+                - "review accept command"
+              out_of_scope:
+                - "review comment"
+              target_repo: "submodules/child-repo"
+              target_path: "."
+              target_part: "cli review accept command"
+              dependencies: []
+              technical_baseline:
+                - "C# / .NET"
+              project_local_guide:
+                - "AGENTS.md"
+              intent_baseline:
+                - "closeout stays thin"
+              intent_references:
+                - "ICL.P.PRODUCT_GOAL"
+              rules_and_specs:
+                - "intents/rules/issue-lifecycle-and-landing.md"
+              acceptance_criteria:
+                - "review accept merges and closes"
+              verification_evidence:
+                - "tests-passing"
+              review_mode: "deterministic-review"
+              completion_action: "wait-for-deterministic-review"
+              landing_policy: "merge-after-review"
+
+            review_context_packet:
+              source_execution_unit: "G226"
+              parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+              intent_references:
+                - "ICL.P.PRODUCT_GOAL"
+              rules_and_specs:
+                - "intents/rules/issue-lifecycle-and-landing.md"
+              acceptance_criteria:
+                - "review accept merges and closes"
+              deterministic_review_checks:
+                - "selected item only"
+              clarification_return_path: "intents/intent-cli/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-03T10:00:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/5"}
+            {"ts":"2026-04-03T10:10:00Z","execution_unit":"G226","event":"review-started","by":"intent-cli","linked_pr":"https://github.com/tomohisa/toy-calc-sample/pull/6"}
+            """ + Environment.NewLine);
+        WriteDirectRunRequest(repoRoot, "G226", "review", "pid:226");
+        WriteDirectRunResult(repoRoot, "G226", "review", "accepted");
+        var originalClientFactory = ReviewAcceptCommand.AcceptClientFactory;
+        var originalGitFactory = ReviewAcceptCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = ReviewAcceptCommand.TimestampFactory;
+        var client = new FakeReviewAcceptClient();
+
+        try
+        {
+            ReviewAcceptCommand.AcceptClientFactory = () => client;
+            ReviewAcceptCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                new Dictionary<string, GitCommandResult>
+                {
+                    [FakeGitRunner.CreateCommandKey(["fetch", "origin", "main"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = string.Empty,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["switch", "main"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = string.Empty,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["merge", "--ff-only", "origin/main"])] = new GitCommandResult
+                    {
+                        ExitCode = 1,
+                        StdOut = string.Empty,
+                        StdErr =
+                            """
+                            error: Your local changes to the following files would be overwritten by merge:
+                              intents/toy-calc/specs/01-cli-surface.md
+                            error: The following untracked working tree files would be overwritten by merge:
+                              intents/toy-calc/specs/02-invalid-usage-contract.md
+                            Please move or remove them before you merge.
+                            Aborting
+                            """
+                    },
+                    [FakeGitRunner.CreateCommandKey(["status", "--porcelain=v1", "--untracked-files=all"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut =
+                            """
+                             M intents/toy-calc/specs/01-cli-surface.md
+                            ?? intents/toy-calc/specs/02-invalid-usage-contract.md
+                            """,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["clean", "-fd", "--", "intents/toy-calc/specs/02-invalid-usage-contract.md"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = string.Empty,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["reset", "--hard", "abc123"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = "HEAD is now at abc123 closeout" + Environment.NewLine,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["rev-parse", "HEAD"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = "abc123" + Environment.NewLine,
+                        StdErr = string.Empty
+                    },
+                    [FakeGitRunner.CreateCommandKey(["add", "submodules/child-repo"])] = new GitCommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut = string.Empty,
+                        StdErr = string.Empty
+                    }
+                },
+                statusSequence:
+                [
+                    """
+                     M intents/toy-calc/specs/01-cli-surface.md
+                    ?? intents/toy-calc/specs/02-invalid-usage-contract.md
+                    """,
+                    string.Empty
+                ]);
+            ReviewAcceptCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-21T02:30:00Z");
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Null(result.ExecutionUnit);
+            var action = Assert.Single(result.Actions);
+            Assert.Equal("review accept", action.Name);
+            Assert.Equal("G226", action.ExecutionUnit);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Completed, queueState.Items.Single(item => item.ExecutionUnit == "G226").State);
+
+            var runEvents = RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+            Assert.Equal("pr-merged", runEvents[^3].Event);
+            Assert.Equal("issue-closed", runEvents[^2].Event);
+            Assert.Equal("completed", runEvents[^1].Event);
+        }
+        finally
+        {
+            ReviewAcceptCommand.AcceptClientFactory = originalClientFactory;
+            ReviewAcceptCommand.GitCommandRunnerFactory = originalGitFactory;
+            ReviewAcceptCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenAcceptedReviewDecisionWithDraftLinkedPrAndReadyApi404_ClosesOutWithoutDeterministicContractGap()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -9024,6 +9199,7 @@ public sealed class RunCommandTests
     {
         private readonly string? statusOutput;
         private readonly IReadOnlyDictionary<string, GitCommandResult>? scriptedResults;
+        private readonly Queue<string>? statusSequence;
 
         public FakeGitRunner(string statusOutput)
         {
@@ -9033,6 +9209,12 @@ public sealed class RunCommandTests
         public FakeGitRunner(IReadOnlyDictionary<string, GitCommandResult> scriptedResults)
         {
             this.scriptedResults = scriptedResults;
+        }
+
+        public FakeGitRunner(IReadOnlyDictionary<string, GitCommandResult> scriptedResults, IReadOnlyList<string> statusSequence)
+        {
+            this.scriptedResults = scriptedResults;
+            this.statusSequence = new Queue<string>(statusSequence);
         }
 
         public List<IReadOnlyList<string>> Commands { get; } = [];
@@ -9047,6 +9229,17 @@ public sealed class RunCommandTests
                 if (!scriptedResults.TryGetValue(key, out var result))
                 {
                     throw new Xunit.Sdk.XunitException($"Unexpected git command: {string.Join(" ", arguments)}");
+                }
+
+                if (arguments.SequenceEqual(["status", "--porcelain=v1", "--untracked-files=all"])
+                    && statusSequence is not null)
+                {
+                    return result with
+                    {
+                        StdOut = statusSequence.Count > 0
+                            ? statusSequence.Dequeue()
+                            : result.StdOut
+                    };
                 }
 
                 return result;
