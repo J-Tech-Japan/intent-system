@@ -501,6 +501,14 @@ internal static class RunCommand
                         continue;
                     }
 
+                    if (TryAutoContinueBlockedImplementRecoveredSpecBoundary(
+                            context,
+                            queueState,
+                            blockedItem))
+                    {
+                        continue;
+                    }
+
                     if (TryResolveBlockedImplementSessionFailureResult(context, actions, blockedItem, out var blockedImplementResult))
                     {
                         return blockedImplementResult;
@@ -783,6 +791,46 @@ internal static class RunCommand
         }
 
         ExecuteAutoContinuePostFixWorktreeProgress(context, actions, blockedItem, session);
+        return true;
+    }
+
+    private static bool TryAutoContinueBlockedImplementRecoveredSpecBoundary(
+        CliContext context,
+        QueueState queueState,
+        QueueItem blockedItem)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueState);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+
+        if (!TryReadSupervisionSession(context, blockedItem.ExecutionUnit, out var session)
+            || session.WorkerEntry != RunSupervisionWorkerEntry.Implement
+            || session.Status != RunSupervisionSessionStatus.Blocked)
+        {
+            return false;
+        }
+
+        if (!HasCurrentBlockedImplementRecoveredSpecBoundary(context, blockedItem.ExecutionUnit))
+        {
+            return false;
+        }
+
+        var timestamp = TimestampFactory();
+        var transition = QueueManager.TransitionNonBlocking(
+            queueState,
+            blockedItem.ExecutionUnit,
+            QueueItemState.Active,
+            TransitionActor,
+            timestamp);
+        var updatedState = transition.UpdatedState with
+        {
+            Items = transition.UpdatedState.Items.Select(item =>
+                string.Equals(item.ExecutionUnit, blockedItem.ExecutionUnit, StringComparison.Ordinal)
+                    ? item with { BlockedBy = [] }
+                    : item).ToArray()
+        };
+        File.WriteAllText(context.GetQueueStatePath(), QueueStateSerializer.Serialize(updatedState));
+        AppendRunEvent(context.GetRunLogPath(), transition.Event);
         return true;
     }
 
@@ -2177,6 +2225,37 @@ internal static class RunCommand
             out var synthesizedContractGapDetail)
             ? synthesizedContractGapDetail
             : null;
+    }
+
+    private static bool HasCurrentBlockedImplementRecoveredSpecBoundary(CliContext context, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
+        var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit, "implement");
+        if (requestArtifact is null
+            || resultArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.RunStatus, "failed", StringComparison.Ordinal)
+            || !MatchesCurrentDirectRunRequestBoundary(requestArtifact, resultArtifact))
+        {
+            return false;
+        }
+
+        var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
+        if (providerEvents.Count == 0)
+        {
+            return false;
+        }
+
+        providerEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        return DirectRunFixOutcomeSupport.HasRecoveredSpecWithoutProductReadSignal(providerEvents);
     }
 
     private static DateTimeOffset? TryResolveCurrentFixSessionLatestActivityAt(

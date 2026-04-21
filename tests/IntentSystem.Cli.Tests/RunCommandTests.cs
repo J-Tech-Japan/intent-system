@@ -8077,7 +8077,7 @@ public sealed class RunCommandTests
     }
 
     [Fact]
-    public void ExecuteCore_GivenBlockedImplementSessionWithFallbackSpecRecovery_RehydratesNonRetryableFailure()
+    public void ExecuteCore_GivenBlockedImplementSessionWithFallbackSpecRecovery_LaunchesFreshImplementContinuation()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -8154,35 +8154,105 @@ public sealed class RunCommandTests
             providerEvents: CreateFallbackSpecRecoveryImplementProviderEvents("TOY-CALC-V0-04", "pid:27654"),
             sessionId: "pid:27654",
             provider: "Codex");
+        var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
+        var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
 
-        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+        try
+        {
+            RunCommand.RunImplementExecutor = (_, executionUnit) =>
+            {
+                WriteDirectRunRequest(
+                    repoRoot,
+                    executionUnit,
+                    "implement",
+                    "pid:4242",
+                    provider: "Codex",
+                    launchedAt: "2026-04-10T12:31:00.0000000+00:00");
+                WriteDirectRunResult(
+                    repoRoot,
+                    executionUnit,
+                    "implement",
+                    "running",
+                    providerEvents: CreateImplementProductReadProviderEvents(executionUnit, "pid:4242"),
+                    sessionId: "pid:4242",
+                    provider: "Codex");
+                File.AppendAllText(
+                    runLogPath,
+                    RunLogSerializer.SerializeLine(new RunEvent
+                    {
+                        Ts = DateTimeOffset.Parse("2026-04-10T12:31:00Z"),
+                        ExecutionUnit = executionUnit,
+                        Event = "provider-lifecycle",
+                        By = "intent-cli",
+                        LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/226",
+                        EntryKind = "implement",
+                        Provider = "Codex",
+                        Model = "gpt-5.4-mini",
+                        SessionId = "pid:4242",
+                        RunStatus = "running",
+                        RawLogRef = $".intent-cli/runs/{executionUnit}.provider.jsonl",
+                        ResultRef = $".intent-cli/runs/{executionUnit}.result.json",
+                        PacketRef = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                        ReviewContextRef = $".intent-cli/issues/{executionUnit}/review-context.md",
+                        WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit)
+                    }) + Environment.NewLine);
 
-        Assert.Equal("non-retryable-failure", result.StopReason);
-        Assert.Equal("TOY-CALC-V0-04", result.ExecutionUnit);
-        Assert.Empty(result.Actions);
-        Assert.Contains("repo_local_spec_read=True", result.Detail, StringComparison.Ordinal);
-        Assert.Contains("product_source_or_test_read=False", result.Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("requires parent-side planning", result.Detail, StringComparison.Ordinal);
+                return new RunImplementResult
+                {
+                    Request = CreateRunImplementRequest(repoRoot, executionUnit),
+                    ArtifactPath = $".intent-cli/implement/{executionUnit}.request.md",
+                    DirectRun = CreateDirectRunLaunchResult(executionUnit, "pid:4242")
+                };
+            };
+            RunCommand.RunSuperviseExecutor = (_, executionUnit) => new RunSuperviseResult
+            {
+                ExecutionUnit = executionUnit,
+                SessionArtifactPath = $".intent-cli/supervision/{executionUnit}.session.json",
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                SessionStatus = RunSupervisionSessionStatus.Monitoring,
+                RetryCount = 0,
+                RetryBudget = 3,
+                HandoffArtifactRef = $".intent-cli/implement/{executionUnit}.request.md"
+            };
 
-        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
-        var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "TOY-CALC-V0-04");
-        Assert.Equal(QueueItemState.Blocked, selectedItem.State);
-        Assert.Contains("requires parent-side planning", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-        var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
-            Path.Combine(repoRoot, ".intent-cli", "supervision", "TOY-CALC-V0-04.session.json")));
-        Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
-        Assert.Contains("requires parent-side planning", session.LastInterruptionReason, StringComparison.Ordinal);
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal("TOY-CALC-V0-04", result.ExecutionUnit);
+            Assert.Equal(2, result.Actions.Count);
+            Assert.Equal("run implement", result.Actions[0].Name);
+            Assert.Equal("run supervise", result.Actions[1].Name);
+            Assert.Contains("under supervision", result.Detail, StringComparison.Ordinal);
 
-        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(
-            Path.Combine(repoRoot, ".intent-cli", "runs", "TOY-CALC-V0-04.provider.jsonl")));
-        Assert.Contains(
-            providerEvents,
-            providerEvent => providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
-                && providerEvent.Payload.TryGetProperty("type", out var typeElement)
-                && string.Equals(typeElement.GetString(), "contract-gap", StringComparison.Ordinal)
-                && providerEvent.Payload.TryGetProperty("reason", out var reasonElement)
-                && string.Equals(reasonElement.GetString(), "implement-session-ended-before-spec-source-test-read", StringComparison.Ordinal));
+            var requestArtifact = DirectRunRequestArtifactJson.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "TOY-CALC-V0-04.request.json")));
+            Assert.Equal("pid:4242", requestArtifact.ProviderSessionId);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", "TOY-CALC-V0-04.result.json")));
+            Assert.Equal("pid:4242", resultArtifact.SessionId);
+            Assert.Equal("running", resultArtifact.RunStatus);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "TOY-CALC-V0-04");
+            Assert.Equal(QueueItemState.Active, selectedItem.State);
+            Assert.Empty(selectedItem.BlockedBy);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal(
+                2,
+                runEvents.Count(runEvent =>
+                    string.Equals(runEvent.Event, "activated", StringComparison.Ordinal)
+                    && string.Equals(runEvent.ExecutionUnit, "TOY-CALC-V0-04", StringComparison.Ordinal)));
+            Assert.Contains(runEvents, runEvent =>
+                string.Equals(runEvent.Event, "provider-lifecycle", StringComparison.Ordinal)
+                && string.Equals(runEvent.SessionId, "pid:4242", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunCommand.RunImplementExecutor = originalRunImplementExecutor;
+            RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+        }
     }
 
     private static CliContext CreateContext(
@@ -8892,6 +8962,40 @@ public sealed class RunCommandTests
                     type = "backend-exit",
                     exit_code = 1
                 })
+            }
+        ];
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateImplementProductReadProviderEvents(
+        string executionUnit,
+        string sessionId)
+    {
+        return
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:31:00.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "session-metadata",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    model = "gpt-5.4-mini",
+                    transport = "responses",
+                    command = "codex"
+                })
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-10T12:31:00.1000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'sed -n ''1,220p'' src/IntentSystem.Cli/Commands/RunCommand.cs' succeeded in 0ms")
             }
         ];
     }
