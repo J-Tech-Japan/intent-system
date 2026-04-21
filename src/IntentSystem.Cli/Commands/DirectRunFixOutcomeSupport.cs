@@ -66,10 +66,26 @@ internal static class DirectRunFixOutcomeSupport
         "i’m reading the request artifact first",
         "i'm reading the request artifact first"
     ];
+    private static readonly string[] StartupPlanningContractGapActionMarkers =
+    [
+        "i’ll inspect",
+        "i'll inspect",
+        "after that i’ll either",
+        "after that i'll either",
+        "either patch it",
+        "either implement the fix and verify it",
+        "pin down the bounded scope",
+        "reproduce and repair it",
+        "validate the bounded fix"
+    ];
     private static readonly string[] StartupPlanningContractGapDecisionMarkers =
     [
         "either patch it or give a concrete contract-gap refusal",
-        "either patch it or give a concrete contract gap refusal"
+        "either patch it or give a concrete contract gap refusal",
+        "give a deterministic contract-gap refusal if",
+        "give a deterministic contract gap refusal if",
+        "give a concrete contract-gap refusal if",
+        "give a concrete contract gap refusal if"
     ];
     private static readonly string[] EvidenceOnlyReviewFollowUpMarkers =
     [
@@ -903,6 +919,8 @@ internal static class DirectRunFixOutcomeSupport
             || PlanningPreambleContractGapMarkers.Any(marker =>
                 normalized.Contains(marker, StringComparison.Ordinal))
             || (StartupPlanningContractGapReadMarkers.Any(marker =>
+                    normalized.Contains(marker, StringComparison.Ordinal))
+                && StartupPlanningContractGapActionMarkers.Any(marker =>
                     normalized.Contains(marker, StringComparison.Ordinal))
                 && StartupPlanningContractGapDecisionMarkers.Any(marker =>
                     normalized.Contains(marker, StringComparison.Ordinal)));
