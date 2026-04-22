@@ -291,6 +291,97 @@ public sealed class RunImplementCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenToyCalcV07StyleStaleMinSpecInWorktree_SyncsCurrentIntentTreeBeforeLaunch()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        var worktreePath = tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G19"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "review-context.md"),
+            CreateReviewContextMarkdown());
+
+        var currentMinSpecContents = """
+            # Toy Calc Min Command v0
+
+            - `toy-calc min <left> <right>`
+            - returns the smaller integer
+            """;
+        var staleModuloSpecContents = """
+            # Toy Calc Modulo Command v0
+
+            - `toy-calc mod <left> <right>`
+            - divide-by-zero must fail deterministically
+            """;
+
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "submodules", "intent-system", "intents", "toy-calc", "specs", "07-min-command.md"),
+            currentMinSpecContents);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "submodules", "intent-system", "intents", "toy-calc", "specs", "06-modulo-command.md"),
+            staleModuloSpecContents);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "worktrees", "G19", "intents", "toy-calc", "specs", "07-min-command.md"),
+            staleModuloSpecContents);
+
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunImplementCommand.TimestampFactory;
+        var originalLauncherFactory = RunImplementCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunImplementCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:15:00Z");
+            RunImplementCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:4321",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G19' for provider 'Claude'.");
+
+            var exitCode = RunImplementCommand.Execute(CreateContext(repoRoot), ["G19"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(
+                currentMinSpecContents,
+                File.ReadAllText(Path.Combine(
+                    worktreePath,
+                    "intents",
+                    "toy-calc",
+                    "specs",
+                    "07-min-command.md")));
+            Assert.DoesNotContain(
+                "Modulo Command",
+                File.ReadAllText(Path.Combine(
+                    worktreePath,
+                    "intents",
+                    "toy-calc",
+                    "specs",
+                    "07-min-command.md")),
+                StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(
+                worktreePath,
+                "intents",
+                "toy-calc",
+                "specs",
+                "06-modulo-command.md")));
+        }
+        finally
+        {
+            RunImplementCommand.TimestampFactory = originalTimestampFactory;
+            RunImplementCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
     private sealed class FakeDirectRunLauncher(
         string providerSessionId,
         string provider,

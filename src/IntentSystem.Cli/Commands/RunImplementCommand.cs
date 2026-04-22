@@ -270,6 +270,7 @@ internal static class RunImplementCommand
         return packet.ProjectLocalGuide
             .Concat(packet.IntentReferences)
             .Concat(packet.RulesAndSpecs)
+            .Concat(["intents"])
             .Distinct(StringComparer.Ordinal);
     }
 
