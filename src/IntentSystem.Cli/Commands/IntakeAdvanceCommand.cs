@@ -60,7 +60,7 @@ internal static class IntakeAdvanceCommand
         var (_, patchPath) = IntakePatchCommand.ExecuteCore(context.RepoRoot, domain);
         var applyResult = IntakeApplyCommand.ExecuteCore(context.RepoRoot, domain);
         var (_, executionPath) = IntakeExecutionCommand.ExecuteCore(context.RepoRoot, domain);
-        var executionApplyResult = IntakeExecutionApplyCommand.ExecuteCore(context.RepoRoot, domain);
+        var executionApplyResult = TryExecuteExecutionApply(context.RepoRoot, domain, out var skippedExecutionApply);
 
         var regeneratedArtifactPaths = new[]
         {
@@ -80,8 +80,35 @@ internal static class IntakeAdvanceCommand
             UpdatedSourceFilePaths = applyResult.ChangedFilePaths,
             UpdatedExecutionFilePaths = executionApplyResult.ChangedFilePaths,
             RegeneratedArtifactPaths = regeneratedArtifactPaths,
-            SkippedStages = []
+            SkippedStages = skippedExecutionApply ? ["execution-apply"] : []
         };
+    }
+
+    private static IntakeExecutionApplyResult TryExecuteExecutionApply(
+        string repoRoot,
+        string domain,
+        out bool skipped)
+    {
+        try
+        {
+            skipped = false;
+            return IntakeExecutionApplyCommand.ExecuteCore(repoRoot, domain);
+        }
+        catch (InvalidOperationException exception)
+            when (string.Equals(
+                exception.Message,
+                "Execution apply target could not be derived from the current execution baseline.",
+                StringComparison.Ordinal))
+        {
+            skipped = true;
+            return new IntakeExecutionApplyResult
+            {
+                Domain = domain,
+                ChangedFilePaths = [],
+                AppliedUnitCount = 0,
+                PreservedDependencyRefs = []
+            };
+        }
     }
 
     private static void EnsureConceptArtifactExists(string repoRoot, string domain)

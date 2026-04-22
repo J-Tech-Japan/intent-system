@@ -154,6 +154,46 @@ public sealed class IntakeAdvanceCommandTests
     }
 
     [Fact]
+    public void Execute_GivenIssueReadyExecutionRowsWithoutExecutionApplyBaseline_SkipsExecutionApplyAndRefreshesDraft()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "toy-calc.concept.yaml"),
+            CreateConceptArtifactYaml("toy-calc"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "toy-calc", "iq-1.yaml"),
+            CreateInterviewArtifactYaml(CreateAnsweredItem(domain: "toy-calc", sourceConceptRef: ".intent-cli/intake/toy-calc.concept.yaml")));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "interviews", "toy-calc", "iq-1.md"),
+            "# Interview Question");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "toy-calc", "execution", "01-issue-ready-slices.md"),
+            """
+            # Toy Calc Issue-Ready Slices
+
+            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
+            |---|---|---|---|---|---|---|---|
+            | TOY-CALC-V0-06 | V0 | integer modulo command を追加する | TOY-CALC-V0-05 | . | . | CLI modulo command and verification | yes |
+            | TOY-CALC-V0-07 | V0 | integer min command を追加する | TOY-CALC-V0-06 | . | . | CLI min command and verification | yes |
+            """);
+        using var writer = new StringWriter();
+
+        var exitCode = IntakeAdvanceCommand.Execute(CreateContext(repoRoot), ["toy-calc"], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Readiness status: ready", output, StringComparison.Ordinal);
+        Assert.Contains("Regenerated artifact paths:", output, StringComparison.Ordinal);
+        Assert.Contains("- .intent-cli/intake/toy-calc.execution.md", output, StringComparison.Ordinal);
+        Assert.Contains("Skipped stages:", output, StringComparison.Ordinal);
+        Assert.Contains("- execution-apply", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Execution apply target could not be derived", output, StringComparison.Ordinal);
+
+        Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "intake", "toy-calc.execution.md")));
+    }
+
+    [Fact]
     public void Execute_GivenMissingDomainArgument_ReturnsExitCodeOne()
     {
         using var writer = new StringWriter();
@@ -181,11 +221,12 @@ public sealed class IntakeAdvanceCommandTests
     }
 
     private static IntentSystem.ConceptIntake.Models.InterviewQueueItem CreateAnsweredItem(
+        string domain = "auth",
         string sourceConceptRef = "intents/intent-cli/concepts/auth-oauth2.md")
     {
         return new IntentSystem.ConceptIntake.Models.InterviewQueueItem
         {
-            DomainSlug = "auth",
+            DomainSlug = domain,
             SourceConceptRef = sourceConceptRef,
             QuestionId = "iq-1",
             QuestionText = "What should be updated?",

@@ -771,6 +771,391 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenCompletedQueueAndStaleIntakeExecutionArtifact_RefreshesIntakeBeforeLaunchingNextSlice()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(
+                CreateQueueState(
+                    CreateQueueItem(QueueItemState.Completed, executionUnit: "TOY-CALC-V0-06"))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "toy-calc.execution.md"),
+            CreateIntakeExecutionArtifactMarkdown("toy-calc", "TOY-CALC-V0-06"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "toy-calc.concept.yaml"),
+            """
+            domain_slug: toy-calc
+            concept_source: test
+            concept_text: "Toy calc"
+            upstream_paths: []
+            initial_goal: "Toy calc"
+            constraints: []
+            known_unknowns: []
+            """);
+        var originalIntakeAdvanceExecutor = RunCommand.IntakeAdvanceExecutor;
+        var originalIntakeIssueExecutor = RunCommand.IntakeIssueExecutor;
+        var originalQueueEnqueueExecutor = RunCommand.QueueEnqueueExecutor;
+        var originalQueueDispatchExecutor = RunCommand.QueueDispatchExecutor;
+        var originalRunStartExecutor = RunCommand.RunStartExecutor;
+        var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
+        var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var invokedSteps = new List<string>();
+
+        try
+        {
+            RunCommand.IntakeAdvanceExecutor = (context, domain) =>
+            {
+                invokedSteps.Add($"advance:{domain}");
+                File.WriteAllText(
+                    Path.Combine(context.RepoRoot, ".intent-cli", "intake", "toy-calc.execution.md"),
+                    CreateIntakeExecutionArtifactMarkdown(
+                        "toy-calc",
+                        ("TOY-CALC-V0-06", "specs"),
+                        ("TOY-CALC-V0-07", "specs")));
+
+                return new IntakeAdvanceResult
+                {
+                    Domain = domain,
+                    ReadinessStatus = "ready",
+                    UpdatedSourceFilePaths = ["intents/toy-calc/specs/07-min-command.md"],
+                    UpdatedExecutionFilePaths = ["intents/toy-calc/execution/01-issue-ready-slices.md"],
+                    RegeneratedArtifactPaths = [".intent-cli/intake/toy-calc.execution.md"],
+                    SkippedStages = []
+                };
+            };
+            RunCommand.IntakeIssueExecutor = (_, domain, executionUnit) =>
+            {
+                invokedSteps.Add($"issue:{domain}:{executionUnit}");
+                return new IntakeIssueResult
+                {
+                    Domain = domain,
+                    GeneratedExecutionUnits = [executionUnit],
+                    ArtifactPaths = [],
+                    SkippedUnits = []
+                };
+            };
+            RunCommand.QueueEnqueueExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"enqueue:{executionUnit}");
+                AppendQueueItem(context.RepoRoot, CreateQueueItem(QueueItemState.Queued, executionUnit: executionUnit, withLinkedIssue: false));
+                return 0;
+            };
+            RunCommand.QueueDispatchExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"dispatch:{executionUnit}");
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => string.Equals(queueItem.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                        ? queueItem with
+                        {
+                            LinkedIssue = new LinkedIssue
+                            {
+                                Repo = "J-Tech-Japan/intent-system",
+                                Number = 407,
+                                Url = "https://github.com/J-Tech-Japan/intent-system/issues/407"
+                            }
+                        }
+                        : queueItem);
+
+                return new QueueDispatchCommandResult
+                {
+                    ExecutionUnit = executionUnit,
+                    LinkedIssueUrl = "https://github.com/J-Tech-Japan/intent-system/issues/407",
+                    ReusedExistingIssue = false
+                };
+            };
+            RunCommand.RunStartExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"start:{executionUnit}");
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => string.Equals(queueItem.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                        ? queueItem with { State = QueueItemState.Active }
+                        : queueItem);
+
+                return new RunStartResult
+                {
+                    ExecutionUnit = executionUnit,
+                    WorktreePath = Path.Combine(context.RepoRoot, ".intent-cli", "worktrees", executionUnit),
+                    BranchName = $"issue-407-{executionUnit.ToLowerInvariant()}"
+                };
+            };
+            RunCommand.RunImplementExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"implement:{executionUnit}");
+                tempDirectory.CreateFile(
+                    Path.Combine("repo", ".intent-cli", "implement", $"{executionUnit}.request.md"),
+                    "# Execution Worker Handoff");
+
+                return new RunImplementResult
+                {
+                    Request = CreateRunImplementRequest(repoRoot, executionUnit),
+                    ArtifactPath = $".intent-cli/implement/{executionUnit}.request.md"
+                };
+            };
+            RunCommand.RunSuperviseExecutor = (_, executionUnit) =>
+            {
+                invokedSteps.Add($"supervise:{executionUnit}");
+                return new RunSuperviseResult
+                {
+                    ExecutionUnit = executionUnit,
+                    SessionArtifactPath = $".intent-cli/supervision/{executionUnit}.session.json",
+                    WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                    SessionStatus = RunSupervisionSessionStatus.Monitoring,
+                    RetryCount = 0,
+                    RetryBudget = 3,
+                    HandoffArtifactRef = $".intent-cli/implement/{executionUnit}.request.md"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal("TOY-CALC-V0-07", result.ExecutionUnit);
+            Assert.Equal(
+                [
+                    "advance:toy-calc",
+                    "issue:toy-calc:TOY-CALC-V0-07",
+                    "enqueue:TOY-CALC-V0-07",
+                    "dispatch:TOY-CALC-V0-07",
+                    "start:TOY-CALC-V0-07",
+                    "implement:TOY-CALC-V0-07",
+                    "supervise:TOY-CALC-V0-07"
+                ],
+                invokedSteps);
+            Assert.Collection(
+                result.Actions,
+                action =>
+                {
+                    Assert.Equal("intake issue", action.Name);
+                    Assert.Equal("TOY-CALC-V0-07", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("queue enqueue", action.Name);
+                    Assert.Equal("TOY-CALC-V0-07", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("queue dispatch", action.Name);
+                    Assert.Equal("TOY-CALC-V0-07", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("run start", action.Name);
+                    Assert.Equal("TOY-CALC-V0-07", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("run implement", action.Name);
+                    Assert.Equal("TOY-CALC-V0-07", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("run supervise", action.Name);
+                    Assert.Equal("TOY-CALC-V0-07", action.ExecutionUnit);
+                });
+        }
+        finally
+        {
+            RunCommand.IntakeAdvanceExecutor = originalIntakeAdvanceExecutor;
+            RunCommand.IntakeIssueExecutor = originalIntakeIssueExecutor;
+            RunCommand.QueueEnqueueExecutor = originalQueueEnqueueExecutor;
+            RunCommand.QueueDispatchExecutor = originalQueueDispatchExecutor;
+            RunCommand.RunStartExecutor = originalRunStartExecutor;
+            RunCommand.RunImplementExecutor = originalRunImplementExecutor;
+            RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenCompletedQueueAndBrokenUnrelatedIntakeDomain_RefreshesOnlyContinuationDomain()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(
+                CreateQueueState(
+                    CreateQueueItem(QueueItemState.Completed, executionUnit: "TOY-CALC-V0-06"))));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "toy-calc.execution.md"),
+            CreateIntakeExecutionArtifactMarkdown("toy-calc", "TOY-CALC-V0-06"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "toy-calc.concept.yaml"),
+            """
+            domain_slug: toy-calc
+            concept_source: test
+            concept_text: "Toy calc"
+            upstream_paths: []
+            initial_goal: "Toy calc"
+            constraints: []
+            known_unknowns: []
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "broken.concept.yaml"),
+            """
+            domain_slug: broken
+            concept_source: test
+            concept_text: "Broken"
+            upstream_paths: []
+            initial_goal: "Broken"
+            constraints: []
+            known_unknowns: []
+            """);
+        var originalIntakeAdvanceExecutor = RunCommand.IntakeAdvanceExecutor;
+        var originalIntakeIssueExecutor = RunCommand.IntakeIssueExecutor;
+        var originalQueueEnqueueExecutor = RunCommand.QueueEnqueueExecutor;
+        var originalQueueDispatchExecutor = RunCommand.QueueDispatchExecutor;
+        var originalRunStartExecutor = RunCommand.RunStartExecutor;
+        var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
+        var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var invokedSteps = new List<string>();
+
+        try
+        {
+            RunCommand.IntakeAdvanceExecutor = (context, domain) =>
+            {
+                invokedSteps.Add($"advance:{domain}");
+                if (string.Equals(domain, "broken", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("Broken intake domain should not be refreshed.");
+                }
+
+                File.WriteAllText(
+                    Path.Combine(context.RepoRoot, ".intent-cli", "intake", "toy-calc.execution.md"),
+                    CreateIntakeExecutionArtifactMarkdown(
+                        "toy-calc",
+                        ("TOY-CALC-V0-06", "specs"),
+                        ("TOY-CALC-V0-07", "specs")));
+
+                return new IntakeAdvanceResult
+                {
+                    Domain = domain,
+                    ReadinessStatus = "ready",
+                    UpdatedSourceFilePaths = ["intents/toy-calc/specs/07-min-command.md"],
+                    UpdatedExecutionFilePaths = ["intents/toy-calc/execution/01-issue-ready-slices.md"],
+                    RegeneratedArtifactPaths = [".intent-cli/intake/toy-calc.execution.md"],
+                    SkippedStages = []
+                };
+            };
+            RunCommand.IntakeIssueExecutor = (_, domain, executionUnit) =>
+            {
+                invokedSteps.Add($"issue:{domain}:{executionUnit}");
+                return new IntakeIssueResult
+                {
+                    Domain = domain,
+                    GeneratedExecutionUnits = [executionUnit],
+                    ArtifactPaths = [],
+                    SkippedUnits = []
+                };
+            };
+            RunCommand.QueueEnqueueExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"enqueue:{executionUnit}");
+                AppendQueueItem(context.RepoRoot, CreateQueueItem(QueueItemState.Queued, executionUnit: executionUnit, withLinkedIssue: false));
+                return 0;
+            };
+            RunCommand.QueueDispatchExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"dispatch:{executionUnit}");
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => string.Equals(queueItem.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                        ? queueItem with
+                        {
+                            LinkedIssue = new LinkedIssue
+                            {
+                                Repo = "J-Tech-Japan/intent-system",
+                                Number = 407,
+                                Url = "https://github.com/J-Tech-Japan/intent-system/issues/407"
+                            }
+                        }
+                        : queueItem);
+
+                return new QueueDispatchCommandResult
+                {
+                    ExecutionUnit = executionUnit,
+                    LinkedIssueUrl = "https://github.com/J-Tech-Japan/intent-system/issues/407",
+                    ReusedExistingIssue = false
+                };
+            };
+            RunCommand.RunStartExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"start:{executionUnit}");
+                PersistQueueState(
+                    context.RepoRoot,
+                    queueItem => string.Equals(queueItem.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                        ? queueItem with { State = QueueItemState.Active }
+                        : queueItem);
+
+                return new RunStartResult
+                {
+                    ExecutionUnit = executionUnit,
+                    WorktreePath = Path.Combine(context.RepoRoot, ".intent-cli", "worktrees", executionUnit),
+                    BranchName = $"issue-407-{executionUnit.ToLowerInvariant()}"
+                };
+            };
+            RunCommand.RunImplementExecutor = (context, executionUnit) =>
+            {
+                invokedSteps.Add($"implement:{executionUnit}");
+                tempDirectory.CreateFile(
+                    Path.Combine("repo", ".intent-cli", "implement", $"{executionUnit}.request.md"),
+                    "# Execution Worker Handoff");
+
+                return new RunImplementResult
+                {
+                    Request = CreateRunImplementRequest(repoRoot, executionUnit),
+                    ArtifactPath = $".intent-cli/implement/{executionUnit}.request.md"
+                };
+            };
+            RunCommand.RunSuperviseExecutor = (_, executionUnit) =>
+            {
+                invokedSteps.Add($"supervise:{executionUnit}");
+                return new RunSuperviseResult
+                {
+                    ExecutionUnit = executionUnit,
+                    SessionArtifactPath = $".intent-cli/supervision/{executionUnit}.session.json",
+                    WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                    SessionStatus = RunSupervisionSessionStatus.Monitoring,
+                    RetryCount = 0,
+                    RetryBudget = 3,
+                    HandoffArtifactRef = $".intent-cli/implement/{executionUnit}.request.md"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal("TOY-CALC-V0-07", result.ExecutionUnit);
+            Assert.Equal(
+                [
+                    "advance:toy-calc",
+                    "issue:toy-calc:TOY-CALC-V0-07",
+                    "enqueue:TOY-CALC-V0-07",
+                    "dispatch:TOY-CALC-V0-07",
+                    "start:TOY-CALC-V0-07",
+                    "implement:TOY-CALC-V0-07",
+                    "supervise:TOY-CALC-V0-07"
+                ],
+                invokedSteps);
+            Assert.DoesNotContain("advance:broken", invokedSteps);
+        }
+        finally
+        {
+            RunCommand.IntakeAdvanceExecutor = originalIntakeAdvanceExecutor;
+            RunCommand.IntakeIssueExecutor = originalIntakeIssueExecutor;
+            RunCommand.QueueEnqueueExecutor = originalQueueEnqueueExecutor;
+            RunCommand.QueueDispatchExecutor = originalQueueDispatchExecutor;
+            RunCommand.RunStartExecutor = originalRunStartExecutor;
+            RunCommand.RunImplementExecutor = originalRunImplementExecutor;
+            RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenReviewItemWithoutRequest_GeneratesReviewRequestAndStopsForReviewDecision()
     {
         using var tempDirectory = new TemporaryDirectory();
