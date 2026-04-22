@@ -7,6 +7,7 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(RunSubmitCommandCollection.Name)]
 public sealed class ReviewAcceptCommandTests
 {
     [Fact]
@@ -395,6 +396,129 @@ public sealed class ReviewAcceptCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenAcceptedCloseoutWithRepoLocalRuntimeState_CompletesWithoutDirtyPathContractGap()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "child-repo"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G12", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var client = new FakeAcceptClient();
+        var gitRunner = new FakeGitRunner(
+            new Dictionary<string, GitCommandResult>
+            {
+                [FakeGitRunner.CreateCommandKey(["fetch", "origin", "main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["switch", "main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["merge", "--ff-only", "origin/main"])] = new GitCommandResult
+                {
+                    ExitCode = 1,
+                    StdOut = string.Empty,
+                    StdErr =
+                        """
+                        error: Your local changes to the following files would be overwritten by merge:
+                          src/ToyCalc/Program.cs
+                        Please commit your changes or stash them before you merge.
+                        Aborting
+                        """
+                },
+                [FakeGitRunner.CreateCommandKey(["status", "--porcelain=v1", "--untracked-files=all"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut =
+                        """
+                         M src/ToyCalc/Program.cs
+                         M .intent-cli/config.toml
+                         M intents/toy-calc/clarifications/open.md
+                        ?? .intent-cli/runs/TOY-CALC-V0-05.result.json
+                        """,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["reset", "--hard", "abc123"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "HEAD is now at abc123 closeout" + Environment.NewLine,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["rev-parse", "HEAD"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "abc123" + Environment.NewLine,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["add", "submodules/child-repo"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                }
+            },
+            statusSequence:
+            [
+                """
+                 M src/ToyCalc/Program.cs
+                 M .intent-cli/config.toml
+                 M intents/toy-calc/clarifications/open.md
+                ?? .intent-cli/runs/TOY-CALC-V0-05.result.json
+                """,
+                """
+                 M .intent-cli/config.toml
+                 M intents/toy-calc/clarifications/open.md
+                ?? .intent-cli/runs/TOY-CALC-V0-05.result.json
+                """
+            ]);
+
+        var originalClientFactory = ReviewAcceptCommand.AcceptClientFactory;
+        var originalGitFactory = ReviewAcceptCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = ReviewAcceptCommand.TimestampFactory;
+
+        try
+        {
+            ReviewAcceptCommand.AcceptClientFactory = () => client;
+            ReviewAcceptCommand.GitCommandRunnerFactory = () => gitRunner;
+            ReviewAcceptCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-22T00:20:00Z");
+
+            var exitCode = ReviewAcceptCommand.Execute(CreateContext(repoRoot), ["G12"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Review accepted for G12", writer.ToString(), StringComparison.Ordinal);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Completed, queueState.Items.Single(item => item.ExecutionUnit == "G12").State);
+
+            var runEvents = RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+            Assert.Equal("pr-merged", runEvents[^3].Event);
+            Assert.Equal("issue-closed", runEvents[^2].Event);
+            Assert.Equal("completed", runEvents[^1].Event);
+        }
+        finally
+        {
+            ReviewAcceptCommand.AcceptClientFactory = originalClientFactory;
+            ReviewAcceptCommand.GitCommandRunnerFactory = originalGitFactory;
+            ReviewAcceptCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -551,13 +675,52 @@ public sealed class ReviewAcceptCommandTests
         }
     }
 
-    private sealed class FakeGitRunner(string headCommit) : IGitCommandRunner
+    private sealed class FakeGitRunner : IGitCommandRunner
     {
+        private readonly string? headCommit;
+        private readonly IReadOnlyDictionary<string, GitCommandResult>? scriptedResults;
+        private readonly Queue<string>? statusSequence;
+
+        public FakeGitRunner(string headCommit)
+        {
+            this.headCommit = headCommit;
+        }
+
+        public FakeGitRunner(
+            IReadOnlyDictionary<string, GitCommandResult> scriptedResults,
+            IReadOnlyList<string>? statusSequence = null)
+        {
+            this.scriptedResults = scriptedResults;
+            this.statusSequence = statusSequence is null ? null : new Queue<string>(statusSequence);
+        }
+
         public List<string> Calls { get; } = [];
 
         public GitCommandResult Run(string workingDirectory, IReadOnlyList<string> arguments)
         {
             Calls.Add($"{workingDirectory}::{string.Join(' ', arguments)}");
+
+            if (scriptedResults is not null)
+            {
+                var key = CreateCommandKey(arguments);
+                if (!scriptedResults.TryGetValue(key, out var result))
+                {
+                    throw new Xunit.Sdk.XunitException($"Unexpected git command: {string.Join(" ", arguments)}");
+                }
+
+                if (arguments.SequenceEqual(["status", "--porcelain=v1", "--untracked-files=all"])
+                    && statusSequence is not null)
+                {
+                    return result with
+                    {
+                        StdOut = statusSequence.Count > 0
+                            ? statusSequence.Dequeue()
+                            : result.StdOut
+                    };
+                }
+
+                return result;
+            }
 
             return new GitCommandResult
             {
@@ -567,6 +730,11 @@ public sealed class ReviewAcceptCommandTests
                     : string.Empty,
                 StdErr = string.Empty
             };
+        }
+
+        public static string CreateCommandKey(IReadOnlyList<string> arguments)
+        {
+            return string.Join("\u001f", arguments);
         }
     }
 

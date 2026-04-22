@@ -87,7 +87,7 @@ public static class ChildRepoMainSynchronizer
         }
 
         var outOfScopeDirtyPaths = dirtyPaths
-            .Where(path => !conflictingPaths.Contains(path))
+            .Where(path => !conflictingPaths.Contains(path) && !IsRepoLocalAcceptedCloseoutStatePath(path))
             .ToArray();
         if (outOfScopeDirtyPaths.Length > 0)
         {
@@ -115,13 +115,28 @@ public static class ChildRepoMainSynchronizer
             childRepoPath,
             ["status", "--porcelain=v1", "--untracked-files=all"],
             "child repo status resolve failed.");
-        if (!string.IsNullOrWhiteSpace(postResetStatusResult.StdOut))
+        var postResetDirtyPaths = ParseStatusPaths(postResetStatusResult.StdOut)
+            .Where(path => !IsRepoLocalAcceptedCloseoutStatePath(path))
+            .ToArray();
+        if (postResetDirtyPaths.Length > 0)
         {
             throw new InvalidOperationException(
                 "child repo accepted closeout reconciliation left unexpected worktree drift after resetting to the merged commit.");
         }
 
         return true;
+    }
+
+    private static bool IsRepoLocalAcceptedCloseoutStatePath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var normalized = path.Replace('\\', '/').Trim();
+        return normalized.StartsWith(".intent-cli/", StringComparison.Ordinal)
+            || string.Equals(normalized, ".intent-cli", StringComparison.Ordinal)
+            || normalized.EndsWith("/clarifications/open.md", StringComparison.Ordinal)
+            || normalized.EndsWith("/execution/01-issue-ready-slices.md", StringComparison.Ordinal)
+            || normalized.EndsWith("/intent-tree/00-map.md", StringComparison.Ordinal);
     }
 
     private static bool TryResolveMergeOverwritePaths(
