@@ -4,6 +4,13 @@ internal static class ChildWorkTargetGuard
 {
     private const string HostRuntimeSegment = ".intent-cli";
 
+    public static bool IsRuntimeOnlyTargetPart(string targetPart)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetPart);
+
+        return ContainsHostRuntimeSegment(targetPart);
+    }
+
     public static void EnsureTargetAllowed(
         string executionUnit,
         string hostRepoRootPath,
@@ -41,7 +48,7 @@ internal static class ChildWorkTargetGuard
                 $"Child target path '{targetPath}' for '{executionUnit}' points to host runtime-only '.intent-cli/**' content. Parent-side clarification is required before generating or launching child work.");
         }
 
-        if (ContainsHostRuntimeSegment(targetPart))
+        if (IsRuntimeOnlyTargetPart(targetPart))
         {
             throw new InvalidOperationException(
                 $"Child target part '{targetPart}' for '{executionUnit}' points to host runtime-only '.intent-cli/**' content. Parent-side clarification is required before generating or launching child work.");
