@@ -556,17 +556,7 @@ internal static class RunCommand
                         $"Blocked item '{blockedItem.ExecutionUnit}' requires parent-side planning.");
                 }
 
-                if (!TryResolveAutoContinueIntakeCandidate(context, queueState, out var intakeCandidate)
-                    && TryResolveAutoContinueIntakeRefreshTarget(context, queueState, out var refreshTarget)
-                    && refreshTarget is not null)
-                {
-                    TryRefreshIntakeDomainForAutoContinue(context, refreshTarget);
-                    TryResolveAutoContinueIntakeCandidate(
-                        context,
-                        queueState,
-                        refreshTarget.Domain,
-                        out intakeCandidate);
-                }
+                TryResolvePostCloseoutAutoContinueIntakeCandidate(context, queueState, out var intakeCandidate);
 
                 if (intakeCandidate is not null)
                 {
@@ -645,6 +635,39 @@ internal static class RunCommand
         out AutoContinueIntakeCandidate? candidate)
     {
         return TryResolveAutoContinueIntakeCandidate(context, queueState, domainFilter: null, out candidate);
+    }
+
+    private static bool TryResolvePostCloseoutAutoContinueIntakeCandidate(
+        CliContext context,
+        QueueState queueState,
+        out AutoContinueIntakeCandidate? candidate)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueState);
+
+        candidate = null;
+
+        if (!TryResolveAutoContinueIntakeRefreshTarget(context, queueState, out var refreshTarget)
+            || refreshTarget is null)
+        {
+            return TryResolveAutoContinueIntakeCandidate(context, queueState, out candidate);
+        }
+
+        if (TryResolveAutoContinueIntakeCandidate(
+                context,
+                queueState,
+                refreshTarget.Domain,
+                out candidate))
+        {
+            return true;
+        }
+
+        TryRefreshIntakeDomainForAutoContinue(context, refreshTarget);
+        return TryResolveAutoContinueIntakeCandidate(
+            context,
+            queueState,
+            refreshTarget.Domain,
+            out candidate);
     }
 
     private static bool TryResolveAutoContinueIntakeCandidate(
