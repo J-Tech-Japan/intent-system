@@ -71,9 +71,11 @@ internal static class IntakeExecutionCommand
             .Where(relativePath => File.Exists(Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar))))
             .ToArray();
 
-        var candidates = updatedSourceFiles
-            .Select((relativePath, index) => CreateCandidate(repoRoot, patchRequest.Domain, relativePath, index + 1))
-            .ToArray();
+        var candidates = updatedSourceFiles.Length == 0
+            ? CreateCandidatesFromExecutionSourceOfTruth(repoRoot, patchRequest.Domain)
+            : updatedSourceFiles
+                .Select((relativePath, index) => CreateCandidate(repoRoot, patchRequest.Domain, relativePath, index + 1))
+                .ToArray();
 
         var conceptIds = candidates
             .Where(candidate => string.Equals(candidate.TargetPart, "concepts", StringComparison.Ordinal))
@@ -86,7 +88,9 @@ internal static class IntakeExecutionCommand
             {
                 Dependencies = string.Equals(candidate.TargetPart, "concepts", StringComparison.Ordinal)
                     ? Array.Empty<string>()
-                    : conceptIds
+                    : conceptIds.Length == 0
+                        ? candidate.Dependencies
+                        : conceptIds
             })
             .ToArray();
 
@@ -95,6 +99,135 @@ internal static class IntakeExecutionCommand
             Domain = patchRequest.Domain,
             ProposedExecutionUnits = resolvedCandidates
         };
+    }
+
+    private static IntakeExecutionUnitCandidate[] CreateCandidatesFromExecutionSourceOfTruth(string repoRoot, string domain)
+    {
+        var intentsRoot = Path.Combine(repoRoot, "intents");
+        if (!Directory.Exists(intentsRoot))
+        {
+            return [];
+        }
+
+        var candidates = new List<IntakeExecutionUnitCandidate>();
+        foreach (var absolutePath in Directory.GetFiles(intentsRoot, "*.md", SearchOption.AllDirectories)
+                     .Where(path => path.Contains($"{Path.DirectorySeparatorChar}execution{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+                     .OrderBy(path => path, StringComparer.Ordinal))
+        {
+            var relativePath = Path.GetRelativePath(repoRoot, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
+            if (!BelongsToDomain(relativePath, domain))
+            {
+                continue;
+            }
+
+            candidates.AddRange(ParseIssueReadyExecutionRows(relativePath, File.ReadAllText(absolutePath)));
+        }
+
+        return candidates
+            .Where(candidate => HasDomainExecutionUnitPrefix(candidate.ExecutionUnitId, domain))
+            .GroupBy(candidate => candidate.ExecutionUnitId, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .OrderBy(candidate => candidate.ExecutionUnitId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool BelongsToDomain(string relativePath, string domain)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        return normalized.StartsWith($"intents/{domain}/", StringComparison.Ordinal);
+    }
+
+    private static bool HasDomainExecutionUnitPrefix(string executionUnitId, string domain)
+    {
+        var normalizedDomain = domain.Replace('/', '-').ToUpperInvariant();
+        return executionUnitId.StartsWith($"{normalizedDomain}-", StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<IntakeExecutionUnitCandidate> ParseIssueReadyExecutionRows(string relativePath, string markdown)
+    {
+        var rows = new List<IntakeExecutionUnitCandidate>();
+        var normalized = markdown.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var lines = normalized.Split('\n', StringSplitOptions.None);
+        var inTargetTable = false;
+
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (line.StartsWith("| subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |", StringComparison.Ordinal))
+            {
+                inTargetTable = true;
+                continue;
+            }
+
+            if (!inTargetTable)
+            {
+                continue;
+            }
+
+            if (!line.StartsWith("|", StringComparison.Ordinal))
+            {
+                inTargetTable = false;
+                continue;
+            }
+
+            if (line.StartsWith("|---", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var cells = line.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            if (cells.Length < 8)
+            {
+                continue;
+            }
+
+            if (!string.Equals(cells[7], "yes", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var executionUnitId = cells[0];
+            var goal = cells[2];
+            var targetPart = cells[6];
+            var dependencies = ParseDependencies(cells[3]);
+
+            rows.Add(new IntakeExecutionUnitCandidate
+            {
+                ExecutionUnitId = executionUnitId,
+                SourceFilePath = relativePath,
+                TargetPart = targetPart,
+                Dependencies = dependencies,
+                ReadinessNotes =
+                [
+                    $"Source file path: {relativePath}",
+                    $"Current goal: {goal}",
+                    $"Execution row target part: {targetPart}"
+                ],
+                VerificationHints =
+                [
+                    $"Review execution row '{executionUnitId}' in '{relativePath}'.",
+                    $"Confirm target part '{targetPart}' remains issue-ready in current source-of-truth.",
+                    "dotnet test IntentSystem.sln"
+                ]
+            });
+        }
+
+        return rows;
+    }
+
+    private static IReadOnlyList<string> ParseDependencies(string rawValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue)
+            || string.Equals(rawValue, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        return rawValue.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(value => !string.Equals(value, "none", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static IntakeExecutionUnitCandidate CreateCandidate(

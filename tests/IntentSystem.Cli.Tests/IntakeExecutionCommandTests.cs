@@ -124,6 +124,57 @@ public sealed class IntakeExecutionCommandTests
     }
 
     [Fact]
+    public void Execute_GivenNoPatchTargetsButIssueReadyExecutionRows_WritesExecutionDraftFromCurrentExecutionSource()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "intake", "toy-calc.patch.md"),
+            """
+            # Intake Patch Draft
+
+            ## Domain
+
+            `toy-calc`
+
+            target_file_paths:
+            - none
+
+            source_concept_refs:
+            - .intent-cli/intake/toy-calc.concept.yaml
+
+            ## File-By-File Patch Candidates
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "intents", "toy-calc", "execution", "01-issue-ready-slices.md"),
+            """
+            # Toy Calc Issue-Ready Slices
+
+            | subslice_id | belongs_to_slice | goal | depends_on_subslices | target_repo | target_path | target_part | issue_cut_ready |
+            |---|---|---|---|---|---|---|---|
+            | TOY-CALC-V0-06 | V0 | integer modulo command を追加する | TOY-CALC-V0-05 | . | . | CLI modulo command and verification | yes |
+            | TOY-CALC-V0-07 | V0 | integer min command を追加する | TOY-CALC-V0-06 | . | . | CLI min command and verification | yes |
+            """);
+        using var writer = new StringWriter();
+
+        var exitCode = IntakeExecutionCommand.Execute(CreateContext(repoRoot), ["toy-calc"], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Intake execution draft generated for domain 'toy-calc'.", output, StringComparison.Ordinal);
+        var artifactPath = Path.Combine(repoRoot, ".intent-cli", "intake", "toy-calc.execution.md");
+        Assert.True(File.Exists(artifactPath));
+        var markdown = File.ReadAllText(artifactPath);
+        Assert.Contains("### `TOY-CALC-V0-06`", markdown, StringComparison.Ordinal);
+        Assert.Contains("### `TOY-CALC-V0-07`", markdown, StringComparison.Ordinal);
+        Assert.Contains("source_file_path: intents/toy-calc/execution/01-issue-ready-slices.md", markdown, StringComparison.Ordinal);
+        Assert.Contains("target_part: CLI modulo command and verification", markdown, StringComparison.Ordinal);
+        Assert.Contains("target_part: CLI min command and verification", markdown, StringComparison.Ordinal);
+        Assert.Contains("- TOY-CALC-V0-06", markdown, StringComparison.Ordinal);
+        Assert.Contains("Current goal: integer min command を追加する", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenMissingPatchArtifact_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();

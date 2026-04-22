@@ -339,10 +339,12 @@ internal static class IntakeIssueCommand
         IntakeIssueBaseline baseline,
         IntakeIssueParentRefs parentRefs)
     {
+        var resolvedGoal = ResolveGoal(unit);
+
         return new SubSliceRow
         {
             SourceExecutionUnit = unit.ExecutionUnitId,
-            Goal = $"Reflect the intake-origin update from `{unit.SourceFilePath}` into `{unit.TargetPart}`.",
+            Goal = resolvedGoal ?? $"Reflect the intake-origin update from `{unit.SourceFilePath}` into `{unit.TargetPart}`.",
             TargetRepo = baseline.TargetRepo,
             TargetPath = baseline.TargetPath,
             TargetPart = unit.TargetPart,
@@ -477,6 +479,12 @@ internal static class IntakeIssueCommand
 
     private static string ResolveTitle(IntakeOriginExecutionUnit unit)
     {
+        var goal = ResolveGoal(unit);
+        if (!string.IsNullOrWhiteSpace(goal))
+        {
+            return goal!;
+        }
+
         var heading = unit.ReadinessNotes
             .FirstOrDefault(note => note.StartsWith("Current heading: ", StringComparison.Ordinal));
 
@@ -492,6 +500,14 @@ internal static class IntakeIssueCommand
         }
 
         return CultureInfo.InvariantCulture.TextInfo.ToTitleCase(fileName.Replace('-', ' '));
+    }
+
+    private static string? ResolveGoal(IntakeOriginExecutionUnit unit)
+    {
+        var goal = unit.ReadinessNotes
+            .FirstOrDefault(note => note.StartsWith("Current goal: ", StringComparison.Ordinal));
+
+        return goal?["Current goal: ".Length..].Trim();
     }
 
     private readonly record struct IntakeIssueBaseline

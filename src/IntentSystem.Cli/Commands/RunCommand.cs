@@ -41,6 +41,9 @@ internal static class RunCommand
     public static Func<string, string, string, IntakeIssueResult> IntakeIssueExecutor { get; set; } =
         IntakeIssueCommand.ExecuteCore;
 
+    public static Func<CliContext, string, IntakeAdvanceResult> IntakeAdvanceExecutor { get; set; } =
+        IntakeAdvanceCommand.ExecuteCore;
+
     public static Func<CliContext, string, int> QueueEnqueueExecutor { get; set; } =
         ExecuteQueueEnqueue;
 
@@ -552,7 +555,13 @@ internal static class RunCommand
                         $"Blocked item '{blockedItem.ExecutionUnit}' requires parent-side planning.");
                 }
 
-                if (TryResolveAutoContinueIntakeCandidate(context, queueState, out var intakeCandidate))
+                if (!TryResolveAutoContinueIntakeCandidate(context, queueState, out var intakeCandidate))
+                {
+                    TryRefreshIntakeDomainsForAutoContinue(context);
+                    TryResolveAutoContinueIntakeCandidate(context, queueState, out intakeCandidate);
+                }
+
+                if (intakeCandidate is not null)
                 {
                     var selectedIntakeCandidate = intakeCandidate
                         ?? throw new InvalidOperationException("Auto-continue intake candidate was not resolved.");
@@ -679,6 +688,46 @@ internal static class RunCommand
         }
 
         return false;
+    }
+
+    private static void TryRefreshIntakeDomainsForAutoContinue(
+        CliContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        foreach (var domain in EnumerateIntakeDomainsForAutoContinue(context.RepoRoot))
+        {
+            try
+            {
+                IntakeAdvanceExecutor(context, domain);
+            }
+            catch (InvalidOperationException exception)
+            {
+                throw new RunDeterministicGapException(
+                    domain,
+                    $"Deterministic contract gap while refreshing intake domain '{domain}' before auto-continue: {exception.Message}");
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> EnumerateIntakeDomainsForAutoContinue(string repoRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repoRoot);
+
+        var intakeDirectory = Path.Combine(repoRoot, ".intent-cli", "intake");
+        if (!Directory.Exists(intakeDirectory))
+        {
+            return [];
+        }
+
+        return Directory.EnumerateFiles(intakeDirectory, "*.concept.yaml", SearchOption.TopDirectoryOnly)
+            .Select(path => Path.GetFileName(path))
+            .Where(fileName => !string.IsNullOrWhiteSpace(fileName))
+            .Select(fileName => fileName![..^".concept.yaml".Length])
+            .Where(domain => !string.IsNullOrWhiteSpace(domain))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(domain => domain, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static bool IsAutoContinueLaunchable(QueueState queueState, string executionUnit)
