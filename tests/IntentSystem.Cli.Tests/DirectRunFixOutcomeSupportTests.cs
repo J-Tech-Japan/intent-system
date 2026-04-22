@@ -218,6 +218,106 @@ public sealed class DirectRunFixOutcomeSupportTests
     }
 
     [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenImplementProductReadsAfterFailedSpecRead_DoesNotUsePreReadReason()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/implement/TOY-CALC-V0-05.request.md' succeeded in 0ms", entryKind: "implement"),
+            CreateProviderEvent("exec /bin/zsh -lc 'pwd && rg --files . | sed -n ''1,200p''' succeeded in 0ms", entryKind: "implement"),
+            CreateProviderEvent("src/ToyCalc/Program.cs", entryKind: "implement"),
+            CreateProviderEvent("src/ToyCalc/Calculator.cs", entryKind: "implement"),
+            CreateProviderEvent("src/ToyCalc/CommandLine.cs", entryKind: "implement"),
+            CreateProviderEvent("tests/ToyCalc.Tests/CalculatorTests.cs", entryKind: "implement"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/specs/05-division-command.md'", entryKind: "implement"),
+            CreateProviderEvent(" failed in 0ms:", entryKind: "implement"),
+            CreateProviderEvent("sed: intents/toy-calc/specs/05-division-command.md: No such file or directory", entryKind: "implement"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs'", entryKind: "implement"),
+            CreateProviderEvent(" succeeded in 0ms:", entryKind: "implement"),
+            CreateProviderEvent("exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Program.cs && printf ''\\n---\\n'' && sed -n ''1,220p'' src/ToyCalc/CommandLine.cs && printf ''\\n---\\n'' && sed -n ''1,220p'' src/ToyCalc/Calculator.cs'", entryKind: "implement"),
+            CreateProviderEvent(" succeeded in 0ms:", entryKind: "implement"),
+            CreateBackendExitEvent(entryKind: "implement")
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-21T09:00:00Z"),
+            "TOY-CALC-V0-05",
+            "implement",
+            "Codex",
+            "pid:13345");
+
+        Assert.NotNull(contractGapEvent);
+        Assert.Equal(
+            "implement-session-ended-after-product-source-test-read",
+            contractGapEvent!.Payload.GetProperty("reason").GetString());
+        Assert.Contains(
+            "product_source_or_test_read=True",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "after current-session product source/test read activity",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "before any repo-local spec or product source/test read",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateCanonicalContractGapEventIfNeeded_GivenIssue373LiveImplementShape_UsesAfterProductReadReason()
+    {
+        IReadOnlyList<DirectRunProviderEvent> providerEvents =
+        [
+            CreateProviderEvent(
+                "Use the request artifact at '/Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/implement/TOY-CALC-V0-05.request.md' as the bounded source of truth for this direct run.",
+                entryKind: "implement"),
+            CreateProviderEvent(
+                "/bin/zsh -lc \"pwd && ls -la && sed -n '1,220p' /Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/implement/TOY-CALC-V0-05.request.md\" in /Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/worktrees/TOY-CALC-V0-05",
+                entryKind: "implement"),
+            CreateProviderEvent(
+                "/bin/zsh -lc \"rg --files -g 'README*' -g 'package.json' -g 'pnpm-workspace.yaml' -g 'tsconfig*.json' -g 'src/**' -g 'app/**' -g 'tests/**' -g 'test/**' -g 'spec/**' -g '.intent-cli/**' | sed -n '1,220p'\" in /Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/worktrees/TOY-CALC-V0-05",
+                entryKind: "implement"),
+            CreateProviderEvent("src/ToyCalc/Program.cs", entryKind: "implement"),
+            CreateProviderEvent("src/ToyCalc/Calculator.cs", entryKind: "implement"),
+            CreateProviderEvent("src/ToyCalc/CommandLine.cs", entryKind: "implement"),
+            CreateProviderEvent("tests/ToyCalc.Tests/CalculatorTests.cs", entryKind: "implement"),
+            CreateProviderEvent(
+                "/bin/zsh -lc \"sed -n '1,220p' intents/toy-calc/specs/05-division-command.md\" in /Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/worktrees/TOY-CALC-V0-05",
+                entryKind: "implement"),
+            CreateProviderEvent("sed: intents/toy-calc/specs/05-division-command.md: No such file or directory", entryKind: "implement"),
+            CreateProviderEvent(
+                "/bin/zsh -lc \"sed -n '1,220p' tests/ToyCalc.Tests/CalculatorTests.cs\" in /Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/worktrees/TOY-CALC-V0-05",
+                entryKind: "implement"),
+            CreateProviderEvent(
+                "/bin/zsh -lc \"sed -n '1,220p' src/ToyCalc/Program.cs && printf '\\n---\\n' && sed -n '1,220p' src/ToyCalc/CommandLine.cs && printf '\\n---\\n' && sed -n '1,220p' src/ToyCalc/Calculator.cs\" in /Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/worktrees/TOY-CALC-V0-05",
+                entryKind: "implement"),
+            CreateBackendExitEvent(entryKind: "implement")
+        ];
+
+        var contractGapEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            providerEvents,
+            DateTimeOffset.Parse("2026-04-21T23:31:51Z"),
+            "TOY-CALC-V0-05",
+            "implement",
+            "Codex",
+            "pid:13345");
+
+        Assert.NotNull(contractGapEvent);
+        Assert.Equal(
+            "implement-session-ended-after-product-source-test-read",
+            contractGapEvent!.Payload.GetProperty("reason").GetString());
+        Assert.Contains(
+            "product_source_or_test_read=True",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "before any repo-local spec or product source/test read",
+            contractGapEvent.Payload.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CreateCanonicalContractGapEventIfNeeded_GivenRequestRereadAndDeadSessionWithoutTerminalEvent_UsesMissingCaptureReason()
     {
         IReadOnlyList<DirectRunProviderEvent> providerEvents =
