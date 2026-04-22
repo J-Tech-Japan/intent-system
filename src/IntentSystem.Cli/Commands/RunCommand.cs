@@ -236,7 +236,7 @@ internal static class RunCommand
 
                     if (inProgressItem.State == QueueItemState.Fixing)
                     {
-                        if (TryAutoContinueFixingImplementRecoveredSpecBoundary(
+                        if (TryAutoContinueFixingImplementRetryBoundary(
                                 context,
                                 queueState,
                                 inProgressItem))
@@ -845,7 +845,7 @@ internal static class RunCommand
         return true;
     }
 
-    private static bool TryAutoContinueFixingImplementRecoveredSpecBoundary(
+    private static bool TryAutoContinueFixingImplementRetryBoundary(
         CliContext context,
         QueueState queueState,
         QueueItem fixingItem)
@@ -867,7 +867,9 @@ internal static class RunCommand
             return false;
         }
 
-        if (!HasCurrentBlockedImplementRecoveredSpecBoundary(context, fixingItem.ExecutionUnit))
+        var latestFixRequestedAt = TryResolveLatestFixRequestedTimestamp(context, fixingItem.ExecutionUnit);
+        if (latestFixRequestedAt is null
+            || latestFixRequestedAt <= session.UpdatedAt)
         {
             return false;
         }
