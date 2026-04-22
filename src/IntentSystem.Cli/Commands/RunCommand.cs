@@ -11,6 +11,7 @@ namespace IntentSystem.Cli.Commands;
 internal static class RunCommand
 {
     private sealed record AutoContinueIntakeCandidate(string Domain, string ExecutionUnit);
+    private sealed record AutoContinueIntakeRefreshTarget(string Domain, string CompletedExecutionUnit);
 
     private sealed class RunDeterministicGapException(string executionUnit, string message)
         : InvalidOperationException(message)
@@ -555,10 +556,16 @@ internal static class RunCommand
                         $"Blocked item '{blockedItem.ExecutionUnit}' requires parent-side planning.");
                 }
 
-                if (!TryResolveAutoContinueIntakeCandidate(context, queueState, out var intakeCandidate))
+                if (!TryResolveAutoContinueIntakeCandidate(context, queueState, out var intakeCandidate)
+                    && TryResolveAutoContinueIntakeRefreshTarget(context, queueState, out var refreshTarget)
+                    && refreshTarget is not null)
                 {
-                    TryRefreshIntakeDomainsForAutoContinue(context);
-                    TryResolveAutoContinueIntakeCandidate(context, queueState, out intakeCandidate);
+                    TryRefreshIntakeDomainForAutoContinue(context, refreshTarget);
+                    TryResolveAutoContinueIntakeCandidate(
+                        context,
+                        queueState,
+                        refreshTarget.Domain,
+                        out intakeCandidate);
                 }
 
                 if (intakeCandidate is not null)
@@ -637,6 +644,15 @@ internal static class RunCommand
         QueueState queueState,
         out AutoContinueIntakeCandidate? candidate)
     {
+        return TryResolveAutoContinueIntakeCandidate(context, queueState, domainFilter: null, out candidate);
+    }
+
+    private static bool TryResolveAutoContinueIntakeCandidate(
+        CliContext context,
+        QueueState queueState,
+        string? domainFilter,
+        out AutoContinueIntakeCandidate? candidate)
+    {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(queueState);
 
@@ -654,9 +670,7 @@ internal static class RunCommand
             return false;
         }
 
-        foreach (var artifactPath in Directory
-                     .EnumerateFiles(intakeDirectory, "*.execution.md", SearchOption.TopDirectoryOnly)
-                     .OrderBy(path => path, StringComparer.Ordinal))
+        foreach (var artifactPath in EnumerateIntakeExecutionArtifactsForAutoContinue(intakeDirectory, domainFilter))
         {
             IntakeExecutionRequest request;
             try
@@ -690,29 +704,102 @@ internal static class RunCommand
         return false;
     }
 
-    private static void TryRefreshIntakeDomainsForAutoContinue(
-        CliContext context)
+    private static bool TryResolveAutoContinueIntakeRefreshTarget(
+        CliContext context,
+        QueueState queueState,
+        out AutoContinueIntakeRefreshTarget? target)
     {
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueState);
 
-        foreach (var domain in EnumerateIntakeDomainsForAutoContinue(context.RepoRoot))
+        target = null;
+
+        if (queueState.Items.Count != 0
+            && !queueState.Items.Any(item => item.State == QueueItemState.Completed))
         {
-            try
-            {
-                IntakeAdvanceExecutor(context, domain);
-            }
-            catch (InvalidOperationException exception)
-            {
-                throw new RunDeterministicGapException(
-                    domain,
-                    $"Deterministic contract gap while refreshing intake domain '{domain}' before auto-continue: {exception.Message}");
-            }
+            return false;
+        }
+
+        var completedExecutionUnit = queueState.Items.LastOrDefault(item => item.State == QueueItemState.Completed)?.ExecutionUnit;
+        if (string.IsNullOrWhiteSpace(completedExecutionUnit))
+        {
+            return false;
+        }
+
+        var matchingDomains = EnumerateIntakeDomainsContainingExecutionUnit(context.RepoRoot, completedExecutionUnit);
+        if (matchingDomains.Count == 0)
+        {
+            return false;
+        }
+
+        if (matchingDomains.Count > 1)
+        {
+            throw new RunDeterministicGapException(
+                completedExecutionUnit,
+                $"Auto-continue refresh target for '{completedExecutionUnit}' is ambiguous across intake domains: {string.Join(", ", matchingDomains)}.");
+        }
+
+        var refreshDomain = matchingDomains[0];
+        var conceptArtifactPath = Path.Combine(
+            context.RepoRoot,
+            IntakeConceptArtifactPathResolver.Resolve(refreshDomain).Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(conceptArtifactPath))
+        {
+            return false;
+        }
+
+        target = new AutoContinueIntakeRefreshTarget(refreshDomain, completedExecutionUnit);
+        return true;
+    }
+
+    private static void TryRefreshIntakeDomainForAutoContinue(
+        CliContext context,
+        AutoContinueIntakeRefreshTarget refreshTarget)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(refreshTarget);
+
+        try
+        {
+            IntakeAdvanceExecutor(context, refreshTarget.Domain);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new RunDeterministicGapException(
+                refreshTarget.CompletedExecutionUnit,
+                $"Deterministic contract gap while refreshing intake domain '{refreshTarget.Domain}' before auto-continue: {exception.Message}");
         }
     }
 
-    private static IReadOnlyList<string> EnumerateIntakeDomainsForAutoContinue(string repoRoot)
+    private static IReadOnlyList<string> EnumerateIntakeExecutionArtifactsForAutoContinue(
+        string intakeDirectory,
+        string? domainFilter)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(intakeDirectory);
+
+        if (!Directory.Exists(intakeDirectory))
+        {
+            return [];
+        }
+
+        if (!string.IsNullOrWhiteSpace(domainFilter))
+        {
+            var filteredArtifactPath = Path.Combine(intakeDirectory, $"{domainFilter}.execution.md");
+            return File.Exists(filteredArtifactPath) ? [filteredArtifactPath] : [];
+        }
+
+        return Directory
+            .EnumerateFiles(intakeDirectory, "*.execution.md", SearchOption.TopDirectoryOnly)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> EnumerateIntakeDomainsContainingExecutionUnit(
+        string repoRoot,
+        string executionUnit)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repoRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
         var intakeDirectory = Path.Combine(repoRoot, ".intent-cli", "intake");
         if (!Directory.Exists(intakeDirectory))
@@ -720,14 +807,45 @@ internal static class RunCommand
             return [];
         }
 
-        return Directory.EnumerateFiles(intakeDirectory, "*.concept.yaml", SearchOption.TopDirectoryOnly)
-            .Select(path => Path.GetFileName(path))
-            .Where(fileName => !string.IsNullOrWhiteSpace(fileName))
-            .Select(fileName => fileName![..^".concept.yaml".Length])
-            .Where(domain => !string.IsNullOrWhiteSpace(domain))
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(domain => domain, StringComparer.Ordinal)
-            .ToArray();
+        var matchingDomains = new List<string>();
+        foreach (var artifactPath in Directory
+                     .EnumerateFiles(intakeDirectory, "*.execution.md", SearchOption.TopDirectoryOnly)
+                     .OrderBy(path => path, StringComparer.Ordinal))
+        {
+            if (!ExecutionArtifactContainsUnit(artifactPath, executionUnit))
+            {
+                continue;
+            }
+
+            var fileName = Path.GetFileName(artifactPath);
+            if (string.IsNullOrWhiteSpace(fileName) || !fileName.EndsWith(".execution.md", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            matchingDomains.Add(fileName[..^".execution.md".Length]);
+        }
+
+        return matchingDomains;
+    }
+
+    private static bool ExecutionArtifactContainsUnit(string artifactPath, string executionUnit)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(artifactPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        try
+        {
+            var executionUnitHeading = $"### `{executionUnit}`";
+            return File.ReadLines(artifactPath)
+                .Any(line => string.Equals(line.TrimEnd(), executionUnitHeading, StringComparison.Ordinal));
+        }
+        catch (IOException exception)
+        {
+            throw new InvalidOperationException(
+                $"Intake auto-continue could not read '{artifactPath}': {exception.Message}",
+                exception);
+        }
     }
 
     private static bool IsAutoContinueLaunchable(QueueState queueState, string executionUnit)
