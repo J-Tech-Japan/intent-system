@@ -34,7 +34,61 @@ public sealed class ChildRepoMainSynchronizerTests
         var exception = Assert.Throws<InvalidOperationException>(
             () => ChildRepoMainSynchronizer.Sync(parentRepoRoot, "submodules/child-repo", "abc123", runner));
 
-        Assert.Contains("must match merged commit", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("must contain merged commit", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sync_GivenHeadDescendantOfMergedCommit_AcceptsCloseout()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var parentRepoRoot = tempDirectory.CreateDirectory("repo");
+        var childRepoPath = tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "child-repo"));
+        var runner = new FakeGitRunner(
+            new Dictionary<string, GitCommandResult>
+            {
+                [FakeGitRunner.CreateCommandKey(["fetch", "origin", "main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["switch", "main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["merge", "--ff-only", "origin/main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["rev-parse", "HEAD"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "def456" + Environment.NewLine,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["merge-base", "--is-ancestor", "abc123", "def456"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                }
+            });
+
+        ChildRepoMainSynchronizer.Sync(parentRepoRoot, "submodules/child-repo", "abc123", runner);
+
+        Assert.Equal(
+            [
+                $"{childRepoPath}::fetch origin main",
+                $"{childRepoPath}::switch main",
+                $"{childRepoPath}::merge --ff-only origin/main",
+                $"{childRepoPath}::rev-parse HEAD",
+                $"{childRepoPath}::merge-base --is-ancestor abc123 def456"
+            ],
+            runner.Calls);
     }
 
     [Fact]
@@ -389,7 +443,11 @@ public sealed class ChildRepoMainSynchronizerTests
 
             return new GitCommandResult
             {
-                ExitCode = 0,
+                ExitCode = arguments.Count >= 4
+                    && arguments[0] == "merge-base"
+                    && arguments[1] == "--is-ancestor"
+                    ? 1
+                    : 0,
                 StdOut = arguments.SequenceEqual(["rev-parse", "HEAD"])
                     ? headCommit + Environment.NewLine
                     : string.Empty,
