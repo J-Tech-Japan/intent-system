@@ -9,7 +9,9 @@ The repair loop runs in this order:
 1. Review-closeout leaves an actionable review comment on the PR.
 2. Review-closeout marks the PR with `intent-pr-request-update`.
 3. The child-side request-update runner picks up the PR and performs the fix work.
-4. After the fix is pushed successfully, the PR transitions to `intent-pr-rereview-ready`.
+4. After the fix is pushed successfully, the request-update runner removes
+   `intent-pr-request-update`, adds `intent-pr-rereview-ready`, and only then
+   hands the PR back for host-side rereview.
 5. Host-side review-closeout picks the PR up again for rereview.
 
 ## Child-Side Repair Ownership
@@ -22,6 +24,7 @@ Its responsibilities are:
 - perform the requested child-side fix work
 - push the repair commit to the PR branch
 - remove the active repair marker when work completes
+- remove `intent-pr-request-update` after a successful repair push
 - hand the PR back by adding `intent-pr-rereview-ready`
 
 During active repair work, the PR may also carry `intent-pr-update-in-progress`.
