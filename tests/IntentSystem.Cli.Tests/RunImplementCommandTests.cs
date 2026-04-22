@@ -213,6 +213,84 @@ public sealed class RunImplementCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_GivenStaleRepoLocalRuleSpecInWorktree_SyncsCurrentContractArtifactsBeforeLaunch()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        var worktreePath = tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G19"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "review-context.md"),
+            CreateReviewContextMarkdown());
+
+        var currentGuideContents = "# Current AGENTS";
+        var currentSpecContents = "# Current min spec";
+        var staleGuideContents = "# Stale AGENTS";
+        var staleSpecContents = "# Stale modulo spec";
+
+        tempDirectory.CreateFile(Path.Combine("repo", "submodules", "intent-system", "AGENTS.md"), currentGuideContents);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", "submodules", "intent-system", "intents", "intent-cli", "specs", "08-config-and-run-model.md"),
+            currentSpecContents);
+        tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "worktrees", "G19", "AGENTS.md"), staleGuideContents);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "worktrees", "G19", "intents", "intent-cli", "specs", "08-config-and-run-model.md"),
+            staleSpecContents);
+
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunImplementCommand.TimestampFactory;
+        var originalLauncherFactory = RunImplementCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunImplementCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:15:00Z");
+            RunImplementCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:4321",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G19' for provider 'Claude'.");
+
+            var exitCode = RunImplementCommand.Execute(CreateContext(repoRoot), ["G19"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(currentGuideContents, File.ReadAllText(Path.Combine(worktreePath, "AGENTS.md")));
+            Assert.Equal(
+                currentSpecContents,
+                File.ReadAllText(Path.Combine(
+                    worktreePath,
+                    "intents",
+                    "intent-cli",
+                    "specs",
+                    "08-config-and-run-model.md")));
+            Assert.DoesNotContain(staleGuideContents, File.ReadAllText(Path.Combine(worktreePath, "AGENTS.md")), StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                staleSpecContents,
+                File.ReadAllText(Path.Combine(
+                    worktreePath,
+                    "intents",
+                    "intent-cli",
+                    "specs",
+                    "08-config-and-run-model.md")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunImplementCommand.TimestampFactory = originalTimestampFactory;
+            RunImplementCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
     private sealed class FakeDirectRunLauncher(
         string providerSessionId,
         string provider,
