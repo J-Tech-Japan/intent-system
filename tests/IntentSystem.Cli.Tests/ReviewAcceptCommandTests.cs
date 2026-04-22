@@ -447,7 +447,7 @@ public sealed class ReviewAcceptCommandTests
                         """
                          M src/ToyCalc/Program.cs
                          M .intent-cli/config.toml
-                         M intents/toy-calc/intent-tree/00-map.md
+                         M intents/toy-calc/clarifications/open.md
                         ?? .intent-cli/runs/TOY-CALC-V0-05.result.json
                         """,
                     StdErr = string.Empty
@@ -476,12 +476,12 @@ public sealed class ReviewAcceptCommandTests
                 """
                  M src/ToyCalc/Program.cs
                  M .intent-cli/config.toml
-                 M intents/toy-calc/intent-tree/00-map.md
+                 M intents/toy-calc/clarifications/open.md
                 ?? .intent-cli/runs/TOY-CALC-V0-05.result.json
                 """,
                 """
                  M .intent-cli/config.toml
-                 M intents/toy-calc/intent-tree/00-map.md
+                 M intents/toy-calc/clarifications/open.md
                 ?? .intent-cli/runs/TOY-CALC-V0-05.result.json
                 """
             ]);

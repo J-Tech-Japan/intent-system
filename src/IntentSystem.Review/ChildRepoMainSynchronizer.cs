@@ -134,8 +134,9 @@ public static class ChildRepoMainSynchronizer
         var normalized = path.Replace('\\', '/').Trim();
         return normalized.StartsWith(".intent-cli/", StringComparison.Ordinal)
             || string.Equals(normalized, ".intent-cli", StringComparison.Ordinal)
-            || normalized.StartsWith("intents/", StringComparison.Ordinal)
-            || string.Equals(normalized, "intents", StringComparison.Ordinal);
+            || normalized.EndsWith("/clarifications/open.md", StringComparison.Ordinal)
+            || normalized.EndsWith("/execution/01-issue-ready-slices.md", StringComparison.Ordinal)
+            || normalized.EndsWith("/intent-tree/00-map.md", StringComparison.Ordinal);
     }
 
     private static bool TryResolveMergeOverwritePaths(

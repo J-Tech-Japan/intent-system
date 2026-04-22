@@ -218,6 +218,7 @@ public sealed class ChildRepoMainSynchronizerTests
                          M src/ToyCalc/CommandLine.cs
                          M .intent-cli/config.toml
                          M intents/toy-calc/clarifications/open.md
+                         M intents/toy-calc/execution/01-issue-ready-slices.md
                         ?? .intent-cli/runs/TOY-CALC-V0-05.provider.jsonl
                         """,
                     StdErr = string.Empty
@@ -241,11 +242,13 @@ public sealed class ChildRepoMainSynchronizerTests
                  M src/ToyCalc/CommandLine.cs
                  M .intent-cli/config.toml
                  M intents/toy-calc/clarifications/open.md
+                 M intents/toy-calc/execution/01-issue-ready-slices.md
                 ?? .intent-cli/runs/TOY-CALC-V0-05.provider.jsonl
                 """,
                 """
                  M .intent-cli/config.toml
                  M intents/toy-calc/clarifications/open.md
+                 M intents/toy-calc/execution/01-issue-ready-slices.md
                 ?? .intent-cli/runs/TOY-CALC-V0-05.provider.jsonl
                 """
             ]);
@@ -263,6 +266,63 @@ public sealed class ChildRepoMainSynchronizerTests
                 $"{childRepoPath}::rev-parse HEAD"
             ],
             runner.Calls);
+    }
+
+    [Fact]
+    public void Sync_GivenMergeOverwriteAndSelectedExecutionUnitIntentDrift_ThrowsInvalidOperationException()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var parentRepoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "child-repo"));
+        var runner = new FakeGitRunner(
+            new Dictionary<string, GitCommandResult>
+            {
+                [FakeGitRunner.CreateCommandKey(["fetch", "origin", "main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["switch", "main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["merge", "--ff-only", "origin/main"])] = new GitCommandResult
+                {
+                    ExitCode = 1,
+                    StdOut = string.Empty,
+                    StdErr =
+                        """
+                        error: Your local changes to the following files would be overwritten by merge:
+                          src/ToyCalc/CommandLine.cs
+                        Please commit your changes or stash them before you merge.
+                        Aborting
+                        """
+                },
+                [FakeGitRunner.CreateCommandKey(["status", "--porcelain=v1", "--untracked-files=all"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut =
+                        """
+                         M src/ToyCalc/CommandLine.cs
+                         M .intent-cli/config.toml
+                         M intents/toy-calc/specs/05-division-command.md
+                        ?? .intent-cli/runs/TOY-CALC-V0-05.provider.jsonl
+                        """,
+                    StdErr = string.Empty
+                }
+            });
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => ChildRepoMainSynchronizer.Sync(parentRepoRoot, "submodules/child-repo", "abc123", runner));
+
+        Assert.Contains(
+            "intents/toy-calc/specs/05-division-command.md",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(".intent-cli/config.toml", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
