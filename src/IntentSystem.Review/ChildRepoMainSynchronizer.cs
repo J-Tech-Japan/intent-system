@@ -29,10 +29,11 @@ public static class ChildRepoMainSynchronizer
 
         var headResult = Run(commandRunner, childRepoPath, ["rev-parse", "HEAD"], "child repo HEAD resolve failed.");
         var headCommit = headResult.StdOut.Trim();
-        if (!string.Equals(headCommit, mergedCommitSha, StringComparison.Ordinal))
+        if (!string.Equals(headCommit, mergedCommitSha, StringComparison.Ordinal)
+            && !DoesHeadContainMergedCommit(commandRunner, childRepoPath, mergedCommitSha, headCommit))
         {
             throw new InvalidOperationException(
-                $"Child repo main HEAD '{headCommit}' must match merged commit '{mergedCommitSha}'.");
+                $"Child repo main HEAD '{headCommit}' must contain merged commit '{mergedCommitSha}'.");
         }
     }
 
@@ -59,6 +60,26 @@ public static class ChildRepoMainSynchronizer
         }
 
         return result;
+    }
+
+    private static bool DoesHeadContainMergedCommit(
+        IGitCommandRunner commandRunner,
+        string childRepoPath,
+        string mergedCommitSha,
+        string headCommit)
+    {
+        var result = commandRunner.Run(
+            childRepoPath,
+            ["merge-base", "--is-ancestor", mergedCommitSha, headCommit]);
+        return result.ExitCode switch
+        {
+            0 => true,
+            1 => false,
+            _ => throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(result.StdErr)
+                    ? "child repo descendant containment check failed."
+                    : result.StdErr.Trim())
+        };
     }
 
     private static bool TryReconcileAcceptedWorktreeState(
