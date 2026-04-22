@@ -29,7 +29,15 @@ public static class ChildRepoMainSynchronizer
 
         var headResult = Run(commandRunner, childRepoPath, ["rev-parse", "HEAD"], "child repo HEAD resolve failed.");
         var headCommit = headResult.StdOut.Trim();
-        if (!string.Equals(headCommit, mergedCommitSha, StringComparison.Ordinal))
+        if (string.Equals(headCommit, mergedCommitSha, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var mergedCommitContainedInHead = commandRunner.Run(
+            childRepoPath,
+            ["merge-base", "--is-ancestor", mergedCommitSha, headCommit]);
+        if (mergedCommitContainedInHead.ExitCode != 0)
         {
             throw new InvalidOperationException(
                 $"Child repo main HEAD '{headCommit}' must match merged commit '{mergedCommitSha}'.");

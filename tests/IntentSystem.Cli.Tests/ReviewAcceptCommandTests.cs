@@ -220,6 +220,102 @@ public sealed class ReviewAcceptCommandTests
     }
 
     [Fact]
+    public void Execute_GivenChildMainHeadDescendsFromMergedCommit_CompletesCloseout()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var childRepoPath = tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "child-repo"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G12", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var client = new FakeAcceptClient();
+        var gitRunner = new FakeGitRunner(
+            new Dictionary<string, GitCommandResult>
+            {
+                [FakeGitRunner.CreateCommandKey(["fetch", "origin", "main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["switch", "main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["merge", "--ff-only", "origin/main"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["rev-parse", "HEAD"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = "def456" + Environment.NewLine,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["merge-base", "--is-ancestor", "abc123", "def456"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                },
+                [FakeGitRunner.CreateCommandKey(["add", "submodules/child-repo"])] = new GitCommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.Empty,
+                    StdErr = string.Empty
+                }
+            });
+
+        var originalClientFactory = ReviewAcceptCommand.AcceptClientFactory;
+        var originalGitFactory = ReviewAcceptCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = ReviewAcceptCommand.TimestampFactory;
+
+        try
+        {
+            ReviewAcceptCommand.AcceptClientFactory = () => client;
+            ReviewAcceptCommand.GitCommandRunnerFactory = () => gitRunner;
+            ReviewAcceptCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-22T07:00:00Z");
+
+            var exitCode = ReviewAcceptCommand.Execute(CreateContext(repoRoot), ["G12"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Review accepted for G12", writer.ToString(), StringComparison.Ordinal);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(QueueItemState.Completed, queueState.Items.Single(item => item.ExecutionUnit == "G12").State);
+
+            Assert.Equal(
+                [
+                    $"{childRepoPath}::fetch origin main",
+                    $"{childRepoPath}::switch main",
+                    $"{childRepoPath}::merge --ff-only origin/main",
+                    $"{childRepoPath}::rev-parse HEAD",
+                    $"{childRepoPath}::merge-base --is-ancestor abc123 def456",
+                    $"{repoRoot}::add submodules/child-repo"
+                ],
+                gitRunner.Calls);
+        }
+        finally
+        {
+            ReviewAcceptCommand.AcceptClientFactory = originalClientFactory;
+            ReviewAcceptCommand.GitCommandRunnerFactory = originalGitFactory;
+            ReviewAcceptCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenDraftLinkedPr_MarksReadyBeforeMergeAndCompletesCloseout()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -724,7 +820,18 @@ public sealed class ReviewAcceptCommandTests
 
             return new GitCommandResult
             {
-                ExitCode = 0,
+                ExitCode = arguments.Count == 4
+                           && arguments[0] == "merge-base"
+                           && arguments[1] == "--is-ancestor"
+                           && headCommit is not null
+                           && string.Equals(arguments[2], headCommit, StringComparison.Ordinal)
+                           && string.Equals(arguments[3], headCommit, StringComparison.Ordinal)
+                    ? 0
+                    : arguments.Count == 4
+                      && arguments[0] == "merge-base"
+                      && arguments[1] == "--is-ancestor"
+                        ? 1
+                        : 0,
                 StdOut = arguments.SequenceEqual(["rev-parse", "HEAD"])
                     ? headCommit + Environment.NewLine
                     : string.Empty,
