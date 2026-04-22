@@ -668,6 +668,11 @@ internal static class RunCommand
                     continue;
                 }
 
+                if (ChildWorkTargetGuard.IsRuntimeOnlyTargetPart(unit.TargetPart))
+                {
+                    continue;
+                }
+
                 candidate = new AutoContinueIntakeCandidate(request.Domain, unit.ExecutionUnitId);
                 return true;
             }
