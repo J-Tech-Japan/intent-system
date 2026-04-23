@@ -9400,7 +9400,7 @@ public sealed class RunCommandTests : IDisposable
                     Success("""{"state":"CLOSED"}""")),
                 new ExpectedGitHubCommand(
                     ["api", "repos/tomohisa/toy-calc-sample/issues/3/timeline"],
-                    Success("""[{"event":"cross-referenced","source":{"issue":{"title":"[G226] Adopted child completion","html_url":"https://github.com/tomohisa/toy-calc-sample/pull/23","pull_request":{"html_url":"https://github.com/tomohisa/toy-calc-sample/pull/23"}}}}]""")),
+                    Success("""[{"event":"cross-referenced","source":{"issue":{"title":"[G226] Adopted child completion","body":"Closes https://github.com/tomohisa/toy-calc-sample/issues/3","html_url":"https://github.com/tomohisa/toy-calc-sample/pull/23","pull_request":{"html_url":"https://github.com/tomohisa/toy-calc-sample/pull/23"}}}}]""")),
                 new ExpectedGitHubCommand(
                     ["pr", "view", "23", "--repo", "tomohisa/toy-calc-sample", "--json", "state,mergeCommit"],
                     Success("""{"state":"MERGED","mergeCommit":{"oid":"ccfef2c122b39f37ca5fe70744b72403b9e24234"}}"""))
@@ -9573,6 +9573,55 @@ public sealed class RunCommandTests : IDisposable
                 new ExpectedGitHubCommand(
                     ["api", "repos/tomohisa/toy-calc-sample/issues/3/timeline"],
                     Success("""[{"event":"cross-referenced","source":{"issue":{"title":"[G999] Unrelated child completion","html_url":"https://github.com/tomohisa/toy-calc-sample/pull/99","pull_request":{"html_url":"https://github.com/tomohisa/toy-calc-sample/pull/99"}}}}]"""))
+            ]);
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("parent-intent-update-required", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Contains("requires parent-side planning", result.Detail, StringComparison.Ordinal);
+            Assert.Empty(result.Actions);
+        }
+        finally
+        {
+            RunCommand.GitHubCommandRunnerFactory = originalGitHubCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenBlockedItemWithClosedIssueAndSameRepoExecutionUnitMentionOnlyTimelinePullRequest_StopsWithParentIntentUpdateRequired()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Blocked) with
+                {
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "tomohisa/toy-calc-sample",
+                        Number = 3,
+                        Url = "https://github.com/tomohisa/toy-calc-sample/issues/3"
+                    }
+                })));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/3"}
+            """ + Environment.NewLine);
+        var originalGitHubCommandRunnerFactory = RunCommand.GitHubCommandRunnerFactory;
+
+        try
+        {
+            RunCommand.GitHubCommandRunnerFactory = () => new ScriptedGitHubCommandRunner(
+            [
+                new ExpectedGitHubCommand(
+                    ["issue", "view", "3", "--repo", "tomohisa/toy-calc-sample", "--json", "state"],
+                    Success("""{"state":"CLOSED"}""")),
+                new ExpectedGitHubCommand(
+                    ["api", "repos/tomohisa/toy-calc-sample/issues/3/timeline"],
+                    Success("""[{"event":"cross-referenced","source":{"issue":{"title":"[G226] Unrelated child completion","body":"Carries forward G226 without issue linkage.","html_url":"https://github.com/tomohisa/toy-calc-sample/pull/100","pull_request":{"html_url":"https://github.com/tomohisa/toy-calc-sample/pull/100"}}}}]"""))
             ]);
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));

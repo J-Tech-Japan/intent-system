@@ -1585,8 +1585,10 @@ internal static class RunCommand
                     ? bodyElement.GetString()
                     : null;
 
-            return ContainsExecutionUnitIdentity(title, executionUnit)
-                || ContainsExecutionUnitIdentity(body, executionUnit);
+            return (ContainsExecutionUnitIdentity(title, executionUnit)
+                    || ContainsExecutionUnitIdentity(body, executionUnit))
+                && (ContainsLinkedIssueIdentity(title, issue)
+                    || ContainsLinkedIssueIdentity(body, issue));
         }
         catch (InvalidOperationException)
         {
@@ -1607,6 +1609,25 @@ internal static class RunCommand
             || Regex.IsMatch(
                 text,
                 $@"(?<![A-Z0-9-]){Regex.Escape(executionUnit)}(?![A-Z0-9-])",
+                RegexOptions.CultureInvariant);
+    }
+
+    private static bool ContainsLinkedIssueIdentity(string? text, GitHubIssueRef issue)
+    {
+        ArgumentNullException.ThrowIfNull(issue);
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return text.Contains(
+                $"https://github.com/{issue.Owner}/{issue.Repo}/issues/{issue.IssueNumber}",
+                StringComparison.Ordinal)
+            || text.Contains($"{issue.Owner}/{issue.Repo}#{issue.IssueNumber}", StringComparison.Ordinal)
+            || Regex.IsMatch(
+                text,
+                $@"(?<![A-Z0-9-])#{issue.IssueNumber}(?![A-Z0-9-])",
                 RegexOptions.CultureInvariant);
     }
 
