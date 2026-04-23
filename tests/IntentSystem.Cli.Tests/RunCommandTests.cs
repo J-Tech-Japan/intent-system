@@ -64,7 +64,8 @@ public sealed class RunCommandTests
                     context.RepoRoot,
                     queueItem => queueItem with
                     {
-                        State = QueueItemState.Review
+                        State = QueueItemState.Review,
+                        LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226"
                     });
 
                 return new RunSubmitResult
@@ -1649,7 +1650,8 @@ public sealed class RunCommandTests
                     context.RepoRoot,
                     queueItem => queueItem with
                     {
-                        State = QueueItemState.Review
+                        State = QueueItemState.Review,
+                        LinkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/226"
                     });
 
                 return new RunSubmitResult
@@ -1690,6 +1692,11 @@ public sealed class RunCommandTests
                     Assert.Equal("review run", action.Name);
                     Assert.Equal("G226", action.ExecutionUnit);
                 });
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(
+                "https://github.com/J-Tech-Japan/intent-system/pull/226",
+                queueState.Items.Single(item => item.ExecutionUnit == "G226").LinkedPr);
         }
         finally
         {
