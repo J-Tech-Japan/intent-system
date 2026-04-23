@@ -3,11 +3,12 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
-internal static class IssueCreateCommand
+internal static class IssuePublishCommand
 {
     private const string TransitionActor = "intent-cli";
-    private const string DraftedPublishStatus = "drafted";
     private const string IssueCreatedPublishStatus = "issue-created";
+    private const string PublishedStatus = "published";
+    private const string PublishLabelName = "intent-target";
 
     public static Func<IQueueDispatchPublisher> PublisherFactory { get; set; } = () => new GhQueueDispatchPublisher();
 
@@ -23,14 +24,14 @@ internal static class IssueCreateCommand
 
         if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
         {
-            writer.WriteLine("Issue create command requires an execution unit.");
+            writer.WriteLine("Issue publish command requires an execution unit.");
             return 1;
         }
 
         try
         {
             var result = ExecuteCore(context, args[0].Trim());
-            writer.WriteLine($"Issue created for {result.Artifact.ExecutionUnit}: {result.LinkedIssue.Url}");
+            writer.WriteLine($"Issue published for {result.Artifact.ExecutionUnit}: {result.LinkedIssue.Url}");
             writer.WriteLine($"Publish artifact: {result.ArtifactPath}");
             return 0;
         }
@@ -41,7 +42,7 @@ internal static class IssueCreateCommand
         }
     }
 
-    internal static IssueCreateCommandResult ExecuteCore(CliContext context, string executionUnit)
+    internal static IssuePublishCommandResult ExecuteCore(CliContext context, string executionUnit)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
@@ -50,7 +51,7 @@ internal static class IssueCreateCommand
         var absoluteArtifactPath = ResolveRepoPath(context.RepoRoot, artifactPath);
         if (!File.Exists(absoluteArtifactPath))
         {
-            throw new InvalidOperationException($"Drafted publish artifact was not found at {absoluteArtifactPath}");
+            throw new InvalidOperationException($"Issue-created publish artifact was not found at {absoluteArtifactPath}");
         }
 
         var artifact = IssuePublishArtifactYaml.Deserialize(File.ReadAllText(absoluteArtifactPath));
@@ -60,10 +61,16 @@ internal static class IssueCreateCommand
                 $"Issue publish artifact execution unit '{artifact.ExecutionUnit}' does not match requested execution unit '{executionUnit}'.");
         }
 
-        if (!string.Equals(artifact.PublishStatus, DraftedPublishStatus, StringComparison.Ordinal))
+        if (!string.Equals(artifact.PublishStatus, IssueCreatedPublishStatus, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Issue publish artifact for '{executionUnit}' must be in '{DraftedPublishStatus}' status.");
+                $"Issue publish artifact for '{executionUnit}' must be in '{IssueCreatedPublishStatus}' status.");
+        }
+
+        if (artifact.CreatedIssueNumber is null || string.IsNullOrWhiteSpace(artifact.CreatedIssueUrl))
+        {
+            throw new InvalidOperationException(
+                $"Issue publish artifact for '{executionUnit}' must contain created issue metadata.");
         }
 
         var packetPath = ResolveRepoPath(context.RepoRoot, artifact.PacketPath);
@@ -73,33 +80,13 @@ internal static class IssueCreateCommand
         }
 
         var packet = ProjectionPacketRuntimeReader.Read(File.ReadAllText(packetPath));
-        if (!string.Equals(packet.ExecutionUnit, executionUnit, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Projection packet execution unit '{packet.ExecutionUnit}' does not match requested execution unit '{executionUnit}'.");
-        }
-
-        var issueBodyPath = ResolveRepoPath(context.RepoRoot, artifact.IssueBodyPath);
-        if (!File.Exists(issueBodyPath))
-        {
-            throw new InvalidOperationException($"GitHub issue body artifact was not found at {issueBodyPath}");
-        }
-
-        var body = File.ReadAllText(issueBodyPath);
-        if (string.IsNullOrWhiteSpace(body))
-        {
-            throw new InvalidOperationException("GitHub issue body artifact must not be empty.");
-        }
-
         var targetRepo = GitHubRepositoryTargetResolver.Resolve(context.RepoRoot, packet.TargetRepo, GitCommandRunnerFactory());
-        var linkedIssue = PublisherFactory().CreateIssue(targetRepo, packet.IssueTitle, body);
+        PublisherFactory().AddLabel(targetRepo, artifact.CreatedIssueNumber.Value, PublishLabelName);
 
         var updatedArtifact = artifact with
         {
-            PublishStatus = IssueCreatedPublishStatus,
-            CreatedIssueNumber = linkedIssue.Number,
-            CreatedIssueUrl = linkedIssue.Url,
-            PublishedLabelName = null
+            PublishStatus = PublishedStatus,
+            PublishedLabelName = PublishLabelName
         };
 
         File.WriteAllText(absoluteArtifactPath, IssuePublishArtifactYaml.Serialize(updatedArtifact));
@@ -109,18 +96,23 @@ internal static class IssueCreateCommand
             {
                 Ts = TimestampFactory(),
                 ExecutionUnit = executionUnit,
-                Event = "issue-created",
+                Event = "issue-published",
                 By = TransitionActor,
-                LinkedIssue = linkedIssue.Url,
+                LinkedIssue = artifact.CreatedIssueUrl,
                 PacketRef = artifact.PacketPath,
                 ResultRef = artifactPath
             });
 
-        return new IssueCreateCommandResult
+        return new IssuePublishCommandResult
         {
             Artifact = updatedArtifact,
             ArtifactPath = artifactPath,
-            LinkedIssue = linkedIssue
+            LinkedIssue = new LinkedIssue
+            {
+                Repo = targetRepo,
+                Number = artifact.CreatedIssueNumber.Value,
+                Url = artifact.CreatedIssueUrl
+            }
         };
     }
 
@@ -140,7 +132,7 @@ internal static class IssueCreateCommand
     }
 }
 
-internal sealed record IssueCreateCommandResult
+internal sealed record IssuePublishCommandResult
 {
     public required IssuePublishArtifact Artifact { get; init; }
 

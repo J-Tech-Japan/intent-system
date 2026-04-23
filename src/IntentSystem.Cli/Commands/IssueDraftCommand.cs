@@ -71,7 +71,8 @@ internal static class IssueDraftCommand
             PacketPath = relativePacketPath,
             IssueBodyPath = relativeIssueBodyPath,
             CreatedIssueNumber = null,
-            CreatedIssueUrl = null
+            CreatedIssueUrl = null,
+            PublishedLabelName = null
         };
 
         var artifactPath = WriteArtifact(context.RepoRoot, artifact);
