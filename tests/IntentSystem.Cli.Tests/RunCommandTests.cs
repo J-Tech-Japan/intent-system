@@ -239,10 +239,12 @@ public sealed class RunCommandTests
         var originalRunStartExecutor = RunCommand.RunStartExecutor;
         var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
         var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var originalIssueLifecycleExecutors = CaptureIssueLifecycleExecutors();
         var invokedSteps = new List<string>();
 
         try
         {
+            ConfigureFakeIssueLifecycleExecutors(invokedSteps);
             RunCommand.IntakeIssueExecutor = (_, domain, executionUnit) =>
             {
                 invokedSteps.Add($"issue:{domain}:{executionUnit}");
@@ -336,7 +338,9 @@ public sealed class RunCommandTests
                 [
                     "issue:auth:AUTH-01",
                     "enqueue:AUTH-01",
-                    "dispatch:AUTH-01",
+                    "draft:AUTH-01",
+                    "create:AUTH-01",
+                    "publish:AUTH-01",
                     "start:AUTH-01",
                     "implement:AUTH-01",
                     "supervise:AUTH-01"
@@ -356,7 +360,17 @@ public sealed class RunCommandTests
                 },
                 action =>
                 {
-                    Assert.Equal("queue dispatch", action.Name);
+                    Assert.Equal("issue draft", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("issue create", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("issue publish", action.Name);
                     Assert.Equal("AUTH-01", action.ExecutionUnit);
                 },
                 action =>
@@ -374,6 +388,20 @@ public sealed class RunCommandTests
                     Assert.Equal("run supervise", action.Name);
                     Assert.Equal("AUTH-01", action.ExecutionUnit);
                 });
+            Assert.Contains("issue draft", result.ReusedChildCommandRefs);
+            Assert.Contains("issue create", result.ReusedChildCommandRefs);
+            Assert.Contains("issue publish", result.ReusedChildCommandRefs);
+            Assert.DoesNotContain("queue dispatch", result.ReusedChildCommandRefs);
+            var publishArtifact = IssuePublishArtifactYaml.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "AUTH-01", "publish.yaml")));
+            Assert.Equal("published", publishArtifact.PublishStatus);
+            Assert.Equal("intent-target", publishArtifact.PublishedLabelName);
+            var runEvents = RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+            Assert.Contains(runEvents, runEvent => runEvent.Event == "issue-drafted" && runEvent.ExecutionUnit == "AUTH-01");
+            Assert.Contains(runEvents, runEvent => runEvent.Event == "issue-created" && runEvent.ExecutionUnit == "AUTH-01");
+            Assert.Contains(runEvents, runEvent => runEvent.Event == "issue-published" && runEvent.ExecutionUnit == "AUTH-01");
+            Assert.DoesNotContain(invokedSteps, step => step.StartsWith("dispatch:", StringComparison.Ordinal));
             Assert.DoesNotContain(invokedSteps, step => step.Contains("AUTH-02", StringComparison.Ordinal));
         }
         finally
@@ -384,6 +412,7 @@ public sealed class RunCommandTests
             RunCommand.RunStartExecutor = originalRunStartExecutor;
             RunCommand.RunImplementExecutor = originalRunImplementExecutor;
             RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+            RestoreIssueLifecycleExecutors(originalIssueLifecycleExecutors);
         }
     }
 
@@ -404,10 +433,12 @@ public sealed class RunCommandTests
         var originalRunStartExecutor = RunCommand.RunStartExecutor;
         var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
         var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var originalIssueLifecycleExecutors = CaptureIssueLifecycleExecutors();
         var invokedSteps = new List<string>();
 
         try
         {
+            ConfigureFakeIssueLifecycleExecutors(invokedSteps);
             RunCommand.IntakeIssueExecutor = (_, domain, executionUnit) =>
             {
                 invokedSteps.Add($"issue:{domain}:{executionUnit}");
@@ -501,7 +532,9 @@ public sealed class RunCommandTests
                 [
                     "issue:auth:AUTH-01",
                     "enqueue:AUTH-01",
-                    "dispatch:AUTH-01",
+                    "draft:AUTH-01",
+                    "create:AUTH-01",
+                    "publish:AUTH-01",
                     "start:AUTH-01",
                     "implement:AUTH-01",
                     "supervise:AUTH-01"
@@ -521,7 +554,17 @@ public sealed class RunCommandTests
                 },
                 action =>
                 {
-                    Assert.Equal("queue dispatch", action.Name);
+                    Assert.Equal("issue draft", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("issue create", action.Name);
+                    Assert.Equal("AUTH-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("issue publish", action.Name);
                     Assert.Equal("AUTH-01", action.ExecutionUnit);
                 },
                 action =>
@@ -549,6 +592,7 @@ public sealed class RunCommandTests
             RunCommand.RunStartExecutor = originalRunStartExecutor;
             RunCommand.RunImplementExecutor = originalRunImplementExecutor;
             RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+            RestoreIssueLifecycleExecutors(originalIssueLifecycleExecutors);
         }
     }
 
@@ -622,10 +666,12 @@ public sealed class RunCommandTests
         var originalRunStartExecutor = RunCommand.RunStartExecutor;
         var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
         var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var originalIssueLifecycleExecutors = CaptureIssueLifecycleExecutors();
         var invokedSteps = new List<string>();
 
         try
         {
+            ConfigureFakeIssueLifecycleExecutors(invokedSteps);
             RunCommand.IntakeIssueExecutor = (_, domain, executionUnit) =>
             {
                 invokedSteps.Add($"issue:{domain}:{executionUnit}");
@@ -719,7 +765,9 @@ public sealed class RunCommandTests
                 [
                     "issue:toy-calc:TOY-CALC-V0-01",
                     "enqueue:TOY-CALC-V0-01",
-                    "dispatch:TOY-CALC-V0-01",
+                    "draft:TOY-CALC-V0-01",
+                    "create:TOY-CALC-V0-01",
+                    "publish:TOY-CALC-V0-01",
                     "start:TOY-CALC-V0-01",
                     "implement:TOY-CALC-V0-01",
                     "supervise:TOY-CALC-V0-01"
@@ -740,7 +788,17 @@ public sealed class RunCommandTests
                 },
                 action =>
                 {
-                    Assert.Equal("queue dispatch", action.Name);
+                    Assert.Equal("issue draft", action.Name);
+                    Assert.Equal("TOY-CALC-V0-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("issue create", action.Name);
+                    Assert.Equal("TOY-CALC-V0-01", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("issue publish", action.Name);
                     Assert.Equal("TOY-CALC-V0-01", action.ExecutionUnit);
                 },
                 action =>
@@ -767,6 +825,7 @@ public sealed class RunCommandTests
             RunCommand.RunStartExecutor = originalRunStartExecutor;
             RunCommand.RunImplementExecutor = originalRunImplementExecutor;
             RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+            RestoreIssueLifecycleExecutors(originalIssueLifecycleExecutors);
         }
     }
 
@@ -801,10 +860,12 @@ public sealed class RunCommandTests
         var originalRunStartExecutor = RunCommand.RunStartExecutor;
         var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
         var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var originalIssueLifecycleExecutors = CaptureIssueLifecycleExecutors();
         var invokedSteps = new List<string>();
 
         try
         {
+            ConfigureFakeIssueLifecycleExecutors(invokedSteps);
             RunCommand.IntakeAdvanceExecutor = (context, domain) =>
             {
                 invokedSteps.Add($"advance:{domain}");
@@ -919,7 +980,9 @@ public sealed class RunCommandTests
                     "advance:toy-calc",
                     "issue:toy-calc:TOY-CALC-V0-07",
                     "enqueue:TOY-CALC-V0-07",
-                    "dispatch:TOY-CALC-V0-07",
+                    "draft:TOY-CALC-V0-07",
+                    "create:TOY-CALC-V0-07",
+                    "publish:TOY-CALC-V0-07",
                     "start:TOY-CALC-V0-07",
                     "implement:TOY-CALC-V0-07",
                     "supervise:TOY-CALC-V0-07"
@@ -939,7 +1002,17 @@ public sealed class RunCommandTests
                 },
                 action =>
                 {
-                    Assert.Equal("queue dispatch", action.Name);
+                    Assert.Equal("issue draft", action.Name);
+                    Assert.Equal("TOY-CALC-V0-07", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("issue create", action.Name);
+                    Assert.Equal("TOY-CALC-V0-07", action.ExecutionUnit);
+                },
+                action =>
+                {
+                    Assert.Equal("issue publish", action.Name);
                     Assert.Equal("TOY-CALC-V0-07", action.ExecutionUnit);
                 },
                 action =>
@@ -967,6 +1040,7 @@ public sealed class RunCommandTests
             RunCommand.RunStartExecutor = originalRunStartExecutor;
             RunCommand.RunImplementExecutor = originalRunImplementExecutor;
             RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+            RestoreIssueLifecycleExecutors(originalIssueLifecycleExecutors);
         }
     }
 
@@ -1012,10 +1086,12 @@ public sealed class RunCommandTests
         var originalRunStartExecutor = RunCommand.RunStartExecutor;
         var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
         var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var originalIssueLifecycleExecutors = CaptureIssueLifecycleExecutors();
         var invokedSteps = new List<string>();
 
         try
         {
+            ConfigureFakeIssueLifecycleExecutors(invokedSteps);
             RunCommand.IntakeAdvanceExecutor = (context, domain) =>
             {
                 invokedSteps.Add($"advance:{domain}");
@@ -1135,7 +1211,9 @@ public sealed class RunCommandTests
                     "advance:toy-calc",
                     "issue:toy-calc:TOY-CALC-V0-07",
                     "enqueue:TOY-CALC-V0-07",
-                    "dispatch:TOY-CALC-V0-07",
+                    "draft:TOY-CALC-V0-07",
+                    "create:TOY-CALC-V0-07",
+                    "publish:TOY-CALC-V0-07",
                     "start:TOY-CALC-V0-07",
                     "implement:TOY-CALC-V0-07",
                     "supervise:TOY-CALC-V0-07"
@@ -1152,6 +1230,7 @@ public sealed class RunCommandTests
             RunCommand.RunStartExecutor = originalRunStartExecutor;
             RunCommand.RunImplementExecutor = originalRunImplementExecutor;
             RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+            RestoreIssueLifecycleExecutors(originalIssueLifecycleExecutors);
         }
     }
 
@@ -1199,10 +1278,12 @@ public sealed class RunCommandTests
         var originalRunStartExecutor = RunCommand.RunStartExecutor;
         var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
         var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var originalIssueLifecycleExecutors = CaptureIssueLifecycleExecutors();
         var invokedSteps = new List<string>();
 
         try
         {
+            ConfigureFakeIssueLifecycleExecutors(invokedSteps);
             RunCommand.IntakeAdvanceExecutor = (context, domain) =>
             {
                 invokedSteps.Add($"advance:{domain}");
@@ -1317,7 +1398,9 @@ public sealed class RunCommandTests
                     "advance:toy-calc",
                     "issue:toy-calc:TOY-CALC-V0-07",
                     "enqueue:TOY-CALC-V0-07",
-                    "dispatch:TOY-CALC-V0-07",
+                    "draft:TOY-CALC-V0-07",
+                    "create:TOY-CALC-V0-07",
+                    "publish:TOY-CALC-V0-07",
                     "start:TOY-CALC-V0-07",
                     "implement:TOY-CALC-V0-07",
                     "supervise:TOY-CALC-V0-07"
@@ -1334,6 +1417,7 @@ public sealed class RunCommandTests
             RunCommand.RunStartExecutor = originalRunStartExecutor;
             RunCommand.RunImplementExecutor = originalRunImplementExecutor;
             RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+            RestoreIssueLifecycleExecutors(originalIssueLifecycleExecutors);
         }
     }
 
@@ -9923,6 +10007,135 @@ public sealed class RunCommandTests
 
         File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
     }
+
+    private static IssueLifecycleExecutorSnapshot CaptureIssueLifecycleExecutors()
+    {
+        return new IssueLifecycleExecutorSnapshot(
+            RunCommand.IssueDraftExecutor,
+            RunCommand.IssueCreateExecutor,
+            RunCommand.IssuePublishExecutor);
+    }
+
+    private static void RestoreIssueLifecycleExecutors(IssueLifecycleExecutorSnapshot snapshot)
+    {
+        RunCommand.IssueDraftExecutor = snapshot.IssueDraftExecutor;
+        RunCommand.IssueCreateExecutor = snapshot.IssueCreateExecutor;
+        RunCommand.IssuePublishExecutor = snapshot.IssuePublishExecutor;
+    }
+
+    private static void ConfigureFakeIssueLifecycleExecutors(ICollection<string> invokedSteps)
+    {
+        RunCommand.IssueDraftExecutor = (context, executionUnit) =>
+        {
+            invokedSteps.Add($"draft:{executionUnit}");
+            var artifact = new IssuePublishArtifact
+            {
+                ExecutionUnit = executionUnit,
+                PublishStatus = "drafted",
+                PacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                IssueBodyPath = $".intent-cli/issues/{executionUnit}/github-body.md",
+                CreatedIssueNumber = null,
+                CreatedIssueUrl = null,
+                PublishedLabelName = null
+            };
+            var artifactPath = IssuePublishArtifactPathResolver.Resolve(executionUnit);
+            WriteIssuePublishArtifact(context.RepoRoot, artifactPath, artifact);
+            AppendRunEvent(context.RepoRoot, "issue-drafted", executionUnit, linkedIssue: null);
+            return new IssueDraftCommandResult
+            {
+                Artifact = artifact,
+                ArtifactPath = artifactPath
+            };
+        };
+
+        RunCommand.IssueCreateExecutor = (context, executionUnit) =>
+        {
+            invokedSteps.Add($"create:{executionUnit}");
+            var artifactPath = IssuePublishArtifactPathResolver.Resolve(executionUnit);
+            var artifact = IssuePublishArtifactYaml.Deserialize(ReadRepoFile(context.RepoRoot, artifactPath));
+            var linkedIssue = new LinkedIssue
+            {
+                Repo = "J-Tech-Japan/intent-system",
+                Number = 401,
+                Url = "https://github.com/J-Tech-Japan/intent-system/issues/401"
+            };
+            var updatedArtifact = artifact with
+            {
+                PublishStatus = "issue-created",
+                CreatedIssueNumber = linkedIssue.Number,
+                CreatedIssueUrl = linkedIssue.Url,
+                PublishedLabelName = null
+            };
+            WriteIssuePublishArtifact(context.RepoRoot, artifactPath, updatedArtifact);
+            AppendRunEvent(context.RepoRoot, "issue-created", executionUnit, linkedIssue.Url);
+            return new IssueCreateCommandResult
+            {
+                Artifact = updatedArtifact,
+                ArtifactPath = artifactPath,
+                LinkedIssue = linkedIssue
+            };
+        };
+
+        RunCommand.IssuePublishExecutor = (context, executionUnit) =>
+        {
+            invokedSteps.Add($"publish:{executionUnit}");
+            var artifactPath = IssuePublishArtifactPathResolver.Resolve(executionUnit);
+            var artifact = IssuePublishArtifactYaml.Deserialize(ReadRepoFile(context.RepoRoot, artifactPath));
+            var updatedArtifact = artifact with
+            {
+                PublishStatus = "published",
+                PublishedLabelName = "intent-target"
+            };
+            WriteIssuePublishArtifact(context.RepoRoot, artifactPath, updatedArtifact);
+            AppendRunEvent(context.RepoRoot, "issue-published", executionUnit, artifact.CreatedIssueUrl);
+            return new IssuePublishCommandResult
+            {
+                Artifact = updatedArtifact,
+                ArtifactPath = artifactPath,
+                LinkedIssue = new LinkedIssue
+                {
+                    Repo = "J-Tech-Japan/intent-system",
+                    Number = artifact.CreatedIssueNumber ?? 401,
+                    Url = artifact.CreatedIssueUrl ?? "https://github.com/J-Tech-Japan/intent-system/issues/401"
+                }
+            };
+        };
+    }
+
+    private static string ReadRepoFile(string repoRoot, string artifactPath)
+    {
+        return File.ReadAllText(Path.Combine(repoRoot, artifactPath.Replace('/', Path.DirectorySeparatorChar)));
+    }
+
+    private static void WriteIssuePublishArtifact(string repoRoot, string artifactPath, IssuePublishArtifact artifact)
+    {
+        var absolutePath = Path.Combine(repoRoot, artifactPath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)
+            ?? throw new InvalidOperationException("Artifact path did not contain a directory."));
+        File.WriteAllText(absolutePath, IssuePublishArtifactYaml.Serialize(artifact));
+    }
+
+    private static void AppendRunEvent(string repoRoot, string eventName, string executionUnit, string? linkedIssue)
+    {
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(runLogPath)
+            ?? throw new InvalidOperationException("Run log path did not contain a directory."));
+        File.AppendAllText(
+            runLogPath,
+            RunLogSerializer.SerializeLine(new RunEvent
+            {
+                Ts = DateTimeOffset.Parse("2026-04-23T01:00:00Z"),
+                ExecutionUnit = executionUnit,
+                Event = eventName,
+                By = "intent-cli",
+                LinkedIssue = linkedIssue
+            }) + Environment.NewLine);
+    }
+
+    private sealed record IssueLifecycleExecutorSnapshot(
+        Func<CliContext, string, IssueDraftCommandResult> IssueDraftExecutor,
+        Func<CliContext, string, IssueCreateCommandResult> IssueCreateExecutor,
+        Func<CliContext, string, IssuePublishCommandResult> IssuePublishExecutor);
 
     private static RunImplementRequest CreateRunImplementRequest(string repoRoot, string executionUnit)
     {
