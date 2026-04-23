@@ -756,6 +756,128 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenAutoResumedImplementSessionDiesWithWorktreeProgress_BlocksForAdoptionInsteadOfMonitoring()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "toy-calc-sample"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "TOY-CALC-V0-11"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active, executionUnit: "TOY-CALC-V0-11")));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-23T19:30:00Z","execution_unit":"TOY-CALC-V0-11","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/24"}
+            {"ts":"2026-04-23T19:50:00Z","execution_unit":"TOY-CALC-V0-11","event":"activated","by":"intent-cli"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "TOY-CALC-V0-11", "packet.yaml"),
+            CreatePacketYaml(executionUnit: "TOY-CALC-V0-11", targetRepo: "submodules/toy-calc-sample"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "TOY-CALC-V0-11.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "TOY-CALC-V0-11.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession(executionUnit: "TOY-CALC-V0-11") with
+            {
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "TOY-CALC-V0-11"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "toy-calc-sample"),
+                LinkedIssue = "https://github.com/tomohisa/toy-calc-sample/issues/24",
+                RetryCount = 1
+            }));
+        WriteDeadImplementDirectRunArtifacts(repoRoot, "pid:999999", executionUnit: "TOY-CALC-V0-11");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalRunImplementExecutor = RunSuperviseCommand.RunImplementExecutor;
+        var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
+        var originalRaceWindow = RunSuperviseCommand.TerminalFailureRaceWindow;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-23T20:30:00Z");
+            RunSuperviseCommand.TerminalFailureRaceWindow = TimeSpan.Zero;
+            RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                """
+                 M src/ToyCalc/Calculator.cs
+                 M src/ToyCalc/CommandLine.cs
+                 M tests/ToyCalc.Tests/CalculatorTests.cs
+                """);
+            RunSuperviseCommand.RunImplementExecutor = (_, executionUnit) =>
+            {
+                WriteLiveImplementDirectRunArtifacts(repoRoot, executionUnit, "pid:71450");
+
+                return new RunImplementResult
+                {
+                    Request = new RunImplementRequest
+                    {
+                        ExecutionUnit = executionUnit,
+                        State = "active",
+                        ImplementRole = "Claude",
+                        QueueWorkerRole = "coder",
+                        QueueReviewRole = "reviewer",
+                        WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", executionUnit),
+                        ChildRepoPath = Path.Combine(repoRoot, "submodules", "toy-calc-sample"),
+                        Branch = "issue-24-toy-calc-v0-11",
+                        LinkedIssue = "https://github.com/tomohisa/toy-calc-sample/issues/24",
+                        LatestLinkedPr = null,
+                        PacketRef = ".intent-cli/issues/TOY-CALC-V0-11/packet.yaml",
+                        ReviewContextRef = ".intent-cli/issues/TOY-CALC-V0-11/review-context.md",
+                        IssueTitle = "[TOY-CALC-V0-11] Sign command and mixed arity command line",
+                        Goal = "Add Calculator.Sign and mixed-arity command-line handling.",
+                        TargetPart = "toy calc command line",
+                        TargetRepo = "submodules/toy-calc-sample",
+                        TargetPath = ".",
+                        InScope = [],
+                        OutOfScope = [],
+                        AcceptanceCriteria = [],
+                        DeterministicReviewChecks = [],
+                        ExpectedEvidence = []
+                    },
+                    ArtifactPath = ".intent-cli/implement/TOY-CALC-V0-11.request.md"
+                };
+            };
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["TOY-CALC-V0-11"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "TOY-CALC-V0-11");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("worktree-progress-adoption-required", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("pid:71450", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("src/ToyCalc/Calculator.cs", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "TOY-CALC-V0-11.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(2, session.RetryCount);
+            Assert.True(session.RequiresPostFixWorktreeProgressDecision);
+            Assert.Contains("worktree-progress-adoption-required", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "TOY-CALC-V0-11.result.json")));
+            Assert.Equal("pid:71450", resultArtifact.SessionId);
+            Assert.Equal("failed", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("retry-attempted", runEvents[^2].Event);
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "auto-resumed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.RunImplementExecutor = originalRunImplementExecutor;
+            RunSuperviseCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+            RunSuperviseCommand.TerminalFailureRaceWindow = originalRaceWindow;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenDeadImplementWorkerSessionAfterInitialInventory_BlocksWithoutAutoResume()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -2888,7 +3010,7 @@ public sealed class RunSuperviseCommandTests
         };
     }
 
-    private static QueueState CreateQueueState(QueueItemState selectedState)
+    private static QueueState CreateQueueState(QueueItemState selectedState, string executionUnit = "G25")
     {
         return new QueueState
         {
@@ -2896,7 +3018,7 @@ public sealed class RunSuperviseCommandTests
             UpdatedAt = DateTimeOffset.Parse("2026-04-08T10:00:00Z"),
             Items =
             [
-                CreateItem("G25", selectedState),
+                CreateItem(executionUnit, selectedState),
                 CreateItem("G26", QueueItemState.Queued) with
                 {
                     Title = "[G26] Unrelated queued item"
@@ -2934,17 +3056,18 @@ public sealed class RunSuperviseCommandTests
     }
 
     private static RunSupervisionSession CreateMonitoringSession(
-        RunSupervisionWorkerEntry workerEntry = RunSupervisionWorkerEntry.Implement)
+        RunSupervisionWorkerEntry workerEntry = RunSupervisionWorkerEntry.Implement,
+        string executionUnit = "G25")
     {
         return new RunSupervisionSession
         {
-            ExecutionUnit = "G25",
+            ExecutionUnit = executionUnit,
             WorkerEntry = workerEntry,
             Status = RunSupervisionSessionStatus.Monitoring,
             QueueState = workerEntry == RunSupervisionWorkerEntry.Fix ? "fixing" : "active",
-            WorktreePath = "/repo/.intent-cli/worktrees/G25",
+            WorktreePath = $"/repo/.intent-cli/worktrees/{executionUnit}",
             ChildRepoPath = "/repo/submodules/intent-system",
-            Branch = "issue-178-g25",
+            Branch = $"issue-178-{executionUnit.ToLowerInvariant()}",
             LinkedIssue = "https://github.com/J-Tech-Japan/intent-system/issues/178",
             LinkedPr = workerEntry == RunSupervisionWorkerEntry.Fix
                 ? "https://github.com/J-Tech-Japan/intent-system/pull/180"
@@ -2953,8 +3076,8 @@ public sealed class RunSuperviseCommandTests
                 ? "https://github.com/J-Tech-Japan/intent-system/pull/180#issuecomment-1"
                 : null,
             HandoffArtifactRef = workerEntry == RunSupervisionWorkerEntry.Fix
-                ? ".intent-cli/fix/G25.request.md"
-                : ".intent-cli/implement/G25.request.md",
+                ? $".intent-cli/fix/{executionUnit}.request.md"
+                : $".intent-cli/implement/{executionUnit}.request.md",
             RetryCount = 0,
             RetryBudget = 3,
             CreatedAt = DateTimeOffset.Parse("2026-04-08T09:00:00Z"),
@@ -2992,21 +3115,23 @@ public sealed class RunSuperviseCommandTests
         };
     }
 
-    private static string CreatePacketYaml()
+    private static string CreatePacketYaml(
+        string executionUnit = "G25",
+        string targetRepo = "submodules/intent-system")
     {
-        return """
-        execution_unit: "G25"
+        return $$"""
+        execution_unit: "{{executionUnit}}"
 
         implementation_issue:
-          issue_title: "[G25] Run Supervise Command"
+          issue_title: "[{{executionUnit}}] Run Supervise Command"
           goal: "Supervise retryable run interruptions."
-          target_repo: "submodules/intent-system"
+          target_repo: "{{targetRepo}}"
           target_path: "."
           target_part: "cli run supervise command"
           dependencies: []
 
         review:
-          review_context_path: ".intent-cli/issues/G25/review-context.md"
+          review_context_path: ".intent-cli/issues/{{executionUnit}}/review-context.md"
           clarification_return_path: "intents/intent-cli/clarifications/open.md"
         """;
     }
@@ -3329,14 +3454,18 @@ public sealed class RunSuperviseCommandTests
         File.WriteAllText(Path.Combine(runsPath, "G25.provider.jsonl"), string.Join(Environment.NewLine, providerEvents) + Environment.NewLine);
     }
 
-    private static void WriteDeadImplementDirectRunArtifacts(string repoRoot, string sessionId, bool includeBackendExit = false)
+    private static void WriteDeadImplementDirectRunArtifacts(
+        string repoRoot,
+        string sessionId,
+        bool includeBackendExit = false,
+        string executionUnit = "G25")
     {
         var requestArtifact = new DirectRunRequestArtifact
         {
             SchemaVersion = "1",
-            ExecutionUnit = "G25",
+            ExecutionUnit = executionUnit,
             EntryKind = "implement",
-            UpstreamRequestRef = ".intent-cli/implement/G25.request.md",
+            UpstreamRequestRef = $".intent-cli/implement/{executionUnit}.request.md",
             Provider = "Claude",
             Model = "sonnet",
             Transport = "sdk",
@@ -3347,19 +3476,19 @@ public sealed class RunSuperviseCommandTests
         var resultArtifact = new DirectRunResultArtifact
         {
             SchemaVersion = "1",
-            ExecutionUnit = "G25",
+            ExecutionUnit = executionUnit,
             EntryKind = "implement",
-            UpstreamRequestRef = ".intent-cli/implement/G25.request.md",
+            UpstreamRequestRef = $".intent-cli/implement/{executionUnit}.request.md",
             Provider = "Claude",
             Model = "sonnet",
             SessionId = sessionId,
             RunStatus = "running",
-            RawLogRef = ".intent-cli/runs/G25.provider.jsonl",
-            PacketRef = ".intent-cli/issues/G25/packet.yaml",
-            ReviewContextRef = ".intent-cli/issues/G25/review-context.md",
+            RawLogRef = $".intent-cli/runs/{executionUnit}.provider.jsonl",
+            PacketRef = $".intent-cli/issues/{executionUnit}/packet.yaml",
+            ReviewContextRef = $".intent-cli/issues/{executionUnit}/review-context.md",
             Worktree = new DirectRunWorktreeContext
             {
-                Path = "/repo/.intent-cli/worktrees/G25"
+                Path = $"/repo/.intent-cli/worktrees/{executionUnit}"
             }
         };
         var providerEvents = new List<string>
@@ -3367,7 +3496,7 @@ public sealed class RunSuperviseCommandTests
             DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
                 Timestamp = "2026-04-08T10:20:00.0000000+00:00",
-                ExecutionUnit = "G25",
+                ExecutionUnit = executionUnit,
                 Provider = "Claude",
                 EntryKind = "implement",
                 SessionId = sessionId,
@@ -3385,7 +3514,7 @@ public sealed class RunSuperviseCommandTests
             providerEvents.Add(DirectRunProviderEventJsonl.SerializeLine(new DirectRunProviderEvent
             {
                 Timestamp = "2026-04-08T10:20:01.0000000+00:00",
-                ExecutionUnit = "G25",
+                ExecutionUnit = executionUnit,
                 Provider = "Claude",
                 EntryKind = "implement",
                 SessionId = sessionId,
@@ -3400,9 +3529,9 @@ public sealed class RunSuperviseCommandTests
 
         var runsPath = Path.Combine(repoRoot, ".intent-cli", "runs");
         Directory.CreateDirectory(runsPath);
-        File.WriteAllText(Path.Combine(runsPath, "G25.request.json"), DirectRunRequestArtifactJson.Serialize(requestArtifact));
-        File.WriteAllText(Path.Combine(runsPath, "G25.result.json"), DirectRunResultArtifactJson.Serialize(resultArtifact));
-        File.WriteAllText(Path.Combine(runsPath, "G25.provider.jsonl"), string.Join(Environment.NewLine, providerEvents) + Environment.NewLine);
+        File.WriteAllText(Path.Combine(runsPath, $"{executionUnit}.request.json"), DirectRunRequestArtifactJson.Serialize(requestArtifact));
+        File.WriteAllText(Path.Combine(runsPath, $"{executionUnit}.result.json"), DirectRunResultArtifactJson.Serialize(resultArtifact));
+        File.WriteAllText(Path.Combine(runsPath, $"{executionUnit}.provider.jsonl"), string.Join(Environment.NewLine, providerEvents) + Environment.NewLine);
     }
 
     private static void WriteLiveFixDirectRunArtifacts(string repoRoot, string executionUnit, string sessionId)
