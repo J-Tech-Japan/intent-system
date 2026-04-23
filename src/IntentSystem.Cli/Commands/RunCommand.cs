@@ -103,6 +103,8 @@ internal static class RunCommand
 
     internal static int FreshFixContinuationMaxPolls { get; set; } = 120;
 
+    internal static int FreshImplementContinuationMaxPolls { get; set; } = 1;
+
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -2443,7 +2445,7 @@ internal static class RunCommand
         continuationStates.Remove(executionUnit);
         if (FreshFixContinuationWindow <= TimeSpan.Zero
             || FreshFixContinuationTotalWindow <= TimeSpan.Zero
-            || FreshFixContinuationMaxPolls <= 0)
+            || FreshImplementContinuationMaxPolls <= 0)
         {
             return;
         }
@@ -2471,7 +2473,7 @@ internal static class RunCommand
             totalDeadline,
             deadline,
             launchedAt,
-            FreshFixContinuationMaxPolls);
+            FreshImplementContinuationMaxPolls);
     }
 
     private static bool ShouldContinueFreshFixSupervision(

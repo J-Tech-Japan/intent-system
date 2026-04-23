@@ -10546,6 +10546,192 @@ public sealed class RunCommandTests : IDisposable
         }
     }
 
+    [Fact]
+    public void ExecuteCore_GivenFreshImplementProgressStillMonitoring_BoundsSameInvocationSuperviseReuse()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        const string executionUnit = "TOY-CALC-V0-11";
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "toy-calc-sample"));
+        var worktreePath = tempDirectory.CreateDirectory(
+            Path.Combine("repo", ".intent-cli", "worktrees", executionUnit));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", executionUnit, "src", "ToyCalc"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", executionUnit, "tests", "ToyCalc.Tests"));
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Active, executionUnit: executionUnit))));
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(
+            runLogPath,
+            """
+            {"ts":"2026-04-23T19:30:00Z","execution_unit":"TOY-CALC-V0-11","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/24"}
+            {"ts":"2026-04-23T19:50:00Z","execution_unit":"TOY-CALC-V0-11","event":"activated","by":"intent-cli"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", executionUnit, "packet.yaml"),
+            """
+            execution_unit: "TOY-CALC-V0-11"
+
+            implementation_issue:
+              issue_title: "[TOY-CALC-V0-11] Sign command and mixed arity command line"
+              goal: "Add Calculator.Sign and mixed-arity command-line handling."
+              target_repo: "submodules/toy-calc-sample"
+              target_path: "."
+              target_part: "toy calc command line"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/TOY-CALC-V0-11/review-context.md"
+              clarification_return_path: "intents/toy-calc/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", $"{executionUnit}.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", $"{executionUnit}.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = executionUnit,
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = worktreePath,
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "toy-calc-sample"),
+                Branch = "issue-24-toy-calc-v0-11",
+                LinkedIssue = "https://github.com/tomohisa/toy-calc-sample/issues/24",
+                HandoffArtifactRef = $".intent-cli/implement/{executionUnit}.request.md",
+                RetryCount = 0,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-23T19:35:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-23T19:40:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-23T19:40:00Z"),
+                LastInterruptionReason = "Worker session 'pid:41000' exited before the fresh activation."
+            }));
+        WriteDirectRunRequest(
+            repoRoot,
+            executionUnit,
+            "implement",
+            "pid:41000",
+            provider: "Codex",
+            launchedAt: "2026-04-23T19:35:00.0000000+00:00");
+        WriteDirectRunResult(
+            repoRoot,
+            executionUnit,
+            "implement",
+            "failed",
+            providerEvents: CreateSingleSearchImplementProviderEvents(executionUnit, "pid:41000"),
+            sessionId: "pid:41000",
+            provider: "Codex");
+        var originalRunImplementExecutor = RunCommand.RunImplementExecutor;
+        var originalRunSuperviseExecutor = RunCommand.RunSuperviseExecutor;
+        var originalTimestampFactory = RunCommand.TimestampFactory;
+        var originalFreshFixContinuationPollInterval = RunCommand.FreshFixContinuationPollInterval;
+        var superviseCallCount = 0;
+
+        try
+        {
+            RunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-23T20:00:01.0000000+00:00");
+            RunCommand.FreshFixContinuationPollInterval = TimeSpan.Zero;
+            RunCommand.RunImplementExecutor = (_, currentExecutionUnit) =>
+            {
+                const string sessionId = "pid:46807";
+                const string launchedAt = "2026-04-23T20:00:00.0000000+00:00";
+                File.WriteAllText(
+                    Path.Combine(worktreePath, "src", "ToyCalc", "Calculator.cs"),
+                    "namespace ToyCalc; public static class Calculator { public static int Sign(int value) => Math.Sign(value); }");
+                File.WriteAllText(
+                    Path.Combine(worktreePath, "src", "ToyCalc", "CommandLine.cs"),
+                    "namespace ToyCalc; public static class CommandLine { public const string MixedArity = \"mixed arity\"; }");
+                File.WriteAllText(
+                    Path.Combine(worktreePath, "tests", "ToyCalc.Tests", "CalculatorTests.cs"),
+                    "namespace ToyCalc.Tests; public sealed class CalculatorTests { public void Sign_returns_sign() { } }");
+                WriteDirectRunRequest(
+                    repoRoot,
+                    currentExecutionUnit,
+                    "implement",
+                    sessionId,
+                    provider: "Codex",
+                    launchedAt: launchedAt);
+                WriteDirectRunResult(
+                    repoRoot,
+                    currentExecutionUnit,
+                    "implement",
+                    "running",
+                    providerEvents: CreateIssue434ProductProgressImplementProviderEvents(currentExecutionUnit, sessionId),
+                    sessionId: sessionId,
+                    provider: "Codex");
+                File.WriteAllText(
+                    Path.Combine(repoRoot, ".intent-cli", "supervision", $"{currentExecutionUnit}.session.json"),
+                    RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+                    {
+                        ExecutionUnit = currentExecutionUnit,
+                        WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                        Status = RunSupervisionSessionStatus.Monitoring,
+                        QueueState = "active",
+                        WorktreePath = worktreePath,
+                        ChildRepoPath = Path.Combine(repoRoot, "submodules", "toy-calc-sample"),
+                        Branch = "issue-24-toy-calc-v0-11",
+                        LinkedIssue = "https://github.com/tomohisa/toy-calc-sample/issues/24",
+                        HandoffArtifactRef = $".intent-cli/implement/{currentExecutionUnit}.request.md",
+                        RetryCount = 0,
+                        RetryBudget = 3,
+                        CreatedAt = DateTimeOffset.Parse(launchedAt),
+                        UpdatedAt = DateTimeOffset.Parse(launchedAt),
+                        LastHeartbeatAt = DateTimeOffset.Parse(launchedAt)
+                    }));
+
+                return new RunImplementResult
+                {
+                    Request = CreateRunImplementRequest(repoRoot, currentExecutionUnit),
+                    ArtifactPath = $".intent-cli/implement/{currentExecutionUnit}.request.md",
+                    DirectRun = CreateDirectRunLaunchResult(currentExecutionUnit, sessionId)
+                };
+            };
+            RunCommand.RunSuperviseExecutor = (_, currentExecutionUnit) =>
+            {
+                superviseCallCount++;
+                return new RunSuperviseResult
+                {
+                    ExecutionUnit = currentExecutionUnit,
+                    SessionArtifactPath = $".intent-cli/supervision/{currentExecutionUnit}.session.json",
+                    WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                    SessionStatus = RunSupervisionSessionStatus.Monitoring,
+                    RetryCount = 0,
+                    RetryBudget = 3,
+                    HandoffArtifactRef = $".intent-cli/implement/{currentExecutionUnit}.request.md"
+                };
+            };
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal(executionUnit, result.ExecutionUnit);
+            Assert.Equal(3, result.Actions.Count);
+            Assert.Equal("run implement", result.Actions[0].Name);
+            Assert.Equal("run supervise", result.Actions[1].Name);
+            Assert.Equal("run supervise", result.Actions[2].Name);
+            Assert.Equal(2, superviseCallCount);
+            Assert.Contains("Worker remains under supervision.", result.Detail, StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.result.json")));
+            Assert.Equal("pid:46807", resultArtifact.SessionId);
+            Assert.Equal("running", resultArtifact.RunStatus);
+            Assert.Contains("Sign", File.ReadAllText(Path.Combine(worktreePath, "src", "ToyCalc", "Calculator.cs")), StringComparison.Ordinal);
+            Assert.Contains("mixed arity", File.ReadAllText(Path.Combine(worktreePath, "src", "ToyCalc", "CommandLine.cs")), StringComparison.Ordinal);
+            Assert.Contains("Sign_returns_sign", File.ReadAllText(Path.Combine(worktreePath, "tests", "ToyCalc.Tests", "CalculatorTests.cs")), StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunCommand.RunImplementExecutor = originalRunImplementExecutor;
+            RunCommand.RunSuperviseExecutor = originalRunSuperviseExecutor;
+            RunCommand.TimestampFactory = originalTimestampFactory;
+            RunCommand.FreshFixContinuationPollInterval = originalFreshFixContinuationPollInterval;
+        }
+    }
+
     private static CliContext CreateContext(
         string repoRoot,
         string postFixWorktreeProgressPolicy = CliRuntimeContracts.DefaultPostFixWorktreeProgressPolicy)
@@ -11600,6 +11786,41 @@ public sealed class RunCommandTests : IDisposable
                 SessionId = sessionId,
                 Kind = "provider-event",
                 Payload = System.Text.Json.JsonSerializer.SerializeToElement("exec /bin/zsh -lc 'rg -n \"max command|max|Max Command|maximum\" -S .' succeeded in 0ms")
+            }
+        ];
+    }
+
+    private static IReadOnlyList<DirectRunProviderEvent> CreateIssue434ProductProgressImplementProviderEvents(
+        string executionUnit,
+        string sessionId)
+    {
+        return
+        [
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-23T20:00:00.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "session-metadata",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    model = "gpt-5.4-mini",
+                    transport = "responses",
+                    command = "codex"
+                })
+            },
+            new DirectRunProviderEvent
+            {
+                Timestamp = "2026-04-23T20:00:02.0000000+00:00",
+                ExecutionUnit = executionUnit,
+                Provider = "Codex",
+                EntryKind = "implement",
+                SessionId = sessionId,
+                Kind = "provider-event",
+                Payload = System.Text.Json.JsonSerializer.SerializeToElement(
+                    "Implemented Calculator.Sign, mixed-arity command-line handling, and unit/process-boundary tests.")
             }
         ];
     }
