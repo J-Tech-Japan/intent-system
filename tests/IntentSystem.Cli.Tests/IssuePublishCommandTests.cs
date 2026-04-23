@@ -5,10 +5,10 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
-public sealed class IssueCreateCommandTests
+public sealed class IssuePublishCommandTests
 {
     [Fact]
-    public void Execute_GivenDraftedArtifact_CreatesIssueAndAdvancesPublishArtifact()
+    public void Execute_GivenIssueCreatedArtifact_AppliesIntentTargetAndAdvancesPublishArtifact()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -17,72 +17,70 @@ public sealed class IssueCreateCommandTests
             Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
             CreatePacketYaml());
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
-            "# Goal");
-        tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G13", "publish.yaml"),
-            CreateDraftedPublishYaml());
+            CreateIssueCreatedPublishYaml());
         using var writer = new StringWriter();
         var publisher = new CapturingPublisher();
         var gitRunner = new CapturingGitCommandRunner();
-        var originalPublisherFactory = IssueCreateCommand.PublisherFactory;
-        var originalGitCommandRunnerFactory = IssueCreateCommand.GitCommandRunnerFactory;
-        var originalTimestampFactory = IssueCreateCommand.TimestampFactory;
+        var originalPublisherFactory = IssuePublishCommand.PublisherFactory;
+        var originalGitCommandRunnerFactory = IssuePublishCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = IssuePublishCommand.TimestampFactory;
 
         try
         {
-            IssueCreateCommand.PublisherFactory = () => publisher;
-            IssueCreateCommand.GitCommandRunnerFactory = () => gitRunner;
-            IssueCreateCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-23T00:10:00Z");
+            IssuePublishCommand.PublisherFactory = () => publisher;
+            IssuePublishCommand.GitCommandRunnerFactory = () => gitRunner;
+            IssuePublishCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-23T00:20:00Z");
 
-            var exitCode = IssueCreateCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
+            var exitCode = IssuePublishCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
 
             Assert.Equal(0, exitCode);
-            Assert.Contains("Issue created for G13", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Issue published for G13", writer.ToString(), StringComparison.Ordinal);
 
             var artifact = IssuePublishArtifactYaml.Deserialize(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "issues", "G13", "publish.yaml")));
-            Assert.Equal("issue-created", artifact.PublishStatus);
+            Assert.Equal("published", artifact.PublishStatus);
             Assert.Equal(73, artifact.CreatedIssueNumber);
             Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/73", artifact.CreatedIssueUrl);
-            Assert.Null(artifact.PublishedLabelName);
+            Assert.Equal("intent-target", artifact.PublishedLabelName);
 
             var runEvents = RunLogSerializer.DeserializeAll(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
-            var createdEvent = Assert.Single(runEvents);
-            Assert.Equal("issue-created", createdEvent.Event);
-            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/73", createdEvent.LinkedIssue);
-            Assert.Equal(".intent-cli/issues/G13/publish.yaml", createdEvent.ResultRef);
+            var publishedEvent = Assert.Single(runEvents);
+            Assert.Equal("issue-published", publishedEvent.Event);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/73", publishedEvent.LinkedIssue);
+            Assert.Equal(".intent-cli/issues/G13/publish.yaml", publishedEvent.ResultRef);
 
             Assert.Equal("J-Tech-Japan/intent-system", publisher.TargetRepo);
-            Assert.Equal("[G13] Add issue create foundation", publisher.Title);
-            Assert.Equal("# Goal", publisher.Body);
+            Assert.Equal(73, publisher.IssueNumber);
+            Assert.Equal("intent-target", publisher.LabelName);
+            Assert.False(publisher.CreateIssueCalled);
             Assert.Single(gitRunner.Calls);
             Assert.Equal(["remote", "get-url", "origin"], gitRunner.Calls[0].Arguments);
         }
         finally
         {
-            IssueCreateCommand.PublisherFactory = originalPublisherFactory;
-            IssueCreateCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
-            IssueCreateCommand.TimestampFactory = originalTimestampFactory;
+            IssuePublishCommand.PublisherFactory = originalPublisherFactory;
+            IssuePublishCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+            IssuePublishCommand.TimestampFactory = originalTimestampFactory;
         }
     }
 
     [Fact]
-    public void Execute_GivenMissingDraftedArtifact_ReturnsExitCodeOne()
+    public void Execute_GivenMissingIssueCreatedArtifact_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
         using var writer = new StringWriter();
 
-        var exitCode = IssueCreateCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
+        var exitCode = IssuePublishCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("Drafted publish artifact was not found", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Issue-created publish artifact was not found", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Execute_GivenNonDraftedArtifact_ReturnsExitCodeOneWithoutCreatingIssue()
+    public void Execute_GivenNonIssueCreatedArtifact_ReturnsExitCodeOneWithoutApplyingLabel()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -91,13 +89,10 @@ public sealed class IssueCreateCommandTests
             Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
             CreatePacketYaml());
         tempDirectory.CreateFile(
-            Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
-            "# Goal");
-        tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G13", "publish.yaml"),
             """
             execution_unit: G13
-            publish_status: issue-created
+            publish_status: drafted
             packet_path: ".intent-cli/issues/G13/packet.yaml"
             issue_body_path: ".intent-cli/issues/G13/github-body.md"
             created_issue_number: 73
@@ -105,21 +100,21 @@ public sealed class IssueCreateCommandTests
             published_label_name: null
             """);
         using var writer = new StringWriter();
-        var originalPublisherFactory = IssueCreateCommand.PublisherFactory;
+        var originalPublisherFactory = IssuePublishCommand.PublisherFactory;
 
         try
         {
-            IssueCreateCommand.PublisherFactory = () => new ThrowingPublisher();
+            IssuePublishCommand.PublisherFactory = () => new ThrowingPublisher();
 
-            var exitCode = IssueCreateCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
+            var exitCode = IssuePublishCommand.Execute(CreateContext(repoRoot), ["G13"], writer);
 
             Assert.Equal(1, exitCode);
-            Assert.Contains("must be in 'drafted' status", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("must be in 'issue-created' status", writer.ToString(), StringComparison.Ordinal);
             Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
         }
         finally
         {
-            IssueCreateCommand.PublisherFactory = originalPublisherFactory;
+            IssuePublishCommand.PublisherFactory = originalPublisherFactory;
         }
     }
 
@@ -145,24 +140,24 @@ public sealed class IssueCreateCommandTests
             """
             execution_unit: G13
             implementation_issue:
-              issue_title: "[G13] Add issue create foundation"
+              issue_title: "[G13] Add issue publish foundation"
               target_repo: "submodules/intent-system"
               target_path: "src/IntentSystem.Cli"
-              target_part: "issue create command"
+              target_part: "issue publish command"
               dependencies: []
             """;
     }
 
-    private static string CreateDraftedPublishYaml()
+    private static string CreateIssueCreatedPublishYaml()
     {
         return
             """
             execution_unit: G13
-            publish_status: drafted
+            publish_status: issue-created
             packet_path: ".intent-cli/issues/G13/packet.yaml"
             issue_body_path: ".intent-cli/issues/G13/github-body.md"
-            created_issue_number: null
-            created_issue_url: null
+            created_issue_number: 73
+            created_issue_url: "https://github.com/J-Tech-Japan/intent-system/issues/73"
             published_label_name: null
             """;
     }
@@ -171,27 +166,23 @@ public sealed class IssueCreateCommandTests
     {
         public string TargetRepo { get; private set; } = string.Empty;
 
-        public string Title { get; private set; } = string.Empty;
+        public int IssueNumber { get; private set; }
 
-        public string Body { get; private set; } = string.Empty;
+        public string LabelName { get; private set; } = string.Empty;
+
+        public bool CreateIssueCalled { get; private set; }
 
         public LinkedIssue CreateIssue(string targetRepo, string title, string body)
         {
-            TargetRepo = targetRepo;
-            Title = title;
-            Body = body;
-
-            return new LinkedIssue
-            {
-                Repo = targetRepo,
-                Number = 73,
-                Url = "https://github.com/J-Tech-Japan/intent-system/issues/73"
-            };
+            CreateIssueCalled = true;
+            throw new InvalidOperationException("CreateIssue should not be called during issue publish.");
         }
 
         public void AddLabel(string targetRepo, int issueNumber, string labelName)
         {
-            throw new InvalidOperationException("AddLabel should not be called during issue create.");
+            TargetRepo = targetRepo;
+            IssueNumber = issueNumber;
+            LabelName = labelName;
         }
     }
 
@@ -238,7 +229,7 @@ public sealed class IssueCreateCommandTests
 
     private sealed class TemporaryDirectory : IDisposable
     {
-        private readonly string rootPath = Directory.CreateTempSubdirectory("intent-cli-issue-create-tests-").FullName;
+        private readonly string rootPath = Directory.CreateTempSubdirectory("intent-cli-issue-publish-tests-").FullName;
 
         public string CreateDirectory(string relativePath)
         {

@@ -78,6 +78,46 @@ internal sealed class GhQueueDispatchPublisher : IQueueDispatchPublisher
         }
     }
 
+    public void AddLabel(string targetRepo, int issueNumber, string labelName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetRepo);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(issueNumber);
+        ArgumentException.ThrowIfNullOrWhiteSpace(labelName);
+
+        var repoRef = GitHubRepositoryRef.Parse(targetRepo);
+        var payloadPath = Path.GetTempFileName();
+
+        try
+        {
+            File.WriteAllText(payloadPath, JsonSerializer.Serialize(new { labels = new[] { labelName } }));
+
+            var result = commandRunner.Run(
+                [
+                    "api",
+                    $"repos/{repoRef.Owner}/{repoRef.Repo}/issues/{issueNumber}/labels",
+                    "--method",
+                    "POST",
+                    "--input",
+                    payloadPath
+                ]);
+
+            if (result.ExitCode != 0)
+            {
+                var error = string.IsNullOrWhiteSpace(result.StdErr)
+                    ? "gh api issue label add failed."
+                    : result.StdErr.Trim();
+                throw new InvalidOperationException(error);
+            }
+        }
+        finally
+        {
+            if (File.Exists(payloadPath))
+            {
+                File.Delete(payloadPath);
+            }
+        }
+    }
+
     private sealed record GitHubRepositoryRef
     {
         public required string Owner { get; init; }

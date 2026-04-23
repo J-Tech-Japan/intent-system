@@ -13,6 +13,8 @@ internal sealed record IssuePublishArtifact
     public required int? CreatedIssueNumber { get; init; }
 
     public required string? CreatedIssueUrl { get; init; }
+
+    public required string? PublishedLabelName { get; init; }
 }
 
 internal static class IssuePublishArtifactYaml
@@ -24,7 +26,8 @@ internal static class IssuePublishArtifactYaml
         "packet_path",
         "issue_body_path",
         "created_issue_number",
-        "created_issue_url"
+        "created_issue_url",
+        "published_label_name"
     ];
 
     public static string Serialize(IssuePublishArtifact artifact)
@@ -39,7 +42,8 @@ internal static class IssuePublishArtifactYaml
                        $"packet_path: {Quote(artifact.PacketPath)}",
                        $"issue_body_path: {Quote(artifact.IssueBodyPath)}",
                        $"created_issue_number: {FormatNullableInteger(artifact.CreatedIssueNumber)}",
-                       $"created_issue_url: {FormatNullableScalar(artifact.CreatedIssueUrl)}"
+                       $"created_issue_url: {FormatNullableScalar(artifact.CreatedIssueUrl)}",
+                       $"published_label_name: {FormatNullableScalar(artifact.PublishedLabelName)}"
                    ])
                + Environment.NewLine;
     }
@@ -58,7 +62,8 @@ internal static class IssuePublishArtifactYaml
             PacketPath = GetRequiredScalar(values, "packet_path"),
             IssueBodyPath = GetRequiredScalar(values, "issue_body_path"),
             CreatedIssueNumber = GetNullableInteger(values, "created_issue_number"),
-            CreatedIssueUrl = GetNullableScalar(values, "created_issue_url")
+            CreatedIssueUrl = GetNullableScalar(values, "created_issue_url"),
+            PublishedLabelName = GetNullableScalar(values, "published_label_name")
         };
     }
 

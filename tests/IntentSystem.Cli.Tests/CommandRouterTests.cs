@@ -2488,6 +2488,7 @@ public sealed class CommandRouterTests
             issue_body_path: ".intent-cli/issues/G13/github-body.md"
             created_issue_number: null
             created_issue_url: null
+            published_label_name: null
             """);
         using var writer = new StringWriter();
         var originalPublisherFactory = IssueCreateCommand.PublisherFactory;
@@ -2511,6 +2512,59 @@ public sealed class CommandRouterTests
             IssueCreateCommand.PublisherFactory = originalPublisherFactory;
             IssueCreateCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
             IssueCreateCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenIssuePublishCommand_DispatchesToIssuePublishRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
+            """
+            execution_unit: G13
+            implementation_issue:
+              issue_title: "[G13] Add issue publish foundation"
+              target_repo: "submodules/intent-system"
+              target_path: "src/IntentSystem.Cli"
+              target_part: "issue publish command"
+              dependencies: []
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "publish.yaml"),
+            """
+            execution_unit: G13
+            publish_status: issue-created
+            packet_path: ".intent-cli/issues/G13/packet.yaml"
+            issue_body_path: ".intent-cli/issues/G13/github-body.md"
+            created_issue_number: 73
+            created_issue_url: "https://github.com/J-Tech-Japan/intent-system/issues/73"
+            published_label_name: null
+            """);
+        using var writer = new StringWriter();
+        var originalPublisherFactory = IssuePublishCommand.PublisherFactory;
+        var originalGitCommandRunnerFactory = IssuePublishCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = IssuePublishCommand.TimestampFactory;
+
+        try
+        {
+            IssuePublishCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            IssuePublishCommand.GitCommandRunnerFactory = () => new FakeQueueDispatchGitRunner();
+            IssuePublishCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-23T00:20:00Z");
+
+            var exitCode = CommandRouter.Execute(["issue", "publish", "G13"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Issue published for G13", writer.ToString(), StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "G13", "publish.yaml")));
+        }
+        finally
+        {
+            IssuePublishCommand.PublisherFactory = originalPublisherFactory;
+            IssuePublishCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+            IssuePublishCommand.TimestampFactory = originalTimestampFactory;
         }
     }
 
@@ -5025,6 +5079,10 @@ recommended_updates:
                 Number = 53,
                 Url = "https://github.com/J-Tech-Japan/intent-system/issues/53"
             };
+        }
+
+        public void AddLabel(string targetRepo, int issueNumber, string labelName)
+        {
         }
     }
 
