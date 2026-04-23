@@ -9,8 +9,18 @@ using IntentSystem.Supervisor.Serialization;
 namespace IntentSystem.Cli.Tests;
 
 [Collection(RunSubmitCommandCollection.Name)]
-public sealed class RunCommandTests
+public sealed class RunCommandTests : IDisposable
 {
+    public RunCommandTests()
+    {
+        RunCommand.GitHubCommandRunnerFactory = () => new FailingGitHubCommandRunner();
+    }
+
+    public void Dispose()
+    {
+        RunCommand.GitHubCommandRunnerFactory = () => new GhCommandRunner();
+    }
+
     [Fact]
     public void Execute_GivenNoActionableQueue_PersistsRootRunArtifactAndWritesSummary()
     {
@@ -9356,6 +9366,78 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenBlockedItemWithMergedAdoptedPullRequest_ReconcilesCompletedAndPreservesBlockedEvidence()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Blocked) with
+                {
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "tomohisa/toy-calc-sample",
+                        Number = 3,
+                        Url = "https://github.com/tomohisa/toy-calc-sample/issues/3"
+                    }
+                })));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/3"}
+            {"ts":"2026-04-10T10:10:00Z","execution_unit":"G226","event":"blocked","by":"intent-cli","reason":"Implement direct run for 'G226' ended after current-session product source/test read activity but before a bounded repair outcome."}
+            """ + Environment.NewLine);
+        var originalGitHubCommandRunnerFactory = RunCommand.GitHubCommandRunnerFactory;
+        var originalTimestampFactory = RunCommand.TimestampFactory;
+
+        try
+        {
+            RunCommand.GitHubCommandRunnerFactory = () => new ScriptedGitHubCommandRunner(
+            [
+                new ExpectedGitHubCommand(
+                    ["issue", "view", "3", "--repo", "tomohisa/toy-calc-sample", "--json", "state"],
+                    Success("""{"state":"CLOSED"}""")),
+                new ExpectedGitHubCommand(
+                    ["api", "repos/tomohisa/toy-calc-sample/issues/3/timeline"],
+                    Success("""[{"event":"cross-referenced","source":{"issue":{"title":"[G226] Adopted child completion","body":"Closes https://github.com/tomohisa/toy-calc-sample/issues/3","html_url":"https://github.com/tomohisa/toy-calc-sample/pull/23","pull_request":{"html_url":"https://github.com/tomohisa/toy-calc-sample/pull/23"}}}}]""")),
+                new ExpectedGitHubCommand(
+                    ["pr", "view", "23", "--repo", "tomohisa/toy-calc-sample", "--json", "state,mergeCommit"],
+                    Success("""{"state":"MERGED","mergeCommit":{"oid":"ccfef2c122b39f37ca5fe70744b72403b9e24234"}}"""))
+            ]);
+            RunCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-23T15:12:00Z");
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Contains("externally completed linked child state", result.Detail, StringComparison.Ordinal);
+            Assert.Empty(result.Actions);
+
+            var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            var selectedItem = queueState.Items.Single(item => item.ExecutionUnit == "G226");
+            Assert.Equal(QueueItemState.Completed, selectedItem.State);
+            Assert.Empty(selectedItem.BlockedBy);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+            var blockedEvent = Assert.Single(
+                runEvents,
+                runEvent => string.Equals(runEvent.Event, "blocked", StringComparison.Ordinal));
+            Assert.Contains("current-session product source/test read activity", blockedEvent.Reason, StringComparison.Ordinal);
+            Assert.Equal("pr-merged", runEvents[^3].Event);
+            Assert.Equal("https://github.com/tomohisa/toy-calc-sample/pull/23", runEvents[^3].LinkedPr);
+            Assert.Equal("issue-closed", runEvents[^2].Event);
+            Assert.Equal("https://github.com/tomohisa/toy-calc-sample/issues/3", runEvents[^2].LinkedIssue);
+            Assert.Equal("completed", runEvents[^1].Event);
+        }
+        finally
+        {
+            RunCommand.GitHubCommandRunnerFactory = originalGitHubCommandRunnerFactory;
+            RunCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenBlockedItemWithClosedIssueButUnmergedPullRequest_StopsWithParentIntentUpdateRequired()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -9389,7 +9471,157 @@ public sealed class RunCommandTests
                     Success("""{"state":"CLOSED"}""")),
                 new ExpectedGitHubCommand(
                     ["pr", "view", "4", "--repo", "tomohisa/toy-calc-sample", "--json", "state,mergeCommit"],
-                    Success("""{"state":"OPEN","mergeCommit":null}"""))
+                    Success("""{"state":"OPEN","mergeCommit":null}""")),
+                new ExpectedGitHubCommand(
+                    ["api", "repos/tomohisa/toy-calc-sample/issues/3/timeline"],
+                    Success("[]"))
+            ]);
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("parent-intent-update-required", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Contains("requires parent-side planning", result.Detail, StringComparison.Ordinal);
+            Assert.Empty(result.Actions);
+        }
+        finally
+        {
+            RunCommand.GitHubCommandRunnerFactory = originalGitHubCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenBlockedItemWithClosedIssueAndUnrelatedMergedTimelinePullRequest_StopsWithParentIntentUpdateRequired()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Blocked) with
+                {
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "tomohisa/toy-calc-sample",
+                        Number = 3,
+                        Url = "https://github.com/tomohisa/toy-calc-sample/issues/3"
+                    }
+                })));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/3"}
+            """ + Environment.NewLine);
+        var originalGitHubCommandRunnerFactory = RunCommand.GitHubCommandRunnerFactory;
+
+        try
+        {
+            RunCommand.GitHubCommandRunnerFactory = () => new ScriptedGitHubCommandRunner(
+            [
+                new ExpectedGitHubCommand(
+                    ["issue", "view", "3", "--repo", "tomohisa/toy-calc-sample", "--json", "state"],
+                    Success("""{"state":"CLOSED"}""")),
+                new ExpectedGitHubCommand(
+                    ["api", "repos/tomohisa/toy-calc-sample/issues/3/timeline"],
+                    Success("""[{"event":"cross-referenced","source":{"issue":{"title":"[G226] Adopted child completion","html_url":"https://github.com/other-org/other-repo/pull/99","pull_request":{"html_url":"https://github.com/other-org/other-repo/pull/99"}}}}]"""))
+            ]);
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("parent-intent-update-required", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Contains("requires parent-side planning", result.Detail, StringComparison.Ordinal);
+            Assert.Empty(result.Actions);
+        }
+        finally
+        {
+            RunCommand.GitHubCommandRunnerFactory = originalGitHubCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenBlockedItemWithClosedIssueAndSameRepoUnrelatedMergedTimelinePullRequest_StopsWithParentIntentUpdateRequired()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Blocked) with
+                {
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "tomohisa/toy-calc-sample",
+                        Number = 3,
+                        Url = "https://github.com/tomohisa/toy-calc-sample/issues/3"
+                    }
+                })));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/3"}
+            """ + Environment.NewLine);
+        var originalGitHubCommandRunnerFactory = RunCommand.GitHubCommandRunnerFactory;
+
+        try
+        {
+            RunCommand.GitHubCommandRunnerFactory = () => new ScriptedGitHubCommandRunner(
+            [
+                new ExpectedGitHubCommand(
+                    ["issue", "view", "3", "--repo", "tomohisa/toy-calc-sample", "--json", "state"],
+                    Success("""{"state":"CLOSED"}""")),
+                new ExpectedGitHubCommand(
+                    ["api", "repos/tomohisa/toy-calc-sample/issues/3/timeline"],
+                    Success("""[{"event":"cross-referenced","source":{"issue":{"title":"[G999] Unrelated child completion","html_url":"https://github.com/tomohisa/toy-calc-sample/pull/99","pull_request":{"html_url":"https://github.com/tomohisa/toy-calc-sample/pull/99"}}}}]"""))
+            ]);
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("parent-intent-update-required", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Contains("requires parent-side planning", result.Detail, StringComparison.Ordinal);
+            Assert.Empty(result.Actions);
+        }
+        finally
+        {
+            RunCommand.GitHubCommandRunnerFactory = originalGitHubCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
+    public void ExecuteCore_GivenBlockedItemWithClosedIssueAndSameRepoExecutionUnitMentionOnlyTimelinePullRequest_StopsWithParentIntentUpdateRequired()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Blocked) with
+                {
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "tomohisa/toy-calc-sample",
+                        Number = 3,
+                        Url = "https://github.com/tomohisa/toy-calc-sample/issues/3"
+                    }
+                })));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/3"}
+            """ + Environment.NewLine);
+        var originalGitHubCommandRunnerFactory = RunCommand.GitHubCommandRunnerFactory;
+
+        try
+        {
+            RunCommand.GitHubCommandRunnerFactory = () => new ScriptedGitHubCommandRunner(
+            [
+                new ExpectedGitHubCommand(
+                    ["issue", "view", "3", "--repo", "tomohisa/toy-calc-sample", "--json", "state"],
+                    Success("""{"state":"CLOSED"}""")),
+                new ExpectedGitHubCommand(
+                    ["api", "repos/tomohisa/toy-calc-sample/issues/3/timeline"],
+                    Success("""[{"event":"cross-referenced","source":{"issue":{"title":"[G226] Unrelated child completion","body":"Carries forward G226 without issue linkage.","html_url":"https://github.com/tomohisa/toy-calc-sample/pull/100","pull_request":{"html_url":"https://github.com/tomohisa/toy-calc-sample/pull/100"}}}}]"""))
             ]);
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
@@ -12113,6 +12345,19 @@ public sealed class RunCommandTests
             var expected = expectedCalls.Dequeue();
             Assert.Equal(expected.Arguments, arguments);
             return expected.Result;
+        }
+    }
+
+    private sealed class FailingGitHubCommandRunner : IGitHubCommandRunner
+    {
+        public GitHubCommandResult Run(IReadOnlyList<string> arguments)
+        {
+            return new GitHubCommandResult
+            {
+                ExitCode = 1,
+                StdOut = string.Empty,
+                StdErr = "gh disabled in test unless explicitly scripted"
+            };
         }
     }
 
