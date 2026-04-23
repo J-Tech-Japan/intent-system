@@ -42,6 +42,15 @@ internal static class RunCommand
     public static Func<string, string, string, IntakeIssueResult> IntakeIssueExecutor { get; set; } =
         IntakeIssueCommand.ExecuteCore;
 
+    public static Func<CliContext, string, IssueDraftCommandResult> IssueDraftExecutor { get; set; } =
+        IssueDraftCommand.ExecuteCore;
+
+    public static Func<CliContext, string, IssueCreateCommandResult> IssueCreateExecutor { get; set; } =
+        IssueCreateCommand.ExecuteCore;
+
+    public static Func<CliContext, string, IssuePublishCommandResult> IssuePublishExecutor { get; set; } =
+        IssuePublishCommand.ExecuteCore;
+
     public static Func<CliContext, string, IntakeAdvanceResult> IntakeAdvanceExecutor { get; set; } =
         IntakeAdvanceCommand.ExecuteCore;
 
@@ -594,12 +603,25 @@ internal static class RunCommand
 
                     if (launchQueueItem.LinkedIssue is null)
                     {
-                        ExecuteAction(
+                        _ = ExecuteAction(
                             context,
                             actions,
-                            "queue dispatch",
+                            "issue draft",
                             selectedIntakeCandidate.ExecutionUnit,
-                            () => QueueDispatchExecutor(context, selectedIntakeCandidate.ExecutionUnit));
+                            () => IssueDraftExecutor(context, selectedIntakeCandidate.ExecutionUnit));
+                        var issueCreateResult = ExecuteAction(
+                            context,
+                            actions,
+                            "issue create",
+                            selectedIntakeCandidate.ExecutionUnit,
+                            () => IssueCreateExecutor(context, selectedIntakeCandidate.ExecutionUnit));
+                        PersistAutoContinueIssueLink(context, selectedIntakeCandidate.ExecutionUnit, issueCreateResult.LinkedIssue);
+                        _ = ExecuteAction(
+                            context,
+                            actions,
+                            "issue publish",
+                            selectedIntakeCandidate.ExecutionUnit,
+                            () => IssuePublishExecutor(context, selectedIntakeCandidate.ExecutionUnit));
                     }
 
                     ExecuteAction(
@@ -926,6 +948,52 @@ internal static class RunCommand
             QueueItemState.ClarifyBlocked => "clarify-blocked",
             _ => state.ToString().ToLowerInvariant()
         };
+    }
+
+    private static void PersistAutoContinueIssueLink(CliContext context, string executionUnit, LinkedIssue linkedIssue)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(linkedIssue);
+
+        var queueStatePath = context.GetQueueStatePath();
+        var queueState = LoadQueueStateOrThrow(context);
+        var foundItem = false;
+        var updatedItems = new QueueItem[queueState.Items.Count];
+
+        for (var index = 0; index < queueState.Items.Count; index++)
+        {
+            var item = queueState.Items[index];
+            if (string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            {
+                foundItem = true;
+                if (item.State != QueueItemState.Queued)
+                {
+                    throw new InvalidOperationException(
+                        $"Auto-continue issue target '{executionUnit}' must remain queued before issue publish.");
+                }
+
+                updatedItems[index] = item.LinkedIssue is null
+                    ? item with { LinkedIssue = linkedIssue }
+                    : item;
+                continue;
+            }
+
+            updatedItems[index] = item;
+        }
+
+        if (!foundItem)
+        {
+            throw new InvalidOperationException($"Execution unit '{executionUnit}' was not found in queue state.");
+        }
+
+        File.WriteAllText(
+            queueStatePath,
+            QueueStateSerializer.Serialize(queueState with
+            {
+                Items = updatedItems,
+                UpdatedAt = TimestampFactory()
+            }));
     }
 
     private static T ExecuteAction<T>(
