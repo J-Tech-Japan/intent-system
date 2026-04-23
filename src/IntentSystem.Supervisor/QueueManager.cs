@@ -509,9 +509,16 @@ public static class QueueManager
             var item = state.Items[i];
             if (string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal))
             {
-                updatedItems[i] = blockedBy is null
+                var updatedItem = blockedBy is null
                     ? item with { State = newState }
                     : item with { State = newState, BlockedBy = blockedBy };
+
+                if (!string.IsNullOrWhiteSpace(runEvent.LinkedPr))
+                {
+                    updatedItem = updatedItem with { LinkedPr = runEvent.LinkedPr };
+                }
+
+                updatedItems[i] = updatedItem;
             }
             else
             {

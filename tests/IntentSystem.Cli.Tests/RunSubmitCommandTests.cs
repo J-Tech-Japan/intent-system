@@ -49,7 +49,9 @@ public sealed class RunSubmitCommandTests
 
             var queueState = QueueStateSerializer.Deserialize(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
-            Assert.Equal(QueueItemState.Review, queueState.Items.Single(item => item.ExecutionUnit == "G14").State);
+            var submittedItem = queueState.Items.Single(item => item.ExecutionUnit == "G14");
+            Assert.Equal(QueueItemState.Review, submittedItem.State);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", submittedItem.LinkedPr);
             Assert.Equal(QueueItemState.Blocked, queueState.Items.Single(item => item.ExecutionUnit == "G15").State);
 
             Assert.Contains($"{worktreePath}::rev-parse --abbrev-ref HEAD", gitRunner.Calls);
@@ -63,6 +65,58 @@ public sealed class RunSubmitCommandTests
             var reviewEvent = Assert.Single(runEvents);
             Assert.Equal("review", reviewEvent.Event);
             Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", reviewEvent.LinkedPr);
+        }
+        finally
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunSubmitCommand.PublisherFactory = originalPublisherFactory;
+            RunSubmitCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenPublisherReusesExistingPr_PersistsLinkedPrAndTransitionsToReview()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G14"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var publisher = new FakePublisher("https://github.com/J-Tech-Japan/intent-system/pull/19");
+        var originalGitFactory = RunSubmitCommand.GitCommandRunnerFactory;
+        var originalPublisherFactory = RunSubmitCommand.PublisherFactory;
+        var originalTimestampFactory = RunSubmitCommand.TimestampFactory;
+
+        try
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = () => new FakeGitRunner(branchName: "issue-56-g14");
+            RunSubmitCommand.PublisherFactory = () => publisher;
+            RunSubmitCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-05T10:15:00Z");
+
+            var exitCode = RunSubmitCommand.Execute(CreateContext(repoRoot), ["G14"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(1, publisher.CallCount);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            var submittedItem = queueState.Items.Single(item => item.ExecutionUnit == "G14");
+            Assert.Equal(QueueItemState.Review, submittedItem.State);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/19", submittedItem.LinkedPr);
+
+            var reviewEvent = Assert.Single(RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl"))));
+            Assert.Equal("review", reviewEvent.Event);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/19", reviewEvent.LinkedPr);
         }
         finally
         {
@@ -1040,21 +1094,23 @@ public sealed class RunSubmitCommandTests
         }
     }
 
-    private sealed class FakePublisher : IRunSubmitPublisher
+    private sealed class FakePublisher(string linkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/58") : IRunSubmitPublisher
     {
         public string TargetRepo { get; private set; } = string.Empty;
         public string HeadBranch { get; private set; } = string.Empty;
         public string Title { get; private set; } = string.Empty;
         public string Body { get; private set; } = string.Empty;
+        public int CallCount { get; private set; }
 
         public string CreateDraftPullRequest(string targetRepo, string headBranch, string title, string body)
         {
+            CallCount++;
             TargetRepo = targetRepo;
             HeadBranch = headBranch;
             Title = title;
             Body = body;
 
-            return "https://github.com/J-Tech-Japan/intent-system/pull/58";
+            return linkedPr;
         }
     }
 

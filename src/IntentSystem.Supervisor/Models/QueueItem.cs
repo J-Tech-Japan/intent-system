@@ -18,6 +18,8 @@ public sealed record QueueItem
 
     public LinkedIssue? LinkedIssue { get; init; }
 
+    public string? LinkedPr { get; init; }
+
     public required string WorkerRole { get; init; }
 
     public required string ReviewRole { get; init; }

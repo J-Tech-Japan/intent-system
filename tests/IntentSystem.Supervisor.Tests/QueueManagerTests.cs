@@ -38,7 +38,9 @@ public sealed class QueueManagerTests
 
         var result = QueueManager.SubmitForReview(state, "A1", "worker", BaseTime, linkedPr: "https://github.com/org/repo/pull/1");
 
-        Assert.Equal(QueueItemState.Review, FindItem(result.UpdatedState, "A1").State);
+        var updatedItem = FindItem(result.UpdatedState, "A1");
+        Assert.Equal(QueueItemState.Review, updatedItem.State);
+        Assert.Equal("https://github.com/org/repo/pull/1", updatedItem.LinkedPr);
         Assert.Equal("review", result.Event.Event);
         Assert.Equal("https://github.com/org/repo/pull/1", result.Event.LinkedPr);
     }
@@ -67,7 +69,9 @@ public sealed class QueueManagerTests
             BaseTime,
             linkedPr: "https://github.com/org/repo/pull/2");
 
-        Assert.Equal(QueueItemState.Review, FindItem(result.UpdatedState, "A1").State);
+        var updatedItem = FindItem(result.UpdatedState, "A1");
+        Assert.Equal(QueueItemState.Review, updatedItem.State);
+        Assert.Equal("https://github.com/org/repo/pull/2", updatedItem.LinkedPr);
         Assert.Equal("review", result.Event.Event);
         Assert.Equal("https://github.com/org/repo/pull/2", result.Event.LinkedPr);
     }
