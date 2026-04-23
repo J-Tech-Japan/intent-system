@@ -1106,6 +1106,7 @@ internal static class RunSuperviseCommand
             || session.RetryCount >= session.RetryBudget
             || !string.IsNullOrWhiteSpace(session.LinkedPr)
             || !TryFindFailingBackendExitCode(providerEvents, out var exitCode)
+            || DirectRunFixOutcomeSupport.HasExplicitContractGapSignal(providerEvents)
             || !DirectRunFixOutcomeSupport.HasDeepExecutionProgressSignal(providerEvents))
         {
             return false;

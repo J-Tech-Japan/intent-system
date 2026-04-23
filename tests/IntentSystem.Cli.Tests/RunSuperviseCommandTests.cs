@@ -1143,6 +1143,141 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRepeatedDeadImplementSessionWithBoundedContractGapRefusal_PreservesContractGapBoundary()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateActiveRunLog()
+            + """
+            {"ts":"2026-04-08T10:21:00Z","execution_unit":"G25","event":"retry-attempted","by":"intent-cli","reason":"Worker session 'pid:888888' for 'G25' exited with backend exit code 1."}
+            {"ts":"2026-04-08T10:21:00Z","execution_unit":"G25","event":"auto-resumed","by":"intent-cli","reason":"run implement"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession() with
+            {
+                RetryCount = 1,
+                RetryBudget = 3,
+                UpdatedAt = DateTimeOffset.Parse("2026-04-08T10:21:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-08T10:21:00Z")
+            }));
+        WriteDeadImplementDirectRunArtifacts(repoRoot, "pid:999999");
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                new[]
+                {
+                    CreateProviderEvent(
+                        "2026-04-08T10:22:00.1000000+00:00",
+                        "G25",
+                        "implement",
+                        "pid:999999",
+                        "provider-event",
+                        "Use the request artifact at '/repo/.intent-cli/implement/G25.request.md' as the bounded source of truth for this direct run."),
+                    CreateProviderEvent(
+                        "2026-04-08T10:22:00.2000000+00:00",
+                        "G25",
+                        "implement",
+                        "pid:999999",
+                        "provider-event",
+                        "exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/implement/G25.request.md' succeeded in 0ms"),
+                    CreateProviderEvent(
+                        "2026-04-08T10:22:00.3000000+00:00",
+                        "G25",
+                        "implement",
+                        "pid:999999",
+                        "provider-event",
+                        "exec /bin/zsh -lc 'rg --files -g ''src/**'' -g ''tests/**'' -g ''.intent-cli/**''' succeeded in 0ms"),
+                    CreateProviderEvent(
+                        "2026-04-08T10:22:00.4000000+00:00",
+                        "G25",
+                        "implement",
+                        "pid:999999",
+                        "provider-event",
+                        "exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Calculator.cs && sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs' succeeded in 0ms"),
+                    CreateProviderEvent(
+                        "2026-04-08T10:22:00.5000000+00:00",
+                        "G25",
+                        "implement",
+                        "pid:999999",
+                        "provider-event",
+                        new
+                        {
+                            type = "contract-gap",
+                            stop_reason = "deterministic-contract-gap",
+                            reason = "provider-explicit-contract-gap-refusal",
+                            detail = "bounded refusal after product read",
+                            run_status = "failed"
+                        }),
+                    CreateProviderEvent(
+                        "2026-04-08T10:22:01.0000000+00:00",
+                        "G25",
+                        "implement",
+                        "pid:999999",
+                        "provider-event",
+                        new
+                        {
+                            type = "backend-exit",
+                            exit_code = 1
+                        })
+                }.Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("bounded refusal after product read", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("Repeated no-progress implement loop detected", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(1, session.RetryCount);
+            Assert.Contains("bounded refusal after product read", session.LastInterruptionReason, StringComparison.Ordinal);
+            Assert.DoesNotContain("Repeated no-progress implement loop detected", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.result.json")));
+            Assert.Equal("failed", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("bounded refusal after product read", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("Repeated no-progress implement loop detected", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenRepeatedDeadImplementSessionWithoutWorktreeProgress_BlocksInsteadOfAutoResumingLoop()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -2694,7 +2829,7 @@ public sealed class RunSuperviseCommandTests
             Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
 
             var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
-        var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
             Assert.Equal(QueueItemState.Blocked, selectedItem.State);
             Assert.Contains("Non-retryable auto-resume failure", selectedItem.BlockedBy[0], StringComparison.Ordinal);
 
