@@ -1391,8 +1391,7 @@ internal static class RunCommand
             var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
             linkedIssue = blockedItem.LinkedIssue?.Url
                 ?? LatestLinkedIssueResolver.Resolve(runEvents, blockedItem.ExecutionUnit);
-            linkedPr = LatestLinkedPrResolver.TryResolve(runEvents, blockedItem.ExecutionUnit) ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(linkedIssue) || string.IsNullOrWhiteSpace(linkedPr))
+            if (string.IsNullOrWhiteSpace(linkedIssue))
             {
                 linkedIssue = null!;
                 linkedPr = null!;
@@ -1401,44 +1400,19 @@ internal static class RunCommand
 
             var githubRunner = GitHubCommandRunnerFactory();
             var issue = GitHubIssueRef.Parse(linkedIssue);
-            var issueResult = RunGitHub(
-                githubRunner,
-                [
-                    "issue",
-                    "view",
-                    issue.IssueNumber.ToString(),
-                    "--repo",
-                    $"{issue.Owner}/{issue.Repo}",
-                    "--json",
-                    "state"
-                ],
-                "gh issue view failed.");
-            using var issueDocument = JsonDocument.Parse(issueResult.StdOut);
-            var issueState = issueDocument.RootElement.GetProperty("state").GetString();
-            if (!string.Equals(issueState, "CLOSED", StringComparison.OrdinalIgnoreCase))
+            if (!IsIssueClosed(githubRunner, issue))
             {
                 linkedIssue = null!;
                 linkedPr = null!;
                 return false;
             }
 
-            var pullRequest = GitHubPullRequestRef.Parse(linkedPr);
-            var pullRequestResult = RunGitHub(
-                githubRunner,
-                [
-                    "pr",
-                    "view",
-                    pullRequest.PullNumber.ToString(),
-                    "--repo",
-                    $"{pullRequest.Owner}/{pullRequest.Repo}",
-                    "--json",
-                    "state,mergeCommit"
-                ],
-                "gh pr view failed.");
-            using var pullRequestDocument = JsonDocument.Parse(pullRequestResult.StdOut);
-            var isMerged = pullRequestDocument.RootElement.TryGetProperty("mergeCommit", out var mergeCommitElement)
-                && mergeCommitElement.ValueKind != JsonValueKind.Null;
-            if (!isMerged)
+            linkedPr = TryResolveMergedLinkedPullRequest(
+                    githubRunner,
+                    issue,
+                    LatestLinkedPrResolver.TryResolve(runEvents, blockedItem.ExecutionUnit))
+                ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(linkedPr))
             {
                 linkedIssue = null!;
                 linkedPr = null!;
@@ -1453,6 +1427,145 @@ internal static class RunCommand
             linkedPr = null!;
             return false;
         }
+    }
+
+    private static bool IsIssueClosed(IGitHubCommandRunner githubRunner, GitHubIssueRef issue)
+    {
+        ArgumentNullException.ThrowIfNull(githubRunner);
+        ArgumentNullException.ThrowIfNull(issue);
+
+        var issueResult = RunGitHub(
+            githubRunner,
+            [
+                "issue",
+                "view",
+                issue.IssueNumber.ToString(),
+                "--repo",
+                $"{issue.Owner}/{issue.Repo}",
+                "--json",
+                "state"
+            ],
+            "gh issue view failed.");
+        using var issueDocument = JsonDocument.Parse(issueResult.StdOut);
+        var issueState = issueDocument.RootElement.GetProperty("state").GetString();
+        return string.Equals(issueState, "CLOSED", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? TryResolveMergedLinkedPullRequest(
+        IGitHubCommandRunner githubRunner,
+        GitHubIssueRef issue,
+        string? linkedPr)
+    {
+        ArgumentNullException.ThrowIfNull(githubRunner);
+        ArgumentNullException.ThrowIfNull(issue);
+
+        if (!string.IsNullOrWhiteSpace(linkedPr)
+            && IsPullRequestMerged(githubRunner, linkedPr))
+        {
+            return linkedPr;
+        }
+
+        return TryResolveMergedPullRequestFromIssueTimeline(githubRunner, issue);
+    }
+
+    private static string? TryResolveMergedPullRequestFromIssueTimeline(
+        IGitHubCommandRunner githubRunner,
+        GitHubIssueRef issue)
+    {
+        ArgumentNullException.ThrowIfNull(githubRunner);
+        ArgumentNullException.ThrowIfNull(issue);
+
+        var timelineResult = RunGitHub(
+            githubRunner,
+            [
+                "api",
+                $"repos/{issue.Owner}/{issue.Repo}/issues/{issue.IssueNumber}/timeline"
+            ],
+            "gh api issue timeline failed.");
+        using var timelineDocument = JsonDocument.Parse(timelineResult.StdOut);
+        if (timelineDocument.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("GitHub issue timeline response must be an array.");
+        }
+
+        var linkedPrCandidates = new List<string>();
+        foreach (var timelineItem in timelineDocument.RootElement.EnumerateArray())
+        {
+            if (!TryResolveTimelinePullRequestUrl(timelineItem, out var candidateLinkedPr))
+            {
+                continue;
+            }
+
+            linkedPrCandidates.Add(candidateLinkedPr);
+        }
+
+        for (var index = linkedPrCandidates.Count - 1; index >= 0; index--)
+        {
+            var candidateLinkedPr = linkedPrCandidates[index];
+            if (IsPullRequestMerged(githubRunner, candidateLinkedPr))
+            {
+                return candidateLinkedPr;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryResolveTimelinePullRequestUrl(JsonElement timelineItem, out string linkedPr)
+    {
+        linkedPr = null!;
+        if (!timelineItem.TryGetProperty("source", out var sourceElement)
+            || sourceElement.ValueKind != JsonValueKind.Object
+            || !sourceElement.TryGetProperty("issue", out var issueElement)
+            || issueElement.ValueKind != JsonValueKind.Object
+            || !issueElement.TryGetProperty("pull_request", out var pullRequestElement)
+            || pullRequestElement.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        linkedPr = TryGetHtmlUrl(issueElement) ?? TryGetHtmlUrl(pullRequestElement) ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(linkedPr))
+        {
+            linkedPr = null!;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsPullRequestMerged(IGitHubCommandRunner githubRunner, string linkedPr)
+    {
+        ArgumentNullException.ThrowIfNull(githubRunner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(linkedPr);
+
+        var pullRequest = GitHubPullRequestRef.Parse(linkedPr);
+        var pullRequestResult = RunGitHub(
+            githubRunner,
+            [
+                "pr",
+                "view",
+                pullRequest.PullNumber.ToString(),
+                "--repo",
+                $"{pullRequest.Owner}/{pullRequest.Repo}",
+                "--json",
+                "state,mergeCommit"
+            ],
+            "gh pr view failed.");
+        using var pullRequestDocument = JsonDocument.Parse(pullRequestResult.StdOut);
+        return pullRequestDocument.RootElement.TryGetProperty("mergeCommit", out var mergeCommitElement)
+            && mergeCommitElement.ValueKind != JsonValueKind.Null;
+    }
+
+    private static string? TryGetHtmlUrl(JsonElement element)
+    {
+        if (!element.TryGetProperty("html_url", out var htmlUrlElement)
+            || htmlUrlElement.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return htmlUrlElement.GetString();
     }
 
     private static GitHubCommandResult RunGitHub(
