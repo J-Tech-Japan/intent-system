@@ -69,7 +69,9 @@ internal static class IssueDraftCommand
             ExecutionUnit = executionUnit,
             PublishStatus = DraftedPublishStatus,
             PacketPath = relativePacketPath,
-            IssueBodyPath = relativeIssueBodyPath
+            IssueBodyPath = relativeIssueBodyPath,
+            CreatedIssueNumber = null,
+            CreatedIssueUrl = null
         };
 
         var artifactPath = WriteArtifact(context.RepoRoot, artifact);

@@ -9,6 +9,10 @@ internal sealed record IssuePublishArtifact
     public required string PacketPath { get; init; }
 
     public required string IssueBodyPath { get; init; }
+
+    public required int? CreatedIssueNumber { get; init; }
+
+    public required string? CreatedIssueUrl { get; init; }
 }
 
 internal static class IssuePublishArtifactYaml
@@ -18,7 +22,9 @@ internal static class IssuePublishArtifactYaml
         "execution_unit",
         "publish_status",
         "packet_path",
-        "issue_body_path"
+        "issue_body_path",
+        "created_issue_number",
+        "created_issue_url"
     ];
 
     public static string Serialize(IssuePublishArtifact artifact)
@@ -31,7 +37,9 @@ internal static class IssuePublishArtifactYaml
                        $"execution_unit: {artifact.ExecutionUnit}",
                        $"publish_status: {artifact.PublishStatus}",
                        $"packet_path: {Quote(artifact.PacketPath)}",
-                       $"issue_body_path: {Quote(artifact.IssueBodyPath)}"
+                       $"issue_body_path: {Quote(artifact.IssueBodyPath)}",
+                       $"created_issue_number: {FormatNullableInteger(artifact.CreatedIssueNumber)}",
+                       $"created_issue_url: {FormatNullableScalar(artifact.CreatedIssueUrl)}"
                    ])
                + Environment.NewLine;
     }
@@ -48,13 +56,15 @@ internal static class IssuePublishArtifactYaml
             ExecutionUnit = GetRequiredScalar(values, "execution_unit"),
             PublishStatus = GetRequiredScalar(values, "publish_status"),
             PacketPath = GetRequiredScalar(values, "packet_path"),
-            IssueBodyPath = GetRequiredScalar(values, "issue_body_path")
+            IssueBodyPath = GetRequiredScalar(values, "issue_body_path"),
+            CreatedIssueNumber = GetNullableInteger(values, "created_issue_number"),
+            CreatedIssueUrl = GetNullableScalar(values, "created_issue_url")
         };
     }
 
-    private static Dictionary<string, string> ParseYaml(string yaml)
+    private static Dictionary<string, object?> ParseYaml(string yaml)
     {
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal);
 
         using var reader = new StringReader(yaml);
         string? line;
@@ -73,13 +83,18 @@ internal static class IssuePublishArtifactYaml
 
             var key = line[..separatorIndex].Trim();
             var value = line[(separatorIndex + 1)..].TrimStart();
-            values[key] = ParseScalar(value);
+            values[key] = value switch
+            {
+                "null" => null,
+                _ when int.TryParse(value, out var integerValue) => integerValue,
+                _ => ParseScalar(value)
+            };
         }
 
         return values;
     }
 
-    private static void ValidateRequiredFields(IReadOnlyDictionary<string, string> values)
+    private static void ValidateRequiredFields(IReadOnlyDictionary<string, object?> values)
     {
         foreach (var field in RequiredFields)
         {
@@ -90,14 +105,44 @@ internal static class IssuePublishArtifactYaml
         }
     }
 
-    private static string GetRequiredScalar(IReadOnlyDictionary<string, string> values, string key)
+    private static string GetRequiredScalar(IReadOnlyDictionary<string, object?> values, string key)
     {
-        if (!values.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value))
+        if (!values.TryGetValue(key, out var value) || value is not string text || string.IsNullOrWhiteSpace(text))
         {
             throw new InvalidOperationException($"Issue publish artifact YAML field '{key}' must be a scalar string.");
         }
 
-        return value;
+        return text;
+    }
+
+    private static int? GetNullableInteger(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            throw new InvalidOperationException($"Issue publish artifact YAML field '{key}' must be present.");
+        }
+
+        return value switch
+        {
+            null => null,
+            int integerValue => integerValue,
+            _ => throw new InvalidOperationException($"Issue publish artifact YAML field '{key}' must be an integer or null.")
+        };
+    }
+
+    private static string? GetNullableScalar(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            throw new InvalidOperationException($"Issue publish artifact YAML field '{key}' must be present.");
+        }
+
+        return value switch
+        {
+            null => null,
+            string text => text,
+            _ => throw new InvalidOperationException($"Issue publish artifact YAML field '{key}' must be a scalar string or null.")
+        };
     }
 
     private static string ParseScalar(string value)
@@ -114,6 +159,16 @@ internal static class IssuePublishArtifactYaml
         }
 
         return value;
+    }
+
+    private static string FormatNullableInteger(int? value)
+    {
+        return value?.ToString() ?? "null";
+    }
+
+    private static string FormatNullableScalar(string? value)
+    {
+        return value is null ? "null" : Quote(value);
     }
 
     private static string Quote(string value)

@@ -36,6 +36,8 @@ public sealed class IssueDraftCommandTests
             Assert.Equal("drafted", artifact.PublishStatus);
             Assert.Equal(".intent-cli/issues/G13/packet.yaml", artifact.PacketPath);
             Assert.Equal(".intent-cli/issues/G13/github-body.md", artifact.IssueBodyPath);
+            Assert.Null(artifact.CreatedIssueNumber);
+            Assert.Null(artifact.CreatedIssueUrl);
 
             var runEvents = RunLogSerializer.DeserializeAll(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
@@ -68,6 +70,8 @@ public sealed class IssueDraftCommandTests
             publish_status: published
             packet_path: ".intent-cli/issues/G13/old-packet.yaml"
             issue_body_path: ".intent-cli/issues/G13/old-body.md"
+            created_issue_number: 91
+            created_issue_url: "https://github.com/J-Tech-Japan/intent-system/issues/91"
             """);
 
         var exitCode = IssueDraftCommand.Execute(CreateContext(repoRoot), ["G13"], TextWriter.Null);
@@ -79,6 +83,8 @@ public sealed class IssueDraftCommandTests
         Assert.Equal("drafted", artifact.PublishStatus);
         Assert.Equal(".intent-cli/issues/G13/packet.yaml", artifact.PacketPath);
         Assert.Equal(".intent-cli/issues/G13/github-body.md", artifact.IssueBodyPath);
+        Assert.Null(artifact.CreatedIssueNumber);
+        Assert.Null(artifact.CreatedIssueUrl);
     }
 
     [Fact]
