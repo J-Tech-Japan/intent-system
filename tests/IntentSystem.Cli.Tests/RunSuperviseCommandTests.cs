@@ -1055,6 +1055,94 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenDeadImplementWorkerSessionAfterProductReadWithMeaningfulWorktreeDiff_RecordsAdoptionRequired()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateActiveRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession()));
+        WriteDeadImplementDirectRunArtifacts(repoRoot, "pid:999999");
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                new[]
+                {
+                    CreateProviderEvent("2026-04-08T10:20:00.1000000+00:00", "G25", "implement", "pid:999999", "provider-event", "exec /bin/zsh -lc 'sed -n ''1,220p'' /repo/.intent-cli/implement/G25.request.md' succeeded in 0ms"),
+                    CreateProviderEvent("2026-04-08T10:20:00.2000000+00:00", "G25", "implement", "pid:999999", "provider-event", "exec /bin/zsh -lc 'rg --files' succeeded in 0ms"),
+                    CreateProviderEvent("2026-04-08T10:20:00.3000000+00:00", "G25", "implement", "pid:999999", "provider-event", "exec /bin/zsh -lc 'sed -n ''1,220p'' intents/toy-calc/specs/10-eq-command.md' succeeded in 0ms"),
+                    CreateProviderEvent("2026-04-08T10:20:00.4000000+00:00", "G25", "implement", "pid:999999", "provider-event", "exec /bin/zsh -lc 'sed -n ''1,220p'' src/ToyCalc/Calculator.cs && sed -n ''1,220p'' tests/ToyCalc.Tests/CalculatorTests.cs' succeeded in 0ms"),
+                    CreateProviderEvent("2026-04-08T10:20:00.5000000+00:00", "G25", "implement", "pid:999999", "provider-event", "exec /bin/zsh -lc 'dotnet test ToyCalc.sln --nologo' succeeded in 0ms"),
+                    CreateProviderEvent("2026-04-08T10:20:01.0000000+00:00", "G25", "implement", "pid:999999", "provider-event", new { type = "backend-exit", exit_code = 1 })
+                }.Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+        var originalGitCommandRunnerFactory = RunSuperviseCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+            RunSuperviseCommand.GitCommandRunnerFactory = () => new FakeGitRunner(
+                """
+                 M src/ToyCalc/Calculator.cs
+                 M src/ToyCalc/CommandLine.cs
+                 M tests/ToyCalc.Tests/CalculatorTests.cs
+                """);
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Auto-resumed: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("worktree-progress-adoption-required", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("Provider session: pid:999999", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("Raw log ref: .intent-cli/runs/G25.provider.jsonl", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("Verification signal: dotnet-test-observed", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("src/ToyCalc/Calculator.cs", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(0, session.RetryCount);
+            Assert.True(session.RequiresPostFixWorktreeProgressDecision);
+            Assert.Contains("worktree-progress-adoption-required", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var resultArtifact = DirectRunResultArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "runs", "G25.result.json")));
+            Assert.Equal("failed", resultArtifact.RunStatus);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("worktree-progress-adoption-required", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+            RunSuperviseCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenDeadImplementWorkerSessionWithProviderAuthFailure_BlocksWithoutConsumingRetryBudget()
     {
         using var tempDirectory = new TemporaryDirectory();

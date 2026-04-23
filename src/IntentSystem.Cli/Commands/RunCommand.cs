@@ -1074,6 +1074,16 @@ internal static class RunCommand
             return false;
         }
 
+        if (session.WorkerEntry == RunSupervisionWorkerEntry.Implement)
+        {
+            decisionResult = CreateStopResult(
+                ClarificationRequiredStopReason,
+                actions,
+                blockedItem.ExecutionUnit,
+                CreateImplementWorktreeProgressAdoptionRequiredDetail(blockedItem.ExecutionUnit, session));
+            return true;
+        }
+
         if (!string.Equals(
                 context.Config.Run.PostFixWorktreeProgressPolicy,
                 CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy,
@@ -1608,7 +1618,7 @@ internal static class RunCommand
         }
 
         session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(sessionArtifactPath));
-        if (session.WorkerEntry != RunSupervisionWorkerEntry.Fix
+        if (session.WorkerEntry is not (RunSupervisionWorkerEntry.Fix or RunSupervisionWorkerEntry.Implement)
             || session.Status != RunSupervisionSessionStatus.Blocked)
         {
             return false;
@@ -1617,6 +1627,11 @@ internal static class RunCommand
         if (session.RequiresPostFixWorktreeProgressDecision)
         {
             return true;
+        }
+
+        if (session.WorkerEntry == RunSupervisionWorkerEntry.Implement)
+        {
+            return false;
         }
 
         if (!TryUpgradeLegacyPostFixWorktreeProgressDecisionSession(
@@ -1647,6 +1662,20 @@ internal static class RunCommand
                $"To continue automatically on the next root run, set [run] " +
                $"{CliRuntimeContracts.PostFixWorktreeProgressPolicyKey} = " +
                $"\"{CliRuntimeContracts.AutoContinuePostFixWorktreeProgressPolicy}\" and rerun.";
+    }
+
+    private static string CreateImplementWorktreeProgressAdoptionRequiredDetail(
+        string executionUnit,
+        RunSupervisionSession session)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(session);
+
+        var reason = string.IsNullOrWhiteSpace(session.LastInterruptionReason)
+            ? $"worktree-progress-adoption-required: Meaningful implement progress exists in the execution-unit worktree for '{executionUnit}'."
+            : session.LastInterruptionReason;
+        return $"{reason} Confirm whether to carry this progress forward through the existing submit/review boundary. " +
+               "Unverified or unrelated worktree diffs must not be auto-accepted.";
     }
 
     private static bool TryUpgradeLegacyPostFixWorktreeProgressDecisionSession(
