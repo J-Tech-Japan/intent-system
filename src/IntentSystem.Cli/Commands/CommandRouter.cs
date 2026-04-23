@@ -74,7 +74,8 @@ internal static class CommandRouter
             {
                 ["draft"] = IssueDraftCommand.Execute,
                 ["create"] = IssueCreateCommand.Execute,
-                ["publish"] = IssuePublishCommand.Execute
+                ["publish"] = IssuePublishCommand.Execute,
+                ["status"] = IssueStatusCommand.Execute
             },
             ["bug"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

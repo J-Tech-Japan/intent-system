@@ -41,25 +41,49 @@ public sealed class GhQueueDispatchPublisherTests
         Assert.Contains("owner/repo shape", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void GetIssueLabels_GivenTargetRepoAndIssueNumber_ReadsLabelsViaGhApi()
+    {
+        var runner = new FakeRunner
+        {
+            ResponseStdOut = """[{"name":"intent-target"},{"name":"bug"}]"""
+        };
+        var publisher = new GhQueueDispatchPublisher(runner);
+
+        var labels = publisher.GetIssueLabels("J-Tech-Japan/intent-system", 53);
+
+        Assert.Equal(["intent-target", "bug"], labels);
+        Assert.Equal(
+            "repos/J-Tech-Japan/intent-system/issues/53/labels",
+            runner.Arguments[1]);
+        Assert.Equal("GET", runner.Arguments[3]);
+        Assert.Empty(runner.PayloadJson);
+    }
+
     private sealed class FakeRunner : IGitHubCommandRunner
     {
         public IReadOnlyList<string> Arguments { get; private set; } = [];
 
         public string PayloadJson { get; private set; } = string.Empty;
 
+        public string ResponseStdOut { get; init; } =
+            """{"number":53,"html_url":"https://github.com/J-Tech-Japan/intent-system/issues/53"}""";
+
         public GitHubCommandResult Run(IReadOnlyList<string> arguments)
         {
             Arguments = arguments.ToArray();
-            var payloadIndex = Arguments
+            var payloadItem = Arguments
                 .Select((argument, index) => (argument, index))
-                .First(item => string.Equals(item.argument, "--input", StringComparison.Ordinal))
-                .index + 1;
-            PayloadJson = File.ReadAllText(Arguments[payloadIndex]);
+                .FirstOrDefault(item => string.Equals(item.argument, "--input", StringComparison.Ordinal));
+            if (payloadItem.argument is not null)
+            {
+                PayloadJson = File.ReadAllText(Arguments[payloadItem.index + 1]);
+            }
 
             return new GitHubCommandResult
             {
                 ExitCode = 0,
-                StdOut = """{"number":53,"html_url":"https://github.com/J-Tech-Japan/intent-system/issues/53"}""",
+                StdOut = ResponseStdOut,
                 StdErr = string.Empty
             };
         }

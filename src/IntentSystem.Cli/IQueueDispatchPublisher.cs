@@ -10,4 +10,9 @@ internal interface IQueueDispatchPublisher
     {
         throw new NotSupportedException("This publisher does not support issue label application.");
     }
+
+    IReadOnlyList<string> GetIssueLabels(string targetRepo, int issueNumber)
+    {
+        throw new NotSupportedException("This publisher does not support issue label inspection.");
+    }
 }

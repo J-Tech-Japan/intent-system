@@ -118,6 +118,48 @@ internal sealed class GhQueueDispatchPublisher : IQueueDispatchPublisher
         }
     }
 
+    public IReadOnlyList<string> GetIssueLabels(string targetRepo, int issueNumber)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetRepo);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(issueNumber);
+
+        var repoRef = GitHubRepositoryRef.Parse(targetRepo);
+        var result = commandRunner.Run(
+            [
+                "api",
+                $"repos/{repoRef.Owner}/{repoRef.Repo}/issues/{issueNumber}/labels",
+                "--method",
+                "GET"
+            ]);
+
+        if (result.ExitCode != 0)
+        {
+            var error = string.IsNullOrWhiteSpace(result.StdErr)
+                ? "gh api issue labels get failed."
+                : result.StdErr.Trim();
+            throw new InvalidOperationException(error);
+        }
+
+        using var document = JsonDocument.Parse(result.StdOut);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("GitHub issue labels response must be an array.");
+        }
+
+        var labels = new List<string>();
+        foreach (var labelElement in document.RootElement.EnumerateArray())
+        {
+            if (labelElement.TryGetProperty("name", out var nameElement)
+                && !string.IsNullOrWhiteSpace(nameElement.GetString()))
+            {
+                labels.Add(nameElement.GetString()
+                    ?? throw new InvalidOperationException("GitHub issue label name was null."));
+            }
+        }
+
+        return labels;
+    }
+
     private sealed record GitHubRepositoryRef
     {
         public required string Owner { get; init; }
