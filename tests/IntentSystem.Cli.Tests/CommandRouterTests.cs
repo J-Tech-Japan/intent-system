@@ -26,6 +26,7 @@ public sealed class CommandRouterTests
         Assert.Contains("project", output, StringComparison.Ordinal);
         Assert.Contains("projection", output, StringComparison.Ordinal);
         Assert.Contains("queue", output, StringComparison.Ordinal);
+        Assert.Contains("issue", output, StringComparison.Ordinal);
         Assert.Contains("run", output, StringComparison.Ordinal);
         Assert.Contains("review", output, StringComparison.Ordinal);
         Assert.Contains("interview", output, StringComparison.Ordinal);
@@ -2417,6 +2418,44 @@ public sealed class CommandRouterTests
         finally
         {
             QueueEnqueueCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenIssueDraftCommand_DispatchesToIssueDraftRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
+            """
+            execution_unit: G13
+            implementation_issue:
+              issue_title: "[G13] Add issue draft foundation"
+              target_repo: "submodules/intent-system"
+              target_path: "src/IntentSystem.Cli"
+              target_part: "issue draft command"
+              dependencies: []
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
+            "# Goal");
+        using var writer = new StringWriter();
+        var originalTimestampFactory = IssueDraftCommand.TimestampFactory;
+
+        try
+        {
+            IssueDraftCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-23T00:00:00Z");
+
+            var exitCode = CommandRouter.Execute(["issue", "draft", "G13"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Issue draft prepared for G13.", writer.ToString(), StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "G13", "publish.yaml")));
+        }
+        finally
+        {
+            IssueDraftCommand.TimestampFactory = originalTimestampFactory;
         }
     }
 
