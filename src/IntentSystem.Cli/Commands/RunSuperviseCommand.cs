@@ -493,12 +493,17 @@ internal static class RunSuperviseCommand
         DateTimeOffset now,
         string reason)
     {
+        var effectiveReason = PreferCurrentSessionContractGapReason(
+            context,
+            executionUnit,
+            session.WorkerEntry,
+            reason);
         var consumeCurrentFailureIntoRetryBudget = session.RetryCount < session.RetryBudget;
         var terminalReason = CreateRetryExhaustionSummary(
             context,
             executionUnit,
             session,
-            reason,
+            effectiveReason,
             consumeCurrentFailureIntoRetryBudget);
 
         return BlockForTerminalFailure(
@@ -514,7 +519,75 @@ internal static class RunSuperviseCommand
             incrementRetryCount: consumeCurrentFailureIntoRetryBudget,
             emitRetryExhaustedEvent: true,
             emitRetryAttemptedEvent: consumeCurrentFailureIntoRetryBudget,
-            retryAttemptReason: reason);
+            retryAttemptReason: effectiveReason);
+    }
+
+    private static string PreferCurrentSessionContractGapReason(
+        CliContext context,
+        string executionUnit,
+        RunSupervisionWorkerEntry workerEntry,
+        string fallbackReason)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fallbackReason);
+
+        if (workerEntry != RunSupervisionWorkerEntry.Implement)
+        {
+            return fallbackReason;
+        }
+
+        var requestArtifactPath = ResolveDirectRunRequestArtifactPath(context, executionUnit);
+        var providerLogPath = ResolveDirectRunProviderLogPath(context, executionUnit);
+        if (!File.Exists(requestArtifactPath) || !File.Exists(providerLogPath))
+        {
+            return fallbackReason;
+        }
+
+        var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+        if (!string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal))
+        {
+            return fallbackReason;
+        }
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(File.ReadAllText(providerLogPath));
+        var currentProviderEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        if (DirectRunFixOutcomeSupport.TryResolveContractGapDetail(
+                currentProviderEvents,
+                executionUnit,
+                "implement",
+                out var contractGapDetail))
+        {
+            return contractGapDetail;
+        }
+
+        var canonicalBoundaryEvent = DirectRunFixOutcomeSupport.CreateCanonicalContractGapEventIfNeeded(
+            currentProviderEvents,
+            DateTimeOffset.UtcNow,
+            executionUnit,
+            "implement",
+            requestArtifact.Provider,
+            requestArtifact.ProviderSessionId,
+            providerSessionAlive: false);
+        if (canonicalBoundaryEvent is null)
+        {
+            return fallbackReason;
+        }
+
+        new DirectRunProviderEventWriter(providerLogPath).Append(canonicalBoundaryEvent);
+        currentProviderEvents = [.. currentProviderEvents, canonicalBoundaryEvent];
+
+        return DirectRunFixOutcomeSupport.TryResolveContractGapDetail(
+            currentProviderEvents,
+            executionUnit,
+            "implement",
+            out var synthesizedContractGapDetail)
+                ? synthesizedContractGapDetail
+                : fallbackReason;
     }
 
     private static RunSuperviseResult BlockForTerminalFailure(
