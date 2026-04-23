@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using IntentSystem.Projection.Serialization;
 using IntentSystem.Review;
 using IntentSystem.Supervisor;
@@ -1410,6 +1411,7 @@ internal static class RunCommand
             linkedPr = TryResolveMergedLinkedPullRequest(
                     githubRunner,
                     issue,
+                    blockedItem.ExecutionUnit,
                     LatestLinkedPrResolver.TryResolve(runEvents, blockedItem.ExecutionUnit))
                 ?? string.Empty;
             if (string.IsNullOrWhiteSpace(linkedPr))
@@ -1454,10 +1456,12 @@ internal static class RunCommand
     private static string? TryResolveMergedLinkedPullRequest(
         IGitHubCommandRunner githubRunner,
         GitHubIssueRef issue,
+        string executionUnit,
         string? linkedPr)
     {
         ArgumentNullException.ThrowIfNull(githubRunner);
         ArgumentNullException.ThrowIfNull(issue);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
         if (!string.IsNullOrWhiteSpace(linkedPr)
             && IsPullRequestMerged(githubRunner, linkedPr))
@@ -1465,15 +1469,17 @@ internal static class RunCommand
             return linkedPr;
         }
 
-        return TryResolveMergedPullRequestFromIssueTimeline(githubRunner, issue);
+        return TryResolveMergedPullRequestFromIssueTimeline(githubRunner, issue, executionUnit);
     }
 
     private static string? TryResolveMergedPullRequestFromIssueTimeline(
         IGitHubCommandRunner githubRunner,
-        GitHubIssueRef issue)
+        GitHubIssueRef issue,
+        string executionUnit)
     {
         ArgumentNullException.ThrowIfNull(githubRunner);
         ArgumentNullException.ThrowIfNull(issue);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
         var timelineResult = RunGitHub(
             githubRunner,
@@ -1496,7 +1502,11 @@ internal static class RunCommand
                 continue;
             }
 
-            if (!IsTimelinePullRequestFromLinkedIssueRepo(issue, candidateLinkedPr))
+            if (!IsTimelinePullRequestDeterministicMatch(
+                    timelineItem,
+                    issue,
+                    executionUnit,
+                    candidateLinkedPr))
             {
                 continue;
             }
@@ -1539,23 +1549,65 @@ internal static class RunCommand
         return true;
     }
 
-    private static bool IsTimelinePullRequestFromLinkedIssueRepo(
+    private static bool IsTimelinePullRequestDeterministicMatch(
+        JsonElement timelineItem,
         GitHubIssueRef issue,
+        string executionUnit,
         string linkedPr)
     {
         ArgumentNullException.ThrowIfNull(issue);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(linkedPr);
 
         try
         {
             var pullRequest = GitHubPullRequestRef.Parse(linkedPr);
-            return string.Equals(pullRequest.Owner, issue.Owner, StringComparison.Ordinal)
-                && string.Equals(pullRequest.Repo, issue.Repo, StringComparison.Ordinal);
+            if (!string.Equals(pullRequest.Owner, issue.Owner, StringComparison.Ordinal)
+                || !string.Equals(pullRequest.Repo, issue.Repo, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!timelineItem.TryGetProperty("source", out var sourceElement)
+                || sourceElement.ValueKind != JsonValueKind.Object
+                || !sourceElement.TryGetProperty("issue", out var issueElement)
+                || issueElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var title = issueElement.TryGetProperty("title", out var titleElement)
+                && titleElement.ValueKind == JsonValueKind.String
+                    ? titleElement.GetString()
+                    : null;
+            var body = issueElement.TryGetProperty("body", out var bodyElement)
+                && bodyElement.ValueKind == JsonValueKind.String
+                    ? bodyElement.GetString()
+                    : null;
+
+            return ContainsExecutionUnitIdentity(title, executionUnit)
+                || ContainsExecutionUnitIdentity(body, executionUnit);
         }
         catch (InvalidOperationException)
         {
             return false;
         }
+    }
+
+    private static bool ContainsExecutionUnitIdentity(string? text, string executionUnit)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return text.Contains($"[{executionUnit}]", StringComparison.Ordinal)
+            || Regex.IsMatch(
+                text,
+                $@"(?<![A-Z0-9-]){Regex.Escape(executionUnit)}(?![A-Z0-9-])",
+                RegexOptions.CultureInvariant);
     }
 
     private static bool IsPullRequestMerged(IGitHubCommandRunner githubRunner, string linkedPr)
