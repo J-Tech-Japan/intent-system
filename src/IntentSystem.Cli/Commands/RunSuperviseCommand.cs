@@ -166,7 +166,7 @@ internal static class RunSuperviseCommand
         if (TryCaptureDeadWorkerSessionFailure(
                 context,
                 executionUnit,
-                session.WorkerEntry,
+                session,
                 out var deadWorkerFailure))
         {
             if (deadWorkerFailure.ReportAsNonRetryableFailure)
@@ -329,7 +329,7 @@ internal static class RunSuperviseCommand
         if (TryCaptureDeadWorkerSessionFailure(
                 context,
                 executionUnit,
-                session.WorkerEntry,
+                session,
                 out var deadWorkerFailure))
         {
             if (deadWorkerFailure.ReportAsNonRetryableFailure)
@@ -425,7 +425,7 @@ internal static class RunSuperviseCommand
                 && TryCaptureDeadWorkerSessionFailure(
                     context,
                     executionUnit,
-                    resumedSession.WorkerEntry,
+                    resumedSession,
                     out var deadWorkerFailure)
                 && deadWorkerFailure.ReportAsNonRetryableFailure)
             {
@@ -845,14 +845,15 @@ internal static class RunSuperviseCommand
     private static bool TryCaptureDeadWorkerSessionFailure(
         CliContext context,
         string executionUnit,
-        RunSupervisionWorkerEntry workerEntry,
+        RunSupervisionSession session,
         out WorkerSessionFailure failure)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(session);
 
         failure = null!;
-        var expectedEntryKind = ResolveDirectRunEntryKind(workerEntry);
+        var expectedEntryKind = ResolveDirectRunEntryKind(session.WorkerEntry);
         var requestArtifactPath = ResolveDirectRunRequestArtifactPath(context, executionUnit);
         var resultArtifactPath = ResolveDirectRunResultArtifactPath(context, executionUnit);
         if (!File.Exists(requestArtifactPath) || !File.Exists(resultArtifactPath))
@@ -926,6 +927,25 @@ internal static class RunSuperviseCommand
                 requestArtifact.ProviderSessionId,
                 resultArtifact.Worktree.Path,
                 ResolveDirectRunProviderLogRef(context, executionUnit),
+                out failure))
+        {
+            File.WriteAllText(
+                resultArtifactPath,
+                DirectRunResultArtifactJson.Serialize(resultArtifact with
+                {
+                    RunStatus = "failed"
+                }));
+
+            return true;
+        }
+
+        if (string.Equals(expectedEntryKind, "implement", StringComparison.Ordinal)
+            && TryResolveRepeatedImplementNoProgressFailure(
+                currentProviderEvents,
+                executionUnit,
+                requestArtifact.ProviderSessionId,
+                resultArtifact.Worktree.Path,
+                session,
                 out failure))
         {
             File.WriteAllText(
@@ -1064,6 +1084,63 @@ internal static class RunSuperviseCommand
             requestArtifact.LaunchedAt);
 
         return DirectRunFixOutcomeSupport.HasBoundedProgressSignal(currentProviderEvents);
+    }
+
+    private static bool TryResolveRepeatedImplementNoProgressFailure(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        string providerSessionId,
+        string worktreePath,
+        RunSupervisionSession session,
+        out WorkerSessionFailure failure)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+        ArgumentNullException.ThrowIfNull(session);
+
+        failure = null!;
+        if (session.WorkerEntry != RunSupervisionWorkerEntry.Implement
+            || session.RetryCount < 1
+            || session.RetryCount >= session.RetryBudget
+            || !string.IsNullOrWhiteSpace(session.LinkedPr)
+            || !TryFindFailingBackendExitCode(providerEvents, out var exitCode)
+            || !DirectRunFixOutcomeSupport.HasDeepExecutionProgressSignal(providerEvents))
+        {
+            return false;
+        }
+
+        var verificationObserved = DirectRunFixOutcomeSupport.HasVerificationCommandSignal(providerEvents);
+        if (verificationObserved)
+        {
+            return false;
+        }
+
+        var gitCommandRunner = GitCommandRunnerFactory();
+        if (RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                gitCommandRunner,
+                worktreePath,
+                out _))
+        {
+            return false;
+        }
+
+        var runtimeArtifactDetail = string.Empty;
+        if (RunWorktreeProgressSupport.TryResolveOutOfScopeRuntimeArtifactDiffPaths(
+                gitCommandRunner,
+                worktreePath,
+                out var runtimeArtifactPaths))
+        {
+            runtimeArtifactDetail =
+                $" Runtime-only changed paths: {RunWorktreeProgressSupport.SummarizePaths(runtimeArtifactPaths)}.";
+        }
+
+        var planningSignal = DirectRunFixOutcomeSupport.HasPlanningProgressSignalBeyondInitialInventory(providerEvents);
+        failure = new WorkerSessionFailure(
+            $"Repeated no-progress implement loop detected for '{executionUnit}': worker session '{providerSessionId}' exited with backend exit code {exitCode} after current-session implement inspection/progress signals, but retry_count={session.RetryCount}, planning_signal={planningSignal}, verification_signal={verificationObserved}, linked_pr_present={(!string.IsNullOrWhiteSpace(session.LinkedPr)).ToString().ToLowerInvariant()}, and no meaningful execution-unit worktree diff was present under 'src/**' or 'tests/**'. Auto-resume would continue surfacing the execution unit as running/monitoring despite no bounded implement outcome.{runtimeArtifactDetail}",
+            ReportAsNonRetryableFailure: true);
+        return true;
     }
 
     private static void AppendDeterministicContractGapBoundaryIfNeeded(

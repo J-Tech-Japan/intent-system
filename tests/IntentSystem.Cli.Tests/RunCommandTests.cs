@@ -10255,7 +10255,7 @@ public sealed class RunCommandTests : IDisposable
     }
 
     [Fact]
-    public void ExecuteCore_GivenFixingItemWithoutReviewCommentButWithBlockedImplementLineage_ReactivatesImplementRetry()
+    public void ExecuteCore_GivenFixingItemWithoutReviewCommentButWithRepeatedNoProgressImplementLineage_StopsWithNonRetryableFailure()
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -10503,23 +10503,25 @@ public sealed class RunCommandTests : IDisposable
                     ExecutionUnit = executionUnit,
                     SessionArtifactPath = $".intent-cli/supervision/{executionUnit}.session.json",
                     WorkerEntry = RunSupervisionWorkerEntry.Implement,
-                    SessionStatus = RunSupervisionSessionStatus.Monitoring,
-                    RetryCount = 0,
+                    SessionStatus = RunSupervisionSessionStatus.Blocked,
+                    RetryCount = 1,
                     RetryBudget = 3,
                     HandoffArtifactRef = $".intent-cli/implement/{executionUnit}.request.md",
-                    AutoResumed = true
+                    Blocked = true,
+                    ReportAsNonRetryableFailure = true,
+                    FailureReason = "Repeated no-progress implement loop detected for 'TOY-CALC-V0-05': worker session 'pid:14401' exited with backend exit code 1 after current-session implement inspection/progress signals, but retry_count=1, planning_signal=false, verification_signal=false, linked_pr_present=false, and no meaningful execution-unit worktree diff was present under 'src/**' or 'tests/**'. Auto-resume would continue surfacing the execution unit as running/monitoring despite no bounded implement outcome."
                 };
             };
 
             var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
 
-            Assert.Equal("no-actionable-item", result.StopReason);
+            Assert.Equal("non-retryable-failure", result.StopReason);
             Assert.Equal("TOY-CALC-V0-05", result.ExecutionUnit);
             Assert.Equal(3, result.Actions.Count);
             Assert.Equal("run implement", result.Actions[0].Name);
             Assert.Equal("run supervise", result.Actions[1].Name);
             Assert.Equal("run supervise", result.Actions[2].Name);
-            Assert.Contains("auto-resumed", result.Detail, StringComparison.Ordinal);
+            Assert.Contains("Repeated no-progress implement loop detected", result.Detail, StringComparison.Ordinal);
             Assert.DoesNotContain(".intent-cli/reviews/TOY-CALC-V0-05.comment.json", result.Detail, StringComparison.Ordinal);
 
             var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
@@ -10532,7 +10534,7 @@ public sealed class RunCommandTests : IDisposable
                 string.Equals(runEvent.Event, "fix-requested", StringComparison.Ordinal)
                 && string.Equals(runEvent.ExecutionUnit, "TOY-CALC-V0-05", StringComparison.Ordinal));
             Assert.Contains(runEvents, runEvent =>
-                string.Equals(runEvent.Event, "auto-resumed", StringComparison.Ordinal)
+                string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal)
                 && string.Equals(runEvent.ExecutionUnit, "TOY-CALC-V0-05", StringComparison.Ordinal));
         }
         finally
