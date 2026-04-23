@@ -449,6 +449,15 @@ internal static class DirectRunFixOutcomeSupport
             && (observedProductRead || observedDotNetTest);
     }
 
+    internal static bool HasVerificationCommandSignal(IReadOnlyList<DirectRunProviderEvent> providerEvents)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        return providerEvents.Any(providerEvent =>
+            !IsIgnorableStartupPreamble(providerEvent.Payload)
+            && ContainsDotNetTestAttempt(providerEvent.Payload));
+    }
+
     private static bool TryResolveCanonicalFailureDetail(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,

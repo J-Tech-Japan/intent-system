@@ -919,6 +919,25 @@ internal static class RunSuperviseCommand
             return true;
         }
 
+        if (string.Equals(expectedEntryKind, "implement", StringComparison.Ordinal)
+            && TryResolveImplementWorktreeProgressFailure(
+                currentProviderEvents,
+                executionUnit,
+                requestArtifact.ProviderSessionId,
+                resultArtifact.Worktree.Path,
+                ResolveDirectRunProviderLogRef(context, executionUnit),
+                out failure))
+        {
+            File.WriteAllText(
+                resultArtifactPath,
+                DirectRunResultArtifactJson.Serialize(resultArtifact with
+                {
+                    RunStatus = "failed"
+                }));
+
+            return true;
+        }
+
         if (TryResolveTerminalFailureReason(
                 currentProviderEvents,
                 executionUnit,
@@ -1188,6 +1207,46 @@ internal static class RunSuperviseCommand
         return true;
     }
 
+    private static bool TryResolveImplementWorktreeProgressFailure(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        string providerSessionId,
+        string worktreePath,
+        string rawLogRef,
+        out WorkerSessionFailure failure)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rawLogRef);
+
+        failure = null!;
+        if (!TryFindFailingBackendExitCode(providerEvents, out var exitCode)
+            || !DirectRunFixOutcomeSupport.HasDeepExecutionProgressSignal(providerEvents))
+        {
+            return false;
+        }
+
+        var gitCommandRunner = GitCommandRunnerFactory();
+        if (!RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                gitCommandRunner,
+                worktreePath,
+                out var changedPaths))
+        {
+            return false;
+        }
+
+        var verificationSignal = DirectRunFixOutcomeSupport.HasVerificationCommandSignal(providerEvents)
+            ? "dotnet-test-observed"
+            : "not-observed";
+        failure = new WorkerSessionFailure(
+            $"worktree-progress-adoption-required: Implement direct run for '{executionUnit}' exited with backend exit code {exitCode} after current-session product source/test or verification activity, and left meaningful execution-unit worktree changes. Worktree path: {worktreePath}. Provider session: {providerSessionId}. Raw log ref: {rawLogRef}. Changed paths: {RunWorktreeProgressSupport.SummarizePaths(changedPaths)}. Verification signal: {verificationSignal}. Downstream automation must either carry this progress into the existing submit/review boundary or leave it for operator adoption; it must not treat the backend exit as a startup-only/provider-auth failure.",
+            ReportAsNonRetryableFailure: true,
+            RequiresPostFixWorktreeProgressDecision: true);
+        return true;
+    }
+
     private static bool TryResolveTerminalFailureReason(
         IReadOnlyList<DirectRunProviderEvent> providerEvents,
         string executionUnit,
@@ -1341,6 +1400,12 @@ internal static class RunSuperviseCommand
     {
         var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
         return ResolveArtifactPath(context.RepoRoot, $"{root}/{executionUnit.Trim()}.provider.jsonl");
+    }
+
+    private static string ResolveDirectRunProviderLogRef(CliContext context, string executionUnit)
+    {
+        var root = context.Config.DirectRun.ArtifactRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{root}/{executionUnit.Trim()}.provider.jsonl";
     }
 
     private static string ResolveDirectRunEntryKind(RunSupervisionWorkerEntry workerEntry)

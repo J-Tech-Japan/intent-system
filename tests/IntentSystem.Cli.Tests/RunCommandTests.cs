@@ -7179,6 +7179,64 @@ public sealed class RunCommandTests
     }
 
     [Fact]
+    public void ExecuteCore_GivenBlockedImplementSessionWithWorktreeProgress_StopsWithAdoptionRequiredDetail()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "TOY-CALC-V0-10"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Blocked, executionUnit: "TOY-CALC-V0-10") with
+                {
+                    BlockedBy =
+                    [
+                        "worktree-progress-adoption-required: Implement direct run for 'TOY-CALC-V0-10' exited with backend exit code 1 after current-session product source/test or verification activity, and left meaningful execution-unit worktree changes."
+                    ]
+                })));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"TOY-CALC-V0-10","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/22"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"TOY-CALC-V0-10","event":"activated","by":"intent-cli"}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "TOY-CALC-V0-10.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = "TOY-CALC-V0-10",
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = Path.Combine(repoRoot, ".intent-cli", "worktrees", "TOY-CALC-V0-10"),
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "toy-calc-sample"),
+                Branch = "issue-22-toy-calc-v0-10",
+                LinkedIssue = "https://github.com/tomohisa/toy-calc-sample/issues/22",
+                LinkedPr = null,
+                CommentRef = null,
+                HandoffArtifactRef = ".intent-cli/implement/TOY-CALC-V0-10.request.md",
+                RetryCount = 3,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T09:00:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T10:00:00Z"),
+                LastInterruptionReason = "worktree-progress-adoption-required: Implement direct run for 'TOY-CALC-V0-10' exited with backend exit code 1 after current-session product source/test or verification activity, and left meaningful execution-unit worktree changes. Worktree path: /repo/.intent-cli/worktrees/TOY-CALC-V0-10. Provider session: pid:31753. Raw log ref: .intent-cli/runs/TOY-CALC-V0-10.provider.jsonl. Changed paths: src/ToyCalc/Calculator.cs, src/ToyCalc/CommandLine.cs, tests/ToyCalc.Tests/CalculatorTests.cs. Verification signal: dotnet-test-observed.",
+                RequiresPostFixWorktreeProgressDecision = true
+            }));
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("clarification-required", result.StopReason);
+        Assert.Equal("TOY-CALC-V0-10", result.ExecutionUnit);
+        Assert.Contains("worktree-progress-adoption-required", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("Provider session: pid:31753", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("Raw log ref: .intent-cli/runs/TOY-CALC-V0-10.provider.jsonl", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("Verification signal: dotnet-test-observed", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("existing submit/review boundary", result.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(result.Actions, action => string.Equals(action.Name, "run submit", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ExecuteCore_GivenAutoContinuePolicyForMeaningfulFixWorktreeDiff_CommitsProgressAndResubmits()
     {
         using var tempDirectory = new TemporaryDirectory();
