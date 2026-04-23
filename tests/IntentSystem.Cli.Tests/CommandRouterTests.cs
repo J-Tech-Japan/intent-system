@@ -2460,6 +2460,61 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIssueCreateCommand_DispatchesToIssueCreateRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
+            """
+            execution_unit: G13
+            implementation_issue:
+              issue_title: "[G13] Add issue create foundation"
+              target_repo: "submodules/intent-system"
+              target_path: "src/IntentSystem.Cli"
+              target_part: "issue create command"
+              dependencies: []
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "github-body.md"),
+            "# Goal");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "publish.yaml"),
+            """
+            execution_unit: G13
+            publish_status: drafted
+            packet_path: ".intent-cli/issues/G13/packet.yaml"
+            issue_body_path: ".intent-cli/issues/G13/github-body.md"
+            created_issue_number: null
+            created_issue_url: null
+            """);
+        using var writer = new StringWriter();
+        var originalPublisherFactory = IssueCreateCommand.PublisherFactory;
+        var originalGitCommandRunnerFactory = IssueCreateCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = IssueCreateCommand.TimestampFactory;
+
+        try
+        {
+            IssueCreateCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            IssueCreateCommand.GitCommandRunnerFactory = () => new FakeQueueDispatchGitRunner();
+            IssueCreateCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-23T00:10:00Z");
+
+            var exitCode = CommandRouter.Execute(["issue", "create", "G13"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Issue created for G13", writer.ToString(), StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "issues", "G13", "publish.yaml")));
+        }
+        finally
+        {
+            IssueCreateCommand.PublisherFactory = originalPublisherFactory;
+            IssueCreateCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+            IssueCreateCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenIntakeConceptCommand_DispatchesToIntakeConceptRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
