@@ -1139,7 +1139,11 @@ internal static class RunCommand
                 blockedItem.ExecutionUnit,
                 requestArtifact,
                 resultArtifact)
-            || !HasImplementProviderPolicyChanged(context, requestArtifact!))
+            || !HasImplementProviderConfigurationRelaunchSignal(
+                context,
+                blockedItem.ExecutionUnit,
+                requestArtifact!,
+                session))
         {
             return false;
         }
@@ -2776,6 +2780,26 @@ internal static class RunCommand
             executionUnit,
             "implement",
             out _);
+    }
+
+    private static bool HasImplementProviderConfigurationRelaunchSignal(
+        CliContext context,
+        string executionUnit,
+        DirectRunRequestArtifact requestArtifact,
+        RunSupervisionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(requestArtifact);
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (HasImplementProviderPolicyChanged(context, requestArtifact))
+        {
+            return true;
+        }
+
+        var latestFixRequestedAt = TryResolveLatestFixRequestedTimestamp(context, executionUnit);
+        return latestFixRequestedAt is not null && latestFixRequestedAt > session.UpdatedAt;
     }
 
     private static bool HasImplementProviderPolicyChanged(
