@@ -126,6 +126,59 @@ public sealed class RunImplementCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRunLogWithBlankLines_GeneratesHandoffAndResolvesLatestLinkedPr()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G19"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            Environment.NewLine + CreateRunLogWithEmbeddedBlankLines());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G19", "review-context.md"),
+            CreateReviewContextMarkdown());
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunImplementCommand.TimestampFactory;
+        var originalLauncherFactory = RunImplementCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            RunImplementCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:15:00Z");
+            RunImplementCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:4321",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G19' for provider 'Claude'.");
+
+            var exitCode = RunImplementCommand.Execute(CreateContext(repoRoot), ["G19"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains(
+                "Latest linked PR: https://github.com/J-Tech-Japan/intent-system/pull/67",
+                writer.ToString(),
+                StringComparison.Ordinal);
+            var markdown = File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "implement", "G19.request.md"));
+            Assert.Contains(
+                "- latest_linked_pr: https://github.com/J-Tech-Japan/intent-system/pull/67",
+                markdown,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunImplementCommand.TimestampFactory = originalTimestampFactory;
+            RunImplementCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenFixingItemWithoutLatestPr_GeneratesArtifactWithoutLatestPr()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -951,6 +1004,19 @@ public sealed class RunImplementCommandTests
         {"ts":"2026-04-08T08:20:00Z","execution_unit":"G19","event":"fix-requested","by":"intent-cli","comment_ref":"https://github.com/J-Tech-Japan/intent-system/pull/66#issuecomment-1"}
         {"ts":"2026-04-08T08:30:00Z","execution_unit":"G19","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/67"}
         """ + Environment.NewLine;
+    }
+
+    private static string CreateRunLogWithEmbeddedBlankLines()
+    {
+        return string.Join(
+            Environment.NewLine,
+            [
+                """{"ts":"2026-04-08T08:00:00Z","execution_unit":"G19","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/66"}""",
+                "",
+                "   ",
+                """{"ts":"2026-04-08T08:30:00Z","execution_unit":"G19","event":"review","by":"intent-cli","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/67"}""",
+                ""
+            ]);
     }
 
     private sealed class TemporaryDirectory : IDisposable
