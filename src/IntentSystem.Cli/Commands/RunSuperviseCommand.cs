@@ -421,13 +421,19 @@ internal static class RunSuperviseCommand
             PersistSession(sessionArtifactPath, resumedSession);
 
             if (resumedSession.WorkerEntry == RunSupervisionWorkerEntry.Implement
-                && HasCurrentImplementBoundedProgressSignal(context, executionUnit)
+                && (HasCurrentImplementBoundedProgressSignal(context, executionUnit)
+                    || HasMeaningfulWorktreeProgress(resumedSession, out _))
                 && TryCaptureDeadWorkerSessionFailure(
                     context,
                     executionUnit,
                     resumedSession,
                     out var deadWorkerFailure)
-                && deadWorkerFailure.ReportAsNonRetryableFailure)
+                && (deadWorkerFailure.ReportAsNonRetryableFailure
+                    || TryResolveAutoResumedImplementWorktreeProgressFailure(
+                        context,
+                        executionUnit,
+                        resumedSession,
+                        out deadWorkerFailure)))
             {
                 return BlockForTerminalFailure(
                     context,
@@ -1084,6 +1090,60 @@ internal static class RunSuperviseCommand
             requestArtifact.LaunchedAt);
 
         return DirectRunFixOutcomeSupport.HasBoundedProgressSignal(currentProviderEvents);
+    }
+
+    private static bool TryResolveAutoResumedImplementWorktreeProgressFailure(
+        CliContext context,
+        string executionUnit,
+        RunSupervisionSession session,
+        out WorkerSessionFailure failure)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(session);
+
+        failure = null!;
+        if (session.WorkerEntry != RunSupervisionWorkerEntry.Implement
+            || !HasMeaningfulWorktreeProgress(session, out var changedPaths))
+        {
+            return false;
+        }
+
+        var requestArtifactPath = ResolveDirectRunRequestArtifactPath(context, executionUnit);
+        if (!File.Exists(requestArtifactPath))
+        {
+            return false;
+        }
+
+        var requestArtifact = DirectRunRequestArtifactJson.Deserialize(File.ReadAllText(requestArtifactPath));
+        if (!string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        failure = new WorkerSessionFailure(
+            $"worktree-progress-adoption-required: Auto-resumed implement direct run for '{executionUnit}' exited before supervision could keep monitoring, and meaningful execution-unit worktree changes are present. Worktree path: {session.WorktreePath}. Provider session: {requestArtifact.ProviderSessionId}. Raw log ref: {ResolveDirectRunProviderLogRef(context, executionUnit)}. Changed paths: {RunWorktreeProgressSupport.SummarizePaths(changedPaths)}. Downstream automation must either carry this progress into the existing submit/review boundary or leave it for operator adoption; it must not leave the dead auto-resumed session as run_status=running/status=monitoring.",
+            ReportAsNonRetryableFailure: true,
+            RequiresPostFixWorktreeProgressDecision: true);
+        return true;
+    }
+
+    private static bool HasMeaningfulWorktreeProgress(
+        RunSupervisionSession session,
+        out IReadOnlyList<string> changedPaths)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        changedPaths = [];
+        if (string.IsNullOrWhiteSpace(session.WorktreePath))
+        {
+            return false;
+        }
+
+        return RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+            GitCommandRunnerFactory(),
+            session.WorktreePath,
+            out changedPaths);
     }
 
     private static bool TryResolveRepeatedImplementNoProgressFailure(
