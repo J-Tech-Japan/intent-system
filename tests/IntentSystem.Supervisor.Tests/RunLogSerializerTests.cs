@@ -49,6 +49,37 @@ public sealed class RunLogSerializerTests
     }
 
     [Fact]
+    public void DeserializeAll_GivenLeadingTrailingAndEmbeddedBlankLines_SkipsBlankLines()
+    {
+        var content = string.Join(
+            Environment.NewLine,
+            [
+                "",
+                """{"ts":"2026-04-02T09:50:13Z","execution_unit":"B1","event":"queued","by":"supervisor"}""",
+                "",
+                "   ",
+                """{"ts":"2026-04-02T10:15:13Z","execution_unit":"B1","event":"completed","by":"supervisor","reason":"done"}""",
+                ""
+            ]);
+
+        var runEvents = RunLogSerializer.DeserializeAll(content);
+
+        Assert.Equal(2, runEvents.Count);
+        Assert.Equal(["queued", "completed"], runEvents.Select(runEvent => runEvent.Event).ToArray());
+    }
+
+    [Fact]
+    public void DeserializeAll_GivenMalformedNonEmptyLine_ThrowsJsonException()
+    {
+        var content = """
+        {"ts":"2026-04-02T09:50:13Z","execution_unit":"B1","event":"queued","by":"supervisor"}
+        not-json
+        """;
+
+        Assert.Throws<JsonException>(() => RunLogSerializer.DeserializeAll(content));
+    }
+
+    [Fact]
     public void DeserializeLine_GivenUnknownEvent_PreservesTheOriginalEventName()
     {
         var line =

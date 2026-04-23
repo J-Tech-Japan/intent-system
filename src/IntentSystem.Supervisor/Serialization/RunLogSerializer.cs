@@ -31,11 +31,16 @@ public static class RunLogSerializer
         }
 
         var lines = normalizedContent.Split('\n');
-        var runEvents = new RunEvent[lines.Length];
+        var runEvents = new List<RunEvent>(lines.Length);
 
         for (var index = 0; index < lines.Length; index++)
         {
-            runEvents[index] = DeserializeLine(lines[index]);
+            if (string.IsNullOrWhiteSpace(lines[index]))
+            {
+                continue;
+            }
+
+            runEvents.Add(DeserializeLine(lines[index]));
         }
 
         return runEvents;
