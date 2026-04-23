@@ -1055,6 +1055,95 @@ public sealed class RunSuperviseCommandTests
     }
 
     [Fact]
+    public void Execute_GivenDeadImplementWorkerSessionWithProviderAuthFailure_BlocksWithoutConsumingRetryBudget()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G25"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(QueueItemState.Active)));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateActiveRunLog());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G25", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", "G25.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", "G25.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(CreateMonitoringSession() with
+            {
+                RetryCount = 2,
+                RetryBudget = 3
+            }));
+        WriteDeadImplementDirectRunArtifacts(repoRoot, "pid:999999");
+        File.AppendAllText(
+            Path.Combine(repoRoot, ".intent-cli", "runs", "G25.provider.jsonl"),
+            string.Join(
+                Environment.NewLine,
+                new[]
+                {
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:00.5000000+00:00",
+                        "G25",
+                        "implement",
+                        "pid:999999",
+                        "provider-event",
+                        "Failed to authenticate. API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"Invalid authentication credentials\"}}"),
+                    CreateProviderEvent(
+                        "2026-04-08T10:20:01.0000000+00:00",
+                        "G25",
+                        "implement",
+                        "pid:999999",
+                        "provider-event",
+                        new
+                        {
+                            type = "backend-exit",
+                            exit_code = 1
+                        })
+                }.Select(DirectRunProviderEventJsonl.SerializeLine)) + Environment.NewLine);
+        using var writer = new StringWriter();
+        var originalTimestampFactory = RunSuperviseCommand.TimestampFactory;
+
+        try
+        {
+            RunSuperviseCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-08T10:30:00Z");
+
+            var exitCode = RunSuperviseCommand.Execute(CreateContext(repoRoot), ["G25"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Blocked transition applied: yes", writer.ToString(), StringComparison.Ordinal);
+
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var selectedItem = Assert.Single(updatedState.Items, item => item.ExecutionUnit == "G25");
+            Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+            Assert.Contains("provider could not authenticate or was misconfigured", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.Contains("Invalid authentication credentials", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("Retry budget exhausted", selectedItem.BlockedBy[0], StringComparison.Ordinal);
+
+            var session = RunSupervisionSessionArtifactJson.Deserialize(File.ReadAllText(
+                Path.Combine(repoRoot, ".intent-cli", "supervision", "G25.session.json")));
+            Assert.Equal(RunSupervisionSessionStatus.Blocked, session.Status);
+            Assert.Equal(2, session.RetryCount);
+            Assert.Contains("provider could not authenticate or was misconfigured", session.LastInterruptionReason, StringComparison.Ordinal);
+
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            Assert.Equal("blocked", runEvents[^1].Event);
+            Assert.Contains("Invalid authentication credentials", runEvents[^1].Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-attempted", StringComparison.Ordinal));
+            Assert.DoesNotContain(runEvents, runEvent => string.Equals(runEvent.Event, "retry-exhausted", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RunSuperviseCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenActiveItemWithoutExistingSessionAndDeadImplementWorkerSession_CapturesFailureAndAutoResumesImplementLoop()
     {
         using var tempDirectory = new TemporaryDirectory();

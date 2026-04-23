@@ -548,6 +548,14 @@ internal static class RunCommand
                         continue;
                     }
 
+                    if (TryAutoContinueBlockedImplementProviderConfigurationBoundary(
+                            context,
+                            queueState,
+                            blockedItem))
+                    {
+                        continue;
+                    }
+
                     if (TryResolveBlockedImplementSessionFailureResult(context, actions, blockedItem, out var blockedImplementResult))
                     {
                         return blockedImplementResult;
@@ -1100,6 +1108,38 @@ internal static class RunCommand
         }
 
         if (!HasCurrentBlockedImplementRecoveredSpecBoundary(context, blockedItem.ExecutionUnit))
+        {
+            return false;
+        }
+
+        TransitionQueueItemToActive(context, queueState, blockedItem.ExecutionUnit);
+        return true;
+    }
+
+    private static bool TryAutoContinueBlockedImplementProviderConfigurationBoundary(
+        CliContext context,
+        QueueState queueState,
+        QueueItem blockedItem)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(queueState);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+
+        if (!TryReadSupervisionSession(context, blockedItem.ExecutionUnit, out var session)
+            || session.WorkerEntry != RunSupervisionWorkerEntry.Implement
+            || session.Status != RunSupervisionSessionStatus.Blocked)
+        {
+            return false;
+        }
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, blockedItem.ExecutionUnit);
+        var resultArtifact = TryReadDirectRunResultArtifact(context, blockedItem.ExecutionUnit, "implement");
+        if (!HasCurrentBlockedImplementProviderConfigurationBoundary(
+                context,
+                blockedItem.ExecutionUnit,
+                requestArtifact,
+                resultArtifact)
+            || !HasImplementProviderPolicyChanged(context, requestArtifact!))
         {
             return false;
         }
@@ -2644,6 +2684,15 @@ internal static class RunCommand
             requestArtifact.ProviderSessionId,
             requestArtifact.LaunchedAt);
 
+        if (DirectRunFixOutcomeSupport.TryResolveProviderConfigurationFailureDetail(
+                providerEvents,
+                executionUnit,
+                "implement",
+                out var providerConfigurationDetail))
+        {
+            return providerConfigurationDetail;
+        }
+
         if (DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(
                 providerEvents,
                 executionUnit,
@@ -2690,6 +2739,56 @@ internal static class RunCommand
             out var synthesizedContractGapDetail)
             ? synthesizedContractGapDetail
             : null;
+    }
+
+    private static bool HasCurrentBlockedImplementProviderConfigurationBoundary(
+        CliContext context,
+        string executionUnit,
+        DirectRunRequestArtifact? requestArtifact,
+        DirectRunResultArtifact? resultArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (requestArtifact is null
+            || resultArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.EntryKind, "implement", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.RunStatus, "failed", StringComparison.Ordinal)
+            || !string.Equals(resultArtifact.SessionId, requestArtifact.ProviderSessionId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var providerEvents = TryReadDirectRunProviderEvents(context, executionUnit);
+        if (providerEvents.Count == 0)
+        {
+            return false;
+        }
+
+        providerEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        return DirectRunFixOutcomeSupport.TryResolveProviderConfigurationFailureDetail(
+            providerEvents,
+            executionUnit,
+            "implement",
+            out _);
+    }
+
+    private static bool HasImplementProviderPolicyChanged(
+        CliContext context,
+        DirectRunRequestArtifact requestArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(requestArtifact);
+
+        var currentPolicy = DirectRunCommandSupport.ResolvePolicy(context, DirectRunEntryKind.Implement);
+        return !string.Equals(currentPolicy.Provider, requestArtifact.Provider, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(currentPolicy.Model, requestArtifact.Model, StringComparison.Ordinal)
+            || !string.Equals(currentPolicy.Transport, requestArtifact.Transport, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool HasCurrentBlockedImplementRecoveredSpecBoundary(CliContext context, string executionUnit)

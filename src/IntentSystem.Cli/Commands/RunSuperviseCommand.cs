@@ -1201,6 +1201,19 @@ internal static class RunSuperviseCommand
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedEntryKind);
 
         failure = null!;
+        if (string.Equals(expectedEntryKind, "implement", StringComparison.Ordinal)
+            && DirectRunFixOutcomeSupport.TryResolveProviderConfigurationFailureDetail(
+                providerEvents,
+                executionUnit,
+                expectedEntryKind,
+                out var providerConfigurationDetail))
+        {
+            failure = new WorkerSessionFailure(
+                providerConfigurationDetail,
+                ReportAsNonRetryableFailure: true);
+            return true;
+        }
+
         if ((string.Equals(expectedEntryKind, "fix", StringComparison.Ordinal)
                 || string.Equals(expectedEntryKind, "implement", StringComparison.Ordinal))
             && DirectRunFixOutcomeSupport.TryResolveStartupOnlyFailureDetail(

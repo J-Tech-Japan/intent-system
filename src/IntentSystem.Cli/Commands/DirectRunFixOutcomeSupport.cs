@@ -113,6 +113,24 @@ internal static class DirectRunFixOutcomeSupport
         "repo-local intent/spec artifacts",
         "repo-local spec artifacts lag implementation"
     ];
+    private static readonly string[] ProviderConfigurationFailureMarkers =
+    [
+        "failed to authenticate",
+        "authentication_error",
+        "authentication error",
+        "invalid authentication credentials",
+        "invalid credentials",
+        "unauthorized",
+        "401",
+        "api key",
+        "apikey",
+        "credential",
+        "credentials",
+        "not configured",
+        "misconfigured",
+        "missing configuration",
+        "configuration error"
+    ];
     private static readonly string[] NoOpEditFreeMarkers =
     [
         "without requiring code changes",
@@ -284,6 +302,58 @@ internal static class DirectRunFixOutcomeSupport
 
         detail =
             $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' exited during provider startup before any bounded repo inspection, edit, test, refusal, or contract-gap output was emitted. Current-session provider output only contained startup warnings or noise before the backend exit.";
+        return true;
+    }
+
+    public static bool TryResolveProviderConfigurationFailureDetail(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        string executionUnit,
+        string entryKind,
+        out string detail)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryKind);
+
+        var orderedProviderEvents = OrderEventsForAnalysis(providerEvents);
+
+        detail = string.Empty;
+        var failingBackendExitIndex = FindFailingBackendExitIndex(orderedProviderEvents);
+        if (failingBackendExitIndex < 0)
+        {
+            return false;
+        }
+
+        string? providerConfigurationSignal = null;
+        for (var index = 0; index < failingBackendExitIndex; index++)
+        {
+            var providerEvent = orderedProviderEvents[index];
+            if (providerEvent.Kind == "session-metadata"
+                || IsIgnorableReadyEvent(providerEvent.Payload)
+                || IsIgnorableStartupPreamble(providerEvent.Payload)
+                || IsIgnorableStartupNoise(providerEvent.Payload))
+            {
+                continue;
+            }
+
+            if (ContainsInitialRepoInventory(providerEvent.Payload)
+                || ContainsRepoLocalSpecReadAttempt(providerEvent.Payload)
+                || ContainsProductSourceOrTestReadAttempt(providerEvent.Payload)
+                || ContainsBoundedFixProgressSignal(providerEvent.Payload))
+            {
+                return false;
+            }
+
+            providerConfigurationSignal ??= TryResolveProviderConfigurationSignal(providerEvent.Payload);
+        }
+
+        if (providerConfigurationSignal is null)
+        {
+            return false;
+        }
+
+        detail =
+            $"{ResolveEntryLabel(entryKind)} direct run for '{executionUnit}' failed because the selected provider could not authenticate or was misconfigured before repo inventory, repo-local spec reads, or product source/test reads. Provider configuration failure detail: {providerConfigurationSignal}";
         return true;
     }
 
@@ -1090,6 +1160,31 @@ internal static class DirectRunFixOutcomeSupport
         }
 
         return sawString;
+    }
+
+    private static string? TryResolveProviderConfigurationSignal(JsonElement payload)
+    {
+        foreach (var value in EnumeratePayloadStrings(payload))
+        {
+            var trimmed = value.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                continue;
+            }
+
+            var normalized = trimmed.ToLowerInvariant();
+            if (!ProviderConfigurationFailureMarkers.Any(marker => normalized.Contains(marker, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            const int maxDetailLength = 240;
+            return trimmed.Length <= maxDetailLength
+                ? trimmed
+                : trimmed[..maxDetailLength];
+        }
+
+        return null;
     }
 
     private static bool ContainsBoundedFixProgressSignal(JsonElement payload)
