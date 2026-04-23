@@ -9491,6 +9491,55 @@ public sealed class RunCommandTests : IDisposable
     }
 
     [Fact]
+    public void ExecuteCore_GivenBlockedItemWithClosedIssueAndUnrelatedMergedTimelinePullRequest_StopsWithParentIntentUpdateRequired()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Blocked) with
+                {
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = "tomohisa/toy-calc-sample",
+                        Number = 3,
+                        Url = "https://github.com/tomohisa/toy-calc-sample/issues/3"
+                    }
+                })));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"G226","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/3"}
+            """ + Environment.NewLine);
+        var originalGitHubCommandRunnerFactory = RunCommand.GitHubCommandRunnerFactory;
+
+        try
+        {
+            RunCommand.GitHubCommandRunnerFactory = () => new ScriptedGitHubCommandRunner(
+            [
+                new ExpectedGitHubCommand(
+                    ["issue", "view", "3", "--repo", "tomohisa/toy-calc-sample", "--json", "state"],
+                    Success("""{"state":"CLOSED"}""")),
+                new ExpectedGitHubCommand(
+                    ["api", "repos/tomohisa/toy-calc-sample/issues/3/timeline"],
+                    Success("""[{"event":"cross-referenced","source":{"issue":{"html_url":"https://github.com/other-org/other-repo/pull/99","pull_request":{"html_url":"https://github.com/other-org/other-repo/pull/99"}}}}]"""))
+            ]);
+
+            var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+            Assert.Equal("parent-intent-update-required", result.StopReason);
+            Assert.Equal("G226", result.ExecutionUnit);
+            Assert.Contains("requires parent-side planning", result.Detail, StringComparison.Ordinal);
+            Assert.Empty(result.Actions);
+        }
+        finally
+        {
+            RunCommand.GitHubCommandRunnerFactory = originalGitHubCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void ExecuteCore_GivenBlockedImplementSessionWithFallbackSpecRecovery_LaunchesFreshImplementContinuation()
     {
         using var tempDirectory = new TemporaryDirectory();

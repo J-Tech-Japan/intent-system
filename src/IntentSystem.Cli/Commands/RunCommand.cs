@@ -1496,6 +1496,11 @@ internal static class RunCommand
                 continue;
             }
 
+            if (!IsTimelinePullRequestFromLinkedIssueRepo(issue, candidateLinkedPr))
+            {
+                continue;
+            }
+
             linkedPrCandidates.Add(candidateLinkedPr);
         }
 
@@ -1532,6 +1537,25 @@ internal static class RunCommand
         }
 
         return true;
+    }
+
+    private static bool IsTimelinePullRequestFromLinkedIssueRepo(
+        GitHubIssueRef issue,
+        string linkedPr)
+    {
+        ArgumentNullException.ThrowIfNull(issue);
+        ArgumentException.ThrowIfNullOrWhiteSpace(linkedPr);
+
+        try
+        {
+            var pullRequest = GitHubPullRequestRef.Parse(linkedPr);
+            return string.Equals(pullRequest.Owner, issue.Owner, StringComparison.Ordinal)
+                && string.Equals(pullRequest.Repo, issue.Repo, StringComparison.Ordinal);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static bool IsPullRequestMerged(IGitHubCommandRunner githubRunner, string linkedPr)
