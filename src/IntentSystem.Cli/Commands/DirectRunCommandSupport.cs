@@ -689,7 +689,7 @@ internal static class DirectRunCommandSupport
             && string.Equals(typeElement.GetString(), "backend-exit", StringComparison.Ordinal);
     }
 
-    private static DirectRunResolvedPolicy ResolvePolicy(
+    internal static DirectRunResolvedPolicy ResolvePolicy(
         CliContext context,
         DirectRunEntryKind entryKind)
     {
