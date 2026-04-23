@@ -2569,6 +2569,56 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenIssueStatusCommand_DispatchesToIssueStatusRenderer()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "packet.yaml"),
+            """
+            execution_unit: G13
+            implementation_issue:
+              issue_title: "[G13] Add issue status foundation"
+              target_repo: "submodules/intent-system"
+              target_path: "src/IntentSystem.Cli"
+              target_part: "issue status command"
+              dependencies: []
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G13", "publish.yaml"),
+            """
+            execution_unit: G13
+            publish_status: published
+            packet_path: ".intent-cli/issues/G13/packet.yaml"
+            issue_body_path: ".intent-cli/issues/G13/github-body.md"
+            created_issue_number: 73
+            created_issue_url: "https://github.com/J-Tech-Japan/intent-system/issues/73"
+            published_label_name: "intent-target"
+            """);
+        using var writer = new StringWriter();
+        var originalPublisherFactory = IssueStatusCommand.PublisherFactory;
+        var originalGitCommandRunnerFactory = IssueStatusCommand.GitCommandRunnerFactory;
+
+        try
+        {
+            IssueStatusCommand.PublisherFactory = () => new FakeQueueDispatchPublisher();
+            IssueStatusCommand.GitCommandRunnerFactory = () => new FakeQueueDispatchGitRunner();
+
+            var exitCode = CommandRouter.Execute(["issue", "status", "G13"], CreateContext(repoRoot), writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Issue status for G13", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Automation state: published and label present", writer.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            IssueStatusCommand.PublisherFactory = originalPublisherFactory;
+            IssueStatusCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenIntakeConceptCommand_DispatchesToIntakeConceptRenderer()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -5083,6 +5133,11 @@ recommended_updates:
 
         public void AddLabel(string targetRepo, int issueNumber, string labelName)
         {
+        }
+
+        public IReadOnlyList<string> GetIssueLabels(string targetRepo, int issueNumber)
+        {
+            return ["intent-target"];
         }
     }
 
