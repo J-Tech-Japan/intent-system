@@ -6385,6 +6385,150 @@ public sealed class RunCommandTests : IDisposable
     }
 
     [Fact]
+    public void ExecuteCore_GivenBlockedImplementSessionWithBackendEvidenceAndContractGap_StopsWithDeterministicContractGap()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        const string executionUnit = "TOY-CALC-V0-11";
+        var worktreePath = tempDirectory.CreateDirectory(
+            Path.Combine("repo", ".intent-cli", "worktrees", executionUnit));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", executionUnit, "src", "ToyCalc"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", executionUnit, "tests", "ToyCalc.Tests"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "toy-calc-sample"));
+        File.WriteAllText(
+            Path.Combine(worktreePath, "src", "ToyCalc", "Calculator.cs"),
+            "namespace ToyCalc { public static class Calculator { public static int Sign(int value) => Math.Sign(value); }");
+        File.WriteAllText(
+            Path.Combine(worktreePath, "tests", "ToyCalc.Tests", "CalculatorTests.cs"),
+            "namespace ToyCalc.Tests { public sealed class CalculatorTests { public void Sign_returns_sign() {} } }");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(CreateQueueState(
+                CreateQueueItem(QueueItemState.Blocked, executionUnit: executionUnit) with
+                {
+                    BlockedBy =
+                    [
+                        "Worker session 'pid:71450' for 'TOY-CALC-V0-11' exited with backend exit code 1."
+                    ]
+                })));
+        tempDirectory.CreateFile(
+            Path.Combine(repoRoot, ".intent-cli", "runs.jsonl"),
+            """
+            {"ts":"2026-04-10T09:50:00Z","execution_unit":"TOY-CALC-V0-11","event":"issue-created","by":"intent-cli","linked_issue":"https://github.com/tomohisa/toy-calc-sample/issues/24"}
+            {"ts":"2026-04-10T10:00:00Z","execution_unit":"TOY-CALC-V0-11","event":"activated","by":"intent-cli"}
+            {"ts":"2026-04-10T12:30:00Z","execution_unit":"TOY-CALC-V0-11","event":"blocked","by":"intent-cli","reason":"Worker session 'pid:71450' for 'TOY-CALC-V0-11' exited with backend exit code 1."}
+            """ + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", executionUnit, "packet.yaml"),
+            """
+            execution_unit: "TOY-CALC-V0-11"
+
+            implementation_issue:
+              issue_title: "[TOY-CALC-V0-11] Sign command and mixed arity command line"
+              goal: "Add Calculator.Sign and mixed-arity command-line handling."
+              target_repo: "submodules/toy-calc-sample"
+              target_path: "."
+              target_part: "toy calc command line"
+              dependencies: []
+
+            review:
+              review_context_path: ".intent-cli/issues/TOY-CALC-V0-11/review-context.md"
+              clarification_return_path: "intents/toy-calc/clarifications/open.md"
+            """);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "implement", $"{executionUnit}.request.md"),
+            "# Execution Worker Handoff");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "supervision", $"{executionUnit}.session.json"),
+            RunSupervisionSessionArtifactJson.Serialize(new RunSupervisionSession
+            {
+                ExecutionUnit = executionUnit,
+                WorkerEntry = RunSupervisionWorkerEntry.Implement,
+                Status = RunSupervisionSessionStatus.Blocked,
+                QueueState = "blocked",
+                WorktreePath = worktreePath,
+                ChildRepoPath = Path.Combine(repoRoot, "submodules", "toy-calc-sample"),
+                Branch = "issue-24-toy-calc-v0-11",
+                LinkedIssue = "https://github.com/tomohisa/toy-calc-sample/issues/24",
+                HandoffArtifactRef = $".intent-cli/implement/{executionUnit}.request.md",
+                RetryCount = 2,
+                RetryBudget = 3,
+                CreatedAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                UpdatedAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastHeartbeatAt = DateTimeOffset.Parse("2026-04-10T11:55:00Z"),
+                LastInterruptionReason = "Worker session 'pid:71450' for 'TOY-CALC-V0-11' exited with backend exit code 1."
+            }));
+        WriteDirectRunRequest(
+            repoRoot,
+            executionUnit,
+            "implement",
+            "pid:71450",
+            provider: "Codex",
+            launchedAt: "2026-04-10T12:00:00.0000000+00:00");
+        WriteDirectRunResult(
+            repoRoot,
+            executionUnit,
+            "implement",
+            "failed",
+            providerEvents:
+            [
+                .. CreateInitialInventoryImplementProviderEvents(executionUnit, "pid:71450"),
+                new DirectRunProviderEvent
+                {
+                    Timestamp = "2026-04-10T12:00:01.1000000+00:00",
+                    ExecutionUnit = executionUnit,
+                    Provider = "Codex",
+                    EntryKind = "implement",
+                    SessionId = "pid:71450",
+                    Kind = "provider-event",
+                    Payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        type = "contract-gap",
+                        stop_reason = "deterministic-contract-gap",
+                        reason = "implement-session-ended-after-product-source-test-read",
+                        detail =
+                            "Implement direct run for 'TOY-CALC-V0-11' reached product source/test read before death, and terminal boundary is deterministically a contract-gap.",
+                        run_status = "failed"
+                    })
+                }
+            ],
+            sessionId: "pid:71450",
+            provider: "Codex");
+
+        var result = RunCommand.ExecuteCore(CreateContext(repoRoot));
+
+        Assert.Equal("deterministic-contract-gap", result.StopReason);
+        Assert.Equal(executionUnit, result.ExecutionUnit);
+        Assert.Empty(result.Actions);
+        Assert.Contains("product source/test read before death", result.Detail, StringComparison.Ordinal);
+
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var selectedItem = Assert.Single(queueState.Items, item => item.ExecutionUnit == executionUnit);
+        Assert.Equal(QueueItemState.Blocked, selectedItem.State);
+        Assert.NotEmpty(selectedItem.BlockedBy);
+
+        var providerEvents = DirectRunProviderEventJsonl.DeserializeAll(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs", $"{executionUnit}.provider.jsonl")));
+        Assert.Contains(
+            providerEvents,
+            providerEvent => providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var backendTypeElement)
+                && string.Equals(backendTypeElement.GetString(), "backend-exit", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                && exitCodeElement.GetInt32() == 1);
+        Assert.Contains(
+            providerEvents,
+            providerEvent => providerEvent.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
+                && providerEvent.Payload.TryGetProperty("type", out var gapTypeElement)
+                && string.Equals(gapTypeElement.GetString(), "contract-gap", StringComparison.Ordinal)
+                && providerEvent.Payload.TryGetProperty("run_status", out var runStatusElement)
+                && string.Equals(runStatusElement.GetString(), "failed", StringComparison.Ordinal));
+
+        Assert.True(Directory.Exists(worktreePath));
+    }
+
+    [Fact]
     public void ExecuteCore_GivenReactivatedImplementWithStaleFailedResult_ReclassifiesToInspectionBoundary()
     {
         using var tempDirectory = new TemporaryDirectory();

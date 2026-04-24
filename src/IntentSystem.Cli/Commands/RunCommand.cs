@@ -1293,10 +1293,23 @@ internal static class RunCommand
             return false;
         }
 
-        var detail = TryResolveCurrentImplementSessionFailureDetail(context, blockedItem.ExecutionUnit);
+        var detail = TryResolveCurrentImplementSessionFailureDetail(
+            context,
+            blockedItem.ExecutionUnit,
+            out var isDeterministicContractGap);
         if (string.IsNullOrWhiteSpace(detail))
         {
             return false;
+        }
+
+        if (isDeterministicContractGap)
+        {
+            result = CreateStopResult(
+                DeterministicContractGapStopReason,
+                actions,
+                blockedItem.ExecutionUnit,
+                detail);
+            return true;
         }
 
         result = CreateStopResult(
@@ -2901,13 +2914,15 @@ internal static class RunCommand
 
     private static string? TryResolveCurrentImplementSessionFailureDetail(
         CliContext context,
-        string executionUnit)
+        string executionUnit,
+        out bool isDeterministicContractGap)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
 
         var requestArtifact = TryReadDirectRunRequestArtifact(context, executionUnit);
         var resultArtifact = TryReadDirectRunResultArtifact(context, executionUnit, "implement");
+        isDeterministicContractGap = false;
         if (requestArtifact is null
             || resultArtifact is null
             || !string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal)
@@ -2953,6 +2968,7 @@ internal static class RunCommand
                 "implement",
                 out var contractGapDetail))
         {
+            isDeterministicContractGap = true;
             return contractGapDetail;
         }
 
@@ -2977,13 +2993,17 @@ internal static class RunCommand
         writer.Append(canonicalBoundaryEvent);
         providerEvents = [.. providerEvents, canonicalBoundaryEvent];
 
-        return DirectRunFixOutcomeSupport.TryResolveContractGapDetail(
-            providerEvents,
-            executionUnit,
-            "implement",
-            out var synthesizedContractGapDetail)
-            ? synthesizedContractGapDetail
-            : null;
+        if (DirectRunFixOutcomeSupport.TryResolveContractGapDetail(
+                providerEvents,
+                executionUnit,
+                "implement",
+                out var synthesizedContractGapDetail))
+        {
+            isDeterministicContractGap = true;
+            return synthesizedContractGapDetail;
+        }
+
+        return null;
     }
 
     private static bool HasCurrentBlockedImplementProviderConfigurationBoundary(
