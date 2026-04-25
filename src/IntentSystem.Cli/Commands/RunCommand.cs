@@ -1389,6 +1389,10 @@ internal static class RunCommand
             ? "dotnet-test-observed"
             : "not-observed";
         var rawLogRef = ResolveDirectRunProviderLogRef(context, blockedItem.ExecutionUnit);
+        var continuationPath = BuildBlockedImplementWorktreeProgressContinuationPath(
+            blockedItem.ExecutionUnit,
+            worktreePath,
+            session);
 
         detail =
             $"worktree-progress-adoption-required: Implement direct run for '{blockedItem.ExecutionUnit}' " +
@@ -1399,10 +1403,40 @@ internal static class RunCommand
             $"Raw log ref: {rawLogRef}. " +
             $"Changed paths: {RunWorktreeProgressSupport.SummarizePaths(changedPaths)}. " +
             $"Verification signal: {verificationSignal}. " +
+            $"Continuation path: {continuationPath} " +
             "Downstream automation must either carry this progress into the existing submit/review boundary " +
             "or leave it for operator adoption; " +
             "it must not treat the backend exit as a startup-only/provider-auth failure.";
         return true;
+    }
+
+    private static string BuildBlockedImplementWorktreeProgressContinuationPath(
+        string executionUnit,
+        string worktreePath,
+        RunSupervisionSession session)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (!string.IsNullOrWhiteSpace(session.LinkedPr))
+        {
+            return
+                $"carry the worktree changes for '{executionUnit}' at {worktreePath} through " +
+                $"'run submit' followed by 'run rereview' to update the existing pull request {session.LinkedPr}.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(session.LinkedIssue))
+        {
+            return
+                $"'run submit' opens the pull request against linked child issue {session.LinkedIssue} " +
+                $"using the worktree at {worktreePath}; " +
+                "the standard submit/review boundary then carries the worktree changes forward.";
+        }
+
+        return
+            $"operator must adopt the worktree changes for '{executionUnit}' at {worktreePath} manually " +
+            "before any submit/review handoff.";
     }
 
     private static bool TryResolveFailingBackendExitCode(
