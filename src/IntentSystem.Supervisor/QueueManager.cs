@@ -148,7 +148,18 @@ public static class QueueManager
     }
 
     /// <summary>
-    /// Transition an active item to review.
+    /// Marker prefix recorded in <see cref="QueueItem.BlockedBy"/> when a direct run
+    /// emits <c>worktree-progress-adoption-required</c>. Submit-for-review accepts a
+    /// blocked item only when its <c>BlockedBy</c> reason starts with this prefix so
+    /// the deterministic continuation path "run submit" can carry the worktree
+    /// progress into the existing submit/review boundary instead of leaving the
+    /// item stuck.
+    /// </summary>
+    public const string WorktreeProgressAdoptionRequiredBlockedReasonPrefix =
+        "worktree-progress-adoption-required";
+
+    /// <summary>
+    /// Transition an active item — or an adoption-required blocked item — to review.
     /// </summary>
     public static QueueTransitionResult SubmitForReview(
         QueueState state, string executionUnit, string by, DateTimeOffset ts,
@@ -159,7 +170,10 @@ public static class QueueManager
         ArgumentException.ThrowIfNullOrWhiteSpace(by);
 
         var item = FindItem(state, executionUnit);
-        AssertState(item, QueueItemState.Active, "submit-for-review");
+        if (item.State != QueueItemState.Active && !IsWorktreeProgressAdoptionRequiredBlocked(item))
+        {
+            AssertState(item, QueueItemState.Active, "submit-for-review");
+        }
 
         return ApplyTransition(state, executionUnit, QueueItemState.Review, new RunEvent
         {
@@ -169,6 +183,31 @@ public static class QueueManager
             By = by,
             LinkedPr = linkedPr
         });
+    }
+
+    private static bool IsWorktreeProgressAdoptionRequiredBlocked(QueueItem item)
+    {
+        if (item.State != QueueItemState.Blocked)
+        {
+            return false;
+        }
+
+        foreach (var reason in item.BlockedBy)
+        {
+            if (reason is null)
+            {
+                continue;
+            }
+
+            if (reason.StartsWith(
+                    WorktreeProgressAdoptionRequiredBlockedReasonPrefix,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

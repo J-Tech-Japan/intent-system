@@ -46,6 +46,52 @@ public sealed class QueueManagerTests
     }
 
     [Fact]
+    public void SubmitForReview_GivenWorktreeProgressAdoptionRequiredBlocked_TransitionsToReview()
+    {
+        var blockedItem = CreateItem("A1", QueueItemState.Blocked) with
+        {
+            BlockedBy =
+            [
+                "worktree-progress-adoption-required: Implement direct run for 'A1' exited with backend exit code 1 ..."
+            ]
+        };
+        var state = CreateState([blockedItem]);
+
+        var result = QueueManager.SubmitForReview(
+            state,
+            "A1",
+            "intent-cli",
+            BaseTime,
+            linkedPr: "https://github.com/org/repo/pull/9");
+
+        var updatedItem = FindItem(result.UpdatedState, "A1");
+        Assert.Equal(QueueItemState.Review, updatedItem.State);
+        Assert.Equal("https://github.com/org/repo/pull/9", updatedItem.LinkedPr);
+        Assert.Equal("review", result.Event.Event);
+        Assert.Equal("https://github.com/org/repo/pull/9", result.Event.LinkedPr);
+    }
+
+    [Fact]
+    public void SubmitForReview_GivenOrdinaryBlocked_ThrowsInvalidOperationException()
+    {
+        var blockedItem = CreateItem("A1", QueueItemState.Blocked) with
+        {
+            BlockedBy = ["dependency-incomplete: B1"]
+        };
+        var state = CreateState([blockedItem]);
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => QueueManager.SubmitForReview(
+                state,
+                "A1",
+                "intent-cli",
+                BaseTime));
+
+        Assert.Contains("expected state 'Active'", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("found 'Blocked'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RequestFix_GivenReviewItem_TransitionsToFixing()
     {
         var state = CreateState(QueueItemState.Review);

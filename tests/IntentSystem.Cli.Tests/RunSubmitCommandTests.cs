@@ -75,6 +75,106 @@ public sealed class RunSubmitCommandTests
     }
 
     [Fact]
+    public void Execute_GivenWorktreeProgressAdoptionRequiredBlockedItem_PushesAndTransitionsToReview()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G14"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                primaryItemState: QueueItemState.Blocked,
+                primaryBlockedBy:
+                [
+                    "worktree-progress-adoption-required: Implement direct run for 'G14' exited with backend exit code 1 after current-session product source/test or verification activity, and left meaningful execution-unit worktree changes."
+                ])));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var publisher = new FakePublisher();
+        var originalGitFactory = RunSubmitCommand.GitCommandRunnerFactory;
+        var originalPublisherFactory = RunSubmitCommand.PublisherFactory;
+        var originalTimestampFactory = RunSubmitCommand.TimestampFactory;
+
+        try
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = () => new FakeGitRunner(branchName: "issue-56-g14");
+            RunSubmitCommand.PublisherFactory = () => publisher;
+            RunSubmitCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-25T15:50:00Z");
+
+            var exitCode = RunSubmitCommand.Execute(CreateContext(repoRoot), ["G14"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run submitted for G14", writer.ToString(), StringComparison.Ordinal);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            var submittedItem = queueState.Items.Single(item => item.ExecutionUnit == "G14");
+            Assert.Equal(QueueItemState.Review, submittedItem.State);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", submittedItem.LinkedPr);
+
+            var reviewEvent = Assert.Single(RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl"))));
+            Assert.Equal("review", reviewEvent.Event);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", reviewEvent.LinkedPr);
+        }
+        finally
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunSubmitCommand.PublisherFactory = originalPublisherFactory;
+            RunSubmitCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenOrdinaryBlockedItem_ReturnsExitCodeOneWithoutMutatingFiles()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G14"));
+        var queueStatePath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                primaryItemState: QueueItemState.Blocked,
+                primaryBlockedBy: ["dependency-incomplete: G13"])));
+        var runLogPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreatePacketYaml());
+        using var writer = new StringWriter();
+        var originalGitFactory = RunSubmitCommand.GitCommandRunnerFactory;
+        var originalPublisherFactory = RunSubmitCommand.PublisherFactory;
+
+        try
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = () => new FakeGitRunner(branchName: "issue-56-g14");
+            RunSubmitCommand.PublisherFactory = () => new FakePublisher();
+
+            var originalQueueState = File.ReadAllText(queueStatePath);
+            var exitCode = RunSubmitCommand.Execute(CreateContext(repoRoot), ["G14"], writer);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("expected state 'Active'", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("found 'Blocked'", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal(originalQueueState, File.ReadAllText(queueStatePath));
+            Assert.Empty(File.ReadAllText(runLogPath));
+        }
+        finally
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunSubmitCommand.PublisherFactory = originalPublisherFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenPublisherReusesExistingPr_PersistsLinkedPrAndTransitionsToReview()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -569,15 +669,24 @@ public sealed class RunSubmitCommandTests
         };
     }
 
-    private static QueueState CreateQueueState(bool withLinkedIssue = true)
+    private static QueueState CreateQueueState(
+        bool withLinkedIssue = true,
+        QueueItemState primaryItemState = QueueItemState.Active,
+        IReadOnlyList<string>? primaryBlockedBy = null)
     {
+        var primaryItem = CreateItem("G14", primaryItemState, withLinkedIssue);
+        if (primaryBlockedBy is { Count: > 0 })
+        {
+            primaryItem = primaryItem with { BlockedBy = primaryBlockedBy };
+        }
+
         return new QueueState
         {
             SchemaVersion = "1",
             UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
             Items =
             [
-                CreateItem("G14", QueueItemState.Active, withLinkedIssue),
+                primaryItem,
                 CreateItem("G15", QueueItemState.Blocked, false) with
                 {
                     Dependencies = ["G14"],
