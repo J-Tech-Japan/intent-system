@@ -97,6 +97,15 @@ internal static class RunSubmitCommand
         var branchName = RunStartCommand.ResolveBranchName(executionUnit, queueItem.LinkedIssue);
         var gitRunner = GitCommandRunnerFactory();
         EnsureBranchMatches(worktreePath, branchName, gitRunner);
+        var hasMeaningfulWorktreeProgress =
+            RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                gitRunner,
+                worktreePath,
+                out _);
+        var allowBlockedWorktreeAdoption =
+            queueItem.State == QueueItemState.Blocked
+            && hasMeaningfulWorktreeProgress
+            && !HasWorktreeProgressAdoptionRequiredMarker(queueItem);
         EnsureCarryForwardCommit(executionUnit, worktreePath, branchName, gitRunner);
         PushBranch(worktreePath, branchName, gitRunner);
 
@@ -115,7 +124,8 @@ internal static class RunSubmitCommand
             executionUnit,
             TransitionActor,
             timestamp,
-            linkedPr);
+            linkedPr,
+            allowBlockedWorktreeAdoption);
         PersistSubmit(context, transition);
 
         return new RunSubmitResult
@@ -151,6 +161,28 @@ internal static class RunSubmitCommand
 
             - {{queueItem.LinkedIssue.Url}}
             """;
+    }
+
+    private static bool HasWorktreeProgressAdoptionRequiredMarker(QueueItem queueItem)
+    {
+        ArgumentNullException.ThrowIfNull(queueItem);
+
+        foreach (var reason in queueItem.BlockedBy)
+        {
+            if (reason is null)
+            {
+                continue;
+            }
+
+            if (reason.StartsWith(
+                    QueueManager.WorktreeProgressAdoptionRequiredBlockedReasonPrefix,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string ResolveChildRepoPath(string repoRoot, string childRepoRef)
