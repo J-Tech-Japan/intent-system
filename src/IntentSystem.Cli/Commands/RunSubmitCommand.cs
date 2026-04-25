@@ -96,27 +96,44 @@ internal static class RunSubmitCommand
 
         var branchName = RunStartCommand.ResolveBranchName(executionUnit, queueItem.LinkedIssue);
         var gitRunner = GitCommandRunnerFactory();
-        EnsureBranchMatches(worktreePath, branchName, gitRunner);
-        var hasMeaningfulWorktreeProgress =
-            RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
-                gitRunner,
-                worktreePath,
-                out _);
-        var allowBlockedWorktreeAdoption =
-            queueItem.State == QueueItemState.Blocked
-            && hasMeaningfulWorktreeProgress
-            && !HasWorktreeProgressAdoptionRequiredMarker(queueItem);
-        EnsureCarryForwardCommit(executionUnit, worktreePath, branchName, gitRunner);
-        PushBranch(worktreePath, branchName, gitRunner);
-
         var targetRepo = ResolveGitHubTargetRepo(childRepoPath, gitRunner);
-        var pullRequestTitle = ResolvePullRequestTitle(queueItem);
-        var pullRequestBody = ResolvePullRequestBody(queueItem);
-        var linkedPr = PublisherFactory().CreateDraftPullRequest(
-            targetRepo,
-            branchName,
-            pullRequestTitle,
-            pullRequestBody);
+        var publisher = PublisherFactory();
+
+        string linkedPr;
+        bool allowBlockedWorktreeAdoption;
+
+        if (publisher.TryFindExistingOpenPullRequest(
+                targetRepo,
+                branchName,
+                queueItem.LinkedIssue.Url,
+                out var existingPullRequestUrl))
+        {
+            linkedPr = existingPullRequestUrl;
+            allowBlockedWorktreeAdoption = true;
+        }
+        else
+        {
+            EnsureBranchMatches(worktreePath, branchName, gitRunner);
+            var hasMeaningfulWorktreeProgress =
+                RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                    gitRunner,
+                    worktreePath,
+                    out _);
+            allowBlockedWorktreeAdoption =
+                queueItem.State == QueueItemState.Blocked
+                && hasMeaningfulWorktreeProgress
+                && !HasWorktreeProgressAdoptionRequiredMarker(queueItem);
+            EnsureCarryForwardCommit(executionUnit, worktreePath, branchName, gitRunner);
+            PushBranch(worktreePath, branchName, gitRunner);
+
+            var pullRequestTitle = ResolvePullRequestTitle(queueItem);
+            var pullRequestBody = ResolvePullRequestBody(queueItem);
+            linkedPr = publisher.CreateDraftPullRequest(
+                targetRepo,
+                branchName,
+                pullRequestTitle,
+                pullRequestBody);
+        }
 
         var timestamp = TimestampFactory();
         var transition = QueueManager.SubmitForReview(

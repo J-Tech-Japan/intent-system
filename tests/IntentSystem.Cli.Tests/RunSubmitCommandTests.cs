@@ -190,6 +190,81 @@ public sealed class RunSubmitCommandTests
     }
 
     [Fact]
+    public void Execute_GivenOrdinaryBlockedItemWithMatchingExistingPr_ReconcilesAndTransitionsToReviewWithoutPushOrCreate()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        var worktreePath = tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G14"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                primaryItemState: QueueItemState.Blocked,
+                primaryBlockedBy: ["dependency-incomplete: G13"])));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var gitRunner = new FakeGitRunner(branchName: "wrong-branch");
+        var publisher = new FakePublisher();
+        publisher.RegisterExistingOpenPullRequest(
+            "J-Tech-Japan/intent-system",
+            "issue-56-g14",
+            "https://github.com/J-Tech-Japan/intent-system/issues/56",
+            "https://github.com/J-Tech-Japan/intent-system/pull/25");
+        var originalGitFactory = RunSubmitCommand.GitCommandRunnerFactory;
+        var originalPublisherFactory = RunSubmitCommand.PublisherFactory;
+        var originalTimestampFactory = RunSubmitCommand.TimestampFactory;
+
+        try
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = () => gitRunner;
+            RunSubmitCommand.PublisherFactory = () => publisher;
+            RunSubmitCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-25T17:00:00Z");
+
+            var exitCode = RunSubmitCommand.Execute(CreateContext(repoRoot), ["G14"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run submitted for G14", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal(0, publisher.CallCount);
+            Assert.Equal(1, publisher.FindCallCount);
+
+            Assert.DoesNotContain(
+                gitRunner.Calls,
+                call => call.Contains("rev-parse --abbrev-ref HEAD", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                gitRunner.Calls,
+                call => call.Contains("push -u", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                gitRunner.Calls,
+                call => call.Contains($"{worktreePath}::add", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                gitRunner.Calls,
+                call => call.Contains($"{worktreePath}::commit", StringComparison.Ordinal));
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            var submittedItem = queueState.Items.Single(item => item.ExecutionUnit == "G14");
+            Assert.Equal(QueueItemState.Review, submittedItem.State);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/25", submittedItem.LinkedPr);
+
+            var reviewEvent = Assert.Single(RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl"))));
+            Assert.Equal("review", reviewEvent.Event);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/25", reviewEvent.LinkedPr);
+        }
+        finally
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunSubmitCommand.PublisherFactory = originalPublisherFactory;
+            RunSubmitCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenOrdinaryBlockedItem_ReturnsExitCodeOneWithoutMutatingFiles()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -1263,11 +1338,24 @@ public sealed class RunSubmitCommandTests
 
     private sealed class FakePublisher(string linkedPr = "https://github.com/J-Tech-Japan/intent-system/pull/58") : IRunSubmitPublisher
     {
+        private readonly Dictionary<(string TargetRepo, string HeadBranch, string LinkedIssueUrl), string> existingPullRequests
+            = new(EqualityComparer<(string, string, string)>.Default);
+
         public string TargetRepo { get; private set; } = string.Empty;
         public string HeadBranch { get; private set; } = string.Empty;
         public string Title { get; private set; } = string.Empty;
         public string Body { get; private set; } = string.Empty;
         public int CallCount { get; private set; }
+        public int FindCallCount { get; private set; }
+
+        public void RegisterExistingOpenPullRequest(
+            string targetRepo,
+            string headBranch,
+            string linkedIssueUrl,
+            string url)
+        {
+            existingPullRequests[(targetRepo, headBranch, linkedIssueUrl)] = url;
+        }
 
         public string CreateDraftPullRequest(string targetRepo, string headBranch, string title, string body)
         {
@@ -1279,6 +1367,23 @@ public sealed class RunSubmitCommandTests
 
             return linkedPr;
         }
+
+        public bool TryFindExistingOpenPullRequest(
+            string targetRepo,
+            string headBranch,
+            string linkedIssueUrl,
+            out string pullRequestUrl)
+        {
+            FindCallCount++;
+            if (existingPullRequests.TryGetValue((targetRepo, headBranch, linkedIssueUrl), out var url))
+            {
+                pullRequestUrl = url;
+                return true;
+            }
+
+            pullRequestUrl = string.Empty;
+            return false;
+        }
     }
 
     private sealed class FailingPublisher : IRunSubmitPublisher
@@ -1286,6 +1391,16 @@ public sealed class RunSubmitCommandTests
         public string CreateDraftPullRequest(string targetRepo, string headBranch, string title, string body)
         {
             throw new InvalidOperationException("gh pr create failed.");
+        }
+
+        public bool TryFindExistingOpenPullRequest(
+            string targetRepo,
+            string headBranch,
+            string linkedIssueUrl,
+            out string pullRequestUrl)
+        {
+            pullRequestUrl = string.Empty;
+            return false;
         }
     }
 

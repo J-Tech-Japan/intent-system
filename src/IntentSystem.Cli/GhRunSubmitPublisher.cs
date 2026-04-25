@@ -79,6 +79,24 @@ internal sealed class GhRunSubmitPublisher : IRunSubmitPublisher
         }
     }
 
+    public bool TryFindExistingOpenPullRequest(
+        string targetRepo,
+        string headBranch,
+        string linkedIssueUrl,
+        out string pullRequestUrl)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetRepo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(headBranch);
+        ArgumentException.ThrowIfNullOrWhiteSpace(linkedIssueUrl);
+
+        if (TryFindExistingPullRequest(targetRepo, headBranch, out pullRequestUrl))
+        {
+            return true;
+        }
+
+        return TryFindOpenPullRequestByLinkedIssueUrl(targetRepo, linkedIssueUrl, out pullRequestUrl);
+    }
+
     private bool TryFindExistingPullRequest(
         string targetRepo,
         string headBranch,
@@ -135,6 +153,78 @@ internal sealed class GhRunSubmitPublisher : IRunSubmitPublisher
                 if (!string.Equals(candidateHead, headBranch, StringComparison.Ordinal)
                     || !string.Equals(candidateBase, PullRequestBase, StringComparison.Ordinal)
                     || !Uri.TryCreate(candidateUrl, UriKind.Absolute, out _))
+                {
+                    continue;
+                }
+
+                pullRequestUrl = candidateUrl;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryFindOpenPullRequestByLinkedIssueUrl(
+        string targetRepo,
+        string linkedIssueUrl,
+        out string pullRequestUrl)
+    {
+        var result = commandRunner.Run(
+            [
+                "pr",
+                "list",
+                "--repo",
+                targetRepo,
+                "--base",
+                PullRequestBase,
+                "--state",
+                "open",
+                "--json",
+                "url,headRefName,baseRefName,body",
+                "--limit",
+                "100"
+            ]);
+
+        pullRequestUrl = string.Empty;
+        if (result.ExitCode != 0)
+        {
+            return false;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(result.StdOut);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        using (document)
+        {
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            foreach (var element in document.RootElement.EnumerateArray())
+            {
+                if (!TryGetStringProperty(element, "url", out var candidateUrl)
+                    || !TryGetStringProperty(element, "baseRefName", out var candidateBase)
+                    || !TryGetStringProperty(element, "body", out var candidateBody))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(candidateBase, PullRequestBase, StringComparison.Ordinal)
+                    || !Uri.TryCreate(candidateUrl, UriKind.Absolute, out _))
+                {
+                    continue;
+                }
+
+                if (!candidateBody.Contains(linkedIssueUrl, StringComparison.Ordinal))
                 {
                     continue;
                 }
