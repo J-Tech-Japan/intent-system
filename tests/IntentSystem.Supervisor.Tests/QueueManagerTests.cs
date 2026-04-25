@@ -92,6 +92,51 @@ public sealed class QueueManagerTests
     }
 
     [Fact]
+    public void SubmitForReview_GivenBlockedWithoutMarkerAndAllowOverride_TransitionsToReview()
+    {
+        var blockedItem = CreateItem("A1", QueueItemState.Blocked) with
+        {
+            BlockedBy =
+            [
+                "Implement direct run for 'A1' ended after current-session product source/test read activity but before a bounded repair outcome."
+            ]
+        };
+        var state = CreateState([blockedItem]);
+
+        var result = QueueManager.SubmitForReview(
+            state,
+            "A1",
+            "intent-cli",
+            BaseTime,
+            linkedPr: "https://github.com/org/repo/pull/11",
+            allowBlockedWorktreeAdoption: true);
+
+        var updatedItem = FindItem(result.UpdatedState, "A1");
+        Assert.Equal(QueueItemState.Review, updatedItem.State);
+        Assert.Equal("https://github.com/org/repo/pull/11", updatedItem.LinkedPr);
+        Assert.Equal("review", result.Event.Event);
+        Assert.Equal("https://github.com/org/repo/pull/11", result.Event.LinkedPr);
+    }
+
+    [Fact]
+    public void SubmitForReview_GivenActiveAndAllowOverride_TransitionsToReview()
+    {
+        var state = CreateState(QueueItemState.Active);
+
+        var result = QueueManager.SubmitForReview(
+            state,
+            "A1",
+            "intent-cli",
+            BaseTime,
+            linkedPr: "https://github.com/org/repo/pull/12",
+            allowBlockedWorktreeAdoption: true);
+
+        var updatedItem = FindItem(result.UpdatedState, "A1");
+        Assert.Equal(QueueItemState.Review, updatedItem.State);
+        Assert.Equal("https://github.com/org/repo/pull/12", updatedItem.LinkedPr);
+    }
+
+    [Fact]
     public void RequestFix_GivenReviewItem_TransitionsToFixing()
     {
         var state = CreateState(QueueItemState.Review);

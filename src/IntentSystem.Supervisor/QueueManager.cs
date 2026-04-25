@@ -161,16 +161,29 @@ public static class QueueManager
     /// <summary>
     /// Transition an active item — or an adoption-required blocked item — to review.
     /// </summary>
+    /// <param name="allowBlockedWorktreeAdoption">
+    /// When <c>true</c>, accept a blocked queue item even when its
+    /// <see cref="QueueItem.BlockedBy"/> reason does not carry the
+    /// <see cref="WorktreeProgressAdoptionRequiredBlockedReasonPrefix"/> marker.
+    /// The caller is responsible for verifying out-of-band that the same bounded
+    /// worktree-progress evidence which originally produced the marker is still
+    /// present (rerun-stable adoption). Ordinary blocked rejection is unaffected
+    /// when the flag is false.
+    /// </param>
     public static QueueTransitionResult SubmitForReview(
         QueueState state, string executionUnit, string by, DateTimeOffset ts,
-        string? linkedPr = null)
+        string? linkedPr = null,
+        bool allowBlockedWorktreeAdoption = false)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(by);
 
         var item = FindItem(state, executionUnit);
-        if (item.State != QueueItemState.Active && !IsWorktreeProgressAdoptionRequiredBlocked(item))
+        var isBlockedAdoption =
+            IsWorktreeProgressAdoptionRequiredBlocked(item)
+            || (allowBlockedWorktreeAdoption && item.State == QueueItemState.Blocked);
+        if (item.State != QueueItemState.Active && !isBlockedAdoption)
         {
             AssertState(item, QueueItemState.Active, "submit-for-review");
         }

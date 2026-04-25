@@ -132,6 +132,64 @@ public sealed class RunSubmitCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRerunStableBlockedItemWithMeaningfulWorktreeProgress_PushesAndTransitionsToReview()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "worktrees", "G14"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState(
+                primaryItemState: QueueItemState.Blocked,
+                primaryBlockedBy:
+                [
+                    "Implement direct run for 'G14' ended after current-session product source/test read activity but before a bounded repair outcome. Current-session evidence observed request_reread=True, repo_inventory=True, repo_local_spec_read=True, product_source_or_test_read=True. A failing backend-exit was captured after product source/test read activity, so the normalized failure must preserve that later evidence rather than collapsing it into an earlier pre-read backend-exit boundary."
+                ])));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G14", "packet.yaml"),
+            CreatePacketYaml());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            string.Empty);
+        using var writer = new StringWriter();
+        var publisher = new FakePublisher();
+        var originalGitFactory = RunSubmitCommand.GitCommandRunnerFactory;
+        var originalPublisherFactory = RunSubmitCommand.PublisherFactory;
+        var originalTimestampFactory = RunSubmitCommand.TimestampFactory;
+
+        try
+        {
+            RunSubmitCommand.GitCommandRunnerFactory =
+                () => new FakeGitRunnerWithDirtyWorktree(branchName: "issue-56-g14");
+            RunSubmitCommand.PublisherFactory = () => publisher;
+            RunSubmitCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-25T16:50:00Z");
+
+            var exitCode = RunSubmitCommand.Execute(CreateContext(repoRoot), ["G14"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Run submitted for G14", writer.ToString(), StringComparison.Ordinal);
+
+            var queueState = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+            var submittedItem = queueState.Items.Single(item => item.ExecutionUnit == "G14");
+            Assert.Equal(QueueItemState.Review, submittedItem.State);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", submittedItem.LinkedPr);
+
+            var reviewEvent = Assert.Single(RunLogSerializer.DeserializeAll(
+                File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl"))));
+            Assert.Equal("review", reviewEvent.Event);
+            Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/58", reviewEvent.LinkedPr);
+        }
+        finally
+        {
+            RunSubmitCommand.GitCommandRunnerFactory = originalGitFactory;
+            RunSubmitCommand.PublisherFactory = originalPublisherFactory;
+            RunSubmitCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenOrdinaryBlockedItem_ReturnsExitCodeOneWithoutMutatingFiles()
     {
         using var tempDirectory = new TemporaryDirectory();
