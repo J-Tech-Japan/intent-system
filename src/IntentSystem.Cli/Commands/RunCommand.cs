@@ -1304,6 +1304,20 @@ internal static class RunCommand
 
         if (isDeterministicContractGap)
         {
+            if (TryBuildBlockedImplementWorktreeProgressAdoptionDetail(
+                    context,
+                    blockedItem,
+                    session,
+                    out var adoptionDetail))
+            {
+                result = CreateStopResult(
+                    ClarificationRequiredStopReason,
+                    actions,
+                    blockedItem.ExecutionUnit,
+                    adoptionDetail);
+                return true;
+            }
+
             result = CreateStopResult(
                 DeterministicContractGapStopReason,
                 actions,
@@ -1318,6 +1332,101 @@ internal static class RunCommand
             blockedItem.ExecutionUnit,
             detail);
         return true;
+    }
+
+    private static bool TryBuildBlockedImplementWorktreeProgressAdoptionDetail(
+        CliContext context,
+        QueueItem blockedItem,
+        RunSupervisionSession session,
+        out string detail)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(blockedItem);
+        ArgumentNullException.ThrowIfNull(session);
+
+        detail = null!;
+
+        var worktreePath = string.IsNullOrWhiteSpace(session.WorktreePath)
+            ? RunStartCommand.ResolveWorktreePath(context, blockedItem.ExecutionUnit)
+            : session.WorktreePath;
+        if (!Directory.Exists(worktreePath))
+        {
+            return false;
+        }
+
+        if (!RunWorktreeProgressSupport.TryResolveMeaningfulWorktreeDiffPaths(
+                GitCommandRunnerFactory(),
+                worktreePath,
+                out var changedPaths))
+        {
+            return false;
+        }
+
+        var requestArtifact = TryReadDirectRunRequestArtifact(context, blockedItem.ExecutionUnit);
+        if (requestArtifact is null
+            || !string.Equals(requestArtifact.EntryKind, "implement", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var providerEvents = TryReadDirectRunProviderEvents(context, blockedItem.ExecutionUnit);
+        if (providerEvents.Count == 0)
+        {
+            return false;
+        }
+
+        providerEvents = SelectCurrentSessionEvents(
+            providerEvents,
+            requestArtifact.ProviderSessionId,
+            requestArtifact.LaunchedAt);
+
+        if (!TryResolveFailingBackendExitCode(providerEvents, out var exitCode))
+        {
+            return false;
+        }
+
+        var verificationSignal = DirectRunFixOutcomeSupport.HasVerificationCommandSignal(providerEvents)
+            ? "dotnet-test-observed"
+            : "not-observed";
+        var rawLogRef = ResolveDirectRunProviderLogRef(context, blockedItem.ExecutionUnit);
+
+        detail =
+            $"worktree-progress-adoption-required: Implement direct run for '{blockedItem.ExecutionUnit}' " +
+            $"exited with backend exit code {exitCode} after current-session product source/test or verification activity, " +
+            "and left meaningful execution-unit worktree changes. " +
+            $"Worktree path: {worktreePath}. " +
+            $"Provider session: {requestArtifact.ProviderSessionId}. " +
+            $"Raw log ref: {rawLogRef}. " +
+            $"Changed paths: {RunWorktreeProgressSupport.SummarizePaths(changedPaths)}. " +
+            $"Verification signal: {verificationSignal}. " +
+            "Downstream automation must either carry this progress into the existing submit/review boundary " +
+            "or leave it for operator adoption; " +
+            "it must not treat the backend exit as a startup-only/provider-auth failure.";
+        return true;
+    }
+
+    private static bool TryResolveFailingBackendExitCode(
+        IReadOnlyList<DirectRunProviderEvent> providerEvents,
+        out int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(providerEvents);
+
+        for (var index = providerEvents.Count - 1; index >= 0; index--)
+        {
+            var providerEvent = providerEvents[index];
+            if (!HasBackendExitType(providerEvent)
+                || !providerEvent.Payload.TryGetProperty("exit_code", out var exitCodeElement)
+                || !exitCodeElement.TryGetInt32(out exitCode)
+                || exitCode == 0)
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        exitCode = default;
+        return false;
     }
 
     private static bool TryReconcileExternallyCompletedBlockedItem(
