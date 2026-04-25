@@ -13018,6 +13018,16 @@ public sealed class RunCommandTests : IDisposable
         {
             return "https://github.com/J-Tech-Japan/intent-system/pull/226";
         }
+
+        public bool TryFindExistingOpenPullRequest(
+            string targetRepo,
+            string headBranch,
+            string linkedIssueUrl,
+            out string pullRequestUrl)
+        {
+            pullRequestUrl = string.Empty;
+            return false;
+        }
     }
 
     private sealed record ExpectedReviewCommand(IReadOnlyList<string> Arguments, ReviewCommandResult Result);

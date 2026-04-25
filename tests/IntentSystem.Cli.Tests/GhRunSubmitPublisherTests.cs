@@ -131,6 +131,145 @@ public sealed class GhRunSubmitPublisherTests
         Assert.Equal(2, runner.Calls.Count);
     }
 
+    [Fact]
+    public void TryFindExistingOpenPullRequest_GivenMatchingHeadBranch_ReturnsTrueWithoutBodyScan()
+    {
+        var runner = new ScriptedRunner(
+            new GitHubCommandResult
+            {
+                ExitCode = 0,
+                StdOut = """
+                [
+                  {
+                    "url": "https://github.com/tomohisa/toy-calc-sample/pull/25",
+                    "headRefName": "issue-24-toy-calc-v0-11",
+                    "baseRefName": "main"
+                  }
+                ]
+                """,
+                StdErr = string.Empty
+            });
+        var publisher = new GhRunSubmitPublisher(runner);
+
+        var found = publisher.TryFindExistingOpenPullRequest(
+            "tomohisa/toy-calc-sample",
+            "issue-24-toy-calc-v0-11",
+            "https://github.com/tomohisa/toy-calc-sample/issues/24",
+            out var url);
+
+        Assert.True(found);
+        Assert.Equal("https://github.com/tomohisa/toy-calc-sample/pull/25", url);
+        Assert.Single(runner.Calls);
+        Assert.Equal(
+            [
+                "pr",
+                "list",
+                "--repo",
+                "tomohisa/toy-calc-sample",
+                "--head",
+                "issue-24-toy-calc-v0-11",
+                "--base",
+                "main",
+                "--state",
+                "open",
+                "--json",
+                "url,headRefName,baseRefName"
+            ],
+            runner.Calls.Single());
+    }
+
+    [Fact]
+    public void TryFindExistingOpenPullRequest_GivenNoHeadMatchButLinkedIssueUrlInBody_ReturnsTrueViaBodyScan()
+    {
+        var runner = new ScriptedRunner(
+            new GitHubCommandResult
+            {
+                ExitCode = 0,
+                StdOut = "[]",
+                StdErr = string.Empty
+            },
+            new GitHubCommandResult
+            {
+                ExitCode = 0,
+                StdOut = """
+                [
+                  {
+                    "url": "https://github.com/tomohisa/toy-calc-sample/pull/25",
+                    "headRefName": "issue-24-toy-calc-v0-11",
+                    "baseRefName": "main",
+                    "body": "## Summary\n\n- [TOY-CALC-V0-11] Add unary integer sign command sign\n\n## Linked Issue\n\n- https://github.com/tomohisa/toy-calc-sample/issues/24\n"
+                  }
+                ]
+                """,
+                StdErr = string.Empty
+            });
+        var publisher = new GhRunSubmitPublisher(runner);
+
+        var found = publisher.TryFindExistingOpenPullRequest(
+            "tomohisa/toy-calc-sample",
+            "different-branch-name",
+            "https://github.com/tomohisa/toy-calc-sample/issues/24",
+            out var url);
+
+        Assert.True(found);
+        Assert.Equal("https://github.com/tomohisa/toy-calc-sample/pull/25", url);
+        Assert.Equal(2, runner.Calls.Count);
+        Assert.Equal(
+            [
+                "pr",
+                "list",
+                "--repo",
+                "tomohisa/toy-calc-sample",
+                "--base",
+                "main",
+                "--state",
+                "open",
+                "--json",
+                "url,headRefName,baseRefName,body",
+                "--limit",
+                "100"
+            ],
+            runner.Calls[1]);
+    }
+
+    [Fact]
+    public void TryFindExistingOpenPullRequest_GivenNoHeadMatchAndNoBodyMatch_ReturnsFalse()
+    {
+        var runner = new ScriptedRunner(
+            new GitHubCommandResult
+            {
+                ExitCode = 0,
+                StdOut = "[]",
+                StdErr = string.Empty
+            },
+            new GitHubCommandResult
+            {
+                ExitCode = 0,
+                StdOut = """
+                [
+                  {
+                    "url": "https://github.com/tomohisa/toy-calc-sample/pull/30",
+                    "headRefName": "issue-99-other-thing",
+                    "baseRefName": "main",
+                    "body": "Unrelated linked issue: https://github.com/tomohisa/toy-calc-sample/issues/99"
+                  }
+                ]
+                """,
+                StdErr = string.Empty
+            });
+        var publisher = new GhRunSubmitPublisher(runner);
+
+        var found = publisher.TryFindExistingOpenPullRequest(
+            "tomohisa/toy-calc-sample",
+            "different-branch-name",
+            "https://github.com/tomohisa/toy-calc-sample/issues/24",
+            out var url);
+
+        Assert.False(found);
+        Assert.Equal(string.Empty, url);
+        Assert.Equal(2, runner.Calls.Count);
+    }
+
     private sealed class ScriptedRunner(params GitHubCommandResult[] results) : IGitHubCommandRunner
     {
         private readonly Queue<GitHubCommandResult> results = new(results);

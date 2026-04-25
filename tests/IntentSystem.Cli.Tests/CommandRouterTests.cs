@@ -5250,6 +5250,16 @@ recommended_updates:
         {
             return "https://github.com/J-Tech-Japan/intent-system/pull/58";
         }
+
+        public bool TryFindExistingOpenPullRequest(
+            string targetRepo,
+            string headBranch,
+            string linkedIssueUrl,
+            out string pullRequestUrl)
+        {
+            pullRequestUrl = string.Empty;
+            return false;
+        }
     }
 
     private sealed class FakeReviewAcceptClient : IReviewAcceptClient
