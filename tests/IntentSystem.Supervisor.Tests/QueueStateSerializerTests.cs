@@ -166,4 +166,79 @@ public sealed class QueueStateSerializerTests
         Assert.DoesNotContain("\"packetPaths\"", serialized, StringComparison.Ordinal);
         Assert.Contains("\n  \"updated_at\"", serialized, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Deserialize_GivenLinkedIssueWithNullNumberAndUrl_TolerantlyReturnsNullableFields()
+    {
+        // G176: parent-host queue-state can carry pre-issue rows whose linked_issue.number / url
+        // are still null. The submit/seed/numbering pipeline must not crash on the deserialize
+        // boundary just because one row is mid-publish.
+        var json = """
+        {
+          "schema_version": "1",
+          "updated_at": "2026-04-26T05:00:00Z",
+          "items": [
+            {
+              "execution_unit": "TOY-CALC-V0-11",
+              "title": "Submitted unit",
+              "state": "active",
+              "dependencies": [],
+              "blocked_by": [],
+              "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+              "packet_paths": {
+                "implementation": ".intent-cli/issues/TOY-CALC-V0-11/implementation.md",
+                "review_context": ".intent-cli/issues/TOY-CALC-V0-11/review-context.md",
+                "yaml": ".intent-cli/issues/TOY-CALC-V0-11/packet.yaml"
+              },
+              "linked_issue": {
+                "repo": "tomohisa/toy-calc-sample",
+                "number": 24,
+                "url": "https://github.com/tomohisa/toy-calc-sample/issues/24"
+              },
+              "worker_role": "coder",
+              "review_role": "reviewer",
+              "priority": "high"
+            },
+            {
+              "execution_unit": "SKS-G54",
+              "title": "Pre-issue row mid-publish",
+              "state": "queued",
+              "dependencies": [],
+              "blocked_by": [],
+              "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+              "packet_paths": {
+                "implementation": ".intent-cli/issues/SKS-G54/implementation.md",
+                "review_context": ".intent-cli/issues/SKS-G54/review-context.md",
+                "yaml": ".intent-cli/issues/SKS-G54/packet.yaml"
+              },
+              "linked_issue": {
+                "repo": "J-Tech-Japan/intent-system",
+                "number": null,
+                "url": null
+              },
+              "worker_role": "coder",
+              "review_role": "reviewer",
+              "priority": "high"
+            }
+          ]
+        }
+        """;
+
+        var queueState = QueueStateSerializer.Deserialize(json);
+
+        Assert.Equal(2, queueState.Items.Count);
+
+        var resolvedItem = Assert.Single(queueState.Items, item => item.ExecutionUnit == "TOY-CALC-V0-11");
+        Assert.NotNull(resolvedItem.LinkedIssue);
+        Assert.Equal(24, resolvedItem.LinkedIssue!.Number);
+        Assert.Equal(
+            "https://github.com/tomohisa/toy-calc-sample/issues/24",
+            resolvedItem.LinkedIssue.Url);
+
+        var preIssueItem = Assert.Single(queueState.Items, item => item.ExecutionUnit == "SKS-G54");
+        Assert.NotNull(preIssueItem.LinkedIssue);
+        Assert.Equal("J-Tech-Japan/intent-system", preIssueItem.LinkedIssue!.Repo);
+        Assert.Null(preIssueItem.LinkedIssue.Number);
+        Assert.Null(preIssueItem.LinkedIssue.Url);
+    }
 }

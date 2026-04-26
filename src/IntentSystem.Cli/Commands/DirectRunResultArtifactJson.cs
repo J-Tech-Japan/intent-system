@@ -63,10 +63,10 @@ internal sealed record DirectRunLinkedIssueContext
     public required string Repo { get; init; }
 
     [JsonPropertyName("number")]
-    public required int Number { get; init; }
+    public int? Number { get; init; }
 
     [JsonPropertyName("url")]
-    public required string Url { get; init; }
+    public string? Url { get; init; }
 }
 
 internal sealed record DirectRunLinkedPullRequestContext
