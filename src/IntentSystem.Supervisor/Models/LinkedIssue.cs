@@ -4,7 +4,7 @@ public sealed record LinkedIssue
 {
     public required string Repo { get; init; }
 
-    public required int Number { get; init; }
+    public int? Number { get; init; }
 
-    public required string Url { get; init; }
+    public string? Url { get; init; }
 }
