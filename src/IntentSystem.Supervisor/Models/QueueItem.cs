@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using IntentSystem.Supervisor.Serialization;
+
 namespace IntentSystem.Supervisor.Models;
 
 public sealed record QueueItem
@@ -18,6 +21,7 @@ public sealed record QueueItem
 
     public LinkedIssue? LinkedIssue { get; init; }
 
+    [JsonConverter(typeof(LinkedPrJsonConverter))]
     public string? LinkedPr { get; init; }
 
     public required string WorkerRole { get; init; }

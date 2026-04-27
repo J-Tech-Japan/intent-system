@@ -241,4 +241,99 @@ public sealed class QueueStateSerializerTests
         Assert.Null(preIssueItem.LinkedIssue.Number);
         Assert.Null(preIssueItem.LinkedIssue.Url);
     }
+
+    [Fact]
+    public void Deserialize_GivenObjectShapedLinkedPr_TolerantlyExtractsUrl()
+    {
+        // G177: parent-host queue-state may carry rows whose linked_pr is the
+        // structured GitHub PR reference shape { repo, number, url } — same family
+        // of canonical shape as linked_issue. The deserialize boundary must accept
+        // both the legacy bare-string form and the structured object form so that
+        // run submit does not crash with JsonException at $.items[*].linked_pr.
+        var json = """
+        {
+          "schema_version": "1",
+          "updated_at": "2026-04-27T20:56:58Z",
+          "items": [
+            {
+              "execution_unit": "SKS-A1",
+              "title": "SKS-A1 Bootstrap Management Service Control Plane",
+              "state": "completed",
+              "dependencies": [],
+              "blocked_by": [],
+              "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+              "packet_paths": {
+                "implementation": ".intent-cli/issues/SKS-A1/implementation.md",
+                "review_context": ".intent-cli/issues/SKS-A1/review-context.md",
+                "yaml": ".intent-cli/issues/SKS-A1/packet.yaml"
+              },
+              "linked_issue": {
+                "repo": "J-Tech-Japan/SekibanAsAService",
+                "number": 85,
+                "url": "https://github.com/J-Tech-Japan/SekibanAsAService/issues/85"
+              },
+              "linked_pr": {
+                "repo": "J-Tech-Japan/SekibanAsAService",
+                "number": 86,
+                "url": "https://github.com/J-Tech-Japan/SekibanAsAService/pull/86"
+              },
+              "worker_role": "coder",
+              "review_role": "reviewer",
+              "priority": "high"
+            },
+            {
+              "execution_unit": "TOY-CALC-V0-11",
+              "title": "Legacy bare-string linked_pr",
+              "state": "completed",
+              "dependencies": [],
+              "blocked_by": [],
+              "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+              "packet_paths": {
+                "implementation": ".intent-cli/issues/TOY-CALC-V0-11/implementation.md",
+                "review_context": ".intent-cli/issues/TOY-CALC-V0-11/review-context.md",
+                "yaml": ".intent-cli/issues/TOY-CALC-V0-11/packet.yaml"
+              },
+              "linked_pr": "https://github.com/tomohisa/toy-calc-sample/pull/25",
+              "worker_role": "coder",
+              "review_role": "reviewer",
+              "priority": "high"
+            },
+            {
+              "execution_unit": "SKS-G54",
+              "title": "Pre-PR row with null linked_pr",
+              "state": "queued",
+              "dependencies": [],
+              "blocked_by": [],
+              "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+              "packet_paths": {
+                "implementation": ".intent-cli/issues/SKS-G54/implementation.md",
+                "review_context": ".intent-cli/issues/SKS-G54/review-context.md",
+                "yaml": ".intent-cli/issues/SKS-G54/packet.yaml"
+              },
+              "linked_pr": null,
+              "worker_role": "coder",
+              "review_role": "reviewer",
+              "priority": "high"
+            }
+          ]
+        }
+        """;
+
+        var queueState = QueueStateSerializer.Deserialize(json);
+
+        Assert.Equal(3, queueState.Items.Count);
+
+        var objectShapedItem = Assert.Single(queueState.Items, item => item.ExecutionUnit == "SKS-A1");
+        Assert.Equal(
+            "https://github.com/J-Tech-Japan/SekibanAsAService/pull/86",
+            objectShapedItem.LinkedPr);
+
+        var legacyStringItem = Assert.Single(queueState.Items, item => item.ExecutionUnit == "TOY-CALC-V0-11");
+        Assert.Equal(
+            "https://github.com/tomohisa/toy-calc-sample/pull/25",
+            legacyStringItem.LinkedPr);
+
+        var nullPrItem = Assert.Single(queueState.Items, item => item.ExecutionUnit == "SKS-G54");
+        Assert.Null(nullPrItem.LinkedPr);
+    }
 }
