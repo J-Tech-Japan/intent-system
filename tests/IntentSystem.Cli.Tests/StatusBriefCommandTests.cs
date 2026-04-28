@@ -111,7 +111,17 @@ public sealed class StatusBriefCommandTests
               ]
             }
             """);
-        workspace.WriteClarificationOpen("# Open\n\n- Should we use plain text format by default?\n");
+        workspace.WriteClarificationOpen(
+            """
+            # intent-cli clarifications
+
+            Some durable prose that should not by itself force the brief to
+            report a clarification.
+
+            ## Current Open Blockers
+
+            - Should we use plain text format by default for `status brief`?
+            """);
 
         using var writer = new StringWriter();
         var exitCode = StatusBriefCommand.Execute(
@@ -225,6 +235,103 @@ public sealed class StatusBriefCommandTests
         var output = writer.ToString();
         Assert.Contains($"Recommended action: {StatusBriefRecommendation.IssueCutReady}", output, StringComparison.Ordinal);
         Assert.Contains("Next candidate: G180", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenRealisticNoBlockerClarificationFile_DoesNotForceClarificationRequired()
+    {
+        // Review fix for G179: parent-host `intents/<domain>/clarifications/open.md` is a
+        // durable markdown artifact and remains non-empty even when there is no root
+        // blocker. The brief must parse the structured "Current Open Blockers" section
+        // and treat the explicit no-blocker sentinel as not-open, so review/WIP/issue-cut
+        // recommendations are not masked by `clarification-required`.
+        using var workspace = new StatusBriefWorkspace();
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G180",
+                  "title": "context collect",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {
+                    "implementation": ".intent-cli/issues/G180/implementation.md",
+                    "review_context": ".intent-cli/issues/G180/review-context.md",
+                    "yaml": ".intent-cli/issues/G180/packet.yaml"
+                  },
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "high"
+                }
+              ]
+            }
+            """);
+        workspace.WriteClarificationOpen(
+            """
+            # intent-cli clarifications
+
+            このファイルは durable な markdown artifact として残し続けるため、本文が
+            空になることはない。clarification-required を出すのは「現時点で実際に
+            blocker が立っているとき」だけにする。
+
+            ## Recently Resolved
+
+            - G178 pending alias を queued に正規化する方針で確定。
+
+            ## Current Open Blockers
+
+            - 現時点で child issue cut を要する root blocker はない。
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = StatusBriefCommand.Execute(
+            workspace.Context,
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("clarification_open").GetBoolean());
+        Assert.NotEqual(
+            StatusBriefRecommendation.ClarificationRequired,
+            root.GetProperty("recommended_action").GetString());
+        // With no WIP / no review and a deps-satisfied queued item, the next
+        // recommendation should fall through to issue-cut-ready.
+        Assert.Equal(
+            StatusBriefRecommendation.IssueCutReady,
+            root.GetProperty("recommended_action").GetString());
+    }
+
+    [Fact]
+    public void Execute_GivenClarificationFileWithoutCurrentOpenBlockersHeading_DoesNotMarkClarificationOpen()
+    {
+        // Defensive: a clarifications/open.md that contains only prose (no
+        // structured "## Current Open Blockers" heading) should not be misread
+        // as an open blocker.
+        using var workspace = new StatusBriefWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            # intent-cli clarifications
+
+            参考メモ。実際の blocker 一覧は別ドキュメントで管理している想定の
+            導入文だけのファイル。
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = StatusBriefCommand.Execute(
+            workspace.Context,
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.False(document.RootElement.GetProperty("clarification_open").GetBoolean());
     }
 
     [Fact]

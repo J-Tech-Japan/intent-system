@@ -87,13 +87,10 @@ internal static class StatusBriefAnalyzer
 
         var clarificationPath = ResolveClarificationPath(context, domain);
         var clarificationOpen = false;
-        if (clarificationPath is not null)
+        if (clarificationPath is not null && File.Exists(clarificationPath))
         {
-            if (File.Exists(clarificationPath))
-            {
-                var content = File.ReadAllText(clarificationPath);
-                clarificationOpen = !string.IsNullOrWhiteSpace(content);
-            }
+            var content = File.ReadAllText(clarificationPath);
+            clarificationOpen = HasOpenBlocker(content);
         }
 
         var recentEvents = LoadRecentEvents(context, notes);
@@ -141,6 +138,93 @@ internal static class StatusBriefAnalyzer
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Parent-host clarification files (<c>intents/&lt;domain&gt;/clarifications/open.md</c>)
+    /// are durable markdown artifacts that remain non-empty even when there is
+    /// no root blocker. The host shape places live blockers as list items under a
+    /// "## Current Open Blockers" heading, with an explicit no-blocker sentinel
+    /// list item when nothing is currently blocking. Detect open blockers
+    /// structurally so that a no-blocker file does not falsely force the
+    /// <c>clarification-required</c> recommendation (G179 review fix).
+    /// </summary>
+    /// <remarks>
+    /// Conservative behaviour: if no <c>## Current Open Blockers</c> section is
+    /// present, treat the file as having no open blocker. The caller already
+    /// records degraded notes for missing files; the AI tasking thread can still
+    /// inspect manually if it suspects the file shape has drifted.
+    /// </remarks>
+    private static bool HasOpenBlocker(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var inBlockerSection = false;
+
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.TrimEnd();
+
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                var heading = line[3..].Trim();
+                inBlockerSection = string.Equals(
+                    heading,
+                    "Current Open Blockers",
+                    StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            if (!inBlockerSection)
+            {
+                continue;
+            }
+
+            var trimmed = line.TrimStart();
+            if (!trimmed.StartsWith("- ", StringComparison.Ordinal)
+                && !trimmed.StartsWith("* ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var item = trimmed[2..].Trim();
+            if (item.Length == 0)
+            {
+                continue;
+            }
+
+            if (IsNoBlockerSentinel(item))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsNoBlockerSentinel(string item)
+    {
+        // Host-established no-blocker sentinel (Japanese). Match on the substring
+        // so any minor surrounding wording (e.g. trailing punctuation, links) is
+        // still treated as a non-actionable entry.
+        const string japaneseSentinel = "現時点で child issue cut を要する root blocker はない";
+        if (item.Contains(japaneseSentinel, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Defensive English fallback for any future host that uses a parallel
+        // English wording. Kept narrow on purpose so unrelated bullets do not
+        // accidentally suppress real blockers.
+        return item.Contains(
+            "no root blocker requiring child issue cut",
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ResolveClarificationPath(CliContext context, string domain)
