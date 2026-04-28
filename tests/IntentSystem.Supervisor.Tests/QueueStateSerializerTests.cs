@@ -336,4 +336,87 @@ public sealed class QueueStateSerializerTests
         var nullPrItem = Assert.Single(queueState.Items, item => item.ExecutionUnit == "SKS-G54");
         Assert.Null(nullPrItem.LinkedPr);
     }
+
+    [Fact]
+    public void Deserialize_GivenLegacyPendingState_TolerantlyMapsToQueued()
+    {
+        // G178: parent-host queue-state may persist `state: "pending"` as a legacy
+        // synonym for canonical `Queued`. The deserialize boundary must accept it
+        // and normalize to QueueItemState.Queued so submit/seed/numbering pipelines
+        // do not crash with JsonException at $.items[*].state.
+        var json = """
+        {
+          "schema_version": "1",
+          "updated_at": "2026-04-28T04:44:00Z",
+          "items": [
+            {
+              "execution_unit": "SKS-G87",
+              "title": "SKS-G87 Cross-Surface Consistency Repair Proposal Read-Only Baseline",
+              "state": "pending",
+              "dependencies": [],
+              "blocked_by": [],
+              "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+              "packet_paths": {
+                "implementation": ".intent-cli/issues/SKS-G87/implementation.md",
+                "review_context": ".intent-cli/issues/SKS-G87/review-context.md",
+                "yaml": ".intent-cli/issues/SKS-G87/packet.yaml"
+              },
+              "linked_issue": {
+                "repo": "J-Tech-Japan/SekibanAsAService",
+                "number": 292,
+                "url": "https://github.com/J-Tech-Japan/SekibanAsAService/issues/292"
+              },
+              "linked_pr": null,
+              "worker_role": "coder",
+              "review_role": "reviewer",
+              "priority": "high"
+            }
+          ]
+        }
+        """;
+
+        var queueState = QueueStateSerializer.Deserialize(json);
+
+        var item = Assert.Single(queueState.Items);
+        Assert.Equal(QueueItemState.Queued, item.State);
+    }
+
+    [Fact]
+    public void Serialize_GivenQueuedState_EmitsCanonicalQueuedNotPending()
+    {
+        // G178: the legacy `pending` alias is read-only tolerance. On the way out
+        // we always emit the canonical `queued` form so the parent-host queue-state
+        // converges on the canonical schema as it gets rewritten.
+        var queueState = new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-28T04:44:00Z"),
+            Items =
+            [
+                new QueueItem
+                {
+                    ExecutionUnit = "SKS-G87",
+                    Title = "Round-trip canonicalization",
+                    State = QueueItemState.Queued,
+                    Dependencies = [],
+                    BlockedBy = [],
+                    ClarificationReturnPath = "intents/intent-cli/clarifications/open.md",
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/SKS-G87/implementation.md",
+                        ReviewContext = ".intent-cli/issues/SKS-G87/review-context.md",
+                        Yaml = ".intent-cli/issues/SKS-G87/packet.yaml"
+                    },
+                    WorkerRole = "coder",
+                    ReviewRole = "reviewer",
+                    Priority = "high"
+                }
+            ]
+        };
+
+        var serialized = QueueStateSerializer.Serialize(queueState);
+
+        Assert.Contains("\"state\": \"queued\"", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"pending\"", serialized, StringComparison.Ordinal);
+    }
 }
