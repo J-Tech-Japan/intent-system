@@ -18,6 +18,7 @@ internal static class SupervisorJsonOptions
             WriteIndented = writeIndented
         };
 
+        options.Converters.Add(new QueueItemStateJsonConverter());
         options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.KebabCaseLower));
 
         return options;
