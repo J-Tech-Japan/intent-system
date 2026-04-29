@@ -96,6 +96,21 @@ internal static class TaskingHandoffBundleVerifyConstants
         public const string BundleArtifactOnlyNoProviderLaunchDirective =
             "bundle_artifact_only_no_provider_launch_directive";
 
+        // G197 — content-hash pinning. New stable check ids appended to the end
+        // of <see cref="All"/> in the order: task-packet (file_exists then
+        // hash_matches), preview, checklist, handoff. The verify analyzer runs
+        // these AFTER the existing G196 path/sha256 field-presence checks so it
+        // can short-circuit deterministically when the path field itself is
+        // missing or empty.
+        public const string TaskPacketFileExists = "task_packet_file_exists";
+        public const string TaskPacketHashMatches = "task_packet_hash_matches";
+        public const string PreviewFileExists = "preview_file_exists";
+        public const string PreviewHashMatches = "preview_hash_matches";
+        public const string ChecklistFileExists = "checklist_file_exists";
+        public const string ChecklistHashMatches = "checklist_hash_matches";
+        public const string HandoffFileExists = "handoff_file_exists";
+        public const string HandoffHashMatches = "handoff_hash_matches";
+
         public static readonly IReadOnlyList<string> All = new[]
         {
             BundlePathPresentAndReadable,
@@ -113,7 +128,17 @@ internal static class TaskingHandoffBundleVerifyConstants
             ChecklistSha256Present,
             ChecklistPassedOrFailedCheckIdsPresent,
             RecommendedWorkerActionNonEmpty,
-            BundleArtifactOnlyNoProviderLaunchDirective
+            BundleArtifactOnlyNoProviderLaunchDirective,
+            // G197 content-hash pinning checks — task-packet, preview,
+            // checklist, handoff (file_exists then hash_matches per ref).
+            TaskPacketFileExists,
+            TaskPacketHashMatches,
+            PreviewFileExists,
+            PreviewHashMatches,
+            ChecklistFileExists,
+            ChecklistHashMatches,
+            HandoffFileExists,
+            HandoffHashMatches
         };
     }
 }

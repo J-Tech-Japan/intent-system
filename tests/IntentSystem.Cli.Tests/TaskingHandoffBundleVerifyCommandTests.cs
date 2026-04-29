@@ -493,6 +493,488 @@ public sealed class TaskingHandoffBundleVerifyCommandTests : IDisposable
         Assert.False(sourceBundle.IsAutomationVisible);
     }
 
+    // -------------------------------------------------------------------
+    // G197 — content-hash pinning for referenced source artifacts.
+    // -------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_GivenValidBundle_AllReferencedArtifactsExistAndHashesMatch()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-happy");
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(0, checkResult.ExitCode);
+
+        var passedIds = ExtractPassedCheckIds(checkResult);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.PreviewFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.PreviewHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.HandoffFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.HandoffHashMatches, passedIds);
+    }
+
+    [Fact]
+    public void Execute_GivenReferencedTaskPacketDeleted_TaskPacketFileExistsCheckFails()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-del-tp");
+        var bundle = ReadBundle(bundlePath);
+        File.Delete(bundle.SourceTaskPacketPath);
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(1, checkResult.ExitCode);
+        AssertCheckFailed(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketFileExists);
+        AssertCheckFailed(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches);
+
+        var passedIds = ExtractPassedCheckIds(checkResult);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.PreviewFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.PreviewHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.HandoffFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.HandoffHashMatches, passedIds);
+    }
+
+    [Fact]
+    public void Execute_GivenReferencedPreviewDeleted_PreviewFileExistsCheckFails()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-del-pv");
+        var bundle = ReadBundle(bundlePath);
+        File.Delete(bundle.SourcePreviewPath);
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(1, checkResult.ExitCode);
+        AssertCheckFailed(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.PreviewFileExists);
+        AssertCheckFailed(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.PreviewHashMatches);
+
+        var passedIds = ExtractPassedCheckIds(checkResult);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.HandoffFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.HandoffHashMatches, passedIds);
+    }
+
+    [Fact]
+    public void Execute_GivenReferencedChecklistDeleted_ChecklistFileExistsCheckFails()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-del-cl");
+        var bundle = ReadBundle(bundlePath);
+        File.Delete(bundle.SourceChecklistPath);
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(1, checkResult.ExitCode);
+        AssertCheckFailed(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistFileExists);
+        AssertCheckFailed(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistHashMatches);
+
+        var passedIds = ExtractPassedCheckIds(checkResult);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.PreviewFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.PreviewHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.HandoffFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.HandoffHashMatches, passedIds);
+    }
+
+    [Fact]
+    public void Execute_GivenReferencedHandoffDeleted_HandoffFileExistsCheckFails()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-del-ho");
+        var bundle = ReadBundle(bundlePath);
+        File.Delete(bundle.SourceHandoffPath);
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(1, checkResult.ExitCode);
+        AssertCheckFailed(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.HandoffFileExists);
+        AssertCheckFailed(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.HandoffHashMatches);
+
+        var passedIds = ExtractPassedCheckIds(checkResult);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.PreviewFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.PreviewHashMatches, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistFileExists, passedIds);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistHashMatches, passedIds);
+    }
+
+    [Fact]
+    public void Execute_GivenReferencedTaskPacketEdited_TaskPacketHashMismatchFails()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-edit-tp");
+        var bundle = ReadBundle(bundlePath);
+        AppendByte(bundle.SourceTaskPacketPath);
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(1, checkResult.ExitCode);
+
+        var passedIds = ExtractPassedCheckIds(checkResult);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketFileExists, passedIds);
+
+        var failedDetail = GetFailedCheckDetail(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches);
+        Assert.Contains("recorded:", failedDetail, StringComparison.Ordinal);
+        Assert.Contains("actual:", failedDetail, StringComparison.Ordinal);
+        Assert.Contains(bundle.SourceTaskPacketSha256, failedDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenReferencedPreviewEdited_PreviewHashMismatchFails()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-edit-pv");
+        var bundle = ReadBundle(bundlePath);
+        AppendByte(bundle.SourcePreviewPath);
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(1, checkResult.ExitCode);
+
+        var passedIds = ExtractPassedCheckIds(checkResult);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.PreviewFileExists, passedIds);
+
+        var failedDetail = GetFailedCheckDetail(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.PreviewHashMatches);
+        Assert.Contains("recorded:", failedDetail, StringComparison.Ordinal);
+        Assert.Contains("actual:", failedDetail, StringComparison.Ordinal);
+        Assert.Contains(bundle.SourcePreviewSha256, failedDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenReferencedChecklistEdited_ChecklistHashMismatchFails()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-edit-cl");
+        var bundle = ReadBundle(bundlePath);
+        AppendByte(bundle.SourceChecklistPath);
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(1, checkResult.ExitCode);
+
+        var passedIds = ExtractPassedCheckIds(checkResult);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistFileExists, passedIds);
+
+        var failedDetail = GetFailedCheckDetail(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistHashMatches);
+        Assert.Contains("recorded:", failedDetail, StringComparison.Ordinal);
+        Assert.Contains("actual:", failedDetail, StringComparison.Ordinal);
+        Assert.Contains(bundle.SourceChecklistSha256, failedDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenReferencedHandoffEdited_HandoffHashMismatchFails()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-edit-ho");
+        var bundle = ReadBundle(bundlePath);
+        AppendByte(bundle.SourceHandoffPath);
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(1, checkResult.ExitCode);
+
+        var passedIds = ExtractPassedCheckIds(checkResult);
+        Assert.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.HandoffFileExists, passedIds);
+
+        var failedDetail = GetFailedCheckDetail(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.HandoffHashMatches);
+        Assert.Contains("recorded:", failedDetail, StringComparison.Ordinal);
+        Assert.Contains("actual:", failedDetail, StringComparison.Ordinal);
+        Assert.Contains(bundle.SourceHandoffSha256, failedDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenJsonFormat_HashMismatchAppearsInErrorsArrayWithBothHashes()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-json-mm");
+        var bundle = ReadBundle(bundlePath);
+        AppendByte(bundle.SourceTaskPacketPath);
+
+        var checkResult = RunVerify(workspace, bundlePath);
+        Assert.Equal(1, checkResult.ExitCode);
+
+        using var doc = JsonDocument.Parse(checkResult.Output);
+        Assert.Equal(JsonValueKind.False, doc.RootElement.GetProperty("valid").ValueKind);
+
+        var actualBytes = File.ReadAllBytes(bundle.SourceTaskPacketPath);
+        var actualSha = ComputeSha256HexLocal(actualBytes);
+
+        var errors = doc.RootElement.GetProperty("errors");
+        var foundMismatchEntry = false;
+        foreach (var err in errors.EnumerateArray())
+        {
+            var entry = err.GetString() ?? string.Empty;
+            if (entry.Contains(TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches, StringComparison.Ordinal)
+                && entry.Contains(bundle.SourceTaskPacketSha256, StringComparison.Ordinal)
+                && entry.Contains(actualSha, StringComparison.Ordinal))
+            {
+                foundMismatchEntry = true;
+                break;
+            }
+        }
+
+        Assert.True(
+            foundMismatchEntry,
+            $"Expected errors[] to include task_packet_hash_matches with both recorded and actual sha256 hex. Output: {checkResult.Output}");
+    }
+
+    [Fact]
+    public void Execute_GivenAllChecksPass_NewCheckIdsAppearInStableOrderAfterPathSha256Checks()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-order");
+
+        using var writer = new StringWriter();
+        var exitCode = TaskingHandoffBundleVerifyCommand.Execute(
+            workspace.Context,
+            new[] { "--from-bundle", bundlePath, "--format", "json" },
+            writer);
+        Assert.Equal(0, exitCode);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var idsInOrder = new List<string>();
+        foreach (var check in doc.RootElement.GetProperty("checks").EnumerateArray())
+        {
+            idsInOrder.Add(check.GetProperty("id").GetString()!);
+        }
+
+        // The eight new G197 ids must appear in the documented stable order
+        // and they must come AFTER the field-presence (path/sha256) tier and
+        // AFTER the artifact-only invariant check, i.e. at the end.
+        var expectedTail = new[]
+        {
+            TaskingHandoffBundleVerifyConstants.CheckIds.BundleArtifactOnlyNoProviderLaunchDirective,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketFileExists,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches,
+            TaskingHandoffBundleVerifyConstants.CheckIds.PreviewFileExists,
+            TaskingHandoffBundleVerifyConstants.CheckIds.PreviewHashMatches,
+            TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistFileExists,
+            TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistHashMatches,
+            TaskingHandoffBundleVerifyConstants.CheckIds.HandoffFileExists,
+            TaskingHandoffBundleVerifyConstants.CheckIds.HandoffHashMatches
+        };
+
+        Assert.True(idsInOrder.Count >= expectedTail.Length);
+        var tail = idsInOrder.GetRange(idsInOrder.Count - expectedTail.Length, expectedTail.Length);
+        Assert.Equal(expectedTail, tail);
+
+        // Each new file_exists must come AFTER its path-presence sibling, and
+        // each hash_matches must come AFTER its sha256-presence sibling.
+        AssertOrder(idsInOrder,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketPathPresent,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketFileExists);
+        AssertOrder(idsInOrder,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketSha256Present,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches);
+        AssertOrder(idsInOrder,
+            TaskingHandoffBundleVerifyConstants.CheckIds.PreviewPathPresent,
+            TaskingHandoffBundleVerifyConstants.CheckIds.PreviewFileExists);
+        AssertOrder(idsInOrder,
+            TaskingHandoffBundleVerifyConstants.CheckIds.PreviewSha256Present,
+            TaskingHandoffBundleVerifyConstants.CheckIds.PreviewHashMatches);
+        AssertOrder(idsInOrder,
+            TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistPathPresent,
+            TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistFileExists);
+        AssertOrder(idsInOrder,
+            TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistSha256Present,
+            TaskingHandoffBundleVerifyConstants.CheckIds.ChecklistHashMatches);
+        AssertOrder(idsInOrder,
+            TaskingHandoffBundleVerifyConstants.CheckIds.HandoffPathPresent,
+            TaskingHandoffBundleVerifyConstants.CheckIds.HandoffFileExists);
+        AssertOrder(idsInOrder,
+            TaskingHandoffBundleVerifyConstants.CheckIds.HandoffSha256Present,
+            TaskingHandoffBundleVerifyConstants.CheckIds.HandoffHashMatches);
+    }
+
+    [Fact]
+    public void Execute_GivenSourcePathFieldEmpty_FileExistsCheckSkippedDeterministically()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-empty-path");
+
+        // Mutate the bundle JSON to set source_task_packet_path to "" without
+        // any artifact removal, simulating an upstream G194 path-missing case.
+        var bundle = ReadBundle(bundlePath);
+        var emptied = bundle with { SourceTaskPacketPath = string.Empty };
+        var emptiedPath = workspace.GetPath("bundle-g197-empty-path-tampered.json");
+        File.WriteAllText(emptiedPath, JsonSerializer.Serialize(emptied));
+
+        var checkResult = RunVerify(workspace, emptiedPath);
+        Assert.Equal(1, checkResult.ExitCode);
+
+        AssertCheckFailed(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketPathPresent);
+
+        var fileExistsDetail = GetFailedCheckDetail(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketFileExists);
+        Assert.True(
+            fileExistsDetail.Contains("skipped", StringComparison.OrdinalIgnoreCase)
+                || fileExistsDetail.Contains("missing or empty", StringComparison.OrdinalIgnoreCase),
+            $"Expected file_exists detail to mention 'skipped' or 'missing or empty path'; got: {fileExistsDetail}");
+
+        var hashDetail = GetFailedCheckDetail(
+            checkResult,
+            TaskingHandoffBundleVerifyConstants.CheckIds.TaskPacketHashMatches);
+        Assert.Contains("skipped", hashDetail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_PreservesAllExistingG196Checks_NoIdRemovedOrRenamed()
+    {
+        // The 16 ids accepted at the close of G196. If any of them ever
+        // disappears or is renamed, this test is the canary.
+        var g196Ids = new[]
+        {
+            "bundle_path_present_and_readable",
+            "bundle_json_parses",
+            "bundle_status_local_only",
+            "bundle_is_published_false",
+            "bundle_is_automation_visible_false",
+            "task_packet_path_present",
+            "task_packet_sha256_present",
+            "preview_path_present",
+            "preview_sha256_present",
+            "handoff_path_present",
+            "handoff_sha256_present",
+            "checklist_path_present",
+            "checklist_sha256_present",
+            "checklist_passed_check_ids_present_or_failed_check_ids_present",
+            "recommended_worker_action_non_empty",
+            "bundle_artifact_only_no_provider_launch_directive"
+        };
+
+        foreach (var id in g196Ids)
+        {
+            Assert.Contains(id, TaskingHandoffBundleVerifyConstants.CheckIds.All);
+        }
+    }
+
+    [Fact]
+    public void Execute_NeverWritesAnyArtifactFile_AfterReadingReferencedArtifacts()
+    {
+        using var workspace = new VerifyWorkspace();
+        var bundlePath = workspace.GenerateBundle("g197-no-write");
+
+        var snapshotBefore = workspace.SnapshotAllFiles();
+
+        using var writer = new StringWriter();
+        var exitCode = TaskingHandoffBundleVerifyCommand.Execute(
+            workspace.Context,
+            new[] { "--from-bundle", bundlePath },
+            writer);
+        Assert.Equal(0, exitCode);
+
+        var snapshotAfter = workspace.SnapshotAllFiles();
+        Assert.Equal(snapshotBefore.Count, snapshotAfter.Count);
+        foreach (var (path, contentBefore) in snapshotBefore)
+        {
+            Assert.True(snapshotAfter.ContainsKey(path), $"File disappeared: {path}");
+            Assert.Equal(contentBefore, snapshotAfter[path]);
+        }
+    }
+
+    private static TaskingHandoffBundleArtifact ReadBundle(string bundlePath)
+    {
+        var bundle = JsonSerializer.Deserialize<TaskingHandoffBundleArtifact>(
+            File.ReadAllText(bundlePath));
+        Assert.NotNull(bundle);
+        return bundle!;
+    }
+
+    private static void AppendByte(string path)
+    {
+        // Adding a single byte changes the file's sha256. ASCII space is
+        // typically harmless to JSON-decoding tools but the analyzer never
+        // re-parses these source artifacts; only the byte hash is compared.
+        using var stream = new FileStream(path, FileMode.Append, FileAccess.Write);
+        stream.WriteByte((byte)' ');
+    }
+
+    private static IReadOnlyList<string> ExtractPassedCheckIds((int ExitCode, string Output) result)
+    {
+        var ids = new List<string>();
+        using var doc = JsonDocument.Parse(result.Output);
+        foreach (var check in doc.RootElement.GetProperty("checks").EnumerateArray())
+        {
+            if (check.GetProperty("passed").GetBoolean())
+            {
+                ids.Add(check.GetProperty("id").GetString()!);
+            }
+        }
+
+        return ids;
+    }
+
+    private static string GetFailedCheckDetail((int ExitCode, string Output) result, string checkId)
+    {
+        using var doc = JsonDocument.Parse(result.Output);
+        foreach (var check in doc.RootElement.GetProperty("checks").EnumerateArray())
+        {
+            if (check.GetProperty("id").GetString() == checkId)
+            {
+                Assert.False(
+                    check.GetProperty("passed").GetBoolean(),
+                    $"Expected {checkId} to be passed=false.");
+                return check.GetProperty("detail").GetString() ?? string.Empty;
+            }
+        }
+
+        Assert.Fail($"Check id {checkId} not found in output.");
+        return string.Empty;
+    }
+
+    private static void AssertOrder(IReadOnlyList<string> ids, string before, string after)
+    {
+        var beforeIndex = ids.ToList().IndexOf(before);
+        var afterIndex = ids.ToList().IndexOf(after);
+        Assert.True(beforeIndex >= 0, $"{before} not found");
+        Assert.True(afterIndex >= 0, $"{after} not found");
+        Assert.True(
+            beforeIndex < afterIndex,
+            $"Expected {before} (index {beforeIndex}) to come before {after} (index {afterIndex}).");
+    }
+
+    private static string ComputeSha256HexLocal(byte[] bytes)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+        var sb = new StringBuilder(hash.Length * 2);
+        foreach (var b in hash)
+        {
+            sb.Append(b.ToString("x2", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        return sb.ToString();
+    }
+
     private static (int ExitCode, string Output) RunVerify(VerifyWorkspace workspace, string bundlePath)
     {
         using var writer = new StringWriter();
