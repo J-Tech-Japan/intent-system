@@ -61,7 +61,8 @@ internal static class CommandRouter
             {
                 ["open"] = ClarifyOpenCommand.Execute,
                 ["list"] = ClarifyListCommand.Execute,
-                ["answer"] = ClarifyAnswerCommand.Execute
+                ["answer"] = ClarifyAnswerCommand.Execute,
+                ["draft"] = ClarifyDraftCommand.Execute
             },
             ["queue"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
