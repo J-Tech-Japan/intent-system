@@ -22,7 +22,8 @@ internal static class CommandRouter
         "next-slice",
         "automation",
         "safety",
-        "tasking"
+        "tasking",
+        "worker"
     ];
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, CommandHandler>> ImplementedCommands =
@@ -123,6 +124,10 @@ internal static class CommandRouter
             ["safety"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["nested-provider-handoff"] = SafetyNestedProviderHandoffCommand.Execute
+            },
+            ["worker"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["issue-preflight"] = WorkerIssuePreflightCommand.Execute
             },
             ["tasking"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
