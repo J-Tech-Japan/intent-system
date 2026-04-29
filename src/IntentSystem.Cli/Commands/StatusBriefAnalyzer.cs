@@ -60,20 +60,7 @@ internal static class StatusBriefAnalyzer
                     .Select(item => item.ExecutionUnit),
                 StringComparer.Ordinal);
 
-            foreach (var item in queueState.Items)
-            {
-                switch (item.State)
-                {
-                    case QueueItemState.Review:
-                        reviewUnits.Add(item.ExecutionUnit);
-                        inFlight.Add(item.ExecutionUnit);
-                        break;
-                    case QueueItemState.Active:
-                    case QueueItemState.Fixing:
-                        inFlight.Add(item.ExecutionUnit);
-                        break;
-                }
-            }
+            CollectWipUnits(queueState, inFlight, reviewUnits);
 
             // Deterministic next candidate: first Queued item whose dependencies
             // are all satisfied within the local queue. We keep queue-state's
@@ -120,6 +107,36 @@ internal static class StatusBriefAnalyzer
             RecommendedAction = recommended,
             Notes = notes
         };
+    }
+
+    /// <summary>
+    /// Canonical "WIP present" predicate for the local queue state. Treats Review,
+    /// Active, and Fixing items as in-flight WIP. G185 next-slice classify is the
+    /// second consumer (do not duplicate this logic). When <paramref name="reviewUnits"/>
+    /// is non-null, Review-state execution units are also collected into it.
+    /// </summary>
+    internal static void CollectWipUnits(
+        QueueState queueState,
+        List<string> inFlightSink,
+        List<string>? reviewUnits)
+    {
+        ArgumentNullException.ThrowIfNull(queueState);
+        ArgumentNullException.ThrowIfNull(inFlightSink);
+
+        foreach (var item in queueState.Items)
+        {
+            switch (item.State)
+            {
+                case QueueItemState.Review:
+                    reviewUnits?.Add(item.ExecutionUnit);
+                    inFlightSink.Add(item.ExecutionUnit);
+                    break;
+                case QueueItemState.Active:
+                case QueueItemState.Fixing:
+                    inFlightSink.Add(item.ExecutionUnit);
+                    break;
+            }
+        }
     }
 
     private static bool DependenciesSatisfied(QueueItem item, HashSet<string> completed)
