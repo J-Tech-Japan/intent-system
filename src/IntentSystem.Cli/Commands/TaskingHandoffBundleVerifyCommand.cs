@@ -141,7 +141,8 @@ internal static class TaskingHandoffBundleVerifyCommand
             return 1;
         }
 
-        var allChecks = TaskingHandoffBundleVerifyAnalyzer.BuildChecks(bundle);
+        var observations = ObserveReferencedSourceArtifacts(bundle);
+        var allChecks = TaskingHandoffBundleVerifyAnalyzer.BuildChecks(bundle, observations);
         var valid = allChecks.All(c => c.Passed);
         var finalResult = new TaskingHandoffBundleVerifyResult
         {
@@ -156,6 +157,59 @@ internal static class TaskingHandoffBundleVerifyCommand
 
         WriteResult(writer, finalResult, format);
         return valid ? 0 : 1;
+    }
+
+    /// <summary>
+    /// G197 — read the four referenced source artifact files (task-packet,
+    /// preview, checklist, handoff) and produce a snapshot for the analyzer.
+    /// Read-only: this method never writes any file. When the recorded path
+    /// field is missing/empty, the observation is "skipped" and the analyzer
+    /// will produce skipped check details. When the file exists but read
+    /// throws (locked, permission denied), the observation records the
+    /// message and the analyzer keeps file_exists=true while failing
+    /// hash_matches.
+    /// </summary>
+    private static SourceArtifactObservations ObserveReferencedSourceArtifacts(
+        TaskingHandoffBundleArtifact bundle)
+    {
+        return new SourceArtifactObservations
+        {
+            TaskPacket = ObserveOne(bundle.SourceTaskPacketPath),
+            Preview = ObserveOne(bundle.SourcePreviewPath),
+            Checklist = ObserveOne(bundle.SourceChecklistPath),
+            Handoff = ObserveOne(bundle.SourceHandoffPath)
+        };
+    }
+
+    private static SourceArtifactObservation ObserveOne(string? recordedPath)
+    {
+        if (string.IsNullOrWhiteSpace(recordedPath))
+        {
+            return SourceArtifactObservation.Skipped();
+        }
+
+        if (!File.Exists(recordedPath))
+        {
+            return new SourceArtifactObservation { FileExists = false };
+        }
+
+        try
+        {
+            var bytes = File.ReadAllBytes(recordedPath);
+            return new SourceArtifactObservation
+            {
+                FileExists = true,
+                ActualSha256 = IssuePrepareCommand.ComputeSha256Hex(bytes)
+            };
+        }
+        catch (Exception exception)
+        {
+            return new SourceArtifactObservation
+            {
+                FileExists = true,
+                ReadErrorMessage = exception.Message
+            };
+        }
     }
 
     private static IReadOnlyList<string> ExtractErrors(IReadOnlyList<VerifyCheck> checks)
