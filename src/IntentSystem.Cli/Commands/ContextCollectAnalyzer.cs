@@ -5,15 +5,17 @@ using IntentSystem.Supervisor.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// Read-only state collector that turns local intent-cli files into a
-/// <see cref="StatusBriefSummary"/> for the AI tasking thread (G179).
-/// Never mutates queue state, runs, GitHub, or source files.
+/// Read-only state collector that turns local intent-cli files plus parent-host
+/// domain artifacts into a <see cref="ContextCollectPacket"/> for the AI tasking
+/// thread (G180). Never mutates queue state, runs, packet files, source files,
+/// or GitHub.
 /// </summary>
-internal static class StatusBriefAnalyzer
+internal static class ContextCollectAnalyzer
 {
-    private const int RecentEventLimit = 3;
+    private const int RecentEventLimit = 5;
+    private const int MarkdownExcerptCharLimit = 1500;
 
-    public static StatusBriefSummary Analyze(CliContext context, string? domainOverride)
+    public static ContextCollectPacket Analyze(CliContext context, string? domainOverride)
     {
         ArgumentNullException.ThrowIfNull(context);
 
@@ -22,6 +24,7 @@ internal static class StatusBriefAnalyzer
             : domainOverride;
 
         var notes = new List<string>();
+
         var queueStatePath = context.GetQueueStatePath();
         var queueStatePresent = File.Exists(queueStatePath);
         var queueStateReadable = false;
@@ -51,6 +54,7 @@ internal static class StatusBriefAnalyzer
         var inFlight = new List<string>();
         var reviewUnits = new List<string>();
         string? nextCandidate = null;
+        QueueItem? focusItem = null;
 
         if (queueState is not null)
         {
@@ -60,6 +64,9 @@ internal static class StatusBriefAnalyzer
                     .Select(item => item.ExecutionUnit),
                 StringComparer.Ordinal);
 
+            QueueItem? firstReview = null;
+            QueueItem? firstActiveOrFixing = null;
+
             foreach (var item in queueState.Items)
             {
                 switch (item.State)
@@ -67,44 +74,60 @@ internal static class StatusBriefAnalyzer
                     case QueueItemState.Review:
                         reviewUnits.Add(item.ExecutionUnit);
                         inFlight.Add(item.ExecutionUnit);
+                        firstReview ??= item;
                         break;
                     case QueueItemState.Active:
                     case QueueItemState.Fixing:
                         inFlight.Add(item.ExecutionUnit);
+                        firstActiveOrFixing ??= item;
                         break;
                 }
             }
 
-            // Deterministic next candidate: first Queued item whose dependencies
-            // are all satisfied within the local queue. We keep queue-state's
-            // declared ordering — no priority sort — so the brief is stable.
-            nextCandidate = queueState.Items
+            var nextCandidateItem = queueState.Items
                 .Where(item => item.State == QueueItemState.Queued)
                 .Where(item => DependenciesSatisfied(item, completed))
-                .Select(item => item.ExecutionUnit)
                 .FirstOrDefault();
+
+            nextCandidate = nextCandidateItem?.ExecutionUnit;
+
+            // Focus precedence: review (closeout-ready), then active/fixing,
+            // then deps-satisfied next candidate. This mirrors the G179 brief
+            // recommendation precedence so the two commands stay aligned.
+            focusItem = firstReview ?? firstActiveOrFixing ?? nextCandidateItem;
         }
 
-        var clarificationPath = ResolveClarificationPath(context, domain);
+        var clarificationPath = ResolveDomainPath(context, domain, "clarifications", "open.md");
         var clarificationOpen = false;
+        string? clarificationExcerpt = null;
         if (clarificationPath is not null && File.Exists(clarificationPath))
         {
             var content = File.ReadAllText(clarificationPath);
             clarificationOpen = ClarificationOpenDetector.HasOpenBlocker(content);
+            clarificationExcerpt = TakeMarkdownExcerpt(content);
+        }
+        else if (clarificationPath is not null)
+        {
+            notes.Add($"no clarification file at {clarificationPath}");
         }
 
+        var automationBindingsPath = ResolveDomainPath(context, domain, "automation", "bindings.md");
+        var automationBindingsPresent = false;
+        string? automationBindingsExcerpt = null;
+        if (automationBindingsPath is not null && File.Exists(automationBindingsPath))
+        {
+            automationBindingsPresent = true;
+            automationBindingsExcerpt = TakeMarkdownExcerpt(File.ReadAllText(automationBindingsPath));
+        }
+        else if (automationBindingsPath is not null)
+        {
+            notes.Add($"no automation bindings file at {automationBindingsPath}");
+        }
+
+        var focusPacket = focusItem is null ? null : BuildFocusPacket(context, focusItem);
         var recentEvents = LoadRecentEvents(context, notes);
 
-        var wipPresent = inFlight.Count > 0;
-        var recommended = ComputeRecommendation(
-            queueStatePresent,
-            queueStateReadable,
-            clarificationOpen,
-            reviewUnits.Count > 0,
-            wipPresent,
-            nextCandidate is not null);
-
-        return new StatusBriefSummary
+        return new ContextCollectPacket
         {
             Domain = domain,
             QueueStatePath = queueStatePath,
@@ -112,12 +135,16 @@ internal static class StatusBriefAnalyzer
             QueueStateReadable = queueStateReadable,
             InFlightUnits = inFlight,
             ReviewUnits = reviewUnits,
-            WipPresent = wipPresent,
+            NextCandidate = nextCandidate,
+            FocusUnit = focusItem?.ExecutionUnit,
+            FocusPacket = focusPacket,
             ClarificationOpenPath = clarificationPath,
             ClarificationOpen = clarificationOpen,
-            NextCandidate = nextCandidate,
+            ClarificationExcerpt = clarificationExcerpt,
+            AutomationBindingsPath = automationBindingsPath,
+            AutomationBindingsPresent = automationBindingsPresent,
+            AutomationBindingsExcerpt = automationBindingsExcerpt,
             RecentEvents = recentEvents,
-            RecommendedAction = recommended,
             Notes = notes
         };
     }
@@ -140,7 +167,7 @@ internal static class StatusBriefAnalyzer
         return true;
     }
 
-    private static string? ResolveClarificationPath(CliContext context, string domain)
+    private static string? ResolveDomainPath(CliContext context, string domain, params string[] parts)
     {
         if (string.IsNullOrWhiteSpace(domain))
         {
@@ -152,10 +179,41 @@ internal static class StatusBriefAnalyzer
             ? context.RepoRoot
             : parentRoot;
 
-        return Path.Combine(baseRoot!, "intents", domain, "clarifications", "open.md");
+        var combined = new List<string> { baseRoot!, "intents", domain };
+        combined.AddRange(parts);
+        return Path.Combine(combined.ToArray());
     }
 
-    private static IReadOnlyList<StatusBriefRecentEvent> LoadRecentEvents(
+    private static ContextCollectPacketReference BuildFocusPacket(CliContext context, QueueItem item)
+    {
+        var implementationPath = ResolvePacketPath(context, item.PacketPaths.Implementation);
+        var reviewContextPath = ResolvePacketPath(context, item.PacketPaths.ReviewContext);
+        var yamlPath = ResolvePacketPath(context, item.PacketPaths.Yaml);
+
+        return new ContextCollectPacketReference
+        {
+            ImplementationPath = implementationPath,
+            ImplementationPresent = File.Exists(implementationPath),
+            ReviewContextPath = reviewContextPath,
+            ReviewContextPresent = File.Exists(reviewContextPath),
+            YamlPath = yamlPath,
+            YamlPresent = File.Exists(yamlPath)
+        };
+    }
+
+    private static string ResolvePacketPath(CliContext context, string relativeOrAbsolute)
+    {
+        if (string.IsNullOrWhiteSpace(relativeOrAbsolute))
+        {
+            return string.Empty;
+        }
+
+        return Path.IsPathRooted(relativeOrAbsolute)
+            ? relativeOrAbsolute
+            : Path.GetFullPath(Path.Combine(context.RepoRoot, relativeOrAbsolute));
+    }
+
+    private static IReadOnlyList<ContextCollectRecentEvent> LoadRecentEvents(
         CliContext context,
         List<string> notes)
     {
@@ -171,7 +229,7 @@ internal static class StatusBriefAnalyzer
             var events = RunLogSerializer.DeserializeAll(content);
             return events
                 .TakeLast(RecentEventLimit)
-                .Select(runEvent => new StatusBriefRecentEvent
+                .Select(runEvent => new ContextCollectRecentEvent
                 {
                     Timestamp = runEvent.Ts.ToString("O"),
                     ExecutionUnit = runEvent.ExecutionUnit,
@@ -190,40 +248,18 @@ internal static class StatusBriefAnalyzer
         }
     }
 
-    private static string ComputeRecommendation(
-        bool queueStatePresent,
-        bool queueStateReadable,
-        bool clarificationOpen,
-        bool reviewPresent,
-        bool wipPresent,
-        bool hasNextCandidate)
+    private static string TakeMarkdownExcerpt(string content)
     {
-        // Deterministic precedence — top-most match wins.
-        if (queueStatePresent && !queueStateReadable)
+        if (string.IsNullOrEmpty(content))
         {
-            return StatusBriefRecommendation.InspectManually;
+            return string.Empty;
         }
 
-        if (clarificationOpen)
+        if (content.Length <= MarkdownExcerptCharLimit)
         {
-            return StatusBriefRecommendation.ClarificationRequired;
+            return content;
         }
 
-        if (reviewPresent)
-        {
-            return StatusBriefRecommendation.ReviewCloseout;
-        }
-
-        if (wipPresent)
-        {
-            return StatusBriefRecommendation.SkipDueToWip;
-        }
-
-        if (hasNextCandidate)
-        {
-            return StatusBriefRecommendation.IssueCutReady;
-        }
-
-        return StatusBriefRecommendation.NoActionableItem;
+        return content[..MarkdownExcerptCharLimit] + "\n…(truncated)";
     }
 }

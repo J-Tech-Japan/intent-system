@@ -17,7 +17,8 @@ internal static class CommandRouter
         "interview",
         "clarify",
         "intake",
-        "status"
+        "status",
+        "context"
     ];
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, CommandHandler>> ImplementedCommands =
@@ -96,6 +97,10 @@ internal static class CommandRouter
             ["status"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["brief"] = StatusBriefCommand.Execute
+            },
+            ["context"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["collect"] = ContextCollectCommand.Execute
             },
             ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
