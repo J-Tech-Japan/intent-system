@@ -132,7 +132,8 @@ internal static class CommandRouter
                 ["task-packet-checklist"] = TaskingTaskPacketChecklistCommand.Execute,
                 ["handoff-bundle"] = TaskingHandoffBundleCommand.Execute,
                 ["handoff-bundle-inspect"] = TaskingHandoffBundleInspectCommand.Execute,
-                ["handoff-bundle-verify"] = TaskingHandoffBundleVerifyCommand.Execute
+                ["handoff-bundle-verify"] = TaskingHandoffBundleVerifyCommand.Execute,
+                ["handoff-bundle-import-dry-run"] = TaskingHandoffBundleImportDryRunCommand.Execute
             },
             ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

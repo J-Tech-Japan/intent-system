@@ -168,8 +168,12 @@ internal static class TaskingHandoffBundleVerifyCommand
     /// throws (locked, permission denied), the observation records the
     /// message and the analyzer keeps file_exists=true while failing
     /// hash_matches.
+    ///
+    /// G198 — promoted from <c>private</c> to <c>internal</c> so the dry-run
+    /// import command can reuse the same observation pipeline before reusing
+    /// <see cref="TaskingHandoffBundleVerifyAnalyzer.BuildChecks"/>.
     /// </summary>
-    private static SourceArtifactObservations ObserveReferencedSourceArtifacts(
+    internal static SourceArtifactObservations ObserveReferencedSourceArtifacts(
         TaskingHandoffBundleArtifact bundle)
     {
         return new SourceArtifactObservations
