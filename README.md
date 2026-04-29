@@ -39,3 +39,28 @@ Equivalent `dnx` path:
 ```bash
 (cd .artifacts/smoke-repo && dnx --yes --source ../packages --version 0.1.0 intent-cli project status)
 ```
+
+## CLI command roles
+
+The accepted production automation boundary lives in the parent host-side
+review/next-slice loop, which uses provider-neutral GitHub labels
+(`intent-target`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.),
+durable parent state, and explicit handoff artifacts. The child CLI is a tasking
+companion to that loop, not a replacement.
+
+| Surface | Role |
+|---------|------|
+| `intent-cli status brief` / `context collect` | Compact / richer AI-thread inputs |
+| `intent-cli clarify draft` / `clarify record` | Owner clarification flow |
+| `intent-cli issue validate-body` | Standalone Child Issue Contract enforcement |
+| `intent-cli issue prepare` / `issue publish-reviewed` | Reviewed issue body publish boundary (never applies `intent-target`) |
+| `intent-cli next-slice classify` | Local read-only continuation classifier |
+| `intent-cli automation summary` | Provider-neutral label-driven automation contract emitter |
+| `intent-cli safety nested-provider-handoff` | Artifact-only nested-provider safety guard (never spawns providers) |
+| `intent-cli run …` | **Integration smoke, deterministic replay, and local dogfooding only** — not the primary production orchestrator |
+
+For ongoing production automation, drive work through the host-side
+review/next-slice loop and the provider-neutral label set described by
+`intent-cli automation summary`. For nested-provider handoff steps, use
+`intent-cli safety nested-provider-handoff` to emit a deterministic artifact
+instead of recursively launching providers from inside `run`.

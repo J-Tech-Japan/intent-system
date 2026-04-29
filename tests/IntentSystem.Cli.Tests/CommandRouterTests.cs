@@ -36,6 +36,39 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_GivenNoArguments_HelpDescribesRunAsIntegrationSmokeNotPrimaryOrchestrator()
+    {
+        // G188 — `intent-cli run` is for integration smoke, deterministic
+        // replay, and local dogfooding; production automation lives in the
+        // host-side review/next-slice loop with provider-neutral labels and
+        // durable parent state. The root help output must say so explicitly,
+        // and the canonical wording must come from the shared
+        // CommandRouter.RunRoleNote constant so the docs/help surface cannot
+        // drift from the test assertion.
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(Array.Empty<string>(), CreateContext("/tmp/intent-system"), writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+
+        Assert.Contains("integration smoke", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("deterministic replay", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("local dogfooding", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not the primary production orchestrator", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("host-side review/next-slice loop", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("automation summary", output, StringComparison.Ordinal);
+        Assert.Contains("safety nested-provider-handoff", output, StringComparison.Ordinal);
+
+        // The shared constant must be the single source of truth for this
+        // wording so future changes flow through one place.
+        foreach (var line in CommandRouter.RunRoleNote)
+        {
+            Assert.Contains(line, output, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Execute_GivenKnownGroupAndUnknownSubcommand_WritesNotYetImplementedMessage()
     {
         using var writer = new StringWriter();

@@ -201,5 +201,32 @@ internal static class CommandRouter
 
         writer.WriteLine("Additional top-level commands:");
         writer.WriteLine($"- {GenerateFromCurrentCommandName}");
+
+        writer.WriteLine();
+        foreach (var line in RunRoleNote)
+        {
+            writer.WriteLine(line);
+        }
     }
+
+    /// <summary>
+    /// G188 — clarifies the accepted role of <c>intent-cli run</c>. The command
+    /// family is for integration smoke, deterministic replay, and local
+    /// dogfooding; production automation uses the host-side review/next-slice
+    /// loop, provider-neutral GitHub labels, durable parent state, and
+    /// explicit handoff artifacts (see <c>automation summary</c> and
+    /// <c>safety nested-provider-handoff</c>). Exposed as <c>internal</c> so
+    /// focused help-surface tests can assert against the canonical wording
+    /// without re-deriving it.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> RunRoleNote =
+    [
+        "Notes:",
+        "- `intent-cli run` is for integration smoke, deterministic replay, and local dogfooding;",
+        "  it is not the primary production orchestrator.",
+        "- Production automation lives in the host-side review/next-slice loop with",
+        "  provider-neutral GitHub labels, durable parent state, and explicit handoff",
+        "  artifacts. See `automation summary` for the label-driven contract and",
+        "  `safety nested-provider-handoff` for artifact-only nested-provider handoffs."
+    ];
 }
