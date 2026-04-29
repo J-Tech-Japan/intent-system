@@ -99,6 +99,36 @@ public sealed class NextSliceClassifyCommandTests
     }
 
     [Fact]
+    public void Execute_GivenIncompletePacketMissingReviewContext_ClassifiesAsInspectManually()
+    {
+        // Regression for the G185 review note: a directory containing only
+        // github-body.md (no review-context.md) is a partial packet that
+        // intent-cli's existing issue prepare/publish-reviewed boundary
+        // cannot deterministically consume. The classifier must NOT report
+        // such a state as `issue-cut-ready`; it must degrade to
+        // `inspect-manually` with a reason naming the incomplete packet.
+        using var workspace = new NextSliceWorkspace();
+        workspace.WriteIncompleteIssuePacket("G998", "# G998 partial body only\n");
+
+        using var writer = new StringWriter();
+        var exitCode = NextSliceClassifyCommand.Execute(
+            workspace.Context,
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<NextSliceClassifyResult>(writer.ToString());
+        Assert.NotNull(result);
+        Assert.Equal(NextSliceClassification.InspectManually, result!.Classification);
+        Assert.Null(result.CandidateExecutionUnit);
+        Assert.Null(result.CandidatePacketPath);
+        Assert.NotNull(result.Reason);
+        Assert.Contains("incomplete", result.Reason!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("review-context.md", result.Reason!, StringComparison.Ordinal);
+        Assert.Contains("G998", result.Reason!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenEmptyState_ClassifiesAsNoActionableItem()
     {
         using var workspace = new NextSliceWorkspace();
@@ -308,6 +338,23 @@ public sealed class NextSliceClassifyCommandTests
 
         public void WriteIssuePacket(string executionUnit, string body)
         {
+            // A complete packet has BOTH github-body.md AND review-context.md
+            // (the canonical packet shape produced by the projection pipeline).
+            // Tests that want an INCOMPLETE packet should use
+            // WriteIncompleteIssuePacket instead.
+            var path = Path.Combine(rootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "github-body.md"), body);
+            File.WriteAllText(
+                Path.Combine(path, "review-context.md"),
+                $"# Review context for {executionUnit}\n\nGenerated for next-slice classify tests.\n");
+        }
+
+        public void WriteIncompleteIssuePacket(string executionUnit, string body)
+        {
+            // Writes only github-body.md (no review-context.md) to simulate a
+            // partial packet that the issue prepare/publish-reviewed boundary
+            // cannot deterministically consume.
             var path = Path.Combine(rootPath, ".intent-cli", "issues", executionUnit);
             Directory.CreateDirectory(path);
             File.WriteAllText(Path.Combine(path, "github-body.md"), body);

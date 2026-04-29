@@ -107,8 +107,15 @@ internal static class NextSliceClassifyAnalyzer
         }
 
         // (4) Issue-cut-ready precedence — find a deterministic packet candidate.
-        var (candidateUnit, candidatePath, ambiguous) = FindIssueCutCandidate(context, queueState);
-        if (ambiguous)
+        // A complete packet requires BOTH github-body.md AND review-context.md
+        // (the canonical packet shape produced by the projection pipeline; see
+        // PacketPathResolver / IssueDraftCommand / QueueEnqueueCommand). Packets
+        // missing review-context.md are NOT publishable from intent-cli's
+        // existing issue prepare/publish-reviewed flow without operator
+        // intervention, so they degrade to `inspect-manually` rather than
+        // `issue-cut-ready`.
+        var candidate = FindIssueCutCandidate(context, queueState);
+        if (candidate.Kind == IssueCutCandidateKind.Ambiguous)
         {
             return new NextSliceClassifyResult
             {
@@ -124,18 +131,36 @@ internal static class NextSliceClassifyAnalyzer
             };
         }
 
-        if (candidateUnit is not null && candidatePath is not null)
+        if (candidate.Kind == IssueCutCandidateKind.Incomplete)
+        {
+            return new NextSliceClassifyResult
+            {
+                Domain = domain,
+                Classification = NextSliceClassification.InspectManually,
+                Rationale = $"unlinked issue packet for {candidate.Unit} is incomplete (missing review-context.md).",
+                WipRefs = Array.Empty<string>(),
+                ClarificationSummary = null,
+                CandidateExecutionUnit = null,
+                CandidatePacketPath = null,
+                RecommendedNextAction = $"Complete the packet under .intent-cli/issues/{candidate.Unit}/ before cutting.",
+                Reason = $"incomplete packet at .intent-cli/issues/{candidate.Unit}/ (missing review-context.md)"
+            };
+        }
+
+        if (candidate.Kind == IssueCutCandidateKind.Ready
+            && candidate.Unit is not null
+            && candidate.Path is not null)
         {
             return new NextSliceClassifyResult
             {
                 Domain = domain,
                 Classification = NextSliceClassification.IssueCutReady,
-                Rationale = $"issue packet for {candidateUnit} is present and not yet linked in queue-state.",
+                Rationale = $"issue packet for {candidate.Unit} is present and not yet linked in queue-state.",
                 WipRefs = Array.Empty<string>(),
                 ClarificationSummary = null,
-                CandidateExecutionUnit = candidateUnit,
-                CandidatePacketPath = candidatePath,
-                RecommendedNextAction = $"Publish reviewed issue for {candidateUnit}.",
+                CandidateExecutionUnit = candidate.Unit,
+                CandidatePacketPath = candidate.Path,
+                RecommendedNextAction = $"Publish reviewed issue for {candidate.Unit}.",
                 Reason = null
             };
         }
@@ -220,19 +245,33 @@ internal static class NextSliceClassifyAnalyzer
         return null;
     }
 
-    private static (string? Unit, string? Path, bool Ambiguous) FindIssueCutCandidate(
+    internal enum IssueCutCandidateKind
+    {
+        None,
+        Ready,
+        Ambiguous,
+        Incomplete
+    }
+
+    internal readonly record struct IssueCutCandidate(
+        IssueCutCandidateKind Kind,
+        string? Unit,
+        string? Path);
+
+    private static IssueCutCandidate FindIssueCutCandidate(
         CliContext context,
         QueueState? queueState)
     {
         var issuesRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
         if (!Directory.Exists(issuesRoot))
         {
-            return (null, null, false);
+            return new IssueCutCandidate(IssueCutCandidateKind.None, null, null);
         }
 
         var linkedUnits = BuildLinkedUnitSet(queueState);
 
-        var candidates = new List<(string Unit, string Path)>();
+        var complete = new List<(string Unit, string Path)>();
+        var incomplete = new List<string>();
         foreach (var unitDir in Directory.EnumerateDirectories(issuesRoot))
         {
             var unit = Path.GetFileName(unitDir);
@@ -244,6 +283,7 @@ internal static class NextSliceClassifyAnalyzer
             var bodyPath = Path.Combine(unitDir, "github-body.md");
             if (!File.Exists(bodyPath))
             {
+                // Not a packet directory at all — skip silently.
                 continue;
             }
 
@@ -252,21 +292,44 @@ internal static class NextSliceClassifyAnalyzer
                 continue;
             }
 
-            candidates.Add((unit, bodyPath));
+            // A complete packet requires the canonical companion artifact
+            // review-context.md (PacketPathResolver / IssueDraftCommand /
+                // QueueEnqueueCommand). Without it, the packet is not in a
+                // shape the existing issue prepare/publish-reviewed boundary
+                // can deterministically consume, so we degrade to Incomplete
+                // rather than reporting issue-cut-ready.
+            var reviewContextPath = Path.Combine(unitDir, "review-context.md");
+            if (!File.Exists(reviewContextPath))
+            {
+                incomplete.Add(unit);
+                continue;
+            }
+
+            complete.Add((unit, bodyPath));
         }
 
-        if (candidates.Count == 0)
+        if (complete.Count > 1)
         {
-            return (null, null, false);
+            return new IssueCutCandidate(IssueCutCandidateKind.Ambiguous, null, null);
         }
 
-        if (candidates.Count > 1)
+        if (complete.Count == 1)
         {
-            return (null, null, true);
+            // Prefer a complete unlinked candidate even if other directories
+            // happen to be incomplete — those are noise relative to the
+            // deterministic next slice.
+            var only = complete[0];
+            return new IssueCutCandidate(IssueCutCandidateKind.Ready, only.Unit, only.Path);
         }
 
-        var only = candidates[0];
-        return (only.Unit, only.Path, false);
+        if (incomplete.Count > 0)
+        {
+            // Sort for deterministic ordering across filesystems.
+            incomplete.Sort(StringComparer.Ordinal);
+            return new IssueCutCandidate(IssueCutCandidateKind.Incomplete, incomplete[0], null);
+        }
+
+        return new IssueCutCandidate(IssueCutCandidateKind.None, null, null);
     }
 
     private static HashSet<string> BuildLinkedUnitSet(QueueState? queueState)
