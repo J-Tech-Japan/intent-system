@@ -197,6 +197,43 @@ public sealed class IssuePublishReviewedCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenSourceBodyChangedButStillValid_ReturnsNonZeroBeforeGhCall()
+    {
+        // Regression for the G184 reviewed-publish boundary: if the body file
+        // is replaced with DIFFERENT but still G183-contract-valid Markdown
+        // after `issue prepare`, `publish-reviewed` must refuse before any
+        // GitHub mutation because the recorded SHA-256 no longer matches.
+        using var workspace = new IssuePublishWorkspace();
+        var (bodyPath, packetPath) = workspace.PrepareValidPacket();
+
+        // Replace the body with a different but still-valid body. Appending
+        // any non-whitespace content changes the bytes (and therefore the
+        // sha256) without removing or invalidating any required heading.
+        var mutatedBody = IssuePrepareCommandTests.CompleteValidBody
+            + "\n\nAdditional prose appended after review approved the packet.\n";
+        File.WriteAllText(bodyPath, mutatedBody);
+
+        var fakeCreator = new RecordingGhIssueCreator("unused");
+        IssuePublishReviewedCommand.GhIssueCreatorFactory = () => fakeCreator;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishReviewedCommand.Execute(
+            workspace.Context,
+            ["--from-file", packetPath, "--repo", "owner/repo"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(fakeCreator.Calls);
+        Assert.Contains("sha256", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        // Packet must remain unpublished on disk.
+        var packet = JsonSerializer.Deserialize<IssueReviewedPublishPacket>(File.ReadAllText(packetPath))!;
+        Assert.False(packet.Published);
+        Assert.Null(packet.IssueNumber);
+        Assert.Null(packet.IssueUrl);
+    }
+
+    [Fact]
     public void Execute_GivenMissingPacketFile_ReturnsNonZero()
     {
         using var workspace = new IssuePublishWorkspace();

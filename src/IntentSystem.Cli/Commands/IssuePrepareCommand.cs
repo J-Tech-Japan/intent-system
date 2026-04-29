@@ -196,7 +196,7 @@ internal static class IssuePrepareCommand
         return true;
     }
 
-    private static string ComputeSha256Hex(byte[] bytes)
+    internal static string ComputeSha256Hex(byte[] bytes)
     {
         var hash = SHA256.HashData(bytes);
         var builder = new StringBuilder(hash.Length * 2);

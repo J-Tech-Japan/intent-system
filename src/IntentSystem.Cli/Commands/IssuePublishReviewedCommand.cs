@@ -82,11 +82,19 @@ internal static class IssuePublishReviewedCommand
             return 1;
         }
 
-        var sourceContent = File.ReadAllText(packet.SourcePath);
+        var sourceBytes = File.ReadAllBytes(packet.SourcePath);
+        var sourceContent = System.Text.Encoding.UTF8.GetString(sourceBytes);
         var validation = IssueValidateBodyValidator.Validate(packet.SourcePath, sourceContent);
         if (!validation.IsValid)
         {
             writer.WriteLine("source body no longer passes validation");
+            return 1;
+        }
+
+        var currentSha256 = IssuePrepareCommand.ComputeSha256Hex(sourceBytes);
+        if (!string.Equals(currentSha256, packet.SourceBodySha256, StringComparison.Ordinal))
+        {
+            writer.WriteLine("source body sha256 does not match reviewed packet");
             return 1;
         }
 
