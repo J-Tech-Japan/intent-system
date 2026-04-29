@@ -127,7 +127,8 @@ internal static class CommandRouter
             ["tasking"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["handoff"] = TaskingHandoffCommand.Execute,
-                ["task-packet"] = TaskingTaskPacketCommand.Execute
+                ["task-packet"] = TaskingTaskPacketCommand.Execute,
+                ["task-packet-preview"] = TaskingTaskPacketPreviewCommand.Execute
             },
             ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
