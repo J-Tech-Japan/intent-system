@@ -79,7 +79,7 @@ internal static class AutomationSummaryConstants
 
     public static readonly IReadOnlyList<string> HostLoopResponsibilities =
     [
-        "Process open intent-target PRs in intent-pr-reviewing through closeout",
+        "Select open intent-target PRs with no PR state label or with intent-pr-rereview-ready, then set intent-pr-reviewing while processing through closeout",
         "Request updates via intent-pr-request-update with concrete repair notes",
         "Approve and merge via intent-pr-approved when all checks pass",
         "Cut next-slice issues only when WIP cap allows",
@@ -89,7 +89,7 @@ internal static class AutomationSummaryConstants
     public static readonly IReadOnlyList<string> ChildLoopResponsibilities =
     [
         "Stage 1: repair PRs labeled intent-pr-request-update and swap to intent-pr-rereview-ready",
-        "Stage 2: implement intent-target issues and open draft PRs labeled intent-pr-created",
+        "Stage 2: implement intent-target issues, open draft PRs, and mark the linked Issue with intent-pr-created (PR publication/review eligibility is handled by PR-side intent-target and PR state labels; never apply intent-pr-created to the PR itself)",
         "Honor single-branch cap and HARD CLARIFICATION over branch cap",
         "Never apply or remove intent-target from the child loop"
     ];
