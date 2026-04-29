@@ -18,7 +18,8 @@ internal static class CommandRouter
         "clarify",
         "intake",
         "status",
-        "context"
+        "context",
+        "next-slice"
     ];
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, CommandHandler>> ImplementedCommands =
@@ -106,6 +107,10 @@ internal static class CommandRouter
             ["context"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["collect"] = ContextCollectCommand.Execute
+            },
+            ["next-slice"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["classify"] = NextSliceClassifyCommand.Execute
             },
             ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
