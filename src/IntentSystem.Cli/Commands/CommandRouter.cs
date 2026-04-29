@@ -19,7 +19,8 @@ internal static class CommandRouter
         "intake",
         "status",
         "context",
-        "next-slice"
+        "next-slice",
+        "automation"
     ];
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, CommandHandler>> ImplementedCommands =
@@ -111,6 +112,10 @@ internal static class CommandRouter
             ["next-slice"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["classify"] = NextSliceClassifyCommand.Execute
+            },
+            ["automation"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["summary"] = AutomationSummaryCommand.Execute
             },
             ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
