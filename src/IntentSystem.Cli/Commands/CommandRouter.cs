@@ -133,7 +133,8 @@ internal static class CommandRouter
                 ["handoff-bundle"] = TaskingHandoffBundleCommand.Execute,
                 ["handoff-bundle-inspect"] = TaskingHandoffBundleInspectCommand.Execute,
                 ["handoff-bundle-verify"] = TaskingHandoffBundleVerifyCommand.Execute,
-                ["handoff-bundle-import-dry-run"] = TaskingHandoffBundleImportDryRunCommand.Execute
+                ["handoff-bundle-import-dry-run"] = TaskingHandoffBundleImportDryRunCommand.Execute,
+                ["publish-reviewed-bridge"] = TaskingPublishReviewedBridgeCommand.Execute
             },
             ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
