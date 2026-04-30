@@ -30,6 +30,14 @@ These templates assume:
 
 ## Template index
 
+The templates are split into two groups by **side** of the host ↔
+child boundary. Child-side templates author or repair implementation
+output; host-side templates review or plan. The two sides MUST NOT
+be mixed inside a single wake — see each template's "Boundary
+against …" section for the explicit comparison tables.
+
+### Child-side (implementation repo)
+
 | File | Path | What it covers |
 |------|------|----------------|
 | [`coding-automation-loop.md`](./coding-automation-loop.md)         | combined loop | One wake: choose between PR repair / issue-to-PR / none |
@@ -37,6 +45,13 @@ These templates assume:
 | [`pr-comment-fix-execution.md`](./pr-comment-fix-execution.md)     | PR repair handoff | Apply repair on the returned PR URL, summarize result |
 | [`metadata-safety.md`](./metadata-safety.md)                       | metadata boundaries | Validate before / after, controlled update only when explicit |
 | [`dry-run-checklist.md`](./dry-run-checklist.md)                   | operator dry-run | Read-only pre-flight to confirm wrapper / commands / no-action / metadata wiring before arming the loop |
+
+### Host-side (parent-host repo)
+
+| File | Path | What it covers |
+|------|------|----------------|
+| [`host-review-loop.md`](./host-review-loop.md)                     | host review | Per-wake review verdict on a child PR (accept / request-update / accept-as-rereview-ready / clarification) with the matching label transition |
+| [`host-next-slice-loop.md`](./host-next-slice-loop.md)             | host planning | Post-merge metadata closeout + pick at most one next-slice candidate (planning artifact only — no implementation, no provider launch) |
 
 ## Hard rules these templates enforce
 
@@ -57,12 +72,34 @@ These templates assume:
   `worker next-action` returns `none`, the wake is idle and ends without
   pushing anything.
 
+## Host-side hard rules (in addition to the rules above)
+
+The host-side templates ([`host-review-loop.md`](./host-review-loop.md)
+and [`host-next-slice-loop.md`](./host-next-slice-loop.md)) keep the
+same `intent-cli` invariants and add:
+
+- **Side discipline**: host-side templates run on the parent-host
+  side. They MUST NOT author or push child-repo implementation
+  changes. Coding-automation work belongs to
+  [`coding-automation-loop.md`](./coding-automation-loop.md).
+- **Bounded writes only into host packets**: any host-packet
+  mutation goes through `intent-cli metadata update` with an
+  explicit supported transition mode (currently
+  `completed-closeout`). See
+  [`metadata-safety.md`](./metadata-safety.md).
+- **No cross-loop shortcuts**: the host review loop and the host
+  next-slice loop run as separate wakes. Neither calls the
+  child-side coding-automation loop directly; the implementation
+  repo's child loop picks up newly-published `intent-target` issues
+  via `intent-cli worker next-action` on its own next wake.
+
 ## What is intentionally out of scope here
 
 - new worker commands;
 - changes to `intent-cli run`;
 - scheduler / cron registration;
-- mutating GitHub issues or PRs from prompts;
-- writing into the parent-host `MyIntentHost` repository from this
-  child repository's prompts;
+- mutating GitHub issues or PRs from coding-automation prompts;
+- writing into the parent-host `MyIntentHost` repository from
+  child-side coding-automation prompts (host-side templates do
+  write — but only via the bounded `metadata update` surface);
 - distributing these templates as a public package.
