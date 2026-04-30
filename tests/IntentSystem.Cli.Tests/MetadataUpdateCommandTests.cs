@@ -256,6 +256,38 @@ public sealed class MetadataUpdateCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_MissingRoot_ReturnsNonZeroAndDoesNotFallBackToContext()
+    {
+        // G208 follow-up per #522 review: this state-mutating parent-host
+        // writer must require --root explicitly. No silent fall-back to
+        // CliContext.RepoRoot or the current directory; otherwise
+        // automation could accidentally write whichever repo happens to
+        // be the process context.
+        using var ws = new MetadataUpdateWorkspace();
+        ws.WriteHostShapePacket("G208", linkedIssue: 521, state: "queued");
+        var before = ws.SnapshotWorkspace();
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataUpdateCommand.Execute(
+            ws.Context, // ws.Context.RepoRoot is set; --root deliberately omitted
+            new[]
+            {
+                "--execution-unit", "G208",
+                "--mode", "completed-closeout",
+                "--linked-pr", "1",
+            },
+            writer);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("--root is required", writer.ToString(), StringComparison.Ordinal);
+
+        // No file may have changed — the writer must not have fallen
+        // back to ws.Context.RepoRoot.
+        var after = ws.SnapshotWorkspace();
+        Assert.Empty(AfterDelta(before, after));
+    }
+
+    [Fact]
     public void Execute_MissingMode_ReturnsNonZero()
     {
         using var ws = new MetadataUpdateWorkspace();

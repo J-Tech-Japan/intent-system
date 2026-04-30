@@ -77,9 +77,12 @@ internal static class MetadataUpdateCommand
             return 1;
         }
 
-        var rootPath = string.IsNullOrWhiteSpace(root)
-            ? context.RepoRoot ?? Directory.GetCurrentDirectory()
-            : root!;
+        // G208 follow-up per #522 review: --root is required for the
+        // metadata writer because this is a state-mutating parent-host
+        // command. Falling back to the process context would let
+        // automation accidentally write whichever repo happens to be
+        // the current directory.
+        var rootPath = root!;
 
         // Mode-specific argument coherence.
         if (string.Equals(mode, MetadataUpdateConstants.Modes.CompletedCloseout, StringComparison.Ordinal))
@@ -672,6 +675,15 @@ internal static class MetadataUpdateCommand
             }
         }
 
+        // G208 follow-up per #522 review: --root is required for this
+        // state-mutating parent-host writer. No falling back to process
+        // context — automation must name the target packet root
+        // explicitly so it cannot accidentally write a different repo.
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            error = "--root is required (e.g. --root /path/to/parent-host-repo).";
+            return false;
+        }
         if (string.IsNullOrWhiteSpace(executionUnit))
         {
             error = "--execution-unit is required (e.g. --execution-unit G208).";
