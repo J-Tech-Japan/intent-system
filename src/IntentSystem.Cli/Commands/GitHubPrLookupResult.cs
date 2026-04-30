@@ -1,0 +1,89 @@
+using System.Text.Json.Serialization;
+
+namespace IntentSystem.Cli.Commands;
+
+/// <summary>
+/// G203: Deserialized GitHub PR payload returned by
+/// <see cref="IGitHubPrLookup"/>. Field names match the JSON shape emitted by
+/// <c>gh pr view --json number,state,title,body,labels,isDraft,closed,merged,mergedAt,closedAt,closingIssuesReferences</c>
+/// so the default adapter can deserialize directly into this record.
+/// </summary>
+internal sealed record GitHubPrLookupResult
+{
+    [JsonPropertyName("number")]
+    public int Number { get; init; }
+
+    [JsonPropertyName("state")]
+    public string State { get; init; } = string.Empty;
+
+    [JsonPropertyName("title")]
+    public string Title { get; init; } = string.Empty;
+
+    [JsonPropertyName("body")]
+    public string Body { get; init; } = string.Empty;
+
+    [JsonPropertyName("isDraft")]
+    public bool IsDraft { get; init; }
+
+    [JsonPropertyName("closed")]
+    public bool Closed { get; init; }
+
+    [JsonPropertyName("merged")]
+    public bool Merged { get; init; }
+
+    [JsonPropertyName("mergedAt")]
+    public string? MergedAt { get; init; }
+
+    [JsonPropertyName("closedAt")]
+    public string? ClosedAt { get; init; }
+
+    [JsonPropertyName("labels")]
+    public IReadOnlyList<GitHubPrLabel> Labels { get; init; } = Array.Empty<GitHubPrLabel>();
+
+    [JsonPropertyName("closingIssuesReferences")]
+    public IReadOnlyList<GitHubPrClosingIssueReference> ClosingIssuesReferences { get; init; }
+        = Array.Empty<GitHubPrClosingIssueReference>();
+}
+
+/// <summary>
+/// G203: Single GitHub PR label as returned by <c>gh pr view --json labels</c>.
+/// Only <c>name</c> is consumed by the preflight classifier.
+/// </summary>
+internal sealed record GitHubPrLabel
+{
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// G203: Single closing-issue reference entry as returned by
+/// <c>gh pr view --json closingIssuesReferences</c>. Captures the issue
+/// number plus an optional repo descriptor for cross-repo links.
+/// </summary>
+internal sealed record GitHubPrClosingIssueReference
+{
+    [JsonPropertyName("number")]
+    public int Number { get; init; }
+
+    [JsonPropertyName("repository")]
+    public GitHubPrClosingIssueRepository? Repository { get; init; }
+}
+
+/// <summary>
+/// G203: Repository descriptor for a closing-issue reference. Mirrors
+/// <c>{ "name": "&lt;repo&gt;", "owner": { "login": "&lt;owner&gt;" } }</c>.
+/// </summary>
+internal sealed record GitHubPrClosingIssueRepository
+{
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = string.Empty;
+
+    [JsonPropertyName("owner")]
+    public GitHubPrClosingIssueRepositoryOwner? Owner { get; init; }
+}
+
+internal sealed record GitHubPrClosingIssueRepositoryOwner
+{
+    [JsonPropertyName("login")]
+    public string Login { get; init; } = string.Empty;
+}
