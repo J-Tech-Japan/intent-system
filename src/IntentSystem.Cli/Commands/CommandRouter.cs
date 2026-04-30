@@ -128,7 +128,8 @@ internal static class CommandRouter
             ["worker"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["issue-preflight"] = WorkerIssuePreflightCommand.Execute,
-                ["pr-review-preflight"] = WorkerPrReviewPreflightCommand.Execute
+                ["pr-review-preflight"] = WorkerPrReviewPreflightCommand.Execute,
+                ["pr-comment-preflight"] = WorkerPrCommentPreflightCommand.Execute
             },
             ["tasking"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

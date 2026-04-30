@@ -381,7 +381,14 @@ internal static class WorkerPrReviewPreflightAnalyzer
             WorkerPrReviewPreflightConstants.RecommendedActions.Review);
     }
 
-    private static IReadOnlyList<string> DetectTargetMismatch(
+    /// <summary>
+    /// G204 reuse: the same target-mismatch heuristics (Repository: header,
+    /// submodules/, parent-host) are needed by the pr-comment-preflight
+    /// analyzer. Promoted from <c>private</c> to <c>internal static</c> so the
+    /// G204 surface can call it without duplicating the logic. Pure: no I/O,
+    /// no external process.
+    /// </summary>
+    internal static IReadOnlyList<string> DetectTargetMismatch(
         string body,
         string repo,
         string workdir,
