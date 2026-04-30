@@ -136,7 +136,8 @@ internal static class CommandRouter
             },
             ["metadata"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
-                ["validate"] = MetadataValidateCommand.Execute
+                ["validate"] = MetadataValidateCommand.Execute,
+                ["update"] = MetadataUpdateCommand.Execute
             },
             ["tasking"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
