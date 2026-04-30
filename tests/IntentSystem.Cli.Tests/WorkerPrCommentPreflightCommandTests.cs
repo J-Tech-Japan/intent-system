@@ -1237,6 +1237,134 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
+    public void Execute_GivenParentHostMentionsOnlyInQuotedAndOutOfScopeContexts_DoesNotClassifyAsTargetMismatch()
+    {
+        // G204 follow-up regression for #514 third rereview:
+        // PR #514's body mentions `parent-host` / `MyIntentHost` ONLY inside
+        // backtick-quoted literals (enumerating the heuristic's own trigger
+        // names) and inside an Out-Of-Scope / Confirmation / Test-plan
+        // section. Those contexts must NOT trip `target-mismatch`; the PR
+        // must classify by labels / source-issue / comments instead.
+        const string realBodyShape = @"## Summary
+
+- Adds `intent-cli worker pr-comment-preflight --repo <owner/repo> --pr <number>` under the existing `worker` group.
+- First-match precedence rules:
+  6. body/source-issue references different repo OR `submodules/...` OR `parent-host`/`MyIntentHost` literal → `target-mismatch`
+  7. source-issue trace produces no candidate → `source-issue-missing`
+
+## Out Of Scope
+
+- This slice does not touch parent-host execution paths or MyIntentHost packets.
+
+## Confirmation
+
+- The command does NOT mutate parent-host state.
+- The command does NOT post comments to MyIntentHost.
+
+Closes #100
+";
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        WorkerPrCommentPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(
+            number: 6042,
+            state: "OPEN",
+            title: "G204 Add PR comment/thread preflight command",
+            body: realBodyShape,
+            labelNames: new[] { "intent-target" },
+            closingIssueNumbers: new[] { 100 }));
+        WorkerPrCommentPreflightCommand.IssueLookupFactory = () => new FakeIssueLookup(BuildIssue(
+            number: 100, state: "OPEN", title: "Source", body: string.Empty,
+            labelNames: new[] { "intent-target", "intent-pr-created" }));
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments());
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "6042", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+
+        // Must NOT classify as target-mismatch — all parent-host/MyIntentHost
+        // mentions are inside backtick-quoted literals or Out-Of-Scope /
+        // Confirmation sections.
+        Assert.NotEqual(
+            WorkerPrCommentPreflightConstants.Classifications.TargetMismatch,
+            result.Classification);
+
+        // No mismatch reason should leak through.
+        Assert.DoesNotContain(result.Reasons, r =>
+            r.Contains("parent-host", StringComparison.OrdinalIgnoreCase)
+            || r.Contains("MyIntentHost", StringComparison.Ordinal));
+
+        // With no comments and the PR otherwise healthy (intent-target only,
+        // source issue carries the expected labels), classification falls
+        // through to no-actionable-comments.
+        Assert.Equal(
+            WorkerPrCommentPreflightConstants.Classifications.NoActionableComments,
+            result.Classification);
+    }
+
+    [Fact]
+    public void StripNonTargetingContexts_LeavesPlainProseParentHostMentionsIntact()
+    {
+        // Defensive: real targeting language (plain-prose execution-path
+        // narration outside any quoted / Out-Of-Scope / Confirmation context)
+        // must still survive the strip so `target-mismatch` continues to
+        // fire for actually-misrouted PRs.
+        const string realTargetingBody = @"## Summary
+
+This PR runs in the parent-host repo and updates MyIntentHost packets.
+";
+        var stripped = WorkerPrReviewPreflightAnalyzer.StripNonTargetingContexts(realTargetingBody);
+
+        Assert.Contains("parent-host", stripped, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("MyIntentHost", stripped);
+    }
+
+    [Fact]
+    public void StripNonTargetingContexts_RemovesBacktickQuotedAndOutOfScopeMentions()
+    {
+        // Locks the strip-helper contract at the helper level, independent
+        // of the preflight pipeline. Mentions inside backtick spans, fenced
+        // code blocks, and Out-Of-Scope / Confirmation sections must all
+        // disappear; mentions in plain prose elsewhere must remain.
+        const string mixedBody = @"## Summary
+
+- `parent-host`/`MyIntentHost` literal → target-mismatch (quoted, must strip)
+
+```
+parent-host fenced code mention (must strip)
+```
+
+## Out Of Scope
+
+- Parent-host execution paths (must strip)
+- MyIntentHost packets (must strip)
+
+## Confirmation
+
+- Does NOT touch parent-host state (must strip)
+
+## Architecture
+
+This actually targets parent-host (must remain).
+";
+        var stripped = WorkerPrReviewPreflightAnalyzer.StripNonTargetingContexts(mixedBody);
+
+        // Plain-prose mention under a non-stripped heading remains.
+        Assert.Contains("This actually targets parent-host", stripped, StringComparison.Ordinal);
+
+        // Stripped occurrences (Out Of Scope / Confirmation / fenced /
+        // backtick) must not contribute the bare token in their original
+        // contexts. We assert the surrounding strings are gone — if any
+        // strip path regresses, this catches it.
+        Assert.DoesNotContain("MyIntentHost packets", stripped, StringComparison.Ordinal);
+        Assert.DoesNotContain("Does NOT touch parent-host state", stripped, StringComparison.Ordinal);
+        Assert.DoesNotContain("parent-host fenced code mention", stripped, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Adapter_PrViewArguments_DoNotRequestUnsupportedReviewThreadsField()
     {
         var arguments = GhCliGitHubPrCommentsLookup.BuildPrViewArguments("J-Tech-Japan/intent-system", 514);

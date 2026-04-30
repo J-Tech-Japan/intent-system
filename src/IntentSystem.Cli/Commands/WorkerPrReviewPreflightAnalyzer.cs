@@ -20,6 +20,35 @@ internal static class WorkerPrReviewPreflightAnalyzer
         @"(?i)(?:closes|fixes|resolves)\s+#(\d+)",
         RegexOptions.Compiled);
 
+    // G204 follow-up: strip fenced code blocks (```...```) and inline backtick
+    // spans (`...`) so parent-host/MyIntentHost mentions inside literal/quoted
+    // contexts (e.g. PR descriptions enumerating the heuristic's own trigger
+    // names) do not falsely fire `target-mismatch`.
+    private static readonly Regex FencedCodeBlockRegex = new(
+        @"```[\s\S]*?```",
+        RegexOptions.Compiled);
+
+    private static readonly Regex InlineBacktickSpanRegex = new(
+        @"`[^`]*`",
+        RegexOptions.Compiled);
+
+    // G204 follow-up: clearly-non-targeting headings. Anything from one of
+    // these heading lines up to the next `## ` or `### ` heading (or end of
+    // body) is treated as documentation/quotation rather than as a directive
+    // to operate on the parent host. Keep this list short and structural.
+    private static readonly string[] NonTargetingHeadingMarkers =
+    {
+        "out of scope",
+        "out-of-scope",
+        "confirmation",
+        "no-mutation",
+        "test plan",
+    };
+
+    private static readonly Regex MarkdownHeadingLineRegex = new(
+        @"^[ \t]*#{1,6}[ \t]+(?<text>.+?)[ \t]*$",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
     /// <summary>
     /// Trace the source-issue candidate from the PR lookup payload using the
     /// algorithm: prefer <c>closingIssuesReferences</c>, fall back to the
@@ -422,8 +451,19 @@ internal static class WorkerPrReviewPreflightAnalyzer
             }
         }
 
+        // G204 follow-up: free-text heuristics 2 and 3 must consult a body
+        // with clearly-non-targeting contexts stripped — otherwise PR
+        // descriptions that quote the heuristic's own trigger tokens (e.g. a
+        // precedence-rules listing enumerating ``submodules/...`` or
+        // ``parent-host``/``MyIntentHost`` literals) falsely classify
+        // child-targeting PRs as `target-mismatch`. Heuristics 0 and 1
+        // remain on the raw inputs because they key on structural metadata
+        // (closingIssuesReferences) or an explicit `Repository: <owner>/<repo>`
+        // header, neither of which is meaningfully affected by quoting.
+        var bodyForFreeTextHeuristics = StripNonTargetingContexts(body);
+
         // Heuristic 2: body mentions submodules/ while workdir does not.
-        if (body.Contains("submodules/", StringComparison.OrdinalIgnoreCase))
+        if (bodyForFreeTextHeuristics.Contains("submodules/", StringComparison.OrdinalIgnoreCase))
         {
             var workdirNormalized = workdir.Replace('\\', '/');
             if (workdirNormalized.IndexOf("submodules/", StringComparison.OrdinalIgnoreCase) < 0)
@@ -434,8 +474,12 @@ internal static class WorkerPrReviewPreflightAnalyzer
         }
 
         // Heuristic 3: body mentions parent-host / MyIntentHost.
-        var mentionsParentHost = body.Contains("parent-host", StringComparison.OrdinalIgnoreCase)
-            || body.Contains("MyIntentHost", StringComparison.Ordinal);
+        //
+        // Real targeting language (e.g. a `Target Repo:` line in plain prose,
+        // or "this PR runs in the parent-host repo") still survives the
+        // strip and trips the heuristic as before.
+        var mentionsParentHost = bodyForFreeTextHeuristics.Contains("parent-host", StringComparison.OrdinalIgnoreCase)
+            || bodyForFreeTextHeuristics.Contains("MyIntentHost", StringComparison.Ordinal);
         if (mentionsParentHost)
         {
             reasons.Add(
@@ -443,6 +487,79 @@ internal static class WorkerPrReviewPreflightAnalyzer
         }
 
         return reasons;
+    }
+
+    /// <summary>
+    /// G204 follow-up: strip clearly-non-targeting contexts from a PR body
+    /// before applying the parent-host/MyIntentHost mention heuristic. Removes
+    /// fenced code blocks, inline backtick spans, and any heading section
+    /// whose heading text contains one of <see cref="NonTargetingHeadingMarkers"/>.
+    /// Pure (no I/O); exposed as <c>internal static</c> so the focused
+    /// regression test can exercise the strip independently of the analyzer
+    /// pipeline.
+    /// </summary>
+    internal static string StripNonTargetingContexts(string? body)
+    {
+        if (string.IsNullOrEmpty(body))
+        {
+            return string.Empty;
+        }
+
+        // Strip fenced code blocks first so multi-line ``` … ``` spans cannot
+        // bleed into the heading-section walk below.
+        var stripped = FencedCodeBlockRegex.Replace(body!, string.Empty);
+
+        // Strip inline backtick spans (` … `) — covers "<bullet> `parent-host`
+        // / `MyIntentHost` literal …" wording.
+        stripped = InlineBacktickSpanRegex.Replace(stripped, string.Empty);
+
+        // Walk all headings; for each one whose heading text matches a
+        // non-targeting marker, blank everything from that heading line up to
+        // (but not including) the next heading of any level.
+        var headings = MarkdownHeadingLineRegex.Matches(stripped);
+        if (headings.Count == 0)
+        {
+            return stripped;
+        }
+
+        var buffer = new System.Text.StringBuilder(stripped);
+        for (int i = 0; i < headings.Count; i++)
+        {
+            var heading = headings[i];
+            var headingText = heading.Groups["text"].Value.Trim();
+
+            bool isNonTargeting = false;
+            foreach (var marker in NonTargetingHeadingMarkers)
+            {
+                if (headingText.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                {
+                    isNonTargeting = true;
+                    break;
+                }
+            }
+
+            if (!isNonTargeting)
+            {
+                continue;
+            }
+
+            int sectionStart = heading.Index;
+            int sectionEnd = i + 1 < headings.Count
+                ? headings[i + 1].Index
+                : stripped.Length;
+
+            for (int p = sectionStart; p < sectionEnd; p++)
+            {
+                // Preserve newlines so subsequent regex runs (if any) keep
+                // their line semantics; blank everything else.
+                if (buffer[p] != '\n' && buffer[p] != '\r')
+                {
+                    buffer[p] = ' ';
+                }
+            }
+        }
+
+        return buffer.ToString();
     }
 
     private static WorkerPrReviewPreflightResult Build(
