@@ -153,6 +153,72 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenPriorRepairRequestAndWorkerUpdateComments_DoesNotClassifyAsRepairRequired()
+    {
+        // G204 follow-up regression for #514 review:
+        // After a worker update applied, the PR's history still contains the
+        // host's prior deterministic review/rereview repair-request comments
+        // and the worker's own "Update — fix applied" note. Once draft-state
+        // gating no longer masks the comment pass, those already-addressed
+        // comments must NOT classify the PR as `repair-required` and must
+        // NOT appear in `ActionableComments` — otherwise the repair loop
+        // chases its own history.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        SetTargetedPrAndIssue(prNumber: 6041);
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            reviewThreads: Array.Empty<GitHubPrReviewThread>(),
+            reviews: Array.Empty<GitHubPrReview>(),
+            comments: new[]
+            {
+                // First-pass deterministic review (host automation/reviewer).
+                BuildIssueComment(
+                    id: "ic-prior-1",
+                    author: "tomohisa",
+                    body: "Deterministic review found one blocker to repair before closeout:\n\n- Adapter requested unsupported `reviewThreads` field on `gh pr view`.\n\nNarrow fix: split into supported call paths."),
+
+                // Second-pass deterministic rereview (host automation/reviewer).
+                BuildIssueComment(
+                    id: "ic-prior-2",
+                    author: "tomohisa",
+                    body: "Deterministic rereview found one remaining blocker before closeout:\n\n- The reused PR lookup still requests `merged`.\n\nNarrow fix: derive merged from supported `state`."),
+
+                // Worker update note posted by this loop after applying the fix.
+                BuildIssueComment(
+                    id: "ic-worker-update",
+                    author: "claude-bot",
+                    body: "Update — fix applied (commit `ccac873`).\n\nLive smoke verified, label swap to `intent-pr-rereview-ready`.")
+            }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "6041", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+
+        // Must NOT be classified as repair-required — these comments were
+        // already addressed by the worker update.
+        Assert.NotEqual(
+            WorkerPrCommentPreflightConstants.Classifications.RepairRequired,
+            result.Classification);
+
+        // Specifically: classify as no-actionable-comments (PR is otherwise
+        // healthy with intent-target only) and emit an empty actionable list.
+        Assert.Equal(
+            WorkerPrCommentPreflightConstants.Classifications.NoActionableComments,
+            result.Classification);
+        Assert.Empty(result.ActionableComments);
+
+        // Belt-and-braces: none of the three filtered-out comment IDs may
+        // leak through under any classification.
+        Assert.DoesNotContain(result.ActionableComments, c => c.Id == "ic-prior-1");
+        Assert.DoesNotContain(result.ActionableComments, c => c.Id == "ic-prior-2");
+        Assert.DoesNotContain(result.ActionableComments, c => c.Id == "ic-worker-update");
+    }
+
+    [Fact]
     public void Execute_GivenPrWithChangesRequestedReview_ClassifiesAsRepairRequired()
     {
         using var workspace = new WorkerPrCommentPreflightWorkspace();
