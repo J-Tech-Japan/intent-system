@@ -1,0 +1,609 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using IntentSystem.Cli;
+using IntentSystem.Cli.Commands;
+using IntentSystem.Cli.Models;
+
+namespace IntentSystem.Cli.Tests;
+
+/// <summary>
+/// G206: Tests for <c>intent-cli worker next-action</c>. Cover the four
+/// priority cases (PR repair > issue-to-PR > none), the in-progress and
+/// pr-created exclusions, the misplaced-PR-label warning, and the
+/// no-mutation invariants.
+/// </summary>
+public sealed class WorkerNextActionCommandTests : IDisposable
+{
+    public WorkerNextActionCommandTests()
+    {
+        WorkerNextActionCommand.CandidateListerFactory = null;
+        WorkerNextActionCommand.NestedProviderLauncher = null;
+    }
+
+    public void Dispose()
+    {
+        WorkerNextActionCommand.CandidateListerFactory = null;
+        WorkerNextActionCommand.NestedProviderLauncher = null;
+    }
+
+    [Fact]
+    public void Execute_GivenPrWithRequestUpdate_SelectsPrCommentFix()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "G204 PR", "https://github.com/J-Tech-Japan/intent-system/pull/514",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+            Issues = new[]
+            {
+                BuildIssue(515, "G205 Issue", "https://github.com/J-Tech-Japan/intent-system/issues/515",
+                    createdAt: "2026-04-30T01:00:00Z",
+                    labels: new[] { "intent-target" }),
+            },
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+        Assert.Equal(514, result.Number);
+        Assert.Equal(WorkerNextActionConstants.RecommendedWorkflows.PrCommentFix, result.RecommendedWorkflow);
+        Assert.Equal(WorkerNextActionConstants.SourceClassifications.RepairRequired, result.SourceClassification);
+        Assert.StartsWith("https://github.com/", result.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenPrInUpdateInProgress_FallsThroughToIssueToPr()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = new[]
+            {
+                // PR already claimed by a worker — must be excluded.
+                BuildPr(514, "Already-claimed PR", "https://github.com/J-Tech-Japan/intent-system/pull/514",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update", "intent-pr-update-in-progress" }),
+            },
+            Issues = new[]
+            {
+                BuildIssue(515, "G205", "https://github.com/J-Tech-Japan/intent-system/issues/515",
+                    createdAt: "2026-04-30T01:00:00Z",
+                    labels: new[] { "intent-target" }),
+            },
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.IssueToPr, result.Action);
+        Assert.Equal(515, result.Number);
+        Assert.Equal(WorkerNextActionConstants.RecommendedWorkflows.GhIssueToPr, result.RecommendedWorkflow);
+    }
+
+    [Fact]
+    public void Execute_GivenIssueWithIntentPrCreated_ExcludesItFromIssueToPrSelection()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = Array.Empty<GitHubAutomationPrCandidate>(),
+            Issues = new[]
+            {
+                // First (older) issue carries intent-pr-created — excluded.
+                BuildIssue(513, "Already PR'd", "https://github.com/J-Tech-Japan/intent-system/issues/513",
+                    createdAt: "2026-04-29T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-created" }),
+                // Eligible newer issue.
+                BuildIssue(517, "Eligible", "https://github.com/J-Tech-Japan/intent-system/issues/517",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target" }),
+            },
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.IssueToPr, result.Action);
+        Assert.Equal(517, result.Number);
+    }
+
+    [Fact]
+    public void Execute_GivenIssueInProgress_ExcludesItFromIssueToPrSelection()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = Array.Empty<GitHubAutomationPrCandidate>(),
+            Issues = new[]
+            {
+                BuildIssue(517, "In progress", "https://github.com/J-Tech-Japan/intent-system/issues/517",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-issue-in-progress" }),
+            },
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.None, result.Action);
+        Assert.Null(result.Number);
+    }
+
+    [Fact]
+    public void Execute_GivenNoCandidates_ReturnsNoneActionWithDeterministicReason()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister();
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.None, result.Action);
+        Assert.Equal("no actionable coding automation target", result.Reason);
+        Assert.Null(result.RecommendedWorkflow);
+        Assert.Null(result.Number);
+    }
+
+    [Fact]
+    public void Execute_GivenPrWithMisplacedIntentPrCreated_EmitsWarningAndExcludesIt()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = new[]
+            {
+                // Misplaced label: intent-pr-created on the PR itself.
+                BuildPr(600, "Misplaced", "https://github.com/J-Tech-Japan/intent-system/pull/600",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update", "intent-pr-created" }),
+            },
+            Issues = Array.Empty<GitHubAutomationIssueCandidate>(),
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        // Misplaced PR is excluded → no eligible target → none.
+        Assert.Equal(WorkerNextActionConstants.Actions.None, result.Action);
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("PR #600", StringComparison.Ordinal)
+            && w.Contains("intent-pr-created", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_PrRepairBeatsIssueToPrEvenWhenIssueIsOlder()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            // Issue was created first (older) but priority is still PR repair.
+            Issues = new[]
+            {
+                BuildIssue(100, "Old issue", "https://github.com/J-Tech-Japan/intent-system/issues/100",
+                    createdAt: "2026-01-01T00:00:00Z",
+                    labels: new[] { "intent-target" }),
+            },
+            Prs = new[]
+            {
+                BuildPr(900, "New PR repair", "https://github.com/J-Tech-Japan/intent-system/pull/900",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+        Assert.Equal(900, result.Number);
+    }
+
+    [Fact]
+    public void Execute_PicksOldestPrWhenMultipleAreEligible()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(901, "newer", "https://github.com/J-Tech-Japan/intent-system/pull/901",
+                    createdAt: "2026-04-30T05:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+                BuildPr(900, "older", "https://github.com/J-Tech-Japan/intent-system/pull/900",
+                    createdAt: "2026-04-29T05:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(900, result.Number);
+    }
+
+    [Fact]
+    public void Execute_MissingRepo_ReturnsNonZero()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            Array.Empty<string>(),
+            writer);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("--repo is required", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_TransportFailure_ReturnsNonZero()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory =
+            () => new ThrowingLister("simulated gh failure");
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("simulated gh failure", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void JsonOutput_IncludesCamelCaseAliasesForRecommendedWorkflowAndSourceClassification()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "PR repair", "https://github.com/J-Tech-Japan/intent-system/pull/514",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var raw = writer.ToString();
+        Assert.Contains("\"recommended_workflow\"", raw, StringComparison.Ordinal);
+        Assert.Contains("\"recommendedWorkflow\"", raw, StringComparison.Ordinal);
+        Assert.Contains("\"source_classification\"", raw, StringComparison.Ordinal);
+        Assert.Contains("\"sourceClassification\"", raw, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Adapter_PrListArguments_RequestSupportedSubsetWithLabelFilter()
+    {
+        var args = GhCliGitHubAutomationCandidateLister.BuildPrListArguments(
+            "J-Tech-Japan/intent-system",
+            new[] { "intent-target" });
+
+        Assert.Contains("pr", args);
+        Assert.Contains("list", args);
+        Assert.Contains("--repo", args);
+        Assert.Contains("J-Tech-Japan/intent-system", args);
+        Assert.Contains("--state", args);
+        Assert.Contains("open", args);
+        Assert.Contains("--json", args);
+        Assert.Contains(GhCliGitHubAutomationCandidateLister.ListJsonFields, args);
+        Assert.Contains("--label", args);
+        Assert.Contains("intent-target", args);
+    }
+
+    [Fact]
+    public void Adapter_IssueListArguments_RequestSupportedSubsetWithLabelFilter()
+    {
+        var args = GhCliGitHubAutomationCandidateLister.BuildIssueListArguments(
+            "J-Tech-Japan/intent-system",
+            new[] { "intent-target" });
+
+        Assert.Contains("issue", args);
+        Assert.Contains("list", args);
+        Assert.Contains("--repo", args);
+        Assert.Contains("J-Tech-Japan/intent-system", args);
+        Assert.Contains(GhCliGitHubAutomationCandidateLister.ListJsonFields, args);
+        Assert.Contains("--label", args);
+        Assert.Contains("intent-target", args);
+    }
+
+    [Fact]
+    public void Execute_NeverInvokesNestedProviderLauncher()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var launcherInvoked = false;
+        WorkerNextActionCommand.NestedProviderLauncher = () =>
+        {
+            launcherInvoked = true;
+            return true;
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "PR", "https://example.com/pr/514",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+            Issues = new[]
+            {
+                BuildIssue(517, "Issue", "https://example.com/issue/517",
+                    createdAt: "2026-04-30T01:00:00Z",
+                    labels: new[] { "intent-target" }),
+            },
+        };
+
+        using var writer = new StringWriter();
+        // Walk both selection paths and the no-action path.
+        Assert.Equal(0, WorkerNextActionCommand.Execute(workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer));
+
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister();
+        writer.GetStringBuilder().Clear();
+        Assert.Equal(0, WorkerNextActionCommand.Execute(workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer));
+
+        Assert.False(launcherInvoked,
+            "WorkerNextActionCommand must never invoke NestedProviderLauncher.");
+    }
+
+    [Fact]
+    public void Execute_LeavesIntentCliWorkspaceByteEquivalent()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var before = workspace.SnapshotWorkspace();
+
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "PR", "https://example.com/pr/514",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+
+        using (var writer = new StringWriter())
+        {
+            Assert.Equal(0, WorkerNextActionCommand.Execute(workspace.Context,
+                new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+                writer));
+        }
+
+        var after = workspace.SnapshotWorkspace();
+        Assert.Equal(before.Count, after.Count);
+        foreach (var (path, hash) in before)
+        {
+            Assert.True(after.TryGetValue(path, out var afterHash),
+                $"file disappeared after run: {path}");
+            Assert.Equal(hash, afterHash);
+        }
+    }
+
+    [Fact]
+    public void SourceScan_AnalyzerAndCommand_ContainNoProcessStartOrGhMutationLiterals()
+    {
+        // The analyzer and command files must remain pure: no Process.Start
+        // and no gh CLI mutation literals in EXECUTABLE code. The lister
+        // adapter is exempt (its job is to shell out to `gh pr list` /
+        // `gh issue list` for read-only metadata). Doc-comment listings of
+        // forbidden mutations are stripped before scanning so the
+        // documentation can name what it forbids.
+        var analyzer = StripCsharpComments(File.ReadAllText(LocateSourceFile("WorkerNextActionAnalyzer.cs")));
+        var command = StripCsharpComments(File.ReadAllText(LocateSourceFile("WorkerNextActionCommand.cs")));
+        var combined = analyzer + "\n" + command;
+
+        Assert.DoesNotContain("Process.Start(", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh issue edit", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh pr edit", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh pr merge", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh pr close", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh pr reopen", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh pr comment", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh pr review", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain("resolveReviewThread", combined, StringComparison.Ordinal);
+    }
+
+    private static string StripCsharpComments(string source)
+    {
+        // Remove block comments (/* … */) including XML doc blocks like
+        // /** … */, and remove line comments (// … to end of line, plus
+        // /// … to end of line). Order matters — strip block comments
+        // first so a "//" inside a /* … */ block doesn't survive.
+        var noBlockComments = System.Text.RegularExpressions.Regex.Replace(
+            source, @"/\*[\s\S]*?\*/", string.Empty);
+        var noLineComments = System.Text.RegularExpressions.Regex.Replace(
+            noBlockComments, @"//.*?$", string.Empty,
+            System.Text.RegularExpressions.RegexOptions.Multiline);
+        return noLineComments;
+    }
+
+    private static GitHubAutomationPrCandidate BuildPr(
+        int number, string title, string url, string createdAt, string[] labels)
+    {
+        return new GitHubAutomationPrCandidate
+        {
+            Number = number,
+            Title = title,
+            Url = url,
+            CreatedAt = createdAt,
+            Labels = labels.Select(n => new GitHubAutomationLabel { Name = n }).ToArray(),
+        };
+    }
+
+    private static GitHubAutomationIssueCandidate BuildIssue(
+        int number, string title, string url, string createdAt, string[] labels)
+    {
+        return new GitHubAutomationIssueCandidate
+        {
+            Number = number,
+            Title = title,
+            Url = url,
+            CreatedAt = createdAt,
+            Labels = labels.Select(n => new GitHubAutomationLabel { Name = n }).ToArray(),
+        };
+    }
+
+    private static string LocateSourceFile(string fileName)
+    {
+        var directory = AppContext.BaseDirectory;
+        var dir = new DirectoryInfo(directory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine(
+                dir.FullName, "src", "IntentSystem.Cli", "Commands", fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException(
+            $"Could not locate source file {fileName} from {directory}");
+    }
+
+    private sealed class FakeLister : IGitHubAutomationCandidateLister
+    {
+        public IReadOnlyList<GitHubAutomationPrCandidate> Prs { get; init; }
+            = Array.Empty<GitHubAutomationPrCandidate>();
+        public IReadOnlyList<GitHubAutomationIssueCandidate> Issues { get; init; }
+            = Array.Empty<GitHubAutomationIssueCandidate>();
+
+        public IReadOnlyList<GitHubAutomationPrCandidate> ListPullRequests(
+            string repo,
+            IReadOnlyCollection<string> requiredLabels) => Prs;
+
+        public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
+            string repo,
+            IReadOnlyCollection<string> requiredLabels) => Issues;
+    }
+
+    private sealed class ThrowingLister : IGitHubAutomationCandidateLister
+    {
+        private readonly string message;
+
+        public ThrowingLister(string message)
+        {
+            this.message = message;
+        }
+
+        public IReadOnlyList<GitHubAutomationPrCandidate> ListPullRequests(
+            string repo, IReadOnlyCollection<string> requiredLabels) =>
+            throw new InvalidOperationException(message);
+
+        public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
+            string repo, IReadOnlyCollection<string> requiredLabels) =>
+            throw new InvalidOperationException(message);
+    }
+
+    private sealed class WorkerNextActionWorkspace : IDisposable
+    {
+        public WorkerNextActionWorkspace()
+        {
+            RootPath = Directory.CreateTempSubdirectory("worker-next-action-tests-").FullName;
+            Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
+            Context = new CliContext
+            {
+                RepoRoot = RootPath,
+                Config = new CliConfig
+                {
+                    Project = new ProjectConfig
+                    {
+                        Domain = "intent-cli",
+                        ArtifactRoot = ".intent-cli"
+                    }
+                }
+            };
+        }
+
+        public string RootPath { get; }
+
+        public CliContext Context { get; }
+
+        public IReadOnlyDictionary<string, string> SnapshotWorkspace()
+        {
+            var snapshot = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var path in Directory.EnumerateFiles(RootPath, "*", SearchOption.AllDirectories))
+            {
+                var bytes = File.ReadAllBytes(path);
+                var hash = Convert.ToHexString(SHA256.HashData(bytes));
+                snapshot[path] = hash;
+            }
+            return snapshot;
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(RootPath))
+            {
+                Directory.Delete(RootPath, recursive: true);
+            }
+        }
+    }
+}
