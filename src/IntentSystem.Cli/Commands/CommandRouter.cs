@@ -130,7 +130,8 @@ internal static class CommandRouter
                 ["issue-preflight"] = WorkerIssuePreflightCommand.Execute,
                 ["pr-review-preflight"] = WorkerPrReviewPreflightCommand.Execute,
                 ["pr-comment-preflight"] = WorkerPrCommentPreflightCommand.Execute,
-                ["result-summary"] = WorkerResultSummaryCommand.Execute
+                ["result-summary"] = WorkerResultSummaryCommand.Execute,
+                ["next-action"] = WorkerNextActionCommand.Execute
             },
             ["tasking"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
