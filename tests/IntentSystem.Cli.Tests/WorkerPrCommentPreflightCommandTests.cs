@@ -1232,6 +1232,80 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
         Assert.Contains("author{login}", query, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Adapter_ParsesRealShapePrViewCommentsJson_AuthorAsObjectAndCamelCaseKeys()
+    {
+        // G204 follow-up: the installed gh CLI emits `author` as an object
+        // `{"login":"<user>"}` (not a bare string) and uses camelCase keys
+        // `createdAt` / `submittedAt`. The adapter DTOs must deserialize that
+        // real shape successfully — earlier in-memory-fake tests bypassed the
+        // serializer so this regression is locked at the JSON-shape layer
+        // without requiring live GitHub.
+        const string realShape = """
+        {
+          "comments": [
+            {
+              "id": "IC_kwDO_real_id",
+              "author": { "login": "tomohisa" },
+              "authorAssociation": "MEMBER",
+              "body": "Deterministic review note",
+              "createdAt": "2026-04-30T01:19:48Z",
+              "url": "https://github.com/example/repo/pull/1#issuecomment-1"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "PRR_kwDO_review_id",
+              "author": { "login": "reviewer-bot" },
+              "body": "approved",
+              "state": "APPROVED",
+              "submittedAt": "2026-04-30T01:18:00Z"
+            }
+          ]
+        }
+        """;
+
+        var parsed = System.Text.Json.JsonSerializer.Deserialize<GitHubPrCommentsLookupResult>(realShape);
+
+        Assert.NotNull(parsed);
+        Assert.Single(parsed!.Comments);
+        Assert.Equal("tomohisa", parsed.Comments[0].Author);
+        Assert.Equal("Deterministic review note", parsed.Comments[0].Body);
+        Assert.Equal("2026-04-30T01:19:48Z", parsed.Comments[0].CreatedAt);
+
+        Assert.Single(parsed.Reviews);
+        Assert.Equal("reviewer-bot", parsed.Reviews[0].Author);
+        Assert.Equal("APPROVED", parsed.Reviews[0].State);
+        Assert.Equal("2026-04-30T01:18:00Z", parsed.Reviews[0].SubmittedAt);
+    }
+
+    [Fact]
+    public void Adapter_AuthorConverter_ToleratesNullAndBareStringAuthors()
+    {
+        // The author converter must accept the three live shapes:
+        //   1. object       — {"login":"x"} (real gh output)
+        //   2. bare string  — "x"            (legacy fixtures / tests)
+        //   3. null         — author was deleted on GitHub
+        // All three project to a flat string the analyzer can compare against.
+        const string variants = """
+        {
+          "comments": [
+            { "id": "a", "author": { "login": "obj-author" }, "body": "x", "createdAt": "t" },
+            { "id": "b", "author": "string-author",            "body": "y", "createdAt": "t" },
+            { "id": "c", "author": null,                        "body": "z", "createdAt": "t" }
+          ]
+        }
+        """;
+
+        var parsed = System.Text.Json.JsonSerializer.Deserialize<GitHubPrCommentsLookupResult>(variants);
+
+        Assert.NotNull(parsed);
+        Assert.Equal(3, parsed!.Comments.Count);
+        Assert.Equal("obj-author", parsed.Comments[0].Author);
+        Assert.Equal("string-author", parsed.Comments[1].Author);
+        Assert.Equal(string.Empty, parsed.Comments[2].Author);
+    }
+
     private sealed class FakePrLookup : IGitHubPrLookup
     {
         private readonly GitHubPrLookupResult payload;
