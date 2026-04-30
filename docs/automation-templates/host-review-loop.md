@@ -63,8 +63,10 @@ which child PRs are currently `repair-required`, which are
 `ready-to-implement`, and which are idle. Use that read as the
 deterministic context for review decisions — even though the review
 loop's actual target list is the set of child PRs in
-`intent-pr-rereview-ready` / `intent-pr-created` / open-default
-states.
+`intent-pr-rereview-ready` / open-default / any host-owned
+review-side label states. `intent-pr-created` is NOT a PR-side
+state; it is the issue-side completion marker and never appears in
+the PR review queue.
 
 ```bash
 intent-cli worker next-action \
