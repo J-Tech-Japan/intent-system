@@ -1157,6 +1157,81 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
         };
     }
 
+    // -----------------------------------------------------------------------
+    // PR #514 review fix (G204): the production `GhCliGitHubPrCommentsLookup`
+    // adapter previously called `gh pr view --json reviewThreads`, which the
+    // installed gh CLI rejects with `Unknown JSON field: "reviewThreads"`.
+    // The adapter now splits the lookup into TWO read-only calls:
+    //   - `gh pr view --json reviews,comments`         (supported subset)
+    //   - `gh api graphql -f query=... reviewThreads`  (GraphQL chain)
+    // The next four regressions lock both call shapes against accidental
+    // re-introduction of the unsupported field. They exercise the adapter's
+    // BuildXxxArguments builders directly so they catch the bug-protection
+    // shape WITHOUT round-tripping a real gh call.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Adapter_PrViewArguments_DoNotRequestUnsupportedReviewThreadsField()
+    {
+        var arguments = GhCliGitHubPrCommentsLookup.BuildPrViewArguments("J-Tech-Japan/intent-system", 514);
+
+        // The argument list MUST still pass --json with the supported subset
+        // and MUST NOT contain the literal "reviewThreads" field anywhere.
+        Assert.Contains("pr", arguments);
+        Assert.Contains("view", arguments);
+        Assert.Contains("--json", arguments);
+        Assert.Contains("reviews,comments", arguments);
+        Assert.DoesNotContain(arguments, a =>
+            a.Contains("reviewThreads", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Adapter_PrViewJsonFieldsConstant_DoesNotIncludeUnsupportedReviewThreads()
+    {
+        // The constant naming the supported gh-CLI subset must remain free of
+        // the unsupported `reviewThreads` field. Locks the bug-protection at
+        // the constant level.
+        Assert.Equal("reviews,comments", GhCliGitHubPrCommentsLookup.PrViewJsonFields);
+        Assert.DoesNotContain(
+            "reviewThreads",
+            GhCliGitHubPrCommentsLookup.PrViewJsonFields,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Adapter_GraphqlArguments_UseGhApiGraphqlAndIncludeReviewThreadsField()
+    {
+        var arguments = GhCliGitHubPrCommentsLookup.BuildGraphqlArguments("J-Tech-Japan/intent-system", 514);
+
+        // The fallthrough call MUST be `gh api graphql` and MUST embed the
+        // GraphQL `reviewThreads(` field name in the query body so the
+        // documented connection on PullRequest is what we actually request.
+        Assert.Equal("api", arguments[0]);
+        Assert.Equal("graphql", arguments[1]);
+        Assert.Contains(arguments, a => a.StartsWith("query=", StringComparison.Ordinal));
+        Assert.Contains(arguments, a =>
+            a.Contains("reviewThreads(", StringComparison.Ordinal));
+
+        // And the variables MUST resolve to the input owner/repo/pr.
+        Assert.Contains("owner=J-Tech-Japan", arguments);
+        Assert.Contains("repo=intent-system", arguments);
+        Assert.Contains("pr=514", arguments);
+    }
+
+    [Fact]
+    public void Adapter_GraphqlQueryConstant_RetrievesIsResolvedAndAuthorLogin()
+    {
+        // The GraphQL query body must select the fields the analyzer relies
+        // on: per-thread `isResolved`, per-comment `body`, and the comment
+        // author `login`. Locks the GraphQL shape against accidental drift.
+        var query = GhCliGitHubPrCommentsLookup.ReviewThreadsGraphqlQuery;
+
+        Assert.Contains("reviewThreads(", query, StringComparison.Ordinal);
+        Assert.Contains("isResolved", query, StringComparison.Ordinal);
+        Assert.Contains("body", query, StringComparison.Ordinal);
+        Assert.Contains("author{login}", query, StringComparison.Ordinal);
+    }
+
     private sealed class FakePrLookup : IGitHubPrLookup
     {
         private readonly GitHubPrLookupResult payload;
