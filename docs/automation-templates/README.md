@@ -36,6 +36,7 @@ These templates assume:
 | [`issue-to-pr-execution.md`](./issue-to-pr-execution.md)           | issue handoff | Run `gh-issue-to-pr` workflow on the returned issue URL, summarize result |
 | [`pr-comment-fix-execution.md`](./pr-comment-fix-execution.md)     | PR repair handoff | Apply repair on the returned PR URL, summarize result |
 | [`metadata-safety.md`](./metadata-safety.md)                       | metadata boundaries | Validate before / after, controlled update only when explicit |
+| [`dry-run-checklist.md`](./dry-run-checklist.md)                   | operator dry-run | Read-only pre-flight to confirm wrapper / commands / no-action / metadata wiring before arming the loop |
 
 ## Hard rules these templates enforce
 
