@@ -26,6 +26,230 @@ public sealed class MetadataValidateCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenParentHostSchemaShape_ReturnsValidWithExitZero()
+    {
+        // G207 follow-up regression for #519 review:
+        // The actual parent-host packet schema nests fields under
+        // `implementation_issue_packet:` and `issue:`, and uses `state` /
+        // object-shaped `linked_issue` / `linked_pr` in queue-state.json.
+        // The validator must recognize that real shape — earlier fixtures
+        // used flat keys and missed this contract.
+        using var ws = new MetadataValidateWorkspace();
+        var unitDir = Path.Combine(ws.RootPath, ".intent-cli", "issues", "G207");
+        Directory.CreateDirectory(unitDir);
+
+        File.WriteAllText(Path.Combine(unitDir, "packet.yaml"), """
+            implementation_issue_packet:
+              issue_title: "G207 Add intent packet metadata validation command"
+              issue_kind: feature
+              source_execution_unit: G207
+              goal: "Add a deterministic local intent-cli command..."
+              target_repo: J-Tech-Japan/intent-system
+              target_path: .
+              target_part: "intent-cli metadata validation"
+            """);
+
+        File.WriteAllText(Path.Combine(unitDir, "github-body.md"), """
+            ## Goal
+            ...
+            ## Why This Slice Exists Now
+            ...
+            ## Current Observed State
+            ...
+            ## Accepted Baseline You May Assume
+            ...
+            ## Target Repo / Path / Part
+            ...
+            ## In Scope
+            ...
+            ## Out Of Scope
+            ...
+            ## Acceptance Criteria
+            ...
+            ## Verification
+            ...
+            ## Related Links
+            ...
+            """);
+
+        File.WriteAllText(Path.Combine(unitDir, "review-context.md"),
+            "## Execution Unit\nG207\n## Child Repo\n...\n## Linked Issue\n...\n"
+            + "## Linked PR\n...\n## Accepted Baseline\n...\n"
+            + "## Deterministic Review Checks\n...\n## Closeout Lookahead\n...\n");
+
+        File.WriteAllText(Path.Combine(unitDir, "implementation.md"), "notes\n");
+
+        // Real host publish.yaml shape: nested issue.{number,url}.
+        File.WriteAllText(Path.Combine(unitDir, "publish.yaml"), """
+            execution_unit: G207
+            issue:
+              number: 519
+              url: https://github.com/J-Tech-Japan/intent-system/issues/519
+              status: published
+              intent_target_label_applied: true
+              published_at: 2026-04-30T07:05:32Z
+            """);
+
+        // Real host queue-state.json shape: top-level items[] with
+        // object-shaped linked_issue (no linked_pr while queued).
+        var queueState = """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-30T07:20:25Z",
+              "items": [
+                {
+                  "execution_unit": "G207",
+                  "title": "G207 Add intent packet metadata validation command",
+                  "state": "queued",
+                  "dependencies": ["G205", "G206"],
+                  "linked_issue": {
+                    "repo": "J-Tech-Japan/intent-system",
+                    "number": 519,
+                    "url": "https://github.com/J-Tech-Japan/intent-system/issues/519"
+                  }
+                }
+              ]
+            }
+            """;
+        File.WriteAllText(
+            Path.Combine(ws.RootPath, ".intent-cli", "queue-state.json"),
+            queueState);
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataValidateCommand.Execute(
+            ws.Context,
+            new[] { "--root", ws.RootPath, "--execution-unit", "G207", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataValidateResult>(writer.ToString())!;
+        Assert.True(result.Valid,
+            $"expected the host-schema fixture to validate, errors={string.Join(", ", result.Errors.Select(e => e.Code))}");
+    }
+
+    [Fact]
+    public void Execute_HostSchemaCompletedWithLinkedPrObject_IsValid()
+    {
+        // Host queue-state encodes a completed item's linked_pr as an
+        // object with `number`. The validator must read the number from
+        // the object form and not flag CompletedMissingClosure.
+        using var ws = new MetadataValidateWorkspace();
+        var unitDir = Path.Combine(ws.RootPath, ".intent-cli", "issues", "G177");
+        Directory.CreateDirectory(unitDir);
+        File.WriteAllText(Path.Combine(unitDir, "packet.yaml"), """
+            implementation_issue_packet:
+              issue_title: "G177 done"
+              source_execution_unit: G177
+            """);
+        File.WriteAllText(Path.Combine(unitDir, "github-body.md"), """
+            ## Goal
+            ## Why This Slice Exists Now
+            ## Current Observed State
+            ## Accepted Baseline You May Assume
+            ## Target Repo / Path / Part
+            ## In Scope
+            ## Out Of Scope
+            ## Acceptance Criteria
+            ## Verification
+            ## Related Links
+            """);
+        File.WriteAllText(Path.Combine(unitDir, "review-context.md"),
+            "## Execution Unit\n## Child Repo\n## Linked Issue\n## Linked PR\n"
+            + "## Accepted Baseline\n## Deterministic Review Checks\n## Closeout Lookahead\n");
+        File.WriteAllText(Path.Combine(unitDir, "implementation.md"), "x\n");
+        File.WriteAllText(
+            Path.Combine(ws.RootPath, ".intent-cli", "queue-state.json"),
+            """
+            {
+              "items": [
+                {
+                  "execution_unit": "G177",
+                  "state": "completed",
+                  "linked_issue": { "number": 459 },
+                  "linked_pr":    { "number": 460 }
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataValidateCommand.Execute(
+            ws.Context,
+            new[] { "--root", ws.RootPath, "--execution-unit", "G177", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataValidateResult>(writer.ToString())!;
+        Assert.True(result.Valid,
+            $"expected completed object-shaped linked_pr to validate, errors={string.Join(", ", result.Errors.Select(e => e.Code))}");
+        Assert.DoesNotContain(result.Errors, e =>
+            e.Code == MetadataValidateConstants.Codes.CompletedMissingClosure);
+    }
+
+    [Fact]
+    public void Execute_HostSchemaPublishQueueIssueMismatch_DetectsAcrossNestedShapes()
+    {
+        // Cross-file consistency must still fire when publish.yaml's
+        // nested `issue.number` disagrees with queue-state's object-shaped
+        // `linked_issue.number`.
+        using var ws = new MetadataValidateWorkspace();
+        var unitDir = Path.Combine(ws.RootPath, ".intent-cli", "issues", "G207");
+        Directory.CreateDirectory(unitDir);
+        File.WriteAllText(Path.Combine(unitDir, "packet.yaml"), """
+            implementation_issue_packet:
+              issue_title: "G207 mismatch"
+              source_execution_unit: G207
+            """);
+        File.WriteAllText(Path.Combine(unitDir, "github-body.md"), """
+            ## Goal
+            ## Why This Slice Exists Now
+            ## Current Observed State
+            ## Accepted Baseline You May Assume
+            ## Target Repo / Path / Part
+            ## In Scope
+            ## Out Of Scope
+            ## Acceptance Criteria
+            ## Verification
+            ## Related Links
+            """);
+        File.WriteAllText(Path.Combine(unitDir, "review-context.md"),
+            "## Execution Unit\n## Child Repo\n## Linked Issue\n## Linked PR\n"
+            + "## Accepted Baseline\n## Deterministic Review Checks\n## Closeout Lookahead\n");
+        File.WriteAllText(Path.Combine(unitDir, "implementation.md"), "x\n");
+        File.WriteAllText(Path.Combine(unitDir, "publish.yaml"), """
+            execution_unit: G207
+            issue:
+              number: 999
+              url: https://github.com/example/repo/issues/999
+              status: published
+            """);
+        File.WriteAllText(
+            Path.Combine(ws.RootPath, ".intent-cli", "queue-state.json"),
+            """
+            {
+              "items": [
+                {
+                  "execution_unit": "G207",
+                  "state": "queued",
+                  "linked_issue": { "number": 519 }
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataValidateCommand.Execute(
+            ws.Context,
+            new[] { "--root", ws.RootPath, "--execution-unit", "G207", "--format", "json" },
+            writer);
+
+        Assert.NotEqual(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataValidateResult>(writer.ToString())!;
+        Assert.Contains(result.Errors, e =>
+            e.Code == MetadataValidateConstants.Codes.PublishQueueIssueMismatch);
+    }
+
+    [Fact]
     public void Execute_GivenValidMetadata_ReturnsValidWithExitZero()
     {
         using var ws = new MetadataValidateWorkspace();

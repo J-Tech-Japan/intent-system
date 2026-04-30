@@ -19,8 +19,17 @@ internal static class MetadataValidateAnalyzer
         RegexOptions.Compiled | RegexOptions.Multiline);
 
     private static readonly Regex YamlScalarKeyRegex = new(
-        // Top-level scalar key: "key:" possibly with a value on the same line.
-        @"^(?<key>[A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*(?<value>.*)$",
+        // Indented or top-level scalar key: "<indent>key:" possibly with a
+        // value. We capture the leading whitespace so the parser can
+        // reconstruct nesting depth.
+        //
+        // IMPORTANT: use [ \t]* between the colon and the inline value
+        // (not \s*) — \s matches newlines, so on a key line whose value
+        // continues on the next physical line (`key:\n  child: ...`) the
+        // value capture would greedily slurp the next line. With [ \t]*
+        // the value capture ends at end-of-line and the next line is
+        // matched as its own regex match.
+        @"^(?<indent>[ \t]*)(?<key>[A-Za-z_][A-Za-z0-9_\-]*)[ \t]*:[ \t]*(?<value>.*)$",
         RegexOptions.Compiled | RegexOptions.Multiline);
 
     public static MetadataValidateResult Analyze(MetadataValidateInputs inputs)
@@ -63,22 +72,32 @@ internal static class MetadataValidateAnalyzer
 
             if (packetFields is not null)
             {
-                if (!HasNonEmptyValue(packetFields, "execution_unit")
-                    && !HasNonEmptyValue(packetFields, "executionUnit"))
+                // The parent-host packet schema nests fields under
+                // `implementation_issue_packet:` with `source_execution_unit`
+                // and `issue_title` keys. Accept both that shape and the
+                // simpler flat shape used by the in-memory test fixtures.
+                if (!HasAnyNonEmptyValue(packetFields,
+                        "execution_unit",
+                        "executionUnit",
+                        "implementation_issue_packet.source_execution_unit",
+                        "source_execution_unit"))
                 {
                     errors.Add(new MetadataValidateFinding
                     {
                         Code = MetadataValidateConstants.Codes.PacketMissingExecutionUnit,
-                        Message = "packet.yaml is missing execution_unit / executionUnit.",
+                        Message = "packet.yaml is missing execution_unit / source_execution_unit.",
                         Path = packetPath,
                     });
                 }
-                if (!HasNonEmptyValue(packetFields, "title"))
+                if (!HasAnyNonEmptyValue(packetFields,
+                        "title",
+                        "implementation_issue_packet.issue_title",
+                        "issue_title"))
                 {
                     errors.Add(new MetadataValidateFinding
                     {
                         Code = MetadataValidateConstants.Codes.PacketMissingTitle,
-                        Message = "packet.yaml is missing title.",
+                        Message = "packet.yaml is missing title / issue_title.",
                         Path = packetPath,
                     });
                 }
@@ -178,23 +197,26 @@ internal static class MetadataValidateAnalyzer
 
             if (publishFields is not null)
             {
-                if (!HasNonEmptyValue(publishFields, "issue_number")
-                    && !HasNonEmptyValue(publishFields, "issueNumber"))
+                // The parent-host publish schema nests issue data under
+                // `issue:` (so the number is exposed as `issue.number`).
+                // Accept both that shape and the simpler flat shape.
+                if (!HasAnyNonEmptyValue(publishFields,
+                        "issue_number", "issueNumber", "issue.number"))
                 {
                     errors.Add(new MetadataValidateFinding
                     {
                         Code = MetadataValidateConstants.Codes.PublishMissingIssueNumber,
-                        Message = "publish.yaml is missing issue_number / issueNumber.",
+                        Message = "publish.yaml is missing issue_number / issue.number.",
                         Path = publishPath,
                     });
                 }
-                if (!HasNonEmptyValue(publishFields, "issue_url")
-                    && !HasNonEmptyValue(publishFields, "issueUrl"))
+                if (!HasAnyNonEmptyValue(publishFields,
+                        "issue_url", "issueUrl", "issue.url"))
                 {
                     errors.Add(new MetadataValidateFinding
                     {
                         Code = MetadataValidateConstants.Codes.PublishMissingIssueUrl,
-                        Message = "publish.yaml is missing issue_url / issueUrl.",
+                        Message = "publish.yaml is missing issue_url / issue.url.",
                         Path = publishPath,
                     });
                 }
@@ -245,7 +267,8 @@ internal static class MetadataValidateAnalyzer
         if (publishFields is not null && queueEntry is not null)
         {
             var publishIssue = TryGetInt(publishFields, "issue_number")
-                ?? TryGetInt(publishFields, "issueNumber");
+                ?? TryGetInt(publishFields, "issueNumber")
+                ?? TryGetInt(publishFields, "issue.number");
             if (publishIssue.HasValue
                 && queueEntry.LinkedIssue.HasValue
                 && publishIssue.Value != queueEntry.LinkedIssue.Value)
@@ -317,40 +340,104 @@ internal static class MetadataValidateAnalyzer
     }
 
     /// <summary>
-    /// G207: parse YAML top-level scalar keys. We deliberately do NOT pull in
-    /// a full YAML library — the validator only needs to recognize whether
-    /// well-known top-level keys are present and have a non-empty value.
-    /// Anything more structured (lists, nested maps) is read as the literal
-    /// trailing-of-line text and downstream consumers parse further if
-    /// needed (see <see cref="ParseListLiteral"/>).
+    /// G207 follow-up: parse YAML scalar keys using indentation-tracked
+    /// nesting so the validator can recognize the parent-host packet and
+    /// publish schemas, which nest fields under outer maps like
+    /// <c>implementation_issue_packet:</c> and <c>issue:</c>.
+    ///
+    /// Keys are returned both bare (e.g. <c>source_execution_unit</c>) and
+    /// dotted (e.g. <c>implementation_issue_packet.source_execution_unit</c>)
+    /// so callers can match either the flat or nested form. Bare keys at
+    /// inner levels are also indexed so a nested <c>issue.number</c> is
+    /// findable as just <c>number</c> when no top-level <c>number</c>
+    /// shadows it.
+    ///
+    /// Lists, multi-line scalars, anchors, and other YAML features are
+    /// out of scope — the validator only needs scalar values.
     /// </summary>
     private static IReadOnlyDictionary<string, string> ParseYamlScalars(string yaml)
     {
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // Stack of (indentWidth, keyName) pairs that describe the chain of
+        // open mapping keys above the current line. We pop entries whose
+        // indent is >= the current indent before pushing.
+        var pathStack = new List<(int Indent, string Key)>();
+
         foreach (Match match in YamlScalarKeyRegex.Matches(yaml))
         {
-            // Only accept top-level keys (no leading whitespace).
-            var line = match.Value;
-            if (line.Length > 0 && (line[0] == ' ' || line[0] == '\t'))
-            {
-                continue;
-            }
+            var indent = match.Groups["indent"].Value.Length;
             var key = match.Groups["key"].Value;
-            var value = match.Groups["value"].Value.Trim();
-            // Strip surrounding quotes if present.
+            var rawValue = match.Groups["value"].Value;
+            var hadInlineValue = rawValue.Length > 0
+                && !rawValue.StartsWith('#');
+            var value = rawValue;
+            // Strip trailing inline comments.
+            var hashIndex = value.IndexOf(" #", StringComparison.Ordinal);
+            if (hashIndex >= 0)
+            {
+                value = value.Substring(0, hashIndex);
+            }
+            value = value.Trim();
             if (value.Length >= 2
                 && (value[0] == '"' && value[^1] == '"'
                     || value[0] == '\'' && value[^1] == '\''))
             {
                 value = value.Substring(1, value.Length - 2);
             }
-            fields[key] = value;
+
+            // Pop the path stack until the top is shallower than the current
+            // line; entries at the same or deeper indent are siblings or
+            // children that already closed.
+            while (pathStack.Count > 0 && pathStack[^1].Indent >= indent)
+            {
+                pathStack.RemoveAt(pathStack.Count - 1);
+            }
+
+            // Build dotted path for this key.
+            var dottedPath = pathStack.Count == 0
+                ? key
+                : string.Join(".", pathStack.Select(e => e.Key)) + "." + key;
+
+            // Always store the dotted path. Also store the bare key when no
+            // earlier line already wrote that bare key — first writer wins
+            // so a top-level `execution_unit` outranks a deeper one.
+            if (hadInlineValue && !string.IsNullOrEmpty(value))
+            {
+                fields[dottedPath] = value;
+                if (!fields.ContainsKey(key))
+                {
+                    fields[key] = value;
+                }
+            }
+            else
+            {
+                // No inline value — this line opens a nested mapping.
+                // Push it onto the path stack so subsequent lines see it
+                // as a parent.
+                pathStack.Add((indent, key));
+            }
         }
+
         return fields;
     }
 
     private static bool HasNonEmptyValue(IReadOnlyDictionary<string, string> fields, string key) =>
         fields.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value);
+
+    private static bool HasAnyNonEmptyValue(
+        IReadOnlyDictionary<string, string> fields,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (HasNonEmptyValue(fields, key))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private static string? ValueFor(IReadOnlyDictionary<string, string> fields, string key) =>
         fields.TryGetValue(key, out var value) ? value : null;
@@ -444,14 +531,70 @@ internal static class MetadataValidateAnalyzer
             var unit = TryGetString(entry, "execution_unit") ?? TryGetString(entry, "executionUnit");
             if (string.Equals(unit, executionUnit, StringComparison.Ordinal))
             {
+                // The host queue-state schema uses `state` (e.g. "queued",
+                // "completed"); accept `status` as a synonym for the simpler
+                // flat shape used in tests.
+                var status = TryGetString(entry, "state") ?? TryGetString(entry, "status");
+
+                // The host queue-state schema represents linked issue / PR
+                // as objects `{ repo, number, url }`. Accept either the
+                // object-with-number form or a flat int (legacy / tests).
                 return new QueueStateEntry(
-                    Status: TryGetString(entry, "status"),
-                    LinkedIssue: TryGetIntProperty(entry, "linked_issue") ?? TryGetIntProperty(entry, "linkedIssue"),
-                    LinkedPr: TryGetIntProperty(entry, "linked_pr") ?? TryGetIntProperty(entry, "linkedPr"),
+                    Status: status,
+                    LinkedIssue: ResolveLinkedNumber(entry, "linked_issue", "linkedIssue"),
+                    LinkedPr: ResolveLinkedNumber(entry, "linked_pr", "linkedPr"),
                     Dependencies: TryGetStringArray(entry, "dependencies"));
             }
         }
 
+        return null;
+    }
+
+    /// <summary>
+    /// G207 follow-up: the host queue-state stores linked_issue / linked_pr
+    /// as objects with a <c>number</c> property. Accept either the
+    /// object-with-number form or a flat integer.
+    /// </summary>
+    private static int? ResolveLinkedNumber(JsonElement entry, params string[] candidateKeys)
+    {
+        foreach (var key in candidateKeys)
+        {
+            if (!entry.TryGetProperty(key, out var prop))
+            {
+                continue;
+            }
+            // Object form: prefer the `number` property.
+            if (prop.ValueKind == JsonValueKind.Object
+                && prop.TryGetProperty("number", out var numberProp))
+            {
+                if (numberProp.ValueKind == JsonValueKind.Number
+                    && numberProp.TryGetInt32(out var n))
+                {
+                    return n;
+                }
+                if (numberProp.ValueKind == JsonValueKind.String
+                    && int.TryParse(numberProp.GetString(),
+                        System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var parsedString))
+                {
+                    return parsedString;
+                }
+            }
+            // Flat form (test fixtures / legacy):
+            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var direct))
+            {
+                return direct;
+            }
+            if (prop.ValueKind == JsonValueKind.String
+                && int.TryParse(prop.GetString(),
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var directParsed))
+            {
+                return directParsed;
+            }
+        }
         return null;
     }
 
