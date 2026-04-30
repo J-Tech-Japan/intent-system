@@ -81,6 +81,13 @@ public sealed class MetadataUpdateCommandTests : IDisposable
         Assert.Equal("completed", entry.GetProperty("state").GetString());
         Assert.Equal(999, entry.GetProperty("linked_pr").GetProperty("number").GetInt32());
 
+        // G208 follow-up per #521 review: head_sha and merge_commit must
+        // also be recorded on the queue entry — host-side automation and
+        // historical closeout checks read them from queue-state.json
+        // alongside publish.yaml and runs.jsonl.
+        Assert.Equal("abc123", entry.GetProperty("head_sha").GetString());
+        Assert.Equal("def456", entry.GetProperty("merge_commit").GetString());
+
         // publish.yaml should have a top-level pr: block now.
         var publishRaw = File.ReadAllText(Path.Combine(ws.RootPath, ".intent-cli", "issues", "G208", "publish.yaml"));
         Assert.Contains("\npr:\n", publishRaw, StringComparison.Ordinal);

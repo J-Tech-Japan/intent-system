@@ -253,7 +253,9 @@ internal static class MetadataUpdateCommand
             executionUnit,
             linkedPrNumber,
             linkedPrRepo,
-            linkedPrUrl);
+            linkedPrUrl,
+            headSha,
+            mergeCommit);
 
         if (alreadyCompleted)
         {
@@ -344,13 +346,21 @@ internal static class MetadataUpdateCommand
     /// Walks the items array (or root array) and rewrites the matching
     /// entry. Returns the new JSON text and a flag indicating the entry
     /// was already completed (refuse-to-clobber signal).
+    ///
+    /// G208 follow-up per #521 review: head_sha and merge_commit are
+    /// closeout evidence the host-side automation reads from
+    /// queue-state.json (not just publish.yaml / runs.jsonl). When
+    /// supplied, they are written onto the matching entry alongside the
+    /// state and linked_pr update.
     /// </summary>
     internal static (string Json, bool AlreadyCompleted) ApplyCompletedCloseoutToQueueState(
         JsonElement queueRoot,
         string executionUnit,
         int linkedPrNumber,
         string? linkedPrRepo,
-        string? linkedPrUrl)
+        string? linkedPrUrl,
+        string? headSha,
+        string? mergeCommit)
     {
         // Convert root to a mutable in-memory model.
         var rootDict = JsonElementToDictionary(queueRoot);
@@ -363,7 +373,8 @@ internal static class MetadataUpdateCommand
                 throw new InvalidOperationException(
                     "queue-state.json has unexpected shape; expected object with items[] or array.");
             }
-            var (changedArr, alreadyArr) = MutateItemsArray(itemsArr, executionUnit, linkedPrNumber, linkedPrRepo, linkedPrUrl);
+            var (changedArr, alreadyArr) = MutateItemsArray(
+                itemsArr, executionUnit, linkedPrNumber, linkedPrRepo, linkedPrUrl, headSha, mergeCommit);
             return (Serialize(changedArr), alreadyArr);
         }
 
@@ -375,7 +386,8 @@ internal static class MetadataUpdateCommand
         var items = (List<object?>?)rootDict[itemsKey]
             ?? throw new InvalidOperationException(
                 $"queue-state.json {itemsKey} key is not an array.");
-        var (changed, alreadyCompleted) = MutateItemsArray(items, executionUnit, linkedPrNumber, linkedPrRepo, linkedPrUrl);
+        var (changed, alreadyCompleted) = MutateItemsArray(
+            items, executionUnit, linkedPrNumber, linkedPrRepo, linkedPrUrl, headSha, mergeCommit);
         rootDict[itemsKey] = changed;
         return (Serialize(rootDict), alreadyCompleted);
     }
@@ -385,7 +397,9 @@ internal static class MetadataUpdateCommand
         string executionUnit,
         int linkedPrNumber,
         string? linkedPrRepo,
-        string? linkedPrUrl)
+        string? linkedPrUrl,
+        string? headSha,
+        string? mergeCommit)
     {
         for (int i = 0; i < items.Count; i++)
         {
@@ -409,6 +423,19 @@ internal static class MetadataUpdateCommand
                 if (!string.IsNullOrEmpty(linkedPrRepo)) prObj["repo"] = linkedPrRepo;
                 if (!string.IsNullOrEmpty(linkedPrUrl)) prObj["url"] = linkedPrUrl;
                 entry["linked_pr"] = prObj;
+
+                // G208 follow-up: record closeout evidence on the queue
+                // entry too. Host-side automation and historical closeout
+                // checks read these from queue-state.json.
+                if (!string.IsNullOrEmpty(headSha))
+                {
+                    entry["head_sha"] = headSha;
+                }
+                if (!string.IsNullOrEmpty(mergeCommit))
+                {
+                    entry["merge_commit"] = mergeCommit;
+                }
+
                 return (items, false);
             }
         }
