@@ -5,8 +5,17 @@ namespace IntentSystem.Cli.Commands;
 /// <summary>
 /// G203: Deserialized GitHub PR payload returned by
 /// <see cref="IGitHubPrLookup"/>. Field names match the JSON shape emitted by
-/// <c>gh pr view --json number,state,title,body,labels,isDraft,closed,merged,mergedAt,closedAt,closingIssuesReferences</c>
-/// so the default adapter can deserialize directly into this record.
+/// <c>gh pr view --json number,state,title,body,labels,isDraft,closed,mergedAt,closedAt,closingIssuesReferences</c>
+/// (see <see cref="GhCliGitHubPrLookup.PrViewJsonFields"/>) so the default
+/// adapter can deserialize directly into this record.
+///
+/// G204 follow-up: the installed <c>gh</c> CLI rejects <c>merged</c> as a
+/// JSON field, so the adapter no longer requests it. <see cref="Merged"/> is
+/// derived post-deserialization from the supported <c>state</c> field by
+/// <see cref="GhCliGitHubPrLookup.DeriveMergedFromState"/>. Tests that
+/// construct this record directly (without going through the adapter) may
+/// continue to set <see cref="Merged"/> explicitly via the initializer; the
+/// JSON attribute is retained as a defensive no-op.
 /// </summary>
 internal sealed record GitHubPrLookupResult
 {

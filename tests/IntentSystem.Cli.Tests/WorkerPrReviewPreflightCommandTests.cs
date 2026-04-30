@@ -1012,6 +1012,78 @@ public sealed class WorkerPrReviewPreflightCommandTests : IDisposable
             $"Could not locate source file {fileName} from {directory}");
     }
 
+    // -----------------------------------------------------------------------
+    // G204 follow-up — adapter-shape regression tests for GhCliGitHubPrLookup.
+    // Lock the supported `gh pr view` field list and the derived merged-state
+    // mapping at the call-shape layer so unsupported JSON fields like
+    // `merged` cannot silently regress the live path. Earlier in-memory-fake
+    // tests miss this class of bug because they bypass the adapter.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Adapter_PrViewArguments_DoNotRequestUnsupportedMergedField()
+    {
+        var arguments = GhCliGitHubPrLookup.BuildPrViewArguments(
+            "J-Tech-Japan/intent-system", 514);
+
+        // The argument list MUST still pass --json with the supported subset
+        // and MUST NOT contain the literal "merged" field anywhere (the
+        // installed gh CLI rejects it as an unknown JSON field).
+        Assert.Contains("pr", arguments);
+        Assert.Contains("view", arguments);
+        Assert.Contains("--json", arguments);
+        Assert.Contains("--repo", arguments);
+        Assert.Contains("J-Tech-Japan/intent-system", arguments);
+        Assert.Contains("514", arguments);
+
+        // Walk every argument; none of them may contain `merged` as a
+        // standalone JSON field token. We allow `mergedAt` (which is
+        // a supported field) so we assert the exact comma-delimited token.
+        foreach (var argument in arguments)
+        {
+            var tokens = argument.Split(',');
+            Assert.DoesNotContain("merged", tokens);
+        }
+    }
+
+    [Fact]
+    public void Adapter_PrViewJsonFieldsConstant_DoesNotIncludeUnsupportedMerged()
+    {
+        // The constant naming the supported gh-CLI subset must remain free of
+        // the unsupported `merged` field. Locks the bug-protection at the
+        // constant level, independent of how arguments are assembled.
+        var fields = GhCliGitHubPrLookup.PrViewJsonFields.Split(',');
+
+        Assert.DoesNotContain("merged", fields);
+
+        // Sanity: the constant must still include the fields the analyzer
+        // and merged-derivation actually depend on.
+        Assert.Contains("state", fields);
+        Assert.Contains("labels", fields);
+        Assert.Contains("isDraft", fields);
+        Assert.Contains("closed", fields);
+        Assert.Contains("mergedAt", fields);
+        Assert.Contains("closingIssuesReferences", fields);
+    }
+
+    [Fact]
+    public void Adapter_DeriveMergedFromState_IsTrueForMergedStateOnly()
+    {
+        // The post-deserialization derivation must treat the gh-CLI `state`
+        // value `MERGED` (case-insensitive) as merged, and every other state
+        // value (`OPEN`, `CLOSED`, empty, null) as not merged. This locks
+        // the contract that `Merged` follows `state` and is not requested
+        // as its own JSON field.
+        Assert.True(GhCliGitHubPrLookup.DeriveMergedFromState("MERGED"));
+        Assert.True(GhCliGitHubPrLookup.DeriveMergedFromState("merged"));
+        Assert.True(GhCliGitHubPrLookup.DeriveMergedFromState("Merged"));
+
+        Assert.False(GhCliGitHubPrLookup.DeriveMergedFromState("OPEN"));
+        Assert.False(GhCliGitHubPrLookup.DeriveMergedFromState("CLOSED"));
+        Assert.False(GhCliGitHubPrLookup.DeriveMergedFromState(""));
+        Assert.False(GhCliGitHubPrLookup.DeriveMergedFromState(null));
+    }
+
     private static GitHubPrLookupResult BuildPr(
         int number,
         string state,
