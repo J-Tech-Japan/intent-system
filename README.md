@@ -64,3 +64,20 @@ review/next-slice loop and the provider-neutral label set described by
 `intent-cli automation summary`. For nested-provider handoff steps, use
 `intent-cli safety nested-provider-handoff` to emit a deterministic artifact
 instead of recursively launching providers from inside `run`.
+
+## Local coding automation prompt templates
+
+Operator-dogfooding prompt templates that drive a local Claude/Codex coding
+automation loop entirely through the deterministic `intent-cli` worker and
+metadata commands (G202–G208) live under
+[`docs/automation-templates/`](./docs/automation-templates/README.md). They
+make explicit that:
+
+- target selection runs through `intent-cli worker next-action`; prompts
+  never reimplement label-walking;
+- post-run outcomes go through `intent-cli worker result-summary`;
+- parent-host metadata is touched only via `metadata validate` and the
+  bounded `metadata update` transition modes;
+- `intent-cli` is deterministic support tooling — it MUST NOT launch
+  Claude, Codex, or any AI provider, and prompts must NOT call
+  `intent-cli run` from this local coding-automation path.
