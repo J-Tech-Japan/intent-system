@@ -23,7 +23,8 @@ internal static class CommandRouter
         "automation",
         "safety",
         "tasking",
-        "worker"
+        "worker",
+        "metadata"
     ];
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, CommandHandler>> ImplementedCommands =
@@ -132,6 +133,10 @@ internal static class CommandRouter
                 ["pr-comment-preflight"] = WorkerPrCommentPreflightCommand.Execute,
                 ["result-summary"] = WorkerResultSummaryCommand.Execute,
                 ["next-action"] = WorkerNextActionCommand.Execute
+            },
+            ["metadata"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["validate"] = MetadataValidateCommand.Execute
             },
             ["tasking"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
