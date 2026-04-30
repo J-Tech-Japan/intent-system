@@ -37,6 +37,19 @@ internal sealed record WorkerIssuePreflightResult
     [JsonPropertyName("recommended_action")]
     public required string RecommendedAction { get; init; }
 
+    /// <summary>
+    /// G202 issue contract alias. Issue #509's minimum-JSON example and
+    /// Acceptance Criteria name this field <c>recommendedAction</c>
+    /// (camelCase). The primary property keeps snake_case for local style
+    /// consistency with every other tasking/worker artifact in this
+    /// codebase; this read-only alias property emits the camelCase key
+    /// alongside it so the issue contract holds verbatim.
+    /// On deserialize the alias is ignored (read-only) — the snake_case
+    /// property is the canonical source — keeping round-trip stable.
+    /// </summary>
+    [JsonPropertyName("recommendedAction")]
+    public string RecommendedActionCamelCase => RecommendedAction;
+
     [JsonPropertyName("summary_line")]
     public required string SummaryLine { get; init; }
 }

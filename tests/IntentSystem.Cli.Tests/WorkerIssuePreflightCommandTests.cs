@@ -292,6 +292,52 @@ public sealed class WorkerIssuePreflightCommandTests : IDisposable
         Assert.True(root.TryGetProperty("repo", out _));
         Assert.True(root.TryGetProperty("reasons", out _));
         Assert.True(root.TryGetProperty("recommended_action", out _));
+
+        // Issue #509's minimum-JSON example and Acceptance Criteria name the
+        // field "recommendedAction" (camelCase). Both keys MUST be present:
+        // the snake_case primary for local style consistency, and the
+        // camelCase alias to satisfy the issue contract verbatim. They MUST
+        // carry identical values.
+        Assert.True(root.TryGetProperty("recommendedAction", out var camelCase));
+        Assert.True(root.TryGetProperty("recommended_action", out var snakeCase));
+        Assert.Equal(snakeCase.GetString(), camelCase.GetString());
+    }
+
+    [Fact]
+    public void Execute_GivenJsonFormat_RecommendedActionCamelCaseAliasMatchesIssueContract()
+    {
+        // Regression for the G202 review note: issue #509 explicitly names
+        // the field "recommendedAction" (camelCase) in both the minimum
+        // JSON example and Acceptance Criteria. The implementation must
+        // emit that key verbatim alongside the snake_case primary so the
+        // issue contract holds. Locks the alias against accidental removal.
+        using var workspace = new WorkerIssuePreflightWorkspace();
+        WorkerIssuePreflightCommand.IssueLookupFactory = () => new FakeLookup(BuildIssue(
+            number: 509,
+            state: "OPEN",
+            title: "Camel case alias",
+            body: ValidBody("J-Tech-Japan/intent-system"),
+            labelNames: new[] { "intent-target" }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerIssuePreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--issue", "509", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var stdout = writer.ToString();
+
+        // The literal key "recommendedAction" must appear in the output.
+        Assert.Contains("\"recommendedAction\"", stdout, StringComparison.Ordinal);
+
+        // Both keys are present and carry the SAME value.
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.True(root.TryGetProperty("recommendedAction", out var camelCase));
+        Assert.True(root.TryGetProperty("recommended_action", out var snakeCase));
+        Assert.Equal(snakeCase.GetString(), camelCase.GetString());
+        Assert.Equal(WorkerIssuePreflightConstants.RecommendedActions.Implement, camelCase.GetString());
     }
 
     [Fact]
