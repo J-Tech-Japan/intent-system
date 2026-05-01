@@ -215,6 +215,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.False(result.Applied);
         Assert.Contains("intent-pr-rereview-ready", result.AddLabels);
         Assert.Contains("intent-pr-update-in-progress", result.RemoveLabels);
+        Assert.Contains("intent-pr-request-update", result.RemoveLabels);
         Assert.Empty(mutator.AppliedTransitions);
 
         // intent-pr-created MUST NOT be added to a PR.
@@ -249,6 +250,44 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
         Assert.Contains(result.Errors, e => e.StartsWith(WorkerClaimCompleteConstants.ErrorCodes.CompleteAlreadyCompleted, StringComparison.Ordinal));
         Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_PrRepairPushedOutcome_WriteRemovesRequestUpdateWhenAddingRereviewReady()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-request-update", "intent-pr-update-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "pr",
+                "--number", "514",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.RepairPushed,
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.True(result.Applied);
+        Assert.Contains("intent-pr-rereview-ready", result.AddLabels);
+        Assert.Contains("intent-pr-update-in-progress", result.RemoveLabels);
+        Assert.Contains("intent-pr-request-update", result.RemoveLabels);
+
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Contains("intent-pr-rereview-ready", transition.AddLabels);
+        Assert.Contains("intent-pr-update-in-progress", transition.RemoveLabels);
+        Assert.Contains("intent-pr-request-update", transition.RemoveLabels);
     }
 
     [Fact]

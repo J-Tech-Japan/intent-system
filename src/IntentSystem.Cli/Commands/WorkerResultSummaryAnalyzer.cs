@@ -165,9 +165,10 @@ internal static class WorkerResultSummaryAnalyzer
                 break;
 
             case WorkerResultSummaryConstants.Outcomes.RepairPushed:
-                // The PR claim label flips from update-in-progress to
-                // rereview-ready. Modeled as a single swap action so the
-                // caller can apply both edits atomically.
+                // The PR claim label and the old request-update state both
+                // clear as the PR becomes rereview-ready. Keep the primary
+                // in-progress -> rereview-ready transition as a swap, and
+                // make the stale request-update cleanup explicit.
                 actions.Add(new WorkerResultSummaryLabelAction
                 {
                     Action = WorkerResultSummaryConstants.LabelActionVerbs.Swap,
@@ -175,6 +176,10 @@ internal static class WorkerResultSummaryAnalyzer
                     Label = $"{WorkerResultSummaryConstants.Labels.IntentPrUpdateInProgress}->" +
                             WorkerResultSummaryConstants.Labels.IntentPrRereviewReady,
                 });
+                actions.Add(MakeAction(
+                    WorkerResultSummaryConstants.LabelActionVerbs.Remove,
+                    WorkerResultSummaryConstants.LabelActionTargets.Pr,
+                    WorkerResultSummaryConstants.Labels.IntentPrRequestUpdate));
                 break;
 
             case WorkerResultSummaryConstants.Outcomes.LabelCleanupRequired:

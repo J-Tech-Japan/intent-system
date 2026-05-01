@@ -220,8 +220,13 @@ public sealed class AutomationCompleteCommandTests : IDisposable
         Assert.Contains(result.PlannedLabelActions, a =>
             a.Action == "remove" && a.Target == "pr" && a.Label == "intent-pr-update-in-progress");
         Assert.Contains(result.PlannedLabelActions, a =>
+            a.Action == "remove" && a.Target == "pr" && a.Label == "intent-pr-request-update");
+        Assert.Contains(result.PlannedLabelActions, a =>
             a.Action == "add" && a.Target == "pr" && a.Label == "intent-pr-rereview-ready");
-        Assert.Single(mutator.AppliedTransitions);
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Contains("intent-pr-rereview-ready", transition.AddLabels);
+        Assert.Contains("intent-pr-update-in-progress", transition.RemoveLabels);
+        Assert.Contains("intent-pr-request-update", transition.RemoveLabels);
     }
 
     [Fact]
