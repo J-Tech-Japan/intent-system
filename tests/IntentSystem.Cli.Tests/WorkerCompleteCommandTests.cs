@@ -288,6 +288,13 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Contains("intent-pr-rereview-ready", transition.AddLabels);
         Assert.Contains("intent-pr-update-in-progress", transition.RemoveLabels);
         Assert.Contains("intent-pr-request-update", transition.RemoveLabels);
+
+        var finalLabels = mutator.Labels
+            .Except(transition.RemoveLabels, StringComparer.Ordinal)
+            .Concat(transition.AddLabels)
+            .ToArray();
+        Assert.Contains("intent-pr-rereview-ready", finalLabels);
+        Assert.DoesNotContain("intent-pr-request-update", finalLabels);
     }
 
     [Fact]

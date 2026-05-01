@@ -78,6 +78,9 @@ intent-cli automation clarification-stop \
 - AI worker pushes a single repair commit and posts the update note.
 - `intent-cli automation complete` returns JSON for the
   outcome.
+- For `repair-pushed`, `automation complete --write` removes
+  `intent-pr-request-update` and adds `intent-pr-rereview-ready`; the
+  resulting PR label set must not contain `intent-pr-request-update`.
 - The host's recurring deterministic-rereview comment is no longer
   classified as `repair-required` once the label-state advances to
   `intent-pr-rereview-ready`.
