@@ -63,6 +63,12 @@ internal static class AutomationCompleteCommand
             return 1;
         }
 
+        if (RequiresCreatedPrTarget(workflowKind!, outcome!) && pr is null)
+        {
+            writer.WriteLine("--pr is required when --kind is issue-to-pr and --outcome is pr-created.");
+            return 1;
+        }
+
         WorkerResultSummaryResult summary;
         try
         {
@@ -110,16 +116,50 @@ internal static class AutomationCompleteCommand
 
         var currentNames = LabelNames(currentLabels);
         var decision = WorkerCompleteAnalyzer.Analyze(targetKind, outcome!, currentNames);
-        var plannedActions = BuildPlannedActions(targetKind, decision);
+        var issueLabelActions = BuildPlannedActions(targetKind, decision);
+
+        IReadOnlyList<string> createdPrCurrentLabels = Array.Empty<string>();
+        var createdPrDecision = CompleteDecisionForPrTarget.None;
+        if (RequiresCreatedPrTarget(workflowKind!, outcome!))
+        {
+            IReadOnlyList<GitHubAutomationLabel> createdPrLabels;
+            try
+            {
+                createdPrLabels = mutator.ReadLabels(repo!, GhCliGitHubLabelMutator.Kinds.Pr, pr!.Value);
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException
+                or IOException)
+            {
+                writer.WriteLine(
+                    $"failed to read current labels for created PR #{pr} in {repo}: {exception.Message}");
+                return 1;
+            }
+
+            createdPrCurrentLabels = LabelNames(createdPrLabels);
+            createdPrDecision = PlanCreatedPrTarget(createdPrCurrentLabels);
+        }
 
         var applied = false;
         if (decision.Proceed
+            && createdPrDecision.Proceed
             && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
         {
             try
             {
                 mutator.ApplyLabelTransitions(
                     repo!, targetKind, targetNumber, decision.AddLabels, decision.RemoveLabels);
+                if (createdPrDecision.Proceed
+                    && createdPrDecision.AddLabels.Count > 0
+                    && pr is not null)
+                {
+                    mutator.ApplyLabelTransitions(
+                        repo!,
+                        GhCliGitHubLabelMutator.Kinds.Pr,
+                        pr.Value,
+                        createdPrDecision.AddLabels,
+                        Array.Empty<string>());
+                }
                 applied = true;
             }
             catch (Exception exception) when (
@@ -132,7 +172,17 @@ internal static class AutomationCompleteCommand
             }
         }
 
-        var warnings = summary.Warnings.Concat(decision.Warnings).ToArray();
+        var issueAndPrLabelActions = issueLabelActions
+            .Concat(createdPrDecision.LabelActions)
+            .ToArray();
+        var warnings = summary.Warnings
+            .Concat(decision.Warnings)
+            .Concat(createdPrDecision.Warnings)
+            .ToArray();
+        var errors = decision.Errors
+            .Concat(createdPrDecision.Errors)
+            .ToArray();
+        var proceed = decision.Proceed && createdPrDecision.Proceed;
         var result = new AutomationCompleteResult
         {
             Kind = workflowKind!,
@@ -144,15 +194,20 @@ internal static class AutomationCompleteCommand
             Mode = mode,
             TargetKind = targetKind,
             TargetNumber = targetNumber,
-            Proceed = decision.Proceed,
+            Proceed = proceed,
             Applied = applied,
             RecommendedLabelActions = summary.RecommendedLabelActions,
-            PlannedLabelActions = plannedActions,
-            AppliedLabelActions = applied ? plannedActions : Array.Empty<WorkerResultSummaryLabelAction>(),
+            PlannedLabelActions = issueAndPrLabelActions,
+            AppliedLabelActions = applied ? issueAndPrLabelActions : Array.Empty<WorkerResultSummaryLabelAction>(),
+            SourceIssueLabelActions = string.Equals(targetKind, GhCliGitHubLabelMutator.Kinds.Issue, StringComparison.Ordinal)
+                ? issueLabelActions
+                : Array.Empty<WorkerResultSummaryLabelAction>(),
+            CreatedPrLabelActions = createdPrDecision.LabelActions,
             CurrentLabels = currentNames,
-            Errors = decision.Errors,
+            CreatedPrCurrentLabels = createdPrCurrentLabels,
+            Errors = errors,
             Warnings = warnings,
-            Summary = $"{summary.Summary} {decision.Summary}",
+            Summary = $"{summary.Summary} {decision.Summary}{createdPrDecision.SummarySuffix}",
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -164,7 +219,7 @@ internal static class AutomationCompleteCommand
             WriteText(writer, result);
         }
 
-        return decision.Proceed ? 0 : 2;
+        return proceed ? 0 : 2;
     }
 
     private static bool TryParseArguments(
@@ -420,6 +475,63 @@ internal static class AutomationCompleteCommand
         return actions;
     }
 
+    private static bool RequiresCreatedPrTarget(string workflowKind, string outcome)
+    {
+        return string.Equals(workflowKind, WorkerResultSummaryConstants.Kinds.IssueToPr, StringComparison.Ordinal)
+            && string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.PrCreated, StringComparison.Ordinal);
+    }
+
+    private static CompleteDecisionForPrTarget PlanCreatedPrTarget(IReadOnlyList<string> currentLabels)
+    {
+        if (currentLabels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal))
+        {
+            return new CompleteDecisionForPrTarget
+            {
+                Proceed = false,
+                AddLabels = Array.Empty<string>(),
+                LabelActions = Array.Empty<WorkerResultSummaryLabelAction>(),
+                Errors = new[]
+                {
+                    $"label policy violation: PR carries '{WorkerNextActionConstants.Labels.IntentPrCreated}', which belongs on the source issue."
+                },
+                Warnings = Array.Empty<string>(),
+                SummarySuffix = " Refusing to mark created PR as review target because it carries an issue-only completion label.",
+            };
+        }
+
+        if (currentLabels.Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal))
+        {
+            return new CompleteDecisionForPrTarget
+            {
+                Proceed = true,
+                AddLabels = Array.Empty<string>(),
+                LabelActions = Array.Empty<WorkerResultSummaryLabelAction>(),
+                Errors = Array.Empty<string>(),
+                Warnings = new[] { "created PR already carries 'intent-target'; no PR label add needed." },
+                SummarySuffix = " Created PR already carries intent-target.",
+            };
+        }
+
+        var actions = new[]
+        {
+            new WorkerResultSummaryLabelAction
+            {
+                Action = WorkerResultSummaryConstants.LabelActionVerbs.Add,
+                Target = WorkerResultSummaryConstants.LabelActionTargets.Pr,
+                Label = WorkerNextActionConstants.Labels.IntentTarget,
+            }
+        };
+        return new CompleteDecisionForPrTarget
+        {
+            Proceed = true,
+            AddLabels = new[] { WorkerNextActionConstants.Labels.IntentTarget },
+            LabelActions = actions,
+            Errors = Array.Empty<string>(),
+            Warnings = Array.Empty<string>(),
+            SummarySuffix = " Would add: intent-target on the created PR.",
+        };
+    }
+
     private static void WriteText(TextWriter writer, AutomationCompleteResult result)
     {
         writer.WriteLine($"# Automation complete for {result.Repo} ({result.Kind})");
@@ -520,11 +632,29 @@ internal sealed record AutomationCompleteResult
     [JsonPropertyName("appliedLabelActions")]
     public IReadOnlyList<WorkerResultSummaryLabelAction> AppliedLabelActionsCamelCase => AppliedLabelActions;
 
+    [JsonPropertyName("source_issue_label_actions")]
+    public required IReadOnlyList<WorkerResultSummaryLabelAction> SourceIssueLabelActions { get; init; }
+
+    [JsonPropertyName("sourceIssueLabelActions")]
+    public IReadOnlyList<WorkerResultSummaryLabelAction> SourceIssueLabelActionsCamelCase => SourceIssueLabelActions;
+
+    [JsonPropertyName("created_pr_label_actions")]
+    public required IReadOnlyList<WorkerResultSummaryLabelAction> CreatedPrLabelActions { get; init; }
+
+    [JsonPropertyName("createdPrLabelActions")]
+    public IReadOnlyList<WorkerResultSummaryLabelAction> CreatedPrLabelActionsCamelCase => CreatedPrLabelActions;
+
     [JsonPropertyName("current_labels")]
     public required IReadOnlyList<string> CurrentLabels { get; init; }
 
     [JsonPropertyName("currentLabels")]
     public IReadOnlyList<string> CurrentLabelsCamelCase => CurrentLabels;
+
+    [JsonPropertyName("created_pr_current_labels")]
+    public required IReadOnlyList<string> CreatedPrCurrentLabels { get; init; }
+
+    [JsonPropertyName("createdPrCurrentLabels")]
+    public IReadOnlyList<string> CreatedPrCurrentLabelsCamelCase => CreatedPrCurrentLabels;
 
     [JsonPropertyName("errors")]
     public required IReadOnlyList<string> Errors { get; init; }
@@ -534,4 +664,29 @@ internal sealed record AutomationCompleteResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+}
+
+internal sealed record CompleteDecisionForPrTarget
+{
+    public static CompleteDecisionForPrTarget None { get; } = new()
+    {
+        Proceed = true,
+        AddLabels = Array.Empty<string>(),
+        LabelActions = Array.Empty<WorkerResultSummaryLabelAction>(),
+        Errors = Array.Empty<string>(),
+        Warnings = Array.Empty<string>(),
+        SummarySuffix = string.Empty,
+    };
+
+    public required bool Proceed { get; init; }
+
+    public required IReadOnlyList<string> AddLabels { get; init; }
+
+    public required IReadOnlyList<WorkerResultSummaryLabelAction> LabelActions { get; init; }
+
+    public required IReadOnlyList<string> Errors { get; init; }
+
+    public required IReadOnlyList<string> Warnings { get; init; }
+
+    public required string SummarySuffix { get; init; }
 }

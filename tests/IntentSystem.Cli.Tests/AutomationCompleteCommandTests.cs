@@ -38,6 +38,10 @@ public sealed class AutomationCompleteCommandTests : IDisposable
         var mutator = new FakeMutator
         {
             Labels = new[] { "intent-target", "intent-issue-in-progress" },
+            LabelsByTarget =
+            {
+                ["pr:534"] = Array.Empty<string>(),
+            },
         };
         AutomationCompleteCommand.MutatorFactory = () => mutator;
 
@@ -67,6 +71,11 @@ public sealed class AutomationCompleteCommandTests : IDisposable
             a.Action == "remove" && a.Target == "issue" && a.Label == "intent-issue-in-progress");
         Assert.Contains(result.PlannedLabelActions, a =>
             a.Action == "add" && a.Target == "issue" && a.Label == "intent-pr-created");
+        Assert.Contains(result.PlannedLabelActions, a =>
+            a.Action == "add" && a.Target == "pr" && a.Label == "intent-target");
+        Assert.Contains(result.SourceIssueLabelActions, a => a.Target == "issue");
+        Assert.Contains(result.CreatedPrLabelActions, a =>
+            a.Target == "pr" && a.Label == "intent-target");
         Assert.Empty(mutator.AppliedTransitions);
         Assert.Contains(result.Warnings, w => w.Contains("intent-pr-created", StringComparison.Ordinal));
     }
@@ -79,6 +88,10 @@ public sealed class AutomationCompleteCommandTests : IDisposable
         var mutator = new FakeMutator
         {
             Labels = new[] { "intent-target", "intent-issue-in-progress" },
+            LabelsByTarget =
+            {
+                ["pr:534"] = Array.Empty<string>(),
+            },
         };
         AutomationCompleteCommand.MutatorFactory = () => mutator;
 
@@ -100,10 +113,79 @@ public sealed class AutomationCompleteCommandTests : IDisposable
         var result = JsonSerializer.Deserialize<AutomationCompleteResult>(writer.ToString())!;
         Assert.True(result.Applied);
         Assert.Equal(result.PlannedLabelActions.Count, result.AppliedLabelActions.Count);
-        Assert.Single(mutator.AppliedTransitions);
-        Assert.Equal("issue", mutator.AppliedTransitions[0].Kind);
-        Assert.Contains("intent-pr-created", mutator.AppliedTransitions[0].AddLabels);
-        Assert.Contains("intent-issue-in-progress", mutator.AppliedTransitions[0].RemoveLabels);
+        Assert.Equal(2, mutator.AppliedTransitions.Count);
+        var issueTransition = mutator.AppliedTransitions.Single(t => t.Kind == "issue");
+        Assert.Contains("intent-pr-created", issueTransition.AddLabels);
+        Assert.Contains("intent-issue-in-progress", issueTransition.RemoveLabels);
+        var prTransition = mutator.AppliedTransitions.Single(t => t.Kind == "pr");
+        Assert.Contains("intent-target", prTransition.AddLabels);
+        Assert.Empty(prTransition.RemoveLabels);
+        Assert.DoesNotContain("intent-pr-created", prTransition.AddLabels);
+    }
+
+    [Fact]
+    public void Execute_IssueToPrPrCreated_MissingPrFailsDeterministically()
+    {
+        using var workspace = new AutomationCompleteWorkspace();
+        workspace.WriteOriginRemote("https://github.com/J-Tech-Japan/intent-system.git");
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        AutomationCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", "issue-to-pr",
+                "--issue", "533",
+                "--outcome", "pr-created",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("--pr is required", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_IssueToPrPrCreated_PrWithMisplacedPrCreatedRefuses()
+    {
+        using var workspace = new AutomationCompleteWorkspace();
+        workspace.WriteOriginRemote("https://github.com/J-Tech-Japan/intent-system.git");
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+            LabelsByTarget =
+            {
+                ["pr:534"] = new[] { "intent-pr-created" },
+            },
+        };
+        AutomationCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", "issue-to-pr",
+                "--issue", "533",
+                "--pr", "534",
+                "--outcome", "pr-created",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(2, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationCompleteResult>(writer.ToString())!;
+        Assert.False(result.Proceed);
+        Assert.False(result.Applied);
+        Assert.Contains(result.Errors, e => e.Contains("intent-pr-created", StringComparison.Ordinal));
+        Assert.Empty(mutator.AppliedTransitions);
     }
 
     [Fact]
@@ -373,6 +455,8 @@ public sealed class AutomationCompleteCommandTests : IDisposable
     {
         public IReadOnlyList<string> Labels { get; init; } = Array.Empty<string>();
 
+        public Dictionary<string, IReadOnlyList<string>> LabelsByTarget { get; } = new(StringComparer.Ordinal);
+
         public string? SeenRepo { get; private set; }
 
         public List<AppliedTransition> AppliedTransitions { get; } = new();
@@ -380,7 +464,11 @@ public sealed class AutomationCompleteCommandTests : IDisposable
         public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number)
         {
             SeenRepo = repo;
-            return Labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray();
+            var key = $"{kind}:{number.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+            var labels = LabelsByTarget.TryGetValue(key, out var targetLabels)
+                ? targetLabels
+                : Labels;
+            return labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray();
         }
 
         public void ApplyLabelTransitions(
