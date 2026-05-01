@@ -171,7 +171,38 @@ That value must be the created draft PR number in a real wake so
 transition to the PR. If the worker returns a PR URL, extract the number
 before completion. Workers must not add that label with `gh pr edit`.
 
-## 6. Smoke-test `automation complete` (PR comment-fix outcome)
+## 6. Verify the primary review-target handoff
+
+After a real issue-to-PR wake creates a draft PR, run completion with
+the created PR number and `--write`:
+
+```bash
+intent-cli automation complete \
+  --kind issue-to-pr \
+  --outcome pr-created \
+  --issue "$ISSUE_NUMBER" \
+  --pr "$CREATED_PR_NUMBER" \
+  --write \
+  --format json
+```
+
+Expected:
+
+- the source issue keeps issue-side state: `intent-issue-in-progress`
+  is removed and `intent-pr-created` is added,
+- the created PR receives PR-side review state: `intent-target` is
+  added by `automation complete --write`,
+- no `intent-pr-created` label is added to the PR,
+- no worker step uses `gh pr edit --add-label intent-target`,
+- the host review loop can select the created PR through the primary
+  `intent-target` PR selector path, without relying on fallback label
+  repair.
+
+Keep the issue and PR checks separate. The issue-side completion marker
+is evidence that implementation finished; the PR-side `intent-target`
+is evidence that review is queued.
+
+## 7. Smoke-test `automation complete` (PR comment-fix outcome)
 
 Repeat the same render-only check for the PR repair workflow. This
 is the path the loop uses after a `gh-fix-pr-comment`-style fix.
@@ -194,7 +225,7 @@ Expected:
   If it does, treat it as a bug — `intent-pr-created` belongs on
   the source ISSUE, not on the PR.
 
-## 7. Validate metadata against a sample / selected root
+## 8. Validate metadata against a sample / selected root
 
 `metadata validate` is a pure read against parent-host packet
 artifacts under a host-style `--root`. It NEVER writes. Use this
@@ -224,7 +255,7 @@ This step performs no GitHub mutation, no file mutation, no queue
 or runs mutation, no branch / worktree creation, no PR / issue
 creation, no comment posting, no merge, and no provider launch.
 
-## 8. Confirm controlled metadata-update boundaries
+## 9. Confirm controlled metadata-update boundaries
 
 `metadata update` is a bounded controlled writer. It is **not**
 part of dry-run smoke; it is mentioned here so the operator
@@ -252,7 +283,7 @@ prompt patch):
 See [`metadata-safety.md`](./metadata-safety.md) for the canonical
 description of the bounded write surface.
 
-## 9. Confirm prompt-template invariants
+## 10. Confirm prompt-template invariants
 
 Before arming the loop, re-read the per-template hard rules:
 
@@ -274,7 +305,7 @@ example by reintroducing manual label-walking, or by calling
 `intent-cli run`, or by recommending `intent-pr-created` on a PR —
 fix the prompt before arming the loop.
 
-## 10. Confirm what this checklist does NOT do
+## 11. Confirm what this checklist does NOT do
 
 Explicit out-of-scope, by design:
 

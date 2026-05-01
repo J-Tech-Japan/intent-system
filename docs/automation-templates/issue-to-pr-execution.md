@@ -103,6 +103,14 @@ intent-cli automation clarification-stop \
   `clarification-required` / `failed` / `label-cleanup-required`.
 - For `pr-created`, the completion command includes both `--pr` with
   the created PR identifier and `--write`.
+- After a `pr-created` completion, verify the source issue and created
+  PR as two separate states: the source issue carries issue-side
+  completion state such as `intent-pr-created`, and the created PR
+  carries review-side target state such as `intent-target` because
+  `automation complete --write` applied the supported propagation.
+- The host review loop should then find the created PR through its
+  primary `intent-target` PR selector path. Do not repair this by
+  adding `intent-target` with `gh pr edit`.
 - No additional GitHub mutations from this prompt.
 
 ## What this template forbids
