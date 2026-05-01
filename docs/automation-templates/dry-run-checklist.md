@@ -219,8 +219,11 @@ Expected:
 
 - exit code 0,
 - the JSON's `plannedLabelActions[]` reflects the
-  update-in-progress → rereview-ready handoff, NOT a fresh
-  `intent-pr-created` on the PR,
+  update-in-progress → rereview-ready handoff,
+- the same planned transition removes `intent-pr-request-update` so
+  the PR cannot remain both repair-requested and rereview-ready,
+- the planned transition does NOT add a fresh `intent-pr-created` on
+  the PR,
 - `intent-pr-created` does not appear as a recommended add on a PR.
   If it does, treat it as a bug — `intent-pr-created` belongs on
   the source ISSUE, not on the PR.
