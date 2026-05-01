@@ -44,12 +44,11 @@ Classify the outcome as one of (G205 schema):
 | `failed`                 | The worker errored before pushing.                             |
 | `label-cleanup-required` | Stale labels left behind after a partial run.                  |
 
-## Step 3: normalize via `result-summary`
+## Step 3: normalize via `automation complete`
 
 ```bash
-intent-cli worker result-summary \
+intent-cli automation complete \
   --kind pr-comment-fix \
-  --repo "$REPO" \
   --pr "$PR_NUMBER" \
   --outcome "$OUTCOME" \
   --format json
@@ -57,14 +56,27 @@ intent-cli worker result-summary \
 
 For the happy `repair-pushed` path the recommended advice is a single
 swap action: `intent-pr-update-in-progress` → `intent-pr-rereview-ready`
-on the PR. The controlling automation applies the swap via its own gh
-layer; this prompt MUST NOT call `gh pr edit` directly.
+on the PR. The controlling automation applies the swap only by calling
+`automation complete --write`; this prompt MUST NOT call `gh pr edit`
+directly.
+
+For `clarification-required`, also render the cooldown stop:
+
+```bash
+intent-cli automation clarification-stop \
+  --kind pr-comment-fix \
+  --pr "$PR_NUMBER" \
+  --url "$PR_URL" \
+  --reason "$REASON" \
+  --recommended-owner-action "$OWNER_ACTION" \
+  --format json
+```
 
 ## Verification (deterministic)
 
 - `intent-cli worker next-action --format json` → a PR URL.
 - AI worker pushes a single repair commit and posts the update note.
-- `intent-cli worker result-summary` returns `valid: true` for the
+- `intent-cli automation complete` returns JSON for the
   outcome.
 - The host's recurring deterministic-rereview comment is no longer
   classified as `repair-required` once the label-state advances to
