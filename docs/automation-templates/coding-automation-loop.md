@@ -61,25 +61,25 @@ If `warnings[]` is non-empty, surface each warning verbatim in the wake
 summary so the operator sees label-policy issues such as
 `intent-pr-created` being misplaced on a PR.
 
-## Step 3: post-run summary (after the AI worker returns)
+## Step 3: post-run completion (after the AI worker returns)
 
 When the dispatched handoff has finished and produced an outcome string
 (e.g. `pr-created`, `repair-pushed`, `clarification-required`, `failed`),
 ask the operator (or the controlling automation) to run:
 
 ```bash
-intent-cli worker result-summary \
+intent-cli automation complete \
   --kind <issue-to-pr|pr-comment-fix> \
-  --repo "$REPO" \
   [--issue <n>] [--pr <n>] \
   --outcome <outcome> \
   --format json
 ```
 
-Use the JSON `recommended_label_actions[]` and `warnings[]` to render the
-wake summary. Do NOT mutate labels from this prompt — those actions are
-advisory; the controlling automation applies them via its own gh CLI
-layer.
+By default this is dry-run and emits `recommended_label_actions[]`,
+`planned_label_actions[]`, `applied_label_actions[]`, `warnings[]`,
+and `summary`. To apply the supported completion label transition,
+the controlling automation must pass `--write` explicitly. Do NOT
+mutate labels outside the `automation complete --write` path.
 
 ## Idempotency
 

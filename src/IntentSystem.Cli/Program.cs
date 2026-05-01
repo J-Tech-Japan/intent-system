@@ -21,7 +21,7 @@ internal static class Program
             }
 
             var currentDirectory = Directory.GetCurrentDirectory();
-            if (IsIntakeInitCommand(args) || IsAutomationCheckCommand(args))
+            if (IsIntakeInitCommand(args) || IsAutomationWorktreeCommand(args))
             {
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
             }
@@ -55,11 +55,12 @@ internal static class Program
             && string.Equals(args[1], "init", StringComparison.Ordinal);
     }
 
-    private static bool IsAutomationCheckCommand(string[] args)
+    private static bool IsAutomationWorktreeCommand(string[] args)
     {
         return args.Length >= 2
             && string.Equals(args[0], "automation", StringComparison.Ordinal)
-            && string.Equals(args[1], "check", StringComparison.Ordinal);
+            && (string.Equals(args[1], "check", StringComparison.Ordinal)
+                || string.Equals(args[1], "complete", StringComparison.Ordinal));
     }
 
     private static CliContext CreateBootstrapContext(string currentDirectory, string[] args)

@@ -27,6 +27,8 @@ These templates assume:
 | G206  | `intent-cli worker next-action`         | Pick at most one target |
 | G207  | `intent-cli metadata validate`          | Mechanical packet validator |
 | G208  | `intent-cli metadata update`            | Bounded controlled writer |
+| G213  | `intent-cli automation check`           | Worktree-aware next-action entrypoint |
+| G214  | `intent-cli automation complete`        | Worktree-aware outcome completion entrypoint |
 
 ## Template index
 
@@ -56,7 +58,8 @@ against …" section for the explicit comparison tables.
 ## Hard rules these templates enforce
 
 - **Single source of truth for target selection**: prompts must call
-  `intent-cli worker next-action --format json` and act on its result.
+  `intent-cli automation check --format json` (or the lower-level
+  `worker next-action` wrapper path) and act on its result.
   No manual label-walking in the prompt body.
 - **No provider launch from `intent-cli`**: `intent-cli` is deterministic
   support tooling; it must NEVER spawn Claude / Codex / any AI provider.
@@ -66,8 +69,8 @@ against …" section for the explicit comparison tables.
   semantics and is out of scope here.
 - **Label policy invariant**: `intent-pr-created` belongs on the source
   ISSUE, not on the PR. Prompts and post-run summaries that imply
-  otherwise are a bug — `worker result-summary` will surface this as a
-  warning automatically when it detects misuse.
+  otherwise are a bug — `automation complete` / `worker result-summary`
+  surface this as a warning automatically when they detect misuse.
 - **Single-target cap**: at most ONE branch/PR is touched per wake. If
   `worker next-action` returns `none`, the wake is idle and ends without
   pushing anything.
