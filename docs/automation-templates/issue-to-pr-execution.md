@@ -47,16 +47,27 @@ schema):
 | `failed`                         | Worker stopped with an error mid-run.                  |
 | `label-cleanup-required`         | Stale labels left behind after a partial run.          |
 
+For `pr-created`, capture the created draft PR number from the worker
+output before normalizing the wake. If the worker reports only a PR URL,
+resolve or extract its PR number before invoking completion. The PR
+identifier is required for the supported review-target propagation; do
+not rely on a later host-side fallback to rediscover the PR.
+
 ## Step 3: normalize via `automation complete`
 
 ```bash
 intent-cli automation complete \
   --kind issue-to-pr \
   --issue "$ISSUE_NUMBER" \
-  [--pr "$PR_NUMBER"] \
+  --pr "$CREATED_PR_NUMBER" \
   --outcome "$OUTCOME" \
+  --write \
   --format json
 ```
+
+When `$OUTCOME` is `pr-created`, `--pr` MUST identify the draft PR that
+the worker just opened. For non-PR outcomes, omit `--pr` only when no PR
+was created.
 
 This emits stable `recommended_label_actions[]` and
 `planned_label_actions[]` advice. For the happy `pr-created` path it
@@ -90,6 +101,8 @@ intent-cli automation clarification-stop \
 - `intent-cli automation complete` returns JSON with an
   outcome whose `status` is one of `completed` / `declined` /
   `clarification-required` / `failed` / `label-cleanup-required`.
+- For `pr-created`, the completion command includes both `--pr` with
+  the created PR identifier and `--write`.
 - No additional GitHub mutations from this prompt.
 
 ## What this template forbids

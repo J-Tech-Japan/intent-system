@@ -74,8 +74,10 @@ against …" section for the explicit comparison tables.
   surface this as a warning automatically when they detect misuse.
 - **Review-target propagation**: after an issue-to-PR success,
   `automation complete --write` is the supported path that marks the
-  created PR with `intent-target` for host review. Prompts must not add
-  that PR label directly.
+  created PR with `intent-target` for host review. The completion call
+  must pass the created PR number with `--pr`; if the worker reports a
+  PR URL, resolve or extract the number before completion. Prompts must
+  not add that PR label directly.
 - **Single-target cap**: at most ONE branch/PR is touched per wake. If
   `worker next-action` returns `none`, the wake is idle and ends without
   pushing anything.

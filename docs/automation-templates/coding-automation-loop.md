@@ -72,6 +72,22 @@ intent-cli automation complete \
   --kind <issue-to-pr|pr-comment-fix> \
   [--issue <n>] [--pr <n>] \
   --outcome <outcome> \
+  [--write] \
+  --format json
+```
+
+For `issue-to-pr` with outcome `pr-created`, the controlling automation
+MUST pass the created draft PR number with `--pr` and MUST use `--write`
+when applying completion. If the worker reports only a PR URL, resolve
+or extract its PR number before running this command:
+
+```bash
+intent-cli automation complete \
+  --kind issue-to-pr \
+  --issue "$ISSUE_NUMBER" \
+  --pr "$CREATED_PR_NUMBER" \
+  --outcome pr-created \
+  --write \
   --format json
 ```
 
