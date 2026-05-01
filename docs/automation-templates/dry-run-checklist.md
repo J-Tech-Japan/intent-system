@@ -165,6 +165,12 @@ currently carries the claim label if you want `plannedLabelActions[]`
 to show the success transition; otherwise the command may correctly
 refuse as stale.
 
+The issue-to-PR `pr-created` example intentionally includes `--pr`.
+That value must be the created draft PR number in a real wake so
+`automation complete --write` can apply the supported `intent-target`
+transition to the PR. If the worker returns a PR URL, extract the number
+before completion. Workers must not add that label with `gh pr edit`.
+
 ## 6. Smoke-test `automation complete` (PR comment-fix outcome)
 
 Repeat the same render-only check for the PR repair workflow. This
