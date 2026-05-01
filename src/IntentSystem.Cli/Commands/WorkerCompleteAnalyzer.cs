@@ -160,9 +160,11 @@ internal static class WorkerCompleteAnalyzer
             // All terminal pr-comment-fix outcomes release the in-progress claim.
             removeLabels.Add(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress);
 
-            // repair-pushed success path also marks the PR as ready for re-review.
+            // repair-pushed success path clears the old request-update state
+            // and marks the PR as ready for re-review.
             if (string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.RepairPushed, StringComparison.Ordinal))
             {
+                removeLabels.Add(WorkerNextActionConstants.Labels.IntentPrRequestUpdate);
                 addLabels.Add(WorkerNextActionConstants.Labels.IntentPrRereviewReady);
             }
         }

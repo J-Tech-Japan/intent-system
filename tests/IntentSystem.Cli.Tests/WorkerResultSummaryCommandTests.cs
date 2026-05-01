@@ -91,12 +91,16 @@ public sealed class WorkerResultSummaryCommandTests : IDisposable
         var result = JsonSerializer.Deserialize<WorkerResultSummaryResult>(writer.ToString())!;
         Assert.Equal(WorkerResultSummaryConstants.Statuses.Completed, result.Status);
 
-        // Single swap action: update-in-progress -> rereview-ready on the PR.
+        // Primary swap action: update-in-progress -> rereview-ready on the PR.
         Assert.Contains(result.RecommendedLabelActions, a =>
             a.Action == "swap"
             && a.Target == "pr"
             && a.Label.Contains(WorkerResultSummaryConstants.Labels.IntentPrUpdateInProgress, StringComparison.Ordinal)
             && a.Label.Contains(WorkerResultSummaryConstants.Labels.IntentPrRereviewReady, StringComparison.Ordinal));
+        Assert.Contains(result.RecommendedLabelActions, a =>
+            a.Action == "remove"
+            && a.Target == "pr"
+            && a.Label == WorkerResultSummaryConstants.Labels.IntentPrRequestUpdate);
 
         // No spurious "remove in-progress" action — the swap covers it.
         Assert.DoesNotContain(result.RecommendedLabelActions, a =>

@@ -54,11 +54,11 @@ intent-cli automation complete \
   --format json
 ```
 
-For the happy `repair-pushed` path the recommended advice is a single
-swap action: `intent-pr-update-in-progress` → `intent-pr-rereview-ready`
-on the PR. The controlling automation applies the swap only by calling
-`automation complete --write`; this prompt MUST NOT call `gh pr edit`
-directly.
+For the happy `repair-pushed` path the recommended advice swaps
+`intent-pr-update-in-progress` → `intent-pr-rereview-ready` and clears
+the stale `intent-pr-request-update` state on the PR. The controlling
+automation applies those edits only by calling `automation complete --write`;
+this prompt MUST NOT call `gh pr edit` directly.
 
 For `clarification-required`, also render the cooldown stop:
 
