@@ -29,6 +29,7 @@ These templates assume:
 | G208  | `intent-cli metadata update`            | Bounded controlled writer |
 | G213  | `intent-cli automation check`           | Worktree-aware next-action entrypoint |
 | G214  | `intent-cli automation complete`        | Worktree-aware outcome completion entrypoint |
+| G215  | `intent-cli automation clarification-stop` | Stable clarification-required stop summary |
 
 ## Template index
 

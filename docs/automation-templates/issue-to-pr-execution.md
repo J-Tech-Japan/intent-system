@@ -46,32 +46,45 @@ schema):
 | `failed`                         | Worker stopped with an error mid-run.                  |
 | `label-cleanup-required`         | Stale labels left behind after a partial run.          |
 
-## Step 3: normalize via `result-summary`
+## Step 3: normalize via `automation complete`
 
 ```bash
-intent-cli worker result-summary \
+intent-cli automation complete \
   --kind issue-to-pr \
-  --repo "$REPO" \
   --issue "$ISSUE_NUMBER" \
   [--pr "$PR_NUMBER"] \
   --outcome "$OUTCOME" \
   --format json
 ```
 
-This emits stable `recommended_label_actions[]` advice — for the
-happy `pr-created` path it will recommend:
+This emits stable `recommended_label_actions[]` and
+`planned_label_actions[]` advice. For the happy `pr-created` path it
+will recommend:
 
 - remove `intent-issue-in-progress` from the source issue,
 - add `intent-pr-created` to the source issue.
 
-The controlling automation applies those edits via its own gh layer.
-The prompt here MUST NOT call `gh issue edit` or `gh pr edit` directly.
+The controlling automation applies those edits only by calling
+`automation complete --write`. The prompt here MUST NOT call
+`gh issue edit` or `gh pr edit` directly.
+
+For `clarification-required`, also render the cooldown stop:
+
+```bash
+intent-cli automation clarification-stop \
+  --kind issue-to-pr \
+  --issue "$ISSUE_NUMBER" \
+  --url "$ISSUE_URL" \
+  --reason "$REASON" \
+  --recommended-owner-action "$OWNER_ACTION" \
+  --format json
+```
 
 ## Verification (deterministic)
 
 - `intent-cli worker next-action --format json` → an issue URL.
 - AI worker runs `gh-issue-to-pr` against that URL.
-- `intent-cli worker result-summary` returns `valid: true` and an
+- `intent-cli automation complete` returns JSON with an
   outcome whose `status` is one of `completed` / `declined` /
   `clarification-required` / `failed` / `label-cleanup-required`.
 - No additional GitHub mutations from this prompt.

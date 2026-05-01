@@ -81,6 +81,22 @@ and `summary`. To apply the supported completion label transition,
 the controlling automation must pass `--write` explicitly. Do NOT
 mutate labels outside the `automation complete --write` path.
 
+If the outcome is `clarification-required`, also emit an owner-facing
+cooldown summary:
+
+```bash
+intent-cli automation clarification-stop \
+  --kind <issue-to-pr|pr-comment-fix> \
+  --number <n> \
+  --url "$TARGET_URL" \
+  --reason "$REASON" \
+  --recommended-owner-action "$OWNER_ACTION" \
+  --format json
+```
+
+This helper is read-only. It exists so the wake summary has stable
+fields instead of free-form prompt prose.
+
 ## Idempotency
 
 This template is fully idempotent: running it again on a state where
