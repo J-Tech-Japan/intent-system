@@ -136,18 +136,17 @@ If the selector instead returns an actionable workflow on an
 already-quiet repo, stop and inspect — the prompt must not fabricate
 a target on top of a non-action selector result.
 
-## 5. Smoke-test `worker result-summary` (issue-to-PR outcome)
+## 5. Smoke-test `automation complete` (issue-to-PR outcome)
 
-`worker result-summary` is how each wake's result is normalized into
-a stable JSON shape that downstream summaries / status comments can
-consume without re-deriving labels. Confirm it can render an
-issue-to-PR outcome shape without mutation.
+`automation complete` is how each wake's result is normalized into a
+stable JSON shape and, only with explicit `--write`, converted into
+the supported completion label transition. Confirm it can render an
+issue-to-PR outcome shape in dry-run mode.
 
 ```bash
-intent-cli worker result-summary \
+intent-cli automation complete \
   --kind issue-to-pr \
   --outcome pr-created \
-  --repo "<owner>/<repo>" \
   --issue 123 \
   --pr 124 \
   --format json
@@ -157,23 +156,24 @@ Expected:
 
 - exit code 0,
 - stdout is a single JSON object with at least `kind`, `outcome`,
-  `status`, `recommendedLabelActions[]`, and `summary`.
+  `status`, `recommendedLabelActions[]`, `plannedLabelActions[]`,
+  `appliedLabelActions[]`, and `summary`.
 
 Important: this is a **render-only** call. It does NOT touch
-GitHub. The numbers above can be placeholders; pick values that
-exist if you want a richer dry run, but do not pass values that
-would imply mutation downstream.
+GitHub labels unless `--write` is present. Use an issue number that
+currently carries the claim label if you want `plannedLabelActions[]`
+to show the success transition; otherwise the command may correctly
+refuse as stale.
 
-## 6. Smoke-test `worker result-summary` (PR comment-fix outcome)
+## 6. Smoke-test `automation complete` (PR comment-fix outcome)
 
 Repeat the same render-only check for the PR repair workflow. This
 is the path the loop uses after a `gh-fix-pr-comment`-style fix.
 
 ```bash
-intent-cli worker result-summary \
+intent-cli automation complete \
   --kind pr-comment-fix \
-  --outcome update-applied \
-  --repo "<owner>/<repo>" \
+  --outcome repair-pushed \
   --pr 124 \
   --format json
 ```
@@ -181,9 +181,9 @@ intent-cli worker result-summary \
 Expected:
 
 - exit code 0,
-- the JSON's `recommendedLabelActions[]` reflects the
-  reviewing → rereview-ready handoff, NOT a fresh
-  `intent-pr-created` on the PR.
+- the JSON's `plannedLabelActions[]` reflects the
+  update-in-progress → rereview-ready handoff, NOT a fresh
+  `intent-pr-created` on the PR,
 - `intent-pr-created` does not appear as a recommended add on a PR.
   If it does, treat it as a bug — `intent-pr-created` belongs on
   the source ISSUE, not on the PR.

@@ -121,6 +121,7 @@ internal static class CommandRouter
             ["automation"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["check"] = AutomationCheckCommand.Execute,
+                ["complete"] = AutomationCompleteCommand.Execute,
                 ["summary"] = AutomationSummaryCommand.Execute
             },
             ["safety"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
