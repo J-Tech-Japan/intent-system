@@ -72,6 +72,10 @@ against …" section for the explicit comparison tables.
   ISSUE, not on the PR. Prompts and post-run summaries that imply
   otherwise are a bug — `automation complete` / `worker result-summary`
   surface this as a warning automatically when they detect misuse.
+- **Review-target propagation**: after an issue-to-PR success,
+  `automation complete --write` is the supported path that marks the
+  created PR with `intent-target` for host review. Prompts must not add
+  that PR label directly.
 - **Single-target cap**: at most ONE branch/PR is touched per wake. If
   `worker next-action` returns `none`, the wake is idle and ends without
   pushing anything.

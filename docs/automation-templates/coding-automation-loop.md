@@ -110,4 +110,6 @@ selected work is already in progress (in-progress label set) returns
 - Calling `intent-cli run` instead of an external AI worker.
 - Asking `intent-cli` to launch Claude or Codex.
 - Adding `intent-pr-created` to a PR (it belongs on the source issue).
+- Adding `intent-target` to a created PR directly; that review-target
+  propagation belongs to `intent-cli automation complete --write`.
 - Touching more than one branch/PR per wake.

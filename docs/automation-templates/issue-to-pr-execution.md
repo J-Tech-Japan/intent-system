@@ -28,7 +28,8 @@ returned issue URL. The prompt to the AI worker should include:
 
 - the issue URL verbatim,
 - a reminder that this worker MUST NOT add `intent-target` to the
-  created PR,
+  created PR directly; `intent-cli automation complete --write` owns
+  that supported propagation after the PR number is known,
 - a reminder that `intent-pr-created` (when applied) belongs on the
   source issue, not on the PR.
 
@@ -62,7 +63,9 @@ This emits stable `recommended_label_actions[]` and
 will recommend:
 
 - remove `intent-issue-in-progress` from the source issue,
-- add `intent-pr-created` to the source issue.
+- add `intent-pr-created` to the source issue,
+- add `intent-target` to the created PR so the host review loop can
+  select it.
 
 The controlling automation applies those edits only by calling
 `automation complete --write`. The prompt here MUST NOT call
@@ -92,7 +95,9 @@ intent-cli automation clarification-stop \
 ## What this template forbids
 
 - Selecting a different issue than the one returned by `next-action`.
-- Adding `intent-target` to the created PR.
+- Adding `intent-target` to the created PR directly. Use
+  `intent-cli automation complete --write` for the supported
+  propagation.
 - Adding `intent-pr-created` to the PR (it belongs on the source issue).
 - Calling `intent-cli run`.
 - Asking `intent-cli` to launch the AI worker.
