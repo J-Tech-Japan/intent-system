@@ -81,15 +81,16 @@ Expected (at minimum, names — exact help text may evolve):
 If any of those names is missing, the installed `intent-cli` is
 older than the prompt templates expect. Upgrade before continuing.
 
-## 3. Smoke-test `worker next-action` (target selection)
+## 3. Smoke-test `automation check` (target selection)
 
-`worker next-action` is the single source of truth for "what does
-this wake do?". Confirm it returns parseable JSON with the expected
-shape, against the live repo, in a no-op state.
+`automation check` is the preferred entrypoint for "what does this
+wake do?". It infers the repo from the current worktree (or
+`--workdir`) and delegates to the same selection semantics as
+`worker next-action`. Confirm it returns parseable JSON with the
+expected shape, against the live repo, in a no-op state.
 
 ```bash
-intent-cli worker next-action \
-  --repo "<owner>/<repo>" \
+intent-cli automation check \
   --format json
 ```
 
@@ -103,8 +104,7 @@ Expected:
 Pipe through `jq` to confirm parseability:
 
 ```bash
-intent-cli worker next-action \
-  --repo "<owner>/<repo>" \
+intent-cli automation check \
   --format json \
   | jq '{recommendedWorkflow, sourceClassification}'
 ```
@@ -117,12 +117,11 @@ works end-to-end.
 ## 4. Smoke-test the no-action path
 
 Verify the loop's idle behavior. When there is no eligible target,
-`worker next-action` must be explicit about it; the prompt then
+`automation check` must be explicit about it; the prompt then
 treats the wake as idle and stops without pushing anything.
 
 ```bash
-intent-cli worker next-action \
-  --repo "<owner>/<repo>" \
+intent-cli automation check \
   --format json \
   | jq -r '.recommendedWorkflow'
 ```

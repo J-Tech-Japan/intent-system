@@ -1,11 +1,11 @@
 # Combined Coding Automation Loop
 
 Use this prompt at the top of one wake of the local coding automation
-loop. It picks at most ONE target via `intent-cli worker next-action`
+loop. It picks at most ONE target via `intent-cli automation check`
 and dispatches to the appropriate execution-handoff template.
 
 > **Hard rules** (do not paraphrase):
-> - Use `intent-cli worker next-action --format json` to choose work.
+> - Use `intent-cli automation check --format json` to choose work.
 >   Do NOT walk labels manually in this prompt.
 > - At most ONE branch/PR per wake.
 > - `intent-cli` MUST NOT launch any AI provider. The external AI
@@ -14,14 +14,22 @@ and dispatches to the appropriate execution-handoff template.
 
 ## Inputs
 
-- `--repo <owner/repo>` — child repo this loop targets.
+- `--repo <owner/repo>` — optional child repo override. When omitted,
+  `intent-cli automation check` infers it from the current worktree or
+  `--workdir`.
+- `--workdir <path>` — optional child worktree path.
 
 ## Step 1: pick the next action
 
 ```bash
-intent-cli worker next-action \
-  --repo "$REPO" \
-  --format json
+intent-cli automation check --format json
+```
+
+When the controlling loop runs outside the child worktree, pass the
+child path explicitly:
+
+```bash
+intent-cli automation check --workdir "$WORKDIR" --format json
 ```
 
 The output has a stable shape (G206):
