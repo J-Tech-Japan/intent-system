@@ -35,6 +35,7 @@ These templates assume:
 | G228  | `intent-cli automation pr-transition --transition review-start` | Host review-start PR transition |
 | G229  | `intent-cli automation pr-transition --transition request-update` | Host request-update PR transition |
 | G230  | `intent-cli automation pr-transition --transition review-start` | Robust absent-rereview-label cleanup |
+| G232  | host transition smoke examples | Read-only local verification before command-only host runbooks |
 
 ## Installed host transition command adoption
 
@@ -84,6 +85,9 @@ intent-cli automation pr-transition \
 
 `intent-pr-created` remains issue-only. It must never be added to a PR
 by a template, fallback, or installed transition command.
+
+For local smoke testing before enabling command-only host runbooks, use
+[`dry-run-checklist.md`](./dry-run-checklist.md#host-transition-command-smoke).
 
 ## Template index
 
