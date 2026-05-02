@@ -43,6 +43,24 @@ internal sealed record AutomationSummaryResult
     [JsonPropertyName("host_pr_transition_commands")]
     public required IReadOnlyList<string> HostPrTransitionCommands { get; init; }
 
+    [JsonPropertyName("automation_capability_schema_version")]
+    public required string AutomationCapabilitySchemaVersion { get; init; }
+
+    [JsonPropertyName("automationCapabilitySchemaVersion")]
+    public string AutomationCapabilitySchemaVersionCamel => AutomationCapabilitySchemaVersion;
+
+    [JsonPropertyName("automation_command_surface_version")]
+    public required string AutomationCommandSurfaceVersion { get; init; }
+
+    [JsonPropertyName("automationCommandSurfaceVersion")]
+    public string AutomationCommandSurfaceVersionCamel => AutomationCommandSurfaceVersion;
+
+    [JsonPropertyName("automation_command_capabilities")]
+    public required IReadOnlyList<AutomationCommandCapability> AutomationCommandCapabilities { get; init; }
+
+    [JsonPropertyName("automationCommandCapabilities")]
+    public IReadOnlyList<AutomationCommandCapability> AutomationCommandCapabilitiesCamel => AutomationCommandCapabilities;
+
     [JsonPropertyName("child_loop_responsibilities")]
     public required IReadOnlyList<string> ChildLoopResponsibilities { get; init; }
 
@@ -64,6 +82,10 @@ internal sealed record AutomationSummaryResult
 /// </summary>
 internal static class AutomationSummaryConstants
 {
+    public const string AutomationCapabilitySchemaVersion = "1";
+
+    public const string AutomationCommandSurfaceVersion = "automation-command-surface/v1";
+
     public static readonly IReadOnlyList<string> IssueWorkflowLabels =
     [
         "intent-target",
@@ -96,6 +118,58 @@ internal static class AutomationSummaryConstants
         "intent-cli automation pr-transition --transition approved --write removes intent-pr-reviewing and adds intent-pr-approved"
     ];
 
+    public static readonly IReadOnlyList<AutomationCommandCapability> AutomationCommandCapabilities =
+    [
+        new()
+        {
+            Capability = "issue-publish",
+            Command = "intent-cli automation issue-publish",
+            WorkflowKind = "issue",
+            TargetKind = "issue",
+            Transition = null,
+            DryRunSupported = true,
+            WriteSupported = true,
+            AddLabels = ["intent-target"],
+            RemoveLabels = []
+        },
+        new()
+        {
+            Capability = "pr-transition.review-start",
+            Command = "intent-cli automation pr-transition",
+            WorkflowKind = "pr",
+            TargetKind = "pr",
+            Transition = "review-start",
+            DryRunSupported = true,
+            WriteSupported = true,
+            AddLabels = ["intent-target", "intent-pr-reviewing"],
+            RemoveLabels = ["intent-pr-rereview-ready", "rereview-ready"]
+        },
+        new()
+        {
+            Capability = "pr-transition.request-update",
+            Command = "intent-cli automation pr-transition",
+            WorkflowKind = "pr",
+            TargetKind = "pr",
+            Transition = "request-update",
+            DryRunSupported = true,
+            WriteSupported = true,
+            AddLabels = ["intent-pr-request-update"],
+            RemoveLabels = ["intent-pr-reviewing"]
+        },
+        new()
+        {
+            Capability = "pr-transition.approved",
+            Command = "intent-cli automation pr-transition",
+            WorkflowKind = "pr",
+            TargetKind = "pr",
+            Transition = "approved",
+            DryRunSupported = true,
+            WriteSupported = true,
+            AddLabels = ["intent-pr-approved"],
+            RemoveLabels = ["intent-pr-reviewing"]
+        }
+    ];
+
     public static readonly IReadOnlyList<string> ChildLoopResponsibilities =
     [
         "Stage 1: repair PRs labeled intent-pr-request-update and swap to intent-pr-rereview-ready",
@@ -109,4 +183,52 @@ internal static class AutomationSummaryConstants
 
     public const string WipCapGuidance =
         "Default child WIP cap is one in-flight branch per loop; when WIP is non-empty, defer new work until WIP drains";
+}
+
+internal sealed record AutomationCommandCapability
+{
+    [JsonPropertyName("capability")]
+    public required string Capability { get; init; }
+
+    [JsonPropertyName("command")]
+    public required string Command { get; init; }
+
+    [JsonPropertyName("workflow_kind")]
+    public required string WorkflowKind { get; init; }
+
+    [JsonPropertyName("workflowKind")]
+    public string WorkflowKindCamel => WorkflowKind;
+
+    [JsonPropertyName("target_kind")]
+    public required string TargetKind { get; init; }
+
+    [JsonPropertyName("targetKind")]
+    public string TargetKindCamel => TargetKind;
+
+    [JsonPropertyName("transition")]
+    public required string? Transition { get; init; }
+
+    [JsonPropertyName("dry_run_supported")]
+    public required bool DryRunSupported { get; init; }
+
+    [JsonPropertyName("dryRunSupported")]
+    public bool DryRunSupportedCamel => DryRunSupported;
+
+    [JsonPropertyName("write_supported")]
+    public required bool WriteSupported { get; init; }
+
+    [JsonPropertyName("writeSupported")]
+    public bool WriteSupportedCamel => WriteSupported;
+
+    [JsonPropertyName("add_labels")]
+    public required IReadOnlyList<string> AddLabels { get; init; }
+
+    [JsonPropertyName("addLabels")]
+    public IReadOnlyList<string> AddLabelsCamel => AddLabels;
+
+    [JsonPropertyName("remove_labels")]
+    public required IReadOnlyList<string> RemoveLabels { get; init; }
+
+    [JsonPropertyName("removeLabels")]
+    public IReadOnlyList<string> RemoveLabelsCamel => RemoveLabels;
 }

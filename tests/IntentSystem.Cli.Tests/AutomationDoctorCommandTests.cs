@@ -55,6 +55,21 @@ public sealed class AutomationDoctorCommandTests
         Assert.EndsWith(Path.Combine(".intent-cli", "bin", "intent-cli"), result.InstalledCliPath, StringComparison.Ordinal);
         Assert.Equal(6, result.RequiredCommands.Count);
         Assert.All(result.RequiredCommands, command => Assert.True(command.Available));
+        Assert.Equal("1", result.AutomationCapabilitySchemaVersion);
+        Assert.Equal("automation-command-surface/v1", result.AutomationCommandSurfaceVersion);
+        Assert.Equal(4, result.AutomationCommandCapabilities.Count);
+        Assert.Contains(result.AutomationCommandCapabilities, capability =>
+            string.Equals(capability.Capability, "issue-publish", StringComparison.Ordinal)
+            && capability.AddLabels.Contains("intent-target", StringComparer.Ordinal));
+        Assert.Contains(result.AutomationCommandCapabilities, capability =>
+            string.Equals(capability.Capability, "pr-transition.review-start", StringComparison.Ordinal)
+            && string.Equals(capability.Transition, "review-start", StringComparison.Ordinal));
+        Assert.Contains(result.AutomationCommandCapabilities, capability =>
+            string.Equals(capability.Capability, "pr-transition.request-update", StringComparison.Ordinal)
+            && string.Equals(capability.Transition, "request-update", StringComparison.Ordinal));
+        Assert.Contains(result.AutomationCommandCapabilities, capability =>
+            string.Equals(capability.Capability, "pr-transition.approved", StringComparison.Ordinal)
+            && string.Equals(capability.Transition, "approved", StringComparison.Ordinal));
         Assert.Contains(result.RequiredCommands, command =>
             string.Equals(command.Command, "intent-cli automation summary", StringComparison.Ordinal));
         Assert.Contains(result.RequiredCommands, command =>
@@ -76,6 +91,10 @@ public sealed class AutomationDoctorCommandTests
         Assert.True(root.TryGetProperty("required_commands", out var requiredCommands));
         Assert.Equal(6, requiredCommands.GetArrayLength());
         Assert.True(root.TryGetProperty("installed_cli_path", out _));
+        Assert.True(root.TryGetProperty("automation_capability_schema_version", out _));
+        Assert.True(root.TryGetProperty("automation_command_surface_version", out _));
+        Assert.True(root.TryGetProperty("automation_command_capabilities", out var capabilities));
+        Assert.Equal(4, capabilities.GetArrayLength());
     }
 
     [Fact]
