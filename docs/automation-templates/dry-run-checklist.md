@@ -156,7 +156,10 @@ export PR_NUMBER="<published-child-pr-number>"
 
 ```bash
 intent-cli automation doctor --format json \
-  | jq '{status, readOnly, installedCliPath, commands: [.requiredCommands[] | {command, transition, available}]}'
+  | jq '{status, readOnly, installedCliPath,
+         surface: .automationCommandSurfaceVersion,
+         capabilities: [.automationCommandCapabilities[] | {capability, transition, addLabels, removeLabels}],
+         commands: [.requiredCommands[] | {command, transition, available}]}'
 ```
 
 Expected:
@@ -166,6 +169,13 @@ Expected:
   "status": "ok",
   "readOnly": true,
   "installedCliPath": "/path/to/host/.intent-cli/bin/intent-cli",
+  "surface": "automation-command-surface/v1",
+  "capabilities": [
+    {"capability": "issue-publish", "transition": null, "addLabels": ["intent-target"], "removeLabels": []},
+    {"capability": "pr-transition.review-start", "transition": "review-start", "addLabels": ["intent-target", "intent-pr-reviewing"], "removeLabels": ["intent-pr-rereview-ready", "rereview-ready"]},
+    {"capability": "pr-transition.request-update", "transition": "request-update", "addLabels": ["intent-pr-request-update"], "removeLabels": ["intent-pr-reviewing"]},
+    {"capability": "pr-transition.approved", "transition": "approved", "addLabels": ["intent-pr-approved"], "removeLabels": ["intent-pr-reviewing"]}
+  ],
   "commands": [
     {"command": "intent-cli automation summary", "transition": null, "available": true},
     {"command": "intent-cli automation host-review-preflight", "transition": null, "available": true},

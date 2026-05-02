@@ -69,6 +69,9 @@ internal static class AutomationDoctorCommand
             ReadOnly = true,
             InstalledCliPath = surfaceReport.InstalledCliPath,
             RequiredCommands = requiredCommands,
+            AutomationCapabilitySchemaVersion = AutomationSummaryConstants.AutomationCapabilitySchemaVersion,
+            AutomationCommandSurfaceVersion = AutomationSummaryConstants.AutomationCommandSurfaceVersion,
+            AutomationCommandCapabilities = AutomationSummaryConstants.AutomationCommandCapabilities,
             Summary = surfaceReport.Available
                 ? "Host automation command preflight passed: required installed automation command surfaces are available."
                 : $"Host automation command preflight failed: installed CLI at {surfaceReport.InstalledCliPath} is missing or stale for {string.Join(", ", missing.Select(command => command.Usage))}. Abort before label transitions; refresh the installed CLI instead of falling back to raw gh label mutation.",
@@ -161,6 +164,15 @@ internal static class AutomationDoctorCommand
             }
             writer.WriteLine($"  purpose: {command.Purpose}");
         }
+        writer.WriteLine();
+        writer.WriteLine("## Automation command capabilities");
+        writer.WriteLine($"schema_version: {result.AutomationCapabilitySchemaVersion}");
+        writer.WriteLine($"surface_version: {result.AutomationCommandSurfaceVersion}");
+        foreach (var capability in result.AutomationCommandCapabilities)
+        {
+            var transition = string.IsNullOrEmpty(capability.Transition) ? "(none)" : capability.Transition;
+            writer.WriteLine($"- {capability.Capability}: command={capability.Command}; target={capability.TargetKind}; transition={transition}");
+        }
     }
 }
 
@@ -186,6 +198,24 @@ internal sealed record AutomationDoctorResult
 
     [JsonPropertyName("requiredCommands")]
     public IReadOnlyList<AutomationDoctorRequiredCommand> RequiredCommandsCamel => RequiredCommands;
+
+    [JsonPropertyName("automation_capability_schema_version")]
+    public required string AutomationCapabilitySchemaVersion { get; init; }
+
+    [JsonPropertyName("automationCapabilitySchemaVersion")]
+    public string AutomationCapabilitySchemaVersionCamel => AutomationCapabilitySchemaVersion;
+
+    [JsonPropertyName("automation_command_surface_version")]
+    public required string AutomationCommandSurfaceVersion { get; init; }
+
+    [JsonPropertyName("automationCommandSurfaceVersion")]
+    public string AutomationCommandSurfaceVersionCamel => AutomationCommandSurfaceVersion;
+
+    [JsonPropertyName("automation_command_capabilities")]
+    public required IReadOnlyList<AutomationCommandCapability> AutomationCommandCapabilities { get; init; }
+
+    [JsonPropertyName("automationCommandCapabilities")]
+    public IReadOnlyList<AutomationCommandCapability> AutomationCommandCapabilitiesCamel => AutomationCommandCapabilities;
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }

@@ -60,6 +60,23 @@ required installed surfaces as available: `automation summary`,
 surface, abort and refresh the installed CLI; do not substitute raw
 `gh` label mutation.
 
+For machine checks, consume the stable capability fields emitted by
+`intent-cli automation summary --format json` or
+`intent-cli automation doctor --format json`:
+
+```bash
+intent-cli automation summary --format json \
+  | jq '{schema: .automationCapabilitySchemaVersion,
+         surface: .automationCommandSurfaceVersion,
+         capabilities: [.automationCommandCapabilities[]
+           | {capability, command, targetKind, transition, addLabels, removeLabels}]}'
+```
+
+Host automation should compare `automationCommandSurfaceVersion` and
+`automationCommandCapabilities[]` directly. Do not parse prose fields
+such as `hostPrTransitionCommands`, command help text, or Markdown
+runbook paragraphs to infer supported command surfaces.
+
 ### Refreshing the host-local installed CLI
 
 When the parent host has a newer `submodules/intent-system` checkout

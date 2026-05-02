@@ -46,6 +46,16 @@ internal static class AutomationSummaryRenderer
         WriteBulletList(writer, result.HostPrTransitionCommands);
         writer.WriteLine();
 
+        writer.WriteLine("## Automation command capabilities");
+        writer.WriteLine($"- schema_version: {result.AutomationCapabilitySchemaVersion}");
+        writer.WriteLine($"- surface_version: {result.AutomationCommandSurfaceVersion}");
+        foreach (var capability in result.AutomationCommandCapabilities)
+        {
+            var transition = string.IsNullOrEmpty(capability.Transition) ? "(none)" : capability.Transition;
+            writer.WriteLine($"- {capability.Capability}: command={capability.Command}; target={capability.TargetKind}; transition={transition}; write_supported={capability.WriteSupported.ToString().ToLowerInvariant()}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Child loop");
         WriteBulletList(writer, result.ChildLoopResponsibilities);
         writer.WriteLine();
