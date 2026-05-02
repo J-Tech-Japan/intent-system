@@ -41,17 +41,19 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_PrReadySelectsOldestReviewPr()
+    public void Execute_PrReadySelectsOldestUpdatedReviewPr()
     {
         using var workspace = new AutomationHostReviewPreflightWorkspace();
         var lister = new FakeLister
         {
             Prs =
             [
-                BuildPr(30, "newer", "https://github.com/J-Tech-Japan/intent-system/pull/30",
-                    "2026-05-02T02:00:00Z", ["intent-target"]),
-                BuildPr(20, "older", "https://github.com/J-Tech-Japan/intent-system/pull/20",
-                    "2026-05-02T01:00:00Z", ["intent-target", "intent-pr-rereview-ready"]),
+                BuildPr(30, "created earlier", "https://github.com/J-Tech-Japan/intent-system/pull/30",
+                    "2026-05-02T01:00:00Z", ["intent-target"],
+                    updatedAt: "2026-05-02T03:00:00Z"),
+                BuildPr(20, "updated earlier", "https://github.com/J-Tech-Japan/intent-system/pull/20",
+                    "2026-05-02T02:00:00Z", ["intent-target", "intent-pr-rereview-ready"],
+                    updatedAt: "2026-05-02T02:30:00Z"),
             ],
         };
         AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
@@ -68,6 +70,45 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         Assert.Equal(20, result.TargetPr);
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/20", result.TargetPrUrl);
         Assert.Equal([20, 30], result.InFlightPrs);
+    }
+
+    [Fact]
+    public void Execute_PrimaryIntentTargetPrWinsOverOlderIssueLinkedFallback()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        var lister = new FakeLister
+        {
+            Prs =
+            [
+                BuildPr(30, "primary", "https://github.com/J-Tech-Japan/intent-system/pull/30",
+                    "2026-05-02T02:00:00Z", ["intent-target"],
+                    updatedAt: "2026-05-02T03:00:00Z"),
+            ],
+            AllPrs =
+            [
+                BuildPr(20, "fallback", "https://github.com/J-Tech-Japan/intent-system/pull/20",
+                    "2026-05-02T01:00:00Z", [], body: "Closes #559",
+                    updatedAt: "2026-05-02T02:00:00Z"),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(559, "G227", "https://github.com/J-Tech-Japan/intent-system/issues/559",
+                    "2026-05-02T01:00:00Z", ["intent-target", "intent-pr-created"]),
+            ],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("review-pr", result.Action);
+        Assert.Equal(30, result.TargetPr);
+        Assert.Equal([30], result.InFlightPrs);
     }
 
     [Fact]
@@ -219,7 +260,8 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         string url,
         string createdAt,
         IReadOnlyList<string> labels,
-        string body = "") =>
+        string body = "",
+        string? updatedAt = null) =>
         new()
         {
             Number = number,
@@ -227,6 +269,7 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
             Url = url,
             Body = body,
             CreatedAt = createdAt,
+            UpdatedAt = updatedAt ?? createdAt,
             Labels = labels.Select(label => new GitHubAutomationLabel { Name = label }).ToArray(),
         };
 

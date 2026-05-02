@@ -86,11 +86,12 @@ internal static class AutomationHostReviewPreflightCommand
             return 1;
         }
 
-        var reviewCandidatePrs = AddIssueLinkedReviewFallbacks(
-            repo!,
-            intentTargetPrs,
-            allOpenPrs,
-            publishedIntentTargetIssues);
+        var reviewCandidatePrs = intentTargetPrs.Count > 0
+            ? intentTargetPrs
+            : FindIssueLinkedReviewFallbacks(
+                repo!,
+                allOpenPrs,
+                publishedIntentTargetIssues);
         var result = Analyze(repo!, reviewCandidatePrs, intentTargetIssues, candidate, clarificationRequired);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -134,14 +135,14 @@ internal static class AutomationHostReviewPreflightCommand
 
         var reviewPr = intentTargetPrs
             .Where(IsReadyForHostReview)
-            .OrderBy(pr => pr.CreatedAt, StringComparer.Ordinal)
+            .OrderBy(GetReviewSortTime, StringComparer.Ordinal)
             .FirstOrDefault();
         if (reviewPr is not null)
         {
             return BuildResult(
                 repo,
                 "review-pr",
-                "oldest open intent-target PR with no blocking review-side state",
+                "oldest updated open review PR with no blocking review-side state",
                 reviewPr.Number,
                 reviewPr.Url,
                 inFlightPrs,
@@ -220,14 +221,16 @@ internal static class AutomationHostReviewPreflightCommand
         return !hasBlockingState;
     }
 
-    private static IReadOnlyList<GitHubAutomationPrCandidate> AddIssueLinkedReviewFallbacks(
+    private static string GetReviewSortTime(GitHubAutomationPrCandidate pr) =>
+        string.IsNullOrWhiteSpace(pr.UpdatedAt) ? pr.CreatedAt : pr.UpdatedAt;
+
+    private static IReadOnlyList<GitHubAutomationPrCandidate> FindIssueLinkedReviewFallbacks(
         string repo,
-        IReadOnlyList<GitHubAutomationPrCandidate> intentTargetPrs,
         IReadOnlyList<GitHubAutomationPrCandidate> allOpenPrs,
         IReadOnlyList<GitHubAutomationIssueCandidate> publishedIntentTargetIssues)
     {
-        var reviewCandidates = new List<GitHubAutomationPrCandidate>(intentTargetPrs);
-        var seenPrNumbers = new HashSet<int>(intentTargetPrs.Select(pr => pr.Number));
+        var reviewCandidates = new List<GitHubAutomationPrCandidate>();
+        var seenPrNumbers = new HashSet<int>();
         var publishedIssueNumbers = publishedIntentTargetIssues
             .Where(IsPublishedIntentTargetIssue)
             .Select(issue => issue.Number)

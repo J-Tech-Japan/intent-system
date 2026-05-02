@@ -42,6 +42,9 @@ internal sealed record GitHubAutomationPrCandidate
     [JsonPropertyName("createdAt")]
     public string CreatedAt { get; init; } = string.Empty;
 
+    [JsonPropertyName("updatedAt")]
+    public string UpdatedAt { get; init; } = string.Empty;
+
     [JsonPropertyName("labels")]
     public IReadOnlyList<GitHubAutomationLabel> Labels { get; init; }
         = Array.Empty<GitHubAutomationLabel>();
@@ -97,7 +100,7 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     /// </summary>
     internal const string ListJsonFields = "number,title,url,createdAt,labels";
 
-    internal const string PrListJsonFields = "number,title,url,body,createdAt,labels,closingIssuesReferences";
+    internal const string PrListJsonFields = "number,title,url,body,createdAt,updatedAt,labels,closingIssuesReferences";
 
     /// <summary>
     /// G206: builds the <c>gh pr list</c> argument list shared by the live
