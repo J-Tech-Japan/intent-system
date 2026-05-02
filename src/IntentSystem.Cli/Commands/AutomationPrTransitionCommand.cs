@@ -143,6 +143,7 @@ internal static class AutomationPrTransitionCommand
                 RemoveLabels:
                 [
                     WorkerNextActionConstants.Labels.IntentPrRereviewReady,
+                    "rereview-ready",
                 ]),
             TransitionApproved => new TransitionPlan(
                 AddLabels:

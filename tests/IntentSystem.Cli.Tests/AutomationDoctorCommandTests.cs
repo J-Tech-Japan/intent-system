@@ -30,6 +30,7 @@ public sealed class AutomationDoctorCommandTests
         Assert.Contains("intent-target", output, StringComparison.Ordinal);
         Assert.Contains("intent-pr-reviewing", output, StringComparison.Ordinal);
         Assert.Contains("intent-pr-rereview-ready", output, StringComparison.Ordinal);
+        Assert.Contains("legacy rereview-ready", output, StringComparison.Ordinal);
         Assert.Contains("intent-pr-approved", output, StringComparison.Ordinal);
     }
 
