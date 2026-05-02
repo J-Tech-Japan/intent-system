@@ -24,6 +24,7 @@ public sealed class AutomationDoctorCommandTests
         Assert.Contains("# Automation doctor", output, StringComparison.Ordinal);
         Assert.Contains("status: ok", output, StringComparison.Ordinal);
         Assert.Contains("read_only: true", output, StringComparison.Ordinal);
+        Assert.Contains("installed_cli_path:", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli automation pr-transition", output, StringComparison.Ordinal);
         Assert.Contains("--transition review-start", output, StringComparison.Ordinal);
         Assert.Contains("--transition request-update", output, StringComparison.Ordinal);
@@ -51,12 +52,15 @@ public sealed class AutomationDoctorCommandTests
         var result = JsonSerializer.Deserialize<AutomationDoctorResult>(writer.ToString())!;
         Assert.Equal("ok", result.Status);
         Assert.True(result.ReadOnly);
-        Assert.Equal(3, result.RequiredCommands.Count);
-        Assert.All(result.RequiredCommands, command =>
-        {
-            Assert.Equal("intent-cli automation pr-transition", command.Command);
-            Assert.True(command.Available);
-        });
+        Assert.EndsWith(Path.Combine(".intent-cli", "bin", "intent-cli"), result.InstalledCliPath, StringComparison.Ordinal);
+        Assert.Equal(6, result.RequiredCommands.Count);
+        Assert.All(result.RequiredCommands, command => Assert.True(command.Available));
+        Assert.Contains(result.RequiredCommands, command =>
+            string.Equals(command.Command, "intent-cli automation summary", StringComparison.Ordinal));
+        Assert.Contains(result.RequiredCommands, command =>
+            string.Equals(command.Command, "intent-cli automation host-review-preflight", StringComparison.Ordinal));
+        Assert.Contains(result.RequiredCommands, command =>
+            string.Equals(command.Command, "intent-cli automation issue-publish", StringComparison.Ordinal));
         Assert.Contains(result.RequiredCommands, command =>
             string.Equals(command.Transition, "review-start", StringComparison.Ordinal)
             && command.Usage.Contains("--transition review-start", StringComparison.Ordinal));
@@ -70,7 +74,32 @@ public sealed class AutomationDoctorCommandTests
         using var document = JsonDocument.Parse(writer.ToString());
         var root = document.RootElement;
         Assert.True(root.TryGetProperty("required_commands", out var requiredCommands));
-        Assert.Equal(3, requiredCommands.GetArrayLength());
+        Assert.Equal(6, requiredCommands.GetArrayLength());
+        Assert.True(root.TryGetProperty("installed_cli_path", out _));
+    }
+
+    [Fact]
+    public void Execute_StaleInstalledCliReportsMissingSurfaceAndFails()
+    {
+        using var workspace = new AutomationDoctorWorkspace();
+        workspace.WriteInstalledCliScript(stalePrTransition: true);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationDoctorCommand.Execute(
+            workspace.Context,
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationDoctorResult>(writer.ToString())!;
+        Assert.Equal("stale-host-cli", result.Status);
+        Assert.Contains(".intent-cli", result.InstalledCliPath, StringComparison.Ordinal);
+        Assert.Contains(result.RequiredCommands, command =>
+            string.Equals(command.Command, "intent-cli automation pr-transition", StringComparison.Ordinal)
+            && string.Equals(command.Transition, "review-start", StringComparison.Ordinal)
+            && !command.Available
+            && command.Reason!.Contains("not yet implemented", StringComparison.Ordinal));
+        Assert.Contains("Abort before label transitions", result.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -131,12 +160,13 @@ public sealed class AutomationDoctorCommandTests
 
             var exitCode = Program.Main(["automation", "doctor", "--format", "json"]);
 
-            Assert.Equal(0, exitCode);
-            Assert.Equal(string.Empty, stderr.ToString());
-            Assert.DoesNotContain("Command 'automation doctor' is not yet implemented.", stdout.ToString(), StringComparison.Ordinal);
-            var result = JsonSerializer.Deserialize<AutomationDoctorResult>(stdout.ToString())!;
-            Assert.Equal("ok", result.Status);
-            Assert.True(result.ReadOnly);
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.DoesNotContain("Command 'automation doctor' is not yet implemented.", stdout.ToString(), StringComparison.Ordinal);
+        var result = JsonSerializer.Deserialize<AutomationDoctorResult>(stdout.ToString())!;
+        Assert.Equal("stale-host-cli", result.Status);
+        Assert.True(result.ReadOnly);
+        Assert.Contains(".intent-cli", result.InstalledCliPath, StringComparison.Ordinal);
         }
         finally
         {
@@ -187,7 +217,7 @@ public sealed class AutomationDoctorCommandTests
         {
             if (createIntentCliDirectory)
             {
-                Directory.CreateDirectory(Path.Combine(rootPath, ".intent-cli"));
+                WriteInstalledCliScript(stalePrTransition: false);
             }
 
             Context = new CliContext
@@ -209,6 +239,40 @@ public sealed class AutomationDoctorCommandTests
         public void WriteSentinel()
         {
             File.WriteAllText(Path.Combine(rootPath, "sentinel.txt"), "unchanged");
+        }
+
+        public void WriteInstalledCliScript(bool stalePrTransition)
+        {
+            var binPath = Path.Combine(rootPath, ".intent-cli", "bin");
+            Directory.CreateDirectory(binPath);
+            var scriptPath = Path.Combine(binPath, "intent-cli");
+            var prTransitionBlock = stalePrTransition
+                ? "  echo \"Command 'automation pr-transition' is not yet implemented.\"\n  exit 1\n"
+                : "  echo 'automation pr-transition'\n  echo 'review-start'\n  echo 'request-update'\n  echo 'approved'\n  exit 0\n";
+            File.WriteAllText(
+                scriptPath,
+                "#!/bin/sh\n"
+                + "case \"$*\" in\n"
+                + "  'automation summary --help') echo 'automation summary'; exit 0 ;;\n"
+                + "  'automation host-review-preflight --help') echo 'automation host-review-preflight'; exit 0 ;;\n"
+                + "  'automation issue-publish --help') echo 'automation issue-publish'; exit 0 ;;\n"
+                + "  'automation pr-transition --help')\n"
+                + prTransitionBlock
+                + "    ;;\n"
+                + "  *) echo \"unexpected probe: $*\"; exit 1 ;;\n"
+                + "esac\n");
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    scriptPath,
+                    UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead
+                    | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead
+                    | UnixFileMode.OtherExecute);
+            }
         }
 
         public IReadOnlyDictionary<string, string> SnapshotWorkspace()

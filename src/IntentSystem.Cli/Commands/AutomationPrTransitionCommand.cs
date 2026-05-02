@@ -31,6 +31,12 @@ internal static class AutomationPrTransitionCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
+        if (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal))
+        {
+            WriteHelp(writer);
+            return 0;
+        }
+
         if (!TryParseArguments(
                 args,
                 out var repo,
@@ -351,6 +357,16 @@ internal static class AutomationPrTransitionCommand
         writer.WriteLine($"repo: {result.Repo}");
         writer.WriteLine($"pr: {result.Pr.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         writer.WriteLine($"applied: {result.Applied.ToString().ToLowerInvariant()}");
+    }
+
+    private static void WriteHelp(TextWriter writer)
+    {
+        writer.WriteLine("automation pr-transition");
+        writer.WriteLine("Usage: intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition <review-start|request-update|approved> [--write] [--dry-run] [--format text|json]");
+        writer.WriteLine("Supported transitions:");
+        writer.WriteLine("- review-start");
+        writer.WriteLine("- request-update");
+        writer.WriteLine("- approved");
     }
 
     private sealed record TransitionPlan(

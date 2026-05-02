@@ -88,8 +88,12 @@ intent-cli automation pr-transition --repo "$CHILD_REPO" --pr "$PR_NUMBER" --tra
 Use `intent-cli automation doctor --format json` and
 `intent-cli automation host-review-preflight --repo "$CHILD_REPO"
 --format json` as stale-CLI/readiness checks before host-side PR
-transition mutation. `intent-pr-created` remains issue-only and must not
-be applied to PRs by installed commands or fallback paths.
+transition mutation. These checks must name the host-local installed CLI
+path and fail with stale/missing surface detail before mutation when
+`automation summary`, `automation host-review-preflight`,
+`automation issue-publish`, or any `automation pr-transition`
+transition is unavailable. `intent-pr-created` remains issue-only and
+must not be applied to PRs by installed commands or fallback paths.
 
 For local smoke testing, run the dry-run examples in
 `docs/automation-templates/dry-run-checklist.md` before enabling

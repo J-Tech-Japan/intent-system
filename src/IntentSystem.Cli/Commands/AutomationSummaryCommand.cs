@@ -19,6 +19,12 @@ internal static class AutomationSummaryCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
+        if (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal))
+        {
+            WriteHelp(writer);
+            return 0;
+        }
+
         if (!TryParseArguments(args, out var domainOverride, out var format, out var error))
         {
             writer.WriteLine(error);
@@ -91,5 +97,12 @@ internal static class AutomationSummaryCommand
         }
 
         return true;
+    }
+
+    private static void WriteHelp(TextWriter writer)
+    {
+        writer.WriteLine("automation summary");
+        writer.WriteLine("Usage: intent-cli automation summary [--domain <name>] [--format text|json]");
+        writer.WriteLine("Emits the read-only label-driven automation contract.");
     }
 }
