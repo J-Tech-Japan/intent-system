@@ -145,6 +145,9 @@ intent-cli automation issue-publish \
 
 Dry-run the same command without `--write` to capture the planned
 `intent-target` label action and JSON publish metadata before mutation.
+Raw `gh issue edit` label mutation is not the normal path for this
+installed transition. If the command is missing or stale, refresh the
+installed CLI before mutating labels.
 
 ## What this template forbids
 
