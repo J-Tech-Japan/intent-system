@@ -136,6 +136,115 @@ If the selector instead returns an actionable workflow on an
 already-quiet repo, stop and inspect — the prompt must not fabricate
 a target on top of a non-action selector result.
 
+## Host transition command smoke
+
+Run this section before enabling command-only parent-host runbooks, or
+after upgrading the local `intent-cli` wrapper. These examples are
+read-only by default. They verify command availability and planned label
+actions without mutating GitHub labels.
+
+Use real, safe identifiers from a staging or currently selected host
+target:
+
+```bash
+export CHILD_REPO="J-Tech-Japan/intent-system"
+export ISSUE_NUMBER="<published-child-issue-number>"
+export PR_NUMBER="<published-child-pr-number>"
+```
+
+### Host command availability
+
+```bash
+intent-cli automation doctor --format json \
+  | jq '{status, readOnly, transitions: [.requiredCommands[].transition]}'
+```
+
+Expected:
+
+```json
+{
+  "status": "ok",
+  "readOnly": true,
+  "transitions": ["review-start", "request-update", "approved"]
+}
+```
+
+If a transition is missing, the installed CLI is stale. Refresh the
+wrapper/tool before using host runbooks; do not fall back to raw `gh pr
+edit` label mutation for installed transitions.
+
+### Host review target preflight
+
+```bash
+intent-cli automation host-review-preflight \
+  --repo "$CHILD_REPO" \
+  --format json \
+  | jq '{action, number, url, warnings}'
+```
+
+Expected:
+
+- exit code 0,
+- `action` is one of the documented host review preflight actions,
+- `warnings` is empty or explicitly actionable.
+
+This command is read-only. It must not claim a PR or change labels.
+
+### Issue publish dry-run
+
+```bash
+intent-cli automation issue-publish \
+  --repo "$CHILD_REPO" \
+  --issue "$ISSUE_NUMBER" \
+  --format json \
+  | jq '{mode, applied, addLabels, removeLabels, warnings}'
+```
+
+Expected:
+
+```json
+{
+  "mode": "dry-run",
+  "applied": false,
+  "addLabels": ["intent-target"],
+  "removeLabels": [],
+  "warnings": []
+}
+```
+
+This dry-run is the safe local smoke. Use `--write` only after the host
+has durably written the publish boundary and the issue number is the real
+child issue to publish.
+
+### PR transition dry-runs
+
+Run all supported PR transitions without `--write`:
+
+```bash
+for transition in review-start request-update approved; do
+  intent-cli automation pr-transition \
+    --repo "$CHILD_REPO" \
+    --pr "$PR_NUMBER" \
+    --transition "$transition" \
+    --format json \
+    | jq '{transition, mode, applied, addLabels, removeLabels}'
+done
+```
+
+Expected assertions:
+
+- every object has `"mode": "dry-run"` and `"applied": false`,
+- `review-start` plans to add `intent-target` and
+  `intent-pr-reviewing`,
+- `request-update` plans to add `intent-pr-request-update` and remove
+  `intent-pr-reviewing`,
+- `approved` plans to add `intent-pr-approved` and remove
+  `intent-pr-reviewing`,
+- no PR transition add/remove plan contains `intent-pr-created`.
+
+Use `--write` only when the host loop has selected that exact PR and
+verdict. Do not use `--write` as part of freshness smoke testing.
+
 ## 5. Smoke-test `automation complete` (issue-to-PR outcome)
 
 `automation complete` is how each wake's result is normalized into a

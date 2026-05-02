@@ -91,6 +91,14 @@ Use `intent-cli automation doctor --format json` and
 transition mutation. `intent-pr-created` remains issue-only and must not
 be applied to PRs by installed commands or fallback paths.
 
+For local smoke testing, run the dry-run examples in
+`docs/automation-templates/dry-run-checklist.md` before enabling
+command-only host runbooks. The smoke path uses `automation doctor`,
+`automation host-review-preflight`, `automation issue-publish` without
+`--write`, and `automation pr-transition` without `--write`. Add
+`--write` only after the host publish/claim/verdict boundary is valid
+for the real issue or PR being transitioned.
+
 ## 1. Issue Runner
 
 The issue runner owns the Issue-to-PR transition.
