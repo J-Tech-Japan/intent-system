@@ -27,6 +27,16 @@ internal static class CommandRouter
         "metadata"
     ];
 
+    private static readonly IReadOnlyList<string> AutomationCommandHelp =
+    [
+        "automation check",
+        "automation clarification-stop",
+        "automation complete",
+        "automation pr-transition --transition review-start --write",
+        "automation pr-transition --transition approved --write",
+        "automation summary"
+    ];
+
     private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, CommandHandler>> ImplementedCommands =
         new Dictionary<string, IReadOnlyDictionary<string, CommandHandler>>(StringComparer.Ordinal)
         {
@@ -238,6 +248,13 @@ internal static class CommandRouter
 
         writer.WriteLine("Additional top-level commands:");
         writer.WriteLine($"- {GenerateFromCurrentCommandName}");
+
+        writer.WriteLine();
+        writer.WriteLine("Automation commands:");
+        foreach (var command in AutomationCommandHelp)
+        {
+            writer.WriteLine($"- {command}");
+        }
 
         writer.WriteLine();
         foreach (var line in RunRoleNote)

@@ -42,6 +42,10 @@ internal static class AutomationSummaryRenderer
         WriteBulletList(writer, result.HostLoopResponsibilities);
         writer.WriteLine();
 
+        writer.WriteLine("## Host PR transition commands");
+        WriteBulletList(writer, result.HostPrTransitionCommands);
+        writer.WriteLine();
+
         writer.WriteLine("## Child loop");
         WriteBulletList(writer, result.ChildLoopResponsibilities);
         writer.WriteLine();

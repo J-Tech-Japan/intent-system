@@ -160,6 +160,22 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
     }
 
     [Fact]
+    public void CommandRouter_HelpSurfacesAutomationPrTransitionUsage()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute([], workspace.Context, writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Automation commands:", output, StringComparison.Ordinal);
+        Assert.Contains("automation pr-transition", output, StringComparison.Ordinal);
+        Assert.Contains("--transition review-start", output, StringComparison.Ordinal);
+        Assert.Contains("--transition approved", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_NeverInvokesNestedProviderLauncher()
     {
         using var workspace = new AutomationPrTransitionWorkspace();

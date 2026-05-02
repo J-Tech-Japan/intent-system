@@ -40,6 +40,9 @@ internal sealed record AutomationSummaryResult
     [JsonPropertyName("host_loop_responsibilities")]
     public required IReadOnlyList<string> HostLoopResponsibilities { get; init; }
 
+    [JsonPropertyName("host_pr_transition_commands")]
+    public required IReadOnlyList<string> HostPrTransitionCommands { get; init; }
+
     [JsonPropertyName("child_loop_responsibilities")]
     public required IReadOnlyList<string> ChildLoopResponsibilities { get; init; }
 
@@ -84,6 +87,12 @@ internal static class AutomationSummaryConstants
         "Approve and merge via intent-pr-approved when all checks pass",
         "Cut next-slice issues only when WIP cap allows",
         "Apply intent-target only after parent source-of-truth state is durable"
+    ];
+
+    public static readonly IReadOnlyList<string> HostPrTransitionCommands =
+    [
+        "intent-cli automation pr-transition --transition review-start --write adds intent-target and intent-pr-reviewing, and removes intent-pr-rereview-ready",
+        "intent-cli automation pr-transition --transition approved --write removes intent-pr-reviewing and adds intent-pr-approved"
     ];
 
     public static readonly IReadOnlyList<string> ChildLoopResponsibilities =
