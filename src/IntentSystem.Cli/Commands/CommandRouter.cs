@@ -32,6 +32,7 @@ internal static class CommandRouter
         "automation check",
         "automation clarification-stop",
         "automation complete",
+        "automation doctor",
         "automation pr-transition --transition review-start --write",
         "automation pr-transition --transition approved --write",
         "automation summary"
@@ -133,6 +134,7 @@ internal static class CommandRouter
                 ["check"] = AutomationCheckCommand.Execute,
                 ["clarification-stop"] = AutomationClarificationStopCommand.Execute,
                 ["complete"] = AutomationCompleteCommand.Execute,
+                ["doctor"] = AutomationDoctorCommand.Execute,
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,
                 ["summary"] = AutomationSummaryCommand.Execute
             },
