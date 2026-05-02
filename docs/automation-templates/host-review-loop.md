@@ -119,14 +119,15 @@ intent-cli automation doctor --format json
 ```
 
 The preflight is read-only. It must report the required
-`intent-cli automation pr-transition` command surface, including both
-`review-start` and `approved`, before the host loop attempts a GitHub
-label mutation.
+`intent-cli automation pr-transition` command surface, including
+`review-start`, `request-update`, and `approved`, before the host loop
+attempts a GitHub label mutation.
 
 Choose ONE of the following review verdicts. Each has an explicit
-label transition. For host-owned review-start and approved transitions,
-the normal installed path is `intent-cli automation pr-transition
---write`; this prompt does not hand-apply those labels.
+label transition. For host-owned review-start, request-update, and
+approved transitions, the normal installed path is
+`intent-cli automation pr-transition --write`; this prompt does not
+hand-apply those labels.
 
 | Verdict                | Label transition                                                                          |
 |------------------------|--------------------------------------------------------------------------------------------|
@@ -154,6 +155,17 @@ intent-cli automation pr-transition \
   --format json
 ```
 
+- Request-update MUST use the installed command path:
+
+```bash
+intent-cli automation pr-transition \
+  --repo "$CHILD_REPO" \
+  --pr "$PR_NUMBER" \
+  --transition request-update \
+  --write \
+  --format json
+```
+
 - Approval MUST use the installed command path:
 
 ```bash
@@ -167,9 +179,10 @@ intent-cli automation pr-transition \
 
 `review-start` adds `intent-target` and `intent-pr-reviewing` while
 clearing stale `intent-pr-rereview-ready` and legacy `rereview-ready`.
-`approved` removes
-`intent-pr-reviewing` and adds `intent-pr-approved`. These commands are
-the supported installed path for those host-owned PR label transitions.
+`request-update` removes `intent-pr-reviewing` and adds
+`intent-pr-request-update`. `approved` removes `intent-pr-reviewing` and
+adds `intent-pr-approved`. These commands are the supported installed
+path for those host-owned PR label transitions.
 
 ## Step 5: write the review verdict comment
 
