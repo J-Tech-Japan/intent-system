@@ -112,6 +112,45 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_BlockedPrimaryFallsBackToIssueLinkedPr()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        var lister = new FakeLister
+        {
+            Prs =
+            [
+                BuildPr(30, "blocked primary", "https://github.com/J-Tech-Japan/intent-system/pull/30",
+                    "2026-05-02T02:00:00Z", ["intent-target", "intent-pr-request-update"],
+                    updatedAt: "2026-05-02T03:00:00Z"),
+            ],
+            AllPrs =
+            [
+                BuildPr(20, "fallback", "https://github.com/J-Tech-Japan/intent-system/pull/20",
+                    "2026-05-02T01:00:00Z", [], body: "Closes #559",
+                    updatedAt: "2026-05-02T02:00:00Z"),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(559, "G227", "https://github.com/J-Tech-Japan/intent-system/issues/559",
+                    "2026-05-02T01:00:00Z", ["intent-target", "intent-pr-created"]),
+            ],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("review-pr", result.Action);
+        Assert.Equal(20, result.TargetPr);
+        Assert.Equal([20, 30], result.InFlightPrs);
+    }
+
+    [Fact]
     public void Execute_IssueLinkedPrWithoutIntentTargetFallsBackToReviewPr()
     {
         using var workspace = new AutomationHostReviewPreflightWorkspace();

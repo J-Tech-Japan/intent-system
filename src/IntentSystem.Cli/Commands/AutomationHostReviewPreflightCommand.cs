@@ -86,13 +86,21 @@ internal static class AutomationHostReviewPreflightCommand
             return 1;
         }
 
-        var reviewCandidatePrs = intentTargetPrs.Count > 0
-            ? intentTargetPrs
+        var eligiblePrimaryPrs = intentTargetPrs
+            .Where(IsReadyForHostReview)
+            .ToArray();
+        var reviewCandidatePrs = eligiblePrimaryPrs.Length > 0
+            ? eligiblePrimaryPrs
             : FindIssueLinkedReviewFallbacks(
                 repo!,
                 allOpenPrs,
                 publishedIntentTargetIssues);
-        var result = Analyze(repo!, reviewCandidatePrs, intentTargetIssues, candidate, clarificationRequired);
+        var inFlightPrs = intentTargetPrs
+            .Concat(reviewCandidatePrs)
+            .GroupBy(pr => pr.Number)
+            .Select(group => group.First())
+            .ToArray();
+        var result = Analyze(repo!, reviewCandidatePrs, inFlightPrs, intentTargetIssues, candidate, clarificationRequired);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -108,16 +116,18 @@ internal static class AutomationHostReviewPreflightCommand
 
     internal static AutomationHostReviewPreflightResult Analyze(
         string repo,
-        IReadOnlyList<GitHubAutomationPrCandidate> intentTargetPrs,
+        IReadOnlyList<GitHubAutomationPrCandidate> reviewCandidatePrs,
+        IReadOnlyList<GitHubAutomationPrCandidate> inFlightPrCandidates,
         IReadOnlyList<GitHubAutomationIssueCandidate> intentTargetIssues,
         string? candidateExecutionUnit,
         bool clarificationRequired)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
-        ArgumentNullException.ThrowIfNull(intentTargetPrs);
+        ArgumentNullException.ThrowIfNull(reviewCandidatePrs);
+        ArgumentNullException.ThrowIfNull(inFlightPrCandidates);
         ArgumentNullException.ThrowIfNull(intentTargetIssues);
 
-        var inFlightPrs = intentTargetPrs.Select(pr => pr.Number).Order().ToArray();
+        var inFlightPrs = inFlightPrCandidates.Select(pr => pr.Number).Order().ToArray();
         var inFlightIssues = intentTargetIssues.Select(issue => issue.Number).Order().ToArray();
 
         if (clarificationRequired)
@@ -133,7 +143,7 @@ internal static class AutomationHostReviewPreflightCommand
                 candidateExecutionUnit);
         }
 
-        var reviewPr = intentTargetPrs
+        var reviewPr = reviewCandidatePrs
             .Where(IsReadyForHostReview)
             .OrderBy(GetReviewSortTime, StringComparer.Ordinal)
             .FirstOrDefault();
