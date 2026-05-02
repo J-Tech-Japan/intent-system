@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -12,6 +13,10 @@ internal static class AutomationHostReviewPreflightCommand
 {
     private const string FormatText = "text";
     private const string FormatJson = "json";
+
+    private static readonly Regex ClosesIssueRegex = new(
+        @"(?i)\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+(?:(?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?<number>\d+)\b",
+        RegexOptions.Compiled);
 
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
@@ -57,12 +62,21 @@ internal static class AutomationHostReviewPreflightCommand
             return 1;
         }
 
-        IReadOnlyList<GitHubAutomationPrCandidate> prs;
-        IReadOnlyList<GitHubAutomationIssueCandidate> issues;
+        IReadOnlyList<GitHubAutomationPrCandidate> intentTargetPrs;
+        IReadOnlyList<GitHubAutomationPrCandidate> allOpenPrs;
+        IReadOnlyList<GitHubAutomationIssueCandidate> intentTargetIssues;
+        IReadOnlyList<GitHubAutomationIssueCandidate> publishedIntentTargetIssues;
         try
         {
-            prs = lister.ListPullRequests(repo!, [WorkerNextActionConstants.Labels.IntentTarget]);
-            issues = lister.ListIssues(repo!, [WorkerNextActionConstants.Labels.IntentTarget]);
+            intentTargetPrs = lister.ListPullRequests(repo!, [WorkerNextActionConstants.Labels.IntentTarget]);
+            allOpenPrs = lister.ListPullRequests(repo!, []);
+            intentTargetIssues = lister.ListIssues(repo!, [WorkerNextActionConstants.Labels.IntentTarget]);
+            publishedIntentTargetIssues = lister.ListIssues(
+                repo!,
+                [
+                    WorkerNextActionConstants.Labels.IntentTarget,
+                    WorkerNextActionConstants.Labels.IntentPrCreated
+                ]);
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
@@ -72,7 +86,12 @@ internal static class AutomationHostReviewPreflightCommand
             return 1;
         }
 
-        var result = Analyze(repo!, prs, issues, candidate, clarificationRequired);
+        var reviewCandidatePrs = AddIssueLinkedReviewFallbacks(
+            repo!,
+            intentTargetPrs,
+            allOpenPrs,
+            publishedIntentTargetIssues);
+        var result = Analyze(repo!, reviewCandidatePrs, intentTargetIssues, candidate, clarificationRequired);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -192,14 +211,108 @@ internal static class AutomationHostReviewPreflightCommand
     private static bool IsReadyForHostReview(GitHubAutomationPrCandidate pr)
     {
         var labels = LabelNames(pr.Labels);
-        var hasRereviewReady = labels.Contains(WorkerNextActionConstants.Labels.IntentPrRereviewReady, StringComparer.Ordinal);
         var hasBlockingState =
             labels.Contains(WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing, StringComparer.Ordinal)
             || labels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate, StringComparer.Ordinal)
             || labels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress, StringComparer.Ordinal)
             || labels.Contains(WorkerNextActionConstants.Labels.IntentPrApproved, StringComparer.Ordinal);
 
-        return !hasBlockingState || hasRereviewReady;
+        return !hasBlockingState;
+    }
+
+    private static IReadOnlyList<GitHubAutomationPrCandidate> AddIssueLinkedReviewFallbacks(
+        string repo,
+        IReadOnlyList<GitHubAutomationPrCandidate> intentTargetPrs,
+        IReadOnlyList<GitHubAutomationPrCandidate> allOpenPrs,
+        IReadOnlyList<GitHubAutomationIssueCandidate> publishedIntentTargetIssues)
+    {
+        var reviewCandidates = new List<GitHubAutomationPrCandidate>(intentTargetPrs);
+        var seenPrNumbers = new HashSet<int>(intentTargetPrs.Select(pr => pr.Number));
+        var publishedIssueNumbers = publishedIntentTargetIssues
+            .Where(IsPublishedIntentTargetIssue)
+            .Select(issue => issue.Number)
+            .ToHashSet();
+
+        if (publishedIssueNumbers.Count == 0)
+        {
+            return reviewCandidates;
+        }
+
+        foreach (var pr in allOpenPrs)
+        {
+            if (!seenPrNumbers.Add(pr.Number))
+            {
+                continue;
+            }
+
+            var labels = LabelNames(pr.Labels);
+            if (labels.Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal))
+            {
+                reviewCandidates.Add(pr);
+                continue;
+            }
+
+            if (LinksPublishedIntentTargetIssue(pr, repo, publishedIssueNumbers))
+            {
+                reviewCandidates.Add(pr);
+            }
+        }
+
+        return reviewCandidates;
+    }
+
+    private static bool IsPublishedIntentTargetIssue(GitHubAutomationIssueCandidate issue)
+    {
+        var labels = LabelNames(issue.Labels);
+        return labels.Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal)
+            && labels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal);
+    }
+
+    private static bool LinksPublishedIntentTargetIssue(
+        GitHubAutomationPrCandidate pr,
+        string repo,
+        IReadOnlySet<int> publishedIssueNumbers)
+    {
+        foreach (var reference in pr.ClosingIssuesReferences)
+        {
+            if (reference.Number <= 0 || !publishedIssueNumbers.Contains(reference.Number))
+            {
+                continue;
+            }
+
+            var referenceRepo = repo;
+            if (reference.Repository is { Name.Length: > 0, Owner.Login.Length: > 0 } repository)
+            {
+                referenceRepo = $"{repository.Owner.Login}/{repository.Name}";
+            }
+
+            if (string.Equals(referenceRepo, repo, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        foreach (Match match in ClosesIssueRegex.Matches(pr.Body ?? string.Empty))
+        {
+            var linkedRepo = match.Groups["repo"].Value;
+            if (!string.IsNullOrWhiteSpace(linkedRepo)
+                && !string.Equals(linkedRepo, repo, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (int.TryParse(
+                    match.Groups["number"].Value,
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var issueNumber)
+                && publishedIssueNumbers.Contains(issueNumber))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static IReadOnlyCollection<string> LabelNames(IReadOnlyList<GitHubAutomationLabel>? labels)

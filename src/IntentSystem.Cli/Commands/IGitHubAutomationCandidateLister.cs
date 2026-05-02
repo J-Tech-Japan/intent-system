@@ -36,12 +36,19 @@ internal sealed record GitHubAutomationPrCandidate
     [JsonPropertyName("url")]
     public string Url { get; init; } = string.Empty;
 
+    [JsonPropertyName("body")]
+    public string Body { get; init; } = string.Empty;
+
     [JsonPropertyName("createdAt")]
     public string CreatedAt { get; init; } = string.Empty;
 
     [JsonPropertyName("labels")]
     public IReadOnlyList<GitHubAutomationLabel> Labels { get; init; }
         = Array.Empty<GitHubAutomationLabel>();
+
+    [JsonPropertyName("closingIssuesReferences")]
+    public IReadOnlyList<GitHubPrClosingIssueReference> ClosingIssuesReferences { get; init; }
+        = Array.Empty<GitHubPrClosingIssueReference>();
 }
 
 /// <summary>
@@ -77,8 +84,9 @@ internal sealed record GitHubAutomationLabel
 /// G206: Default lister that shells out to <c>gh pr list</c> and
 /// <c>gh issue list</c>. The only file in the worker next-action surface
 /// permitted to call <c>Process.Start</c> — the analyzer and command layers
-/// must remain pure. Both calls request a stable supported field subset
-/// (<c>number,title,url,createdAt,labels</c>).
+/// must remain pure. Both calls request stable supported field subsets.
+/// PR listing also includes body and closing issue metadata so host selectors
+/// can model issue-linked PR fallback without extra mutation-capable calls.
 /// </summary>
 internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCandidateLister
 {
@@ -88,6 +96,8 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     /// subset.
     /// </summary>
     internal const string ListJsonFields = "number,title,url,createdAt,labels";
+
+    internal const string PrListJsonFields = "number,title,url,body,createdAt,labels,closingIssuesReferences";
 
     /// <summary>
     /// G206: builds the <c>gh pr list</c> argument list shared by the live
@@ -106,7 +116,7 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
             "list",
             "--repo", repo,
             "--state", "open",
-            "--json", ListJsonFields,
+            "--json", PrListJsonFields,
             "--limit", "200"
         };
         foreach (var label in requiredLabels)

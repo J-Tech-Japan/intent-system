@@ -71,6 +71,66 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_IssueLinkedPrWithoutIntentTargetFallsBackToReviewPr()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        var lister = new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(560, "G227", "https://github.com/J-Tech-Japan/intent-system/pull/560",
+                    "2026-05-02T02:00:00Z", [], body: "Closes #559"),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(559, "G227", "https://github.com/J-Tech-Japan/intent-system/issues/559",
+                    "2026-05-02T01:00:00Z", ["intent-target", "intent-pr-created"]),
+            ],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("review-pr", result.Action);
+        Assert.Equal(560, result.TargetPr);
+        Assert.Equal([560], result.InFlightPrs);
+    }
+
+    [Fact]
+    public void Execute_RereviewReadyDoesNotOverrideBlockingReviewState()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        var lister = new FakeLister
+        {
+            Prs =
+            [
+                BuildPr(560, "blocked", "https://github.com/J-Tech-Japan/intent-system/pull/560",
+                    "2026-05-02T02:00:00Z",
+                    ["intent-target", "intent-pr-rereview-ready", "intent-pr-request-update"]),
+            ],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G228", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Null(result.TargetPr);
+        Assert.Equal([560], result.InFlightPrs);
+    }
+
+    [Fact]
     public void Execute_WipIssueBlocksCandidate()
     {
         using var workspace = new AutomationHostReviewPreflightWorkspace();
@@ -158,12 +218,14 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         string title,
         string url,
         string createdAt,
-        IReadOnlyList<string> labels) =>
+        IReadOnlyList<string> labels,
+        string body = "") =>
         new()
         {
             Number = number,
             Title = title,
             Url = url,
+            Body = body,
             CreatedAt = createdAt,
             Labels = labels.Select(label => new GitHubAutomationLabel { Name = label }).ToArray(),
         };
@@ -187,15 +249,23 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
     {
         public IReadOnlyList<GitHubAutomationPrCandidate> Prs { get; init; } = Array.Empty<GitHubAutomationPrCandidate>();
 
+        public IReadOnlyList<GitHubAutomationPrCandidate> AllPrs { get; init; } = Array.Empty<GitHubAutomationPrCandidate>();
+
         public IReadOnlyList<GitHubAutomationIssueCandidate> Issues { get; init; } = Array.Empty<GitHubAutomationIssueCandidate>();
+
+        public IReadOnlyList<GitHubAutomationIssueCandidate> PublishedIssues { get; init; } = Array.Empty<GitHubAutomationIssueCandidate>();
 
         public IReadOnlyList<GitHubAutomationPrCandidate> ListPullRequests(
             string repo,
-            IReadOnlyCollection<string> requiredLabels) => Prs;
+            IReadOnlyCollection<string> requiredLabels) =>
+            requiredLabels.Count == 0 ? AllPrs : Prs;
 
         public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
             string repo,
-            IReadOnlyCollection<string> requiredLabels) => Issues;
+            IReadOnlyCollection<string> requiredLabels) =>
+            requiredLabels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal)
+                ? PublishedIssues
+                : Issues;
     }
 
     private sealed class AutomationHostReviewPreflightWorkspace : IDisposable

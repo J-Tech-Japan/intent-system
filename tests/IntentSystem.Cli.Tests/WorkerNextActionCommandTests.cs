@@ -349,7 +349,7 @@ public sealed class WorkerNextActionCommandTests : IDisposable
         Assert.Contains("--state", args);
         Assert.Contains("open", args);
         Assert.Contains("--json", args);
-        Assert.Contains(GhCliGitHubAutomationCandidateLister.ListJsonFields, args);
+        Assert.Contains(GhCliGitHubAutomationCandidateLister.PrListJsonFields, args);
         Assert.Contains("--label", args);
         Assert.Contains("intent-target", args);
     }
