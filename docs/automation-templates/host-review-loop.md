@@ -131,8 +131,11 @@ The preflight is read-only. It must report the required
 `intent-cli automation pr-transition` command surface, including
 `review-start`, `request-update`, and `approved`, before the host loop
 attempts a GitHub label mutation. If either preflight reports a stale or
-missing command surface, stop and refresh the installed CLI; do not fall
-back to raw `gh pr edit` label mutation for installed transitions.
+missing command surface, stop and refresh the installed CLI using the
+host-local procedure in
+[`README.md`](./README.md#refreshing-the-host-local-installed-cli);
+do not fall back to raw `gh pr edit` label mutation for installed
+transitions.
 
 Choose ONE of the following review verdicts. Each has an explicit
 label transition. For host-owned review-start, request-update, and
