@@ -58,6 +58,20 @@ write surface.
 
 ## Step 2: ask the worker / next-action selector for context
 
+Run the read-only host selector before manual review judgement:
+
+```bash
+intent-cli automation host-review-preflight \
+  --repo "<owner>/<repo>" \
+  --format json
+```
+
+Use `action` as the mechanical host-loop branch:
+`review-pr`, `skip-next-slice-due-to-wip`, `candidate-ready`,
+`no-actionable-item`, or `clarification-required`. The command does
+not mutate labels, claim PRs, create issues, run providers, or perform
+semantic review; it only reports target ids and WIP context.
+
 The implementation-side `worker next-action` selector tells you
 which child PRs are currently `repair-required`, which are
 `ready-to-implement`, and which are idle. Use that read as the
