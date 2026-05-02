@@ -30,6 +30,60 @@ These templates assume:
 | G213  | `intent-cli automation check`           | Worktree-aware next-action entrypoint |
 | G214  | `intent-cli automation complete`        | Worktree-aware outcome completion entrypoint |
 | G215  | `intent-cli automation clarification-stop` | Stable clarification-required stop summary |
+| G226  | `intent-cli automation issue-publish`   | Host issue publish label transition |
+| G227  | `intent-cli automation host-review-preflight` | Host PR review target preflight |
+| G228  | `intent-cli automation pr-transition --transition review-start` | Host review-start PR transition |
+| G229  | `intent-cli automation pr-transition --transition request-update` | Host request-update PR transition |
+| G230  | `intent-cli automation pr-transition --transition review-start` | Robust absent-rereview-label cleanup |
+
+## Installed host transition command adoption
+
+Parent-host runbooks should use installed `intent-cli` transition
+commands for supported mechanical label changes. Raw `gh issue edit` /
+`gh pr edit` label mutation is not the normal path for these
+transitions.
+
+Before applying host-side label transitions, detect stale local CLI
+installations with the read-only command surfaces:
+
+```bash
+intent-cli automation doctor --format json
+intent-cli automation host-review-preflight --repo "$CHILD_REPO" --format json
+```
+
+Supported installed transitions:
+
+```bash
+intent-cli automation issue-publish \
+  --repo "$CHILD_REPO" \
+  --issue "$ISSUE_NUMBER" \
+  --write \
+  --format json
+
+intent-cli automation pr-transition \
+  --repo "$CHILD_REPO" \
+  --pr "$PR_NUMBER" \
+  --transition review-start \
+  --write \
+  --format json
+
+intent-cli automation pr-transition \
+  --repo "$CHILD_REPO" \
+  --pr "$PR_NUMBER" \
+  --transition request-update \
+  --write \
+  --format json
+
+intent-cli automation pr-transition \
+  --repo "$CHILD_REPO" \
+  --pr "$PR_NUMBER" \
+  --transition approved \
+  --write \
+  --format json
+```
+
+`intent-pr-created` remains issue-only. It must never be added to a PR
+by a template, fallback, or installed transition command.
 
 ## Template index
 

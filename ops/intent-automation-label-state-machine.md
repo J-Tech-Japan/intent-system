@@ -74,6 +74,23 @@ This document explains the label contract used by the target-scoped automation f
 
 ## Transition Summary
 
+Supported mechanical label transitions should be applied through the
+installed `intent-cli` command surfaces, not by normal runbook raw
+`gh issue edit` / `gh pr edit` label mutation:
+
+```bash
+intent-cli automation issue-publish --repo "$CHILD_REPO" --issue "$ISSUE_NUMBER" --write --format json
+intent-cli automation pr-transition --repo "$CHILD_REPO" --pr "$PR_NUMBER" --transition review-start --write --format json
+intent-cli automation pr-transition --repo "$CHILD_REPO" --pr "$PR_NUMBER" --transition request-update --write --format json
+intent-cli automation pr-transition --repo "$CHILD_REPO" --pr "$PR_NUMBER" --transition approved --write --format json
+```
+
+Use `intent-cli automation doctor --format json` and
+`intent-cli automation host-review-preflight --repo "$CHILD_REPO"
+--format json` as stale-CLI/readiness checks before host-side PR
+transition mutation. `intent-pr-created` remains issue-only and must not
+be applied to PRs by installed commands or fallback paths.
+
 ## 1. Issue Runner
 
 The issue runner owns the Issue-to-PR transition.
