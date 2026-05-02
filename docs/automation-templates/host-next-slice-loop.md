@@ -131,6 +131,21 @@ will then pick the published issue up via `intent-cli worker
 next-action` on its next wake; this template MUST NOT shortcut that
 boundary by calling the child loop directly.
 
+After the host creates the child issue and durable parent state has
+been written, the installed child CLI issue-publish transition is the
+supported way to apply the publish-boundary label:
+
+```bash
+intent-cli automation issue-publish \
+  --repo "$CHILD_REPO" \
+  --issue "$ISSUE_NUMBER" \
+  --write \
+  --format json
+```
+
+Dry-run the same command without `--write` to capture the planned
+`intent-target` label action and JSON publish metadata before mutation.
+
 ## What this template forbids
 
 - Authoring implementation changes. Next-slice planning describes
