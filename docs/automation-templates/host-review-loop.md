@@ -104,7 +104,7 @@ GitHub labels.
 
 | Verdict                | Label transition                                                                          |
 |------------------------|--------------------------------------------------------------------------------------------|
-| accept-and-merge       | remove `intent-pr-reviewing`; the PR is then merged via the host's merge step.            |
+| accept-and-merge       | remove `intent-pr-reviewing`; add `intent-pr-approved`; the PR is then merged via the host's merge step. |
 | request-update         | remove `intent-pr-reviewing` (if present); add `intent-pr-request-update` with comment(s).|
 | accept-as-rereview-ready | (post-repair) remove `intent-pr-update-in-progress`; add `intent-pr-rereview-ready`.   |
 | reject-clarification   | leave a host clarification comment with the cooldown marker; do NOT flip review labels.    |
@@ -116,6 +116,32 @@ Notes:
   PR-state marker.
 - `intent-target` is owned by the host's labeling policy. The
   child-side automation NEVER adds or removes it; host review may.
+- Host-owned review transitions should use the installed command
+  surface when available:
+
+```bash
+intent-cli automation pr-transition \
+  --repo "$CHILD_REPO" \
+  --pr "$PR_NUMBER" \
+  --transition review-start \
+  --write \
+  --format json
+```
+
+```bash
+intent-cli automation pr-transition \
+  --repo "$CHILD_REPO" \
+  --pr "$PR_NUMBER" \
+  --transition approved \
+  --write \
+  --format json
+```
+
+`review-start` adds `intent-target` and `intent-pr-reviewing` while
+clearing stale `intent-pr-rereview-ready`. `approved` removes
+`intent-pr-reviewing` and adds `intent-pr-approved`. These commands are
+the supported installed path for those host-owned PR label transitions;
+raw `gh pr edit` blocks are transitional fallback only.
 
 ## Step 5: write the review verdict comment
 
