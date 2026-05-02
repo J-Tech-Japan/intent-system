@@ -98,9 +98,9 @@ not push, do not flip labels.
 ## Step 4: produce a deterministic review verdict
 
 Choose ONE of the following review verdicts. Each has an explicit
-label transition. The review loop applies labels via the host's own
-gh CLI / label policy layer; this prompt does not directly mutate
-GitHub labels.
+label transition. For host-owned review-start and approved transitions,
+the normal installed path is `intent-cli automation pr-transition
+--write`; this prompt does not hand-apply those labels.
 
 | Verdict                | Label transition                                                                          |
 |------------------------|--------------------------------------------------------------------------------------------|
@@ -115,9 +115,9 @@ Notes:
   verdict above. It is an issue-side completion marker, not a
   PR-state marker.
 - `intent-target` is owned by the host's labeling policy. The
-  child-side automation NEVER adds or removes it; host review may.
-- Host-owned review transitions should use the installed command
-  surface when available:
+  child-side automation NEVER adds or removes it; host review uses the
+  installed transition command for review-start.
+- Review start MUST use the installed command path:
 
 ```bash
 intent-cli automation pr-transition \
@@ -127,6 +127,8 @@ intent-cli automation pr-transition \
   --write \
   --format json
 ```
+
+- Approval MUST use the installed command path:
 
 ```bash
 intent-cli automation pr-transition \
@@ -140,8 +142,7 @@ intent-cli automation pr-transition \
 `review-start` adds `intent-target` and `intent-pr-reviewing` while
 clearing stale `intent-pr-rereview-ready`. `approved` removes
 `intent-pr-reviewing` and adds `intent-pr-approved`. These commands are
-the supported installed path for those host-owned PR label transitions;
-raw `gh pr edit` blocks are transitional fallback only.
+the supported installed path for those host-owned PR label transitions.
 
 ## Step 5: write the review verdict comment
 
