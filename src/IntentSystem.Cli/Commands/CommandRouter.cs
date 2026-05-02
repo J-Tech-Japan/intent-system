@@ -36,6 +36,7 @@ internal static class CommandRouter
         "automation host-review-preflight",
         "automation issue-publish --issue <n> --write",
         "automation pr-transition --transition review-start --write",
+        "automation pr-transition --transition request-update --write",
         "automation pr-transition --transition approved --write",
         "automation summary"
     ];

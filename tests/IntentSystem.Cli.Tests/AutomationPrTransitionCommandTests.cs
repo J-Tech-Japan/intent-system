@@ -130,6 +130,76 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_RequestUpdate_DryRunPlansRepairRequestLabelsWithoutApplying()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-reviewing" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "request-update",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.Equal("request-update", result.Transition);
+        Assert.Equal("dry-run", result.Mode);
+        Assert.False(result.Applied);
+        Assert.Contains("intent-pr-request-update", result.AddLabels);
+        Assert.Contains("intent-pr-reviewing", result.RemoveLabels);
+        Assert.DoesNotContain("intent-pr-created", result.AddLabels);
+        Assert.DoesNotContain("intent-pr-created", result.RemoveLabels);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_RequestUpdate_WriteAppliesExactRepairRequestLabels()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-reviewing" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "request-update",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.True(result.Applied);
+
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Equal("pr", transition.Kind);
+        Assert.Equal(542, transition.Number);
+        Assert.Contains("intent-pr-request-update", transition.AddLabels);
+        Assert.Contains("intent-pr-reviewing", transition.RemoveLabels);
+        Assert.DoesNotContain("intent-pr-created", transition.AddLabels);
+        Assert.DoesNotContain("intent-pr-created", transition.RemoveLabels);
+    }
+
+    [Fact]
     public void CommandRouter_RegistersAutomationPrTransition()
     {
         using var workspace = new AutomationPrTransitionWorkspace();
@@ -174,6 +244,7 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         Assert.Contains("Automation commands:", output, StringComparison.Ordinal);
         Assert.Contains("automation pr-transition", output, StringComparison.Ordinal);
         Assert.Contains("--transition review-start", output, StringComparison.Ordinal);
+        Assert.Contains("--transition request-update", output, StringComparison.Ordinal);
         Assert.Contains("--transition approved", output, StringComparison.Ordinal);
     }
 

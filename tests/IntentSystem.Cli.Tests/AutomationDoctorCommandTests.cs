@@ -26,9 +26,11 @@ public sealed class AutomationDoctorCommandTests
         Assert.Contains("read_only: true", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli automation pr-transition", output, StringComparison.Ordinal);
         Assert.Contains("--transition review-start", output, StringComparison.Ordinal);
+        Assert.Contains("--transition request-update", output, StringComparison.Ordinal);
         Assert.Contains("--transition approved", output, StringComparison.Ordinal);
         Assert.Contains("intent-target", output, StringComparison.Ordinal);
         Assert.Contains("intent-pr-reviewing", output, StringComparison.Ordinal);
+        Assert.Contains("intent-pr-request-update", output, StringComparison.Ordinal);
         Assert.Contains("intent-pr-rereview-ready", output, StringComparison.Ordinal);
         Assert.Contains("legacy rereview-ready", output, StringComparison.Ordinal);
         Assert.Contains("intent-pr-approved", output, StringComparison.Ordinal);
@@ -49,7 +51,7 @@ public sealed class AutomationDoctorCommandTests
         var result = JsonSerializer.Deserialize<AutomationDoctorResult>(writer.ToString())!;
         Assert.Equal("ok", result.Status);
         Assert.True(result.ReadOnly);
-        Assert.Equal(2, result.RequiredCommands.Count);
+        Assert.Equal(3, result.RequiredCommands.Count);
         Assert.All(result.RequiredCommands, command =>
         {
             Assert.Equal("intent-cli automation pr-transition", command.Command);
@@ -59,13 +61,16 @@ public sealed class AutomationDoctorCommandTests
             string.Equals(command.Transition, "review-start", StringComparison.Ordinal)
             && command.Usage.Contains("--transition review-start", StringComparison.Ordinal));
         Assert.Contains(result.RequiredCommands, command =>
+            string.Equals(command.Transition, "request-update", StringComparison.Ordinal)
+            && command.Usage.Contains("--transition request-update", StringComparison.Ordinal));
+        Assert.Contains(result.RequiredCommands, command =>
             string.Equals(command.Transition, "approved", StringComparison.Ordinal)
             && command.Usage.Contains("--transition approved", StringComparison.Ordinal));
 
         using var document = JsonDocument.Parse(writer.ToString());
         var root = document.RootElement;
         Assert.True(root.TryGetProperty("required_commands", out var requiredCommands));
-        Assert.Equal(2, requiredCommands.GetArrayLength());
+        Assert.Equal(3, requiredCommands.GetArrayLength());
     }
 
     [Fact]

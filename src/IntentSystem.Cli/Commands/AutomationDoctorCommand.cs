@@ -59,6 +59,14 @@ internal static class AutomationDoctorCommand
             new AutomationDoctorRequiredCommand
             {
                 Command = "intent-cli automation pr-transition",
+                Transition = "request-update",
+                Usage = "intent-cli automation pr-transition --transition request-update --write",
+                Purpose = "Host request-update transition: remove intent-pr-reviewing and add intent-pr-request-update",
+                Available = true,
+            },
+            new AutomationDoctorRequiredCommand
+            {
+                Command = "intent-cli automation pr-transition",
                 Transition = "approved",
                 Usage = "intent-cli automation pr-transition --transition approved --write",
                 Purpose = "Host approved transition: remove intent-pr-reviewing and add intent-pr-approved",

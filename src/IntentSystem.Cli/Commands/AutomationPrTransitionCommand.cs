@@ -12,6 +12,7 @@ internal static class AutomationPrTransitionCommand
     private const string FormatText = "text";
     private const string FormatJson = "json";
     private const string TransitionReviewStart = "review-start";
+    private const string TransitionRequestUpdate = "request-update";
     private const string TransitionApproved = "approved";
 
     public static Func<IGitHubLabelMutator>? MutatorFactory { get; set; }
@@ -154,6 +155,15 @@ internal static class AutomationPrTransitionCommand
                 [
                     WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing,
                 ]),
+            TransitionRequestUpdate => new TransitionPlan(
+                AddLabels:
+                [
+                    WorkerPrReviewPreflightConstants.Labels.IntentPrRequestUpdate,
+                ],
+                RemoveLabels:
+                [
+                    WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing,
+                ]),
             _ => throw new ArgumentOutOfRangeException(nameof(transition), transition, "Unsupported PR transition."),
         };
 
@@ -212,14 +222,15 @@ internal static class AutomationPrTransitionCommand
                 case "--transition":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
-                        error = "--transition requires a value (review-start or approved).";
+                        error = "--transition requires a value (review-start, request-update, or approved).";
                         return false;
                     }
                     transition = args[index + 1].Trim();
                     if (!string.Equals(transition, TransitionReviewStart, StringComparison.Ordinal)
+                        && !string.Equals(transition, TransitionRequestUpdate, StringComparison.Ordinal)
                         && !string.Equals(transition, TransitionApproved, StringComparison.Ordinal))
                     {
-                        error = $"--transition must be '{TransitionReviewStart}' or '{TransitionApproved}' (got '{transition}').";
+                        error = $"--transition must be '{TransitionReviewStart}', '{TransitionRequestUpdate}', or '{TransitionApproved}' (got '{transition}').";
                         return false;
                     }
                     index++;
@@ -251,7 +262,7 @@ internal static class AutomationPrTransitionCommand
                     break;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] --pr <n> --transition <review-start|approved> [--write] [--dry-run] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] --pr <n> --transition <review-start|request-update|approved> [--write] [--dry-run] [--format text|json].";
                     return false;
             }
         }
@@ -264,7 +275,7 @@ internal static class AutomationPrTransitionCommand
 
         if (string.IsNullOrWhiteSpace(transition))
         {
-            error = "--transition is required (review-start or approved).";
+            error = "--transition is required (review-start, request-update, or approved).";
             return false;
         }
 
