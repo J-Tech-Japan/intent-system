@@ -91,7 +91,7 @@ internal static class AutomationSummaryConstants
 
     public static readonly IReadOnlyList<string> HostPrTransitionCommands =
     [
-        "intent-cli automation pr-transition --transition review-start --write adds intent-target and intent-pr-reviewing, and removes intent-pr-rereview-ready",
+        "intent-cli automation pr-transition --transition review-start --write adds intent-target and intent-pr-reviewing, and removes intent-pr-rereview-ready plus legacy rereview-ready",
         "intent-cli automation pr-transition --transition approved --write removes intent-pr-reviewing and adds intent-pr-approved"
     ];
 

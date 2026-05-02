@@ -53,7 +53,7 @@ internal static class AutomationDoctorCommand
                 Command = "intent-cli automation pr-transition",
                 Transition = "review-start",
                 Usage = "intent-cli automation pr-transition --transition review-start --write",
-                Purpose = "Host review-start transition: add intent-target and intent-pr-reviewing, remove intent-pr-rereview-ready",
+                Purpose = "Host review-start transition: add intent-target and intent-pr-reviewing, remove intent-pr-rereview-ready and legacy rereview-ready",
                 Available = true,
             },
             new AutomationDoctorRequiredCommand

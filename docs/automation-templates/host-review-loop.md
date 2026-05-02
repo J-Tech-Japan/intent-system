@@ -166,7 +166,8 @@ intent-cli automation pr-transition \
 ```
 
 `review-start` adds `intent-target` and `intent-pr-reviewing` while
-clearing stale `intent-pr-rereview-ready`. `approved` removes
+clearing stale `intent-pr-rereview-ready` and legacy `rereview-ready`.
+`approved` removes
 `intent-pr-reviewing` and adds `intent-pr-approved`. These commands are
 the supported installed path for those host-owned PR label transitions.
 

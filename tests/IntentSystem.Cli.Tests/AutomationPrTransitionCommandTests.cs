@@ -26,7 +26,7 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         workspace.WriteOriginRemote("https://github.com/J-Tech-Japan/intent-system.git");
         var mutator = new FakeMutator
         {
-            Labels = new[] { "intent-pr-rereview-ready" },
+            Labels = new[] { "intent-pr-rereview-ready", "rereview-ready" },
         };
         AutomationPrTransitionCommand.MutatorFactory = () => mutator;
 
@@ -51,6 +51,7 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         Assert.Contains("intent-target", result.AddLabels);
         Assert.Contains("intent-pr-reviewing", result.AddLabels);
         Assert.Contains("intent-pr-rereview-ready", result.RemoveLabels);
+        Assert.Contains("rereview-ready", result.RemoveLabels);
         Assert.Empty(mutator.AppliedTransitions);
     }
 
@@ -60,7 +61,7 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         using var workspace = new AutomationPrTransitionWorkspace();
         var mutator = new FakeMutator
         {
-            Labels = new[] { "intent-pr-rereview-ready" },
+            Labels = new[] { "intent-pr-rereview-ready", "rereview-ready" },
         };
         AutomationPrTransitionCommand.MutatorFactory = () => mutator;
 
@@ -87,6 +88,7 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         Assert.Contains("intent-target", transition.AddLabels);
         Assert.Contains("intent-pr-reviewing", transition.AddLabels);
         Assert.Contains("intent-pr-rereview-ready", transition.RemoveLabels);
+        Assert.Contains("rereview-ready", transition.RemoveLabels);
         Assert.DoesNotContain("intent-pr-created", transition.AddLabels);
         Assert.DoesNotContain("intent-pr-created", transition.RemoveLabels);
     }
