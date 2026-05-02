@@ -60,6 +60,61 @@ required installed surfaces as available: `automation summary`,
 surface, abort and refresh the installed CLI; do not substitute raw
 `gh` label mutation.
 
+### Refreshing the host-local installed CLI
+
+When the parent host has a newer `submodules/intent-system` checkout
+than the wrapper under `.intent-cli/bin/intent-cli`, refresh the
+host-local CLI from the host root. This is the supported local install
+path for host automation command surfaces:
+
+```bash
+cd "$HOST_ROOT"
+export CHILD_INTENT_SYSTEM="$HOST_ROOT/submodules/intent-system"
+
+git -C "$CHILD_INTENT_SYSTEM" rev-parse --show-toplevel
+dotnet pack "$CHILD_INTENT_SYSTEM/src/IntentSystem.Cli/IntentSystem.Cli.csproj" \
+  -o "$HOST_ROOT/.intent-cli/packages"
+
+mkdir -p "$HOST_ROOT/.intent-cli/bin"
+cat > "$HOST_ROOT/.intent-cli/bin/intent-cli.tmp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+HOST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+exec dotnet tool exec \
+  --yes \
+  --source "$HOST_ROOT/.intent-cli/packages" \
+  --version 0.1.0 \
+  intent-cli \
+  "$@"
+EOF
+chmod +x "$HOST_ROOT/.intent-cli/bin/intent-cli.tmp"
+mv "$HOST_ROOT/.intent-cli/bin/intent-cli.tmp" "$HOST_ROOT/.intent-cli/bin/intent-cli"
+```
+
+Run the refresh from the parent host root, not from an arbitrary child
+worktree. The package source is the host's checked-out
+`submodules/intent-system`; the wrapper target is the host-local
+`.intent-cli/bin/intent-cli`. Do not write this wrapper into child
+implementation worktrees, and do not commit generated packages or other
+local install artifacts from `.intent-cli/packages`.
+
+After refreshing, verify the installed command surfaces before any label
+transition:
+
+```bash
+"$HOST_ROOT/.intent-cli/bin/intent-cli" automation doctor --format json \
+  | jq '{status, installedCliPath, unavailable: [.requiredCommands[] | select(.available == false)]}'
+
+"$HOST_ROOT/.intent-cli/bin/intent-cli" automation host-review-preflight \
+  --repo "$CHILD_REPO" \
+  --format json \
+  | jq '{action, installedCliPath, warnings}'
+```
+
+Both commands must succeed without unavailable command surfaces. If they
+still report `stale-host-cli`, stop and repair the local install; do not
+fall back to raw GitHub label mutation.
+
 Supported installed transitions:
 
 ```bash
