@@ -52,6 +52,14 @@ intent-cli automation doctor --format json
 intent-cli automation host-review-preflight --repo "$CHILD_REPO" --format json
 ```
 
+Both commands must report the host-local installed CLI path and all
+required installed surfaces as available: `automation summary`,
+`automation host-review-preflight`, `automation issue-publish`, and
+`automation pr-transition` for `review-start`, `request-update`, and
+`approved`. If either command reports `stale-host-cli` or a missing
+surface, abort and refresh the installed CLI; do not substitute raw
+`gh` label mutation.
+
 Supported installed transitions:
 
 ```bash

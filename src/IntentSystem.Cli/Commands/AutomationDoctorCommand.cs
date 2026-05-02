@@ -31,7 +31,7 @@ internal static class AutomationDoctorCommand
             return 1;
         }
 
-        var result = BuildResult();
+        var result = BuildResult(context);
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
@@ -41,47 +41,64 @@ internal static class AutomationDoctorCommand
             WriteText(writer, result);
         }
 
-        return 0;
+        return string.Equals(result.Status, "ok", StringComparison.Ordinal) ? 0 : 1;
     }
 
-    private static AutomationDoctorResult BuildResult()
+    private static AutomationDoctorResult BuildResult(CliContext context)
     {
-        var requiredCommands = new[]
-        {
-            new AutomationDoctorRequiredCommand
+        var surfaceReport = AutomationInstalledCliSurfaceProbe.Check(context);
+        var requiredCommands = surfaceReport.Checks
+            .Select(check => new AutomationDoctorRequiredCommand
             {
-                Command = "intent-cli automation pr-transition",
-                Transition = "review-start",
-                Usage = "intent-cli automation pr-transition --transition review-start --write",
-                Purpose = "Host review-start transition: add intent-target and intent-pr-reviewing, remove intent-pr-rereview-ready and legacy rereview-ready",
-                Available = true,
-            },
-            new AutomationDoctorRequiredCommand
-            {
-                Command = "intent-cli automation pr-transition",
-                Transition = "request-update",
-                Usage = "intent-cli automation pr-transition --transition request-update --write",
-                Purpose = "Host request-update transition: remove intent-pr-reviewing and add intent-pr-request-update",
-                Available = true,
-            },
-            new AutomationDoctorRequiredCommand
-            {
-                Command = "intent-cli automation pr-transition",
-                Transition = "approved",
-                Usage = "intent-cli automation pr-transition --transition approved --write",
-                Purpose = "Host approved transition: remove intent-pr-reviewing and add intent-pr-approved",
-                Available = true,
-            },
-        };
+                Command = check.Command,
+                Transition = check.Transition,
+                Usage = BuildUsage(check.Command, check.Transition),
+                Purpose = BuildPurpose(check.Command, check.Transition),
+                Available = check.Available,
+                Reason = check.Reason,
+            })
+            .ToArray();
+
+        var missing = requiredCommands
+            .Where(command => !command.Available)
+            .ToArray();
 
         return new AutomationDoctorResult
         {
-            Status = "ok",
+            Status = surfaceReport.Available ? "ok" : "stale-host-cli",
             ReadOnly = true,
+            InstalledCliPath = surfaceReport.InstalledCliPath,
             RequiredCommands = requiredCommands,
-            Summary = "Host automation command preflight passed: required automation pr-transition commands are available.",
+            Summary = surfaceReport.Available
+                ? "Host automation command preflight passed: required installed automation command surfaces are available."
+                : $"Host automation command preflight failed: installed CLI at {surfaceReport.InstalledCliPath} is missing or stale for {string.Join(", ", missing.Select(command => command.Usage))}. Abort before label transitions; refresh the installed CLI instead of falling back to raw gh label mutation.",
         };
     }
+
+    private static string BuildUsage(string command, string? transition) =>
+        command switch
+        {
+            "intent-cli automation summary" => "intent-cli automation summary --format json",
+            "intent-cli automation host-review-preflight" => "intent-cli automation host-review-preflight --format json",
+            "intent-cli automation issue-publish" => "intent-cli automation issue-publish --issue <n> --write --format json",
+            "intent-cli automation pr-transition" => $"intent-cli automation pr-transition --transition {transition} --write --format json",
+            _ => command,
+        };
+
+    private static string BuildPurpose(string command, string? transition) =>
+        command switch
+        {
+            "intent-cli automation summary" => "Read-only installed command contract summary used by host runbooks.",
+            "intent-cli automation host-review-preflight" => "Read-only host review preflight before any host-owned PR label transition.",
+            "intent-cli automation issue-publish" => "Host issue-publish transition: add intent-target to a child issue.",
+            "intent-cli automation pr-transition" when string.Equals(transition, "review-start", StringComparison.Ordinal) =>
+                "Host review-start transition: add intent-target and intent-pr-reviewing, remove intent-pr-rereview-ready and legacy rereview-ready",
+            "intent-cli automation pr-transition" when string.Equals(transition, "request-update", StringComparison.Ordinal) =>
+                "Host request-update transition: remove intent-pr-reviewing and add intent-pr-request-update",
+            "intent-cli automation pr-transition" when string.Equals(transition, "approved", StringComparison.Ordinal) =>
+                "Host approved transition: remove intent-pr-reviewing and add intent-pr-approved",
+            _ => "Required host automation command surface.",
+        };
 
     private static bool TryParseArguments(
         string[] args,
@@ -129,14 +146,19 @@ internal static class AutomationDoctorCommand
         writer.WriteLine("# Automation doctor");
         writer.WriteLine($"status: {result.Status}");
         writer.WriteLine($"read_only: {result.ReadOnly.ToString().ToLowerInvariant()}");
+        writer.WriteLine($"installed_cli_path: {result.InstalledCliPath}");
         writer.WriteLine(result.Summary);
         writer.WriteLine();
-        writer.WriteLine("## Required host PR transition commands");
+        writer.WriteLine("## Required installed automation command surfaces");
         foreach (var command in result.RequiredCommands)
         {
             writer.WriteLine($"- {command.Usage}");
             writer.WriteLine($"  transition: {command.Transition}");
             writer.WriteLine($"  available: {command.Available.ToString().ToLowerInvariant()}");
+            if (!string.IsNullOrEmpty(command.Reason))
+            {
+                writer.WriteLine($"  reason: {command.Reason}");
+            }
             writer.WriteLine($"  purpose: {command.Purpose}");
         }
     }
@@ -152,6 +174,12 @@ internal sealed record AutomationDoctorResult
 
     [JsonPropertyName("readOnly")]
     public bool ReadOnlyCamel => ReadOnly;
+
+    [JsonPropertyName("installed_cli_path")]
+    public required string InstalledCliPath { get; init; }
+
+    [JsonPropertyName("installedCliPath")]
+    public string InstalledCliPathCamel => InstalledCliPath;
 
     [JsonPropertyName("required_commands")]
     public required IReadOnlyList<AutomationDoctorRequiredCommand> RequiredCommands { get; init; }
@@ -169,7 +197,7 @@ internal sealed record AutomationDoctorRequiredCommand
     public required string Command { get; init; }
 
     [JsonPropertyName("transition")]
-    public required string Transition { get; init; }
+    public required string? Transition { get; init; }
 
     [JsonPropertyName("usage")]
     public required string Usage { get; init; }
@@ -179,4 +207,7 @@ internal sealed record AutomationDoctorRequiredCommand
 
     [JsonPropertyName("available")]
     public required bool Available { get; init; }
+
+    [JsonPropertyName("reason")]
+    public required string? Reason { get; init; }
 }

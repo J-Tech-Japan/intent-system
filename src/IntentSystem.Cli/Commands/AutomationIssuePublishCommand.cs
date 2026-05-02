@@ -31,6 +31,12 @@ internal static class AutomationIssuePublishCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
+        if (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal))
+        {
+            WriteHelp(writer);
+            return 0;
+        }
+
         if (!TryParseArguments(
                 args,
                 out var repo,
@@ -277,6 +283,13 @@ internal static class AutomationIssuePublishCommand
         writer.WriteLine($"applied_label: {result.AppliedLabel}");
         writer.WriteLine($"applied: {result.Applied.ToString().ToLowerInvariant()}");
         writer.WriteLine($"published_at: {result.PublishedAt:O}");
+    }
+
+    private static void WriteHelp(TextWriter writer)
+    {
+        writer.WriteLine("automation issue-publish");
+        writer.WriteLine("Usage: intent-cli automation issue-publish --repo <owner/repo> --issue <n> [--write] [--dry-run] [--format text|json]");
+        writer.WriteLine("Publishes a child issue by applying the host-owned intent-target transition.");
     }
 }
 

@@ -34,6 +34,12 @@ internal static class AutomationHostReviewPreflightCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
+        if (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal))
+        {
+            WriteHelp(writer);
+            return 0;
+        }
+
         if (!TryParseArguments(args, out var repo, out var workdir, out var candidate, out var clarificationRequired, out var format, out var error))
         {
             writer.WriteLine(error);
@@ -45,6 +51,22 @@ internal static class AutomationHostReviewPreflightCommand
             && !AutomationCheckCommand.TryInferGitHubRepo(resolvedWorkdir, out repo, out error))
         {
             writer.WriteLine(error);
+            return 1;
+        }
+
+        var surfaceReport = AutomationInstalledCliSurfaceProbe.Check(context);
+        if (!surfaceReport.Available)
+        {
+            var staleResult = BuildStaleHostCliResult(repo!, surfaceReport);
+            if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+            {
+                writer.WriteLine(JsonSerializer.Serialize(staleResult, JsonOptions));
+            }
+            else
+            {
+                WriteText(writer, staleResult);
+            }
+
             return 1;
         }
 
@@ -217,7 +239,35 @@ internal static class AutomationHostReviewPreflightCommand
             CandidateExecutionUnit = string.IsNullOrWhiteSpace(candidateExecutionUnit) ? null : candidateExecutionUnit,
             Reason = reason,
             Warnings = Array.Empty<string>(),
+            InstalledCliPath = null,
+            MissingCommandSurfaces = Array.Empty<InstalledCliSurfaceCheck>(),
         };
+
+    private static AutomationHostReviewPreflightResult BuildStaleHostCliResult(
+        string repo,
+        InstalledCliSurfaceReport surfaceReport)
+    {
+        var missing = surfaceReport.Checks
+            .Where(check => !check.Available)
+            .ToArray();
+
+        return new AutomationHostReviewPreflightResult
+        {
+            Action = "stale-host-cli",
+            Repo = repo,
+            TargetPr = null,
+            TargetPrUrl = null,
+            InFlightPrs = Array.Empty<int>(),
+            InFlightIssues = Array.Empty<int>(),
+            CandidateExecutionUnit = null,
+            Reason = $"installed CLI at {surfaceReport.InstalledCliPath} is missing or stale for required automation command surfaces; abort before label transitions and refresh the installed CLI instead of falling back to raw gh label mutation",
+            Warnings = missing
+                .Select(check => $"{check.Command}{(string.IsNullOrWhiteSpace(check.Transition) ? string.Empty : $" --transition {check.Transition}")}: {check.Reason}")
+                .ToArray(),
+            InstalledCliPath = surfaceReport.InstalledCliPath,
+            MissingCommandSurfaces = missing,
+        };
+    }
 
     private static bool IsReadyForHostReview(GitHubAutomationPrCandidate pr)
     {
@@ -442,6 +492,21 @@ internal static class AutomationHostReviewPreflightCommand
         {
             writer.WriteLine($"- candidate_execution_unit: {result.CandidateExecutionUnit}");
         }
+        if (!string.IsNullOrEmpty(result.InstalledCliPath))
+        {
+            writer.WriteLine($"- installed_cli_path: {result.InstalledCliPath}");
+        }
+        foreach (var warning in result.Warnings)
+        {
+            writer.WriteLine($"- warning: {warning}");
+        }
+    }
+
+    private static void WriteHelp(TextWriter writer)
+    {
+        writer.WriteLine("automation host-review-preflight");
+        writer.WriteLine("Usage: intent-cli automation host-review-preflight [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--format text|json]");
+        writer.WriteLine("Checks installed CLI command surfaces before selecting host review-loop work.");
     }
 }
 
@@ -488,4 +553,16 @@ internal sealed record AutomationHostReviewPreflightResult
 
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }
+
+    [JsonPropertyName("installed_cli_path")]
+    public required string? InstalledCliPath { get; init; }
+
+    [JsonPropertyName("installedCliPath")]
+    public string? InstalledCliPathCamel => InstalledCliPath;
+
+    [JsonPropertyName("missing_command_surfaces")]
+    public required IReadOnlyList<InstalledCliSurfaceCheck> MissingCommandSurfaces { get; init; }
+
+    [JsonPropertyName("missingCommandSurfaces")]
+    public IReadOnlyList<InstalledCliSurfaceCheck> MissingCommandSurfacesCamel => MissingCommandSurfaces;
 }

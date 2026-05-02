@@ -64,7 +64,9 @@ internal static class Program
                 || string.Equals(args[1], "complete", StringComparison.Ordinal)
                 || string.Equals(args[1], "doctor", StringComparison.Ordinal)
                 || string.Equals(args[1], "host-review-preflight", StringComparison.Ordinal)
-                || string.Equals(args[1], "issue-publish", StringComparison.Ordinal));
+                || string.Equals(args[1], "issue-publish", StringComparison.Ordinal)
+                || string.Equals(args[1], "pr-transition", StringComparison.Ordinal)
+                || string.Equals(args[1], "summary", StringComparison.Ordinal));
     }
 
     private static CliContext CreateBootstrapContext(string currentDirectory, string[] args)

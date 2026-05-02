@@ -17,6 +17,7 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
     {
         AutomationHostReviewPreflightCommand.CandidateListerFactory = null;
         AutomationHostReviewPreflightCommand.NestedProviderLauncher = null;
+        AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
     }
 
     [Fact]
@@ -277,6 +278,50 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_StaleInstalledCliStopsBeforeListingCandidates()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        var lister = new ThrowingLister();
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+        workspace.WriteInstalledCliScript(stalePrTransition: true);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("stale-host-cli", result.Action);
+        Assert.Contains(".intent-cli", result.InstalledCliPath, StringComparison.Ordinal);
+        Assert.NotEmpty(result.MissingCommandSurfaces);
+        Assert.Contains(result.MissingCommandSurfaces, surface =>
+            string.Equals(surface.Command, "intent-cli automation pr-transition", StringComparison.Ordinal)
+            && string.Equals(surface.Transition, "review-start", StringComparison.Ordinal)
+            && !surface.Available);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("automation pr-transition", StringComparison.Ordinal)
+            && warning.Contains("not yet implemented", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_HelpSurfacesHostReviewPreflightWithoutCandidateListing()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => new ThrowingLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--help"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("automation host-review-preflight", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CommandRouter_RegistersAutomationHostReviewPreflight()
     {
         using var workspace = new AutomationHostReviewPreflightWorkspace();
@@ -350,12 +395,25 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
                 : Issues;
     }
 
+    private sealed class ThrowingLister : IGitHubAutomationCandidateLister
+    {
+        public IReadOnlyList<GitHubAutomationPrCandidate> ListPullRequests(
+            string repo,
+            IReadOnlyCollection<string> requiredLabels) =>
+            throw new InvalidOperationException("candidate listing should not run");
+
+        public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
+            string repo,
+            IReadOnlyCollection<string> requiredLabels) =>
+            throw new InvalidOperationException("candidate listing should not run");
+    }
+
     private sealed class AutomationHostReviewPreflightWorkspace : IDisposable
     {
         public AutomationHostReviewPreflightWorkspace()
         {
             RootPath = Directory.CreateTempSubdirectory("automation-host-review-preflight-tests-").FullName;
-            Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
+            WriteInstalledCliScript(stalePrTransition: false);
             Context = new CliContext
             {
                 RepoRoot = RootPath,
@@ -373,6 +431,40 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         public string RootPath { get; }
 
         public CliContext Context { get; }
+
+        public void WriteInstalledCliScript(bool stalePrTransition)
+        {
+            var binPath = Path.Combine(RootPath, ".intent-cli", "bin");
+            Directory.CreateDirectory(binPath);
+            var scriptPath = Path.Combine(binPath, "intent-cli");
+            var prTransitionBlock = stalePrTransition
+                ? "  echo \"Command 'automation pr-transition' is not yet implemented.\"\n  exit 1\n"
+                : "  echo 'automation pr-transition'\n  echo 'review-start'\n  echo 'request-update'\n  echo 'approved'\n  exit 0\n";
+            File.WriteAllText(
+                scriptPath,
+                "#!/bin/sh\n"
+                + "case \"$*\" in\n"
+                + "  'automation summary --help') echo 'automation summary'; exit 0 ;;\n"
+                + "  'automation host-review-preflight --help') echo 'automation host-review-preflight'; exit 0 ;;\n"
+                + "  'automation issue-publish --help') echo 'automation issue-publish'; exit 0 ;;\n"
+                + "  'automation pr-transition --help')\n"
+                + prTransitionBlock
+                + "    ;;\n"
+                + "  *) echo \"unexpected probe: $*\"; exit 1 ;;\n"
+                + "esac\n");
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    scriptPath,
+                    UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead
+                    | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead
+                    | UnixFileMode.OtherExecute);
+            }
+        }
 
         public void Dispose()
         {

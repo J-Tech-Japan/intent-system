@@ -156,7 +156,7 @@ export PR_NUMBER="<published-child-pr-number>"
 
 ```bash
 intent-cli automation doctor --format json \
-  | jq '{status, readOnly, transitions: [.requiredCommands[].transition]}'
+  | jq '{status, readOnly, installedCliPath, commands: [.requiredCommands[] | {command, transition, available}]}'
 ```
 
 Expected:
@@ -165,13 +165,22 @@ Expected:
 {
   "status": "ok",
   "readOnly": true,
-  "transitions": ["review-start", "request-update", "approved"]
+  "installedCliPath": "/path/to/host/.intent-cli/bin/intent-cli",
+  "commands": [
+    {"command": "intent-cli automation summary", "transition": null, "available": true},
+    {"command": "intent-cli automation host-review-preflight", "transition": null, "available": true},
+    {"command": "intent-cli automation issue-publish", "transition": null, "available": true},
+    {"command": "intent-cli automation pr-transition", "transition": "review-start", "available": true},
+    {"command": "intent-cli automation pr-transition", "transition": "request-update", "available": true},
+    {"command": "intent-cli automation pr-transition", "transition": "approved", "available": true}
+  ]
 }
 ```
 
-If a transition is missing, the installed CLI is stale. Refresh the
-wrapper/tool before using host runbooks; do not fall back to raw `gh pr
-edit` label mutation for installed transitions.
+If `status` is `stale-host-cli`, or any command is unavailable, abort
+the runbook and refresh the wrapper/tool before using host runbooks; do
+not fall back to raw `gh issue edit` or `gh pr edit` label mutation for
+installed transitions.
 
 ### Host review target preflight
 
