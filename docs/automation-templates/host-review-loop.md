@@ -97,6 +97,18 @@ not push, do not flip labels.
 
 ## Step 4: produce a deterministic review verdict
 
+Before applying any host-owned PR label transition, run the installed
+binary preflight:
+
+```bash
+intent-cli automation doctor --format json
+```
+
+The preflight is read-only. It must report the required
+`intent-cli automation pr-transition` command surface, including both
+`review-start` and `approved`, before the host loop attempts a GitHub
+label mutation.
+
 Choose ONE of the following review verdicts. Each has an explicit
 label transition. For host-owned review-start and approved transitions,
 the normal installed path is `intent-cli automation pr-transition
