@@ -33,6 +33,7 @@ internal static class AutomationSummaryAnalyzer
             IssueWorkflowLabels = AutomationSummaryConstants.IssueWorkflowLabels,
             PrWorkflowLabels = AutomationSummaryConstants.PrWorkflowLabels,
             HostLoopResponsibilities = AutomationSummaryConstants.HostLoopResponsibilities,
+            HostPrTransitionCommands = AutomationSummaryConstants.HostPrTransitionCommands,
             ChildLoopResponsibilities = AutomationSummaryConstants.ChildLoopResponsibilities,
             PublishBoundaryGuidance = AutomationSummaryConstants.PublishBoundaryGuidance,
             WipCapGuidance = AutomationSummaryConstants.WipCapGuidance,
