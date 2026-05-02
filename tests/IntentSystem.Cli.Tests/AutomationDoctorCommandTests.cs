@@ -108,6 +108,39 @@ public sealed class AutomationDoctorCommandTests
     }
 
     [Fact]
+    public void ProgramMain_AutomationDoctorDoesNotRequireIntentCliDirectory()
+    {
+        using var workspace = new AutomationDoctorWorkspace(createIntentCliDirectory: false);
+        var originalDirectory = Directory.GetCurrentDirectory();
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        try
+        {
+            Directory.SetCurrentDirectory(workspace.RootPath);
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
+
+            var exitCode = Program.Main(["automation", "doctor", "--format", "json"]);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, stderr.ToString());
+            Assert.DoesNotContain("Command 'automation doctor' is not yet implemented.", stdout.ToString(), StringComparison.Ordinal);
+            var result = JsonSerializer.Deserialize<AutomationDoctorResult>(stdout.ToString())!;
+            Assert.Equal("ok", result.Status);
+            Assert.True(result.ReadOnly);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+            Directory.SetCurrentDirectory(originalDirectory);
+        }
+    }
+
+    [Fact]
     public void CommandRouter_HelpSurfacesAutomationDoctor()
     {
         using var workspace = new AutomationDoctorWorkspace();
@@ -142,9 +175,15 @@ public sealed class AutomationDoctorCommandTests
             .CreateTempSubdirectory("automation-doctor-tests-")
             .FullName;
 
-        public AutomationDoctorWorkspace()
+        public string RootPath => rootPath;
+
+        public AutomationDoctorWorkspace(bool createIntentCliDirectory = true)
         {
-            Directory.CreateDirectory(Path.Combine(rootPath, ".intent-cli"));
+            if (createIntentCliDirectory)
+            {
+                Directory.CreateDirectory(Path.Combine(rootPath, ".intent-cli"));
+            }
+
             Context = new CliContext
             {
                 RepoRoot = rootPath,
