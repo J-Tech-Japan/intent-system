@@ -179,6 +179,8 @@ intent-cli automation pr-transition \
 
 `review-start` adds `intent-target` and `intent-pr-reviewing` while
 clearing stale `intent-pr-rereview-ready` and legacy `rereview-ready`.
+Those rereview-ready labels are optional cleanup labels; if either is
+already absent, the installed command treats it as already cleared.
 `request-update` removes `intent-pr-reviewing` and adds
 `intent-pr-request-update`. `approved` removes `intent-pr-reviewing` and
 adds `intent-pr-approved`. These commands are the supported installed
