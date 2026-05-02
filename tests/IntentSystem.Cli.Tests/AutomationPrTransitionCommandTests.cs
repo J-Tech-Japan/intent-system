@@ -94,6 +94,106 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_ReviewStart_DryRunSucceedsWhenOptionalRereviewLabelsAreAbsent()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "review-start",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.False(result.Applied);
+        Assert.Contains("intent-pr-reviewing", result.AddLabels);
+        Assert.Contains("intent-pr-rereview-ready", result.RemoveLabels);
+        Assert.Contains("rereview-ready", result.RemoveLabels);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_ReviewStart_WriteSkipsAbsentOptionalRereviewLabels()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "review-start",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.True(result.Applied);
+        Assert.Contains("intent-pr-reviewing", result.AddLabels);
+        Assert.Empty(result.RemoveLabels);
+
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Contains("intent-pr-reviewing", transition.AddLabels);
+        Assert.Empty(transition.RemoveLabels);
+        Assert.DoesNotContain("intent-pr-created", transition.AddLabels);
+        Assert.DoesNotContain("intent-pr-created", transition.RemoveLabels);
+    }
+
+    [Fact]
+    public void Execute_ReviewStart_WriteRemovesOnlyPresentRereviewLabels()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-rereview-ready" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "review-start",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Contains("intent-pr-reviewing", transition.AddLabels);
+        Assert.Contains("intent-pr-rereview-ready", transition.RemoveLabels);
+        Assert.DoesNotContain("rereview-ready", transition.RemoveLabels);
+        Assert.DoesNotContain("intent-pr-created", transition.AddLabels);
+        Assert.DoesNotContain("intent-pr-created", transition.RemoveLabels);
+    }
+
+    [Fact]
     public void Execute_Approved_WriteAppliesExactApprovedLabels()
     {
         using var workspace = new AutomationPrTransitionWorkspace();
@@ -300,6 +400,15 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
                     || removeLabels.Contains("intent-pr-created", StringComparer.Ordinal)))
             {
                 throw new InvalidOperationException("'intent-pr-created' is issue-only.");
+            }
+
+            foreach (var removeLabel in removeLabels)
+            {
+                if (!Labels.Contains(removeLabel, StringComparer.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"cannot remove absent label '{removeLabel}' in fake mutator");
+                }
             }
 
             AppliedTransitions.Add(new AppliedTransition(

@@ -85,6 +85,8 @@ internal static class AutomationPrTransitionCommand
             return 1;
         }
 
+        var removeLabels = ResolveRemoveLabelsForMode(transition!, mode, plan.RemoveLabels, currentLabels);
+
         var applied = false;
         if (string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
         {
@@ -95,7 +97,7 @@ internal static class AutomationPrTransitionCommand
                     GhCliGitHubLabelMutator.Kinds.Pr,
                     pr!.Value,
                     plan.AddLabels,
-                    plan.RemoveLabels);
+                    removeLabels);
                 applied = true;
             }
             catch (Exception exception) when (
@@ -115,9 +117,9 @@ internal static class AutomationPrTransitionCommand
             Mode = mode,
             Applied = applied,
             AddLabels = plan.AddLabels,
-            RemoveLabels = plan.RemoveLabels,
+            RemoveLabels = removeLabels,
             CurrentLabels = currentLabels,
-            Summary = BuildSummary(transition!, plan.AddLabels, plan.RemoveLabels),
+            Summary = BuildSummary(transition!, plan.AddLabels, removeLabels),
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -166,6 +168,24 @@ internal static class AutomationPrTransitionCommand
                 ]),
             _ => throw new ArgumentOutOfRangeException(nameof(transition), transition, "Unsupported PR transition."),
         };
+
+    private static IReadOnlyList<string> ResolveRemoveLabelsForMode(
+        string transition,
+        string mode,
+        IReadOnlyList<string> plannedRemoveLabels,
+        IReadOnlyList<string> currentLabels)
+    {
+        if (!string.Equals(transition, TransitionReviewStart, StringComparison.Ordinal)
+            || !string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
+        {
+            return plannedRemoveLabels;
+        }
+
+        var currentLabelSet = new HashSet<string>(currentLabels, StringComparer.Ordinal);
+        return plannedRemoveLabels
+            .Where(label => currentLabelSet.Contains(label))
+            .ToArray();
+    }
 
     private static bool TryParseArguments(
         string[] args,
