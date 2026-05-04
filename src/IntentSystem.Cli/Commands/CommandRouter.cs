@@ -27,7 +27,8 @@ internal static class CommandRouter
         "metadata",
         "guide",
         "intent",
-        "packet"
+        "packet",
+        "closeout"
     ];
 
     private static readonly IReadOnlyList<string> AutomationCommandHelp =
@@ -213,6 +214,10 @@ internal static class CommandRouter
             ["packet"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["draft"] = PacketDraftCommand.Execute
+            },
+            ["closeout"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["pr"] = CloseoutPrCommand.Execute
             }
         };
 
