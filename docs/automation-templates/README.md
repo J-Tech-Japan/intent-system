@@ -39,6 +39,7 @@ These templates assume:
 | G239  | `intent-cli guide oneshot`              | Emit the current host or child one-shot prompt for manual single-wake operation |
 | G240  | `intent-cli guide automation`           | Emit the current recurring host-review or child implement/update automation setup prompt |
 | G241  | `intent-cli intent status`              | Read-only domain status: latest completed, WIP, queued packets, open clarifications |
+| G242  | `intent-cli intent search` / `intent explain` | Read-only intent discovery: substring search across packets/intents and execution-unit explainer |
 
 ## Installed host transition command adoption
 

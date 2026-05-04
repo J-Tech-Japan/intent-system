@@ -203,7 +203,9 @@ internal static class CommandRouter
             },
             ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
-                ["status"] = IntentStatusCommand.Execute
+                ["status"] = IntentStatusCommand.Execute,
+                ["search"] = IntentSearchCommand.Execute,
+                ["explain"] = IntentExplainCommand.Execute
             }
         };
 
