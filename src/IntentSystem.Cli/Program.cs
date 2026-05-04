@@ -73,7 +73,8 @@ internal static class Program
     {
         return args.Length >= 2
             && string.Equals(args[0], "guide", StringComparison.Ordinal)
-            && string.Equals(args[1], "oneshot", StringComparison.Ordinal);
+            && (string.Equals(args[1], "oneshot", StringComparison.Ordinal)
+                || string.Equals(args[1], "automation", StringComparison.Ordinal));
     }
 
     private static CliContext CreateBootstrapContext(string currentDirectory, string[] args)
