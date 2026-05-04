@@ -108,14 +108,14 @@ can resolve a stale .NET tool package cache that does not contain the
 current `automation` command group.
 
 After refreshing, verify the installed command surfaces before any label
-transition:
+transition by reading the capability JSON:
 
 ```bash
 "$HOST_ROOT/.intent-cli/bin/intent-cli" automation doctor --format json \
   | jq '{status, installedCliPath, surface: .automationCommandSurfaceVersion, unavailable: [.requiredCommands[] | select(.available == false)]}'
 
 "$HOST_ROOT/.intent-cli/bin/intent-cli" automation summary --format json \
-  | jq '{surface: .automationCommandSurfaceVersion, capabilities: [.automationCommandCapabilities[] | .name]}'
+  | jq '{surface: .automationCommandSurfaceVersion, capabilities: [.automationCommandCapabilities[] | .capability]}'
 
 "$HOST_ROOT/.intent-cli/bin/intent-cli" automation host-review-preflight \
   --repo "$CHILD_REPO" \
@@ -123,11 +123,21 @@ transition:
   | jq '{action, installedCliPath, warnings}'
 ```
 
-Both commands must succeed without unavailable command surfaces. If they
-still report `stale-host-cli`, if `automationCommandSurfaceVersion` is
-missing, or if `automation pr-transition --help` is not recognized, stop
-and repair the local install; do not fall back to raw GitHub label
-mutation.
+Required capability set (consume from `automationCommandCapabilities[]`):
+
+- `issue-publish`
+- `pr-transition.review-start`
+- `pr-transition.request-update`
+- `pr-transition.approved`
+
+Host runbooks MUST mechanically check that every required capability name
+is present in the JSON before any installed transition. If `doctor`
+reports `stale-host-cli`, if `automationCommandSurfaceVersion` is
+missing, or if any required capability is absent from
+`automationCommandCapabilities[]`, abort the runbook and refresh the
+installed CLI; do not fall back to raw GitHub label mutation, and do not
+infer command availability by reading `--help` text or other prose
+output.
 
 Supported installed transitions:
 

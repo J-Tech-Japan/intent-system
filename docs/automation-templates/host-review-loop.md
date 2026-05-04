@@ -127,15 +127,23 @@ intent-cli automation host-review-preflight \
   --format json
 ```
 
-The preflight is read-only. It must report the required
-`intent-cli automation pr-transition` command surface, including
-`review-start`, `request-update`, and `approved`, before the host loop
-attempts a GitHub label mutation. If either preflight reports a stale or
-missing command surface, stop and refresh the installed CLI using the
-host-local procedure in
+The preflight is read-only. Before the host loop attempts a GitHub
+label mutation it MUST mechanically check the capability JSON emitted by
+`automation doctor --format json` (or `automation summary --format json`)
+and confirm that `automationCommandCapabilities[]` contains every
+required capability name for this loop:
+
+- `pr-transition.review-start`
+- `pr-transition.request-update`
+- `pr-transition.approved`
+
+If `automationCommandSurfaceVersion` is missing, if either preflight
+reports `stale-host-cli`, or if any required capability above is absent
+from the JSON, stop and refresh the installed CLI using the host-local
+procedure in
 [`README.md`](./README.md#refreshing-the-host-local-installed-cli);
 do not fall back to raw `gh pr edit` label mutation for installed
-transitions.
+transitions, and do not infer command availability from `--help` text.
 
 Choose ONE of the following review verdicts. Each has an explicit
 label transition. For host-owned review-start, request-update, and

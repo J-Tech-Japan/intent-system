@@ -143,7 +143,11 @@ public sealed class PackagedInvocationSmokeTests
         Assert.Contains("find \"$PACKAGES_DIR\" -maxdepth 1 -type f -name 'intent-cli.*.nupkg' -delete", script, StringComparison.Ordinal);
         Assert.Contains("automation summary --format json", script, StringComparison.Ordinal);
         Assert.Contains("\"automationCommandSurfaceVersion\"", script, StringComparison.Ordinal);
-        Assert.Contains("automation pr-transition --help", script, StringComparison.Ordinal);
+        Assert.Contains("\"issue-publish\"", script, StringComparison.Ordinal);
+        Assert.Contains("\"pr-transition.review-start\"", script, StringComparison.Ordinal);
+        Assert.Contains("\"pr-transition.request-update\"", script, StringComparison.Ordinal);
+        Assert.Contains("\"pr-transition.approved\"", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("automation pr-transition --help", script, StringComparison.Ordinal);
         Assert.DoesNotContain("--version 0.1.0", script, StringComparison.Ordinal);
     }
 
