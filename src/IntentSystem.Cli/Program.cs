@@ -21,7 +21,7 @@ internal static class Program
             }
 
             var currentDirectory = Directory.GetCurrentDirectory();
-            if (IsIntakeInitCommand(args) || IsAutomationWorktreeCommand(args))
+            if (IsIntakeInitCommand(args) || IsAutomationWorktreeCommand(args) || IsGuideOneshotCommand(args))
             {
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
             }
@@ -67,6 +67,13 @@ internal static class Program
                 || string.Equals(args[1], "issue-publish", StringComparison.Ordinal)
                 || string.Equals(args[1], "pr-transition", StringComparison.Ordinal)
                 || string.Equals(args[1], "summary", StringComparison.Ordinal));
+    }
+
+    private static bool IsGuideOneshotCommand(string[] args)
+    {
+        return args.Length >= 2
+            && string.Equals(args[0], "guide", StringComparison.Ordinal)
+            && string.Equals(args[1], "oneshot", StringComparison.Ordinal);
     }
 
     private static CliContext CreateBootstrapContext(string currentDirectory, string[] args)

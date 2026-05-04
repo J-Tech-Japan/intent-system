@@ -36,6 +36,7 @@ These templates assume:
 | G229  | `intent-cli automation pr-transition --transition request-update` | Host request-update PR transition |
 | G230  | `intent-cli automation pr-transition --transition review-start` | Robust absent-rereview-label cleanup |
 | G232  | host transition smoke examples | Read-only local verification before command-only host runbooks |
+| G239  | `intent-cli guide oneshot`              | Emit the current host or child one-shot prompt for manual single-wake operation |
 
 ## Installed host transition command adoption
 
