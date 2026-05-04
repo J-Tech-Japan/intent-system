@@ -197,7 +197,8 @@ internal static class CommandRouter
             },
             ["guide"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
-                ["oneshot"] = GuideOneshotCommand.Execute
+                ["oneshot"] = GuideOneshotCommand.Execute,
+                ["automation"] = GuideAutomationCommand.Execute
             }
         };
 
