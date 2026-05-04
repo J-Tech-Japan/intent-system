@@ -205,7 +205,8 @@ internal static class CommandRouter
             {
                 ["status"] = IntentStatusCommand.Execute,
                 ["search"] = IntentSearchCommand.Execute,
-                ["explain"] = IntentExplainCommand.Execute
+                ["explain"] = IntentExplainCommand.Execute,
+                ["next-slice"] = IntentNextSliceCommand.Execute
             }
         };
 
