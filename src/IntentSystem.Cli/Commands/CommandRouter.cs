@@ -73,7 +73,8 @@ internal static class CommandRouter
             {
                 ["run"] = ReviewRunCommand.Execute,
                 ["comment"] = ReviewCommentCommand.Execute,
-                ["accept"] = ReviewAcceptCommand.Execute
+                ["accept"] = ReviewAcceptCommand.Execute,
+                ["closeout-plan"] = ReviewCloseoutPlanCommand.Execute
             },
             ["interview"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
