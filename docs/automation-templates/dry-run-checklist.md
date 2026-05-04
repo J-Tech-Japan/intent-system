@@ -203,34 +203,22 @@ cd "$HOST_ROOT"
 export CHILD_INTENT_SYSTEM="$HOST_ROOT/submodules/intent-system"
 
 git -C "$CHILD_INTENT_SYSTEM" rev-parse --show-toplevel
-dotnet pack "$CHILD_INTENT_SYSTEM/src/IntentSystem.Cli/IntentSystem.Cli.csproj" \
-  -o "$HOST_ROOT/.intent-cli/packages"
-
-mkdir -p "$HOST_ROOT/.intent-cli/bin"
-cat > "$HOST_ROOT/.intent-cli/bin/intent-cli.tmp" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-HOST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-exec dotnet tool exec \
-  --yes \
-  --source "$HOST_ROOT/.intent-cli/packages" \
-  --version 0.1.0 \
-  intent-cli \
-  "$@"
-EOF
-chmod +x "$HOST_ROOT/.intent-cli/bin/intent-cli.tmp"
-mv "$HOST_ROOT/.intent-cli/bin/intent-cli.tmp" "$HOST_ROOT/.intent-cli/bin/intent-cli"
+"$CHILD_INTENT_SYSTEM/ops/refresh-host-local-intent-cli.sh" "$HOST_ROOT"
 ```
 
 This refresh is worktree-safe when run from the parent host root: it
 packs the host's `submodules/intent-system` source and replaces only the
 host-local wrapper. It must not write into child implementation
 worktrees. Keep generated packages and wrapper artifacts out of child
-repo commits.
+repo commits. The script uses a unique local package version derived
+from the current child checkout and pins the wrapper to that version, so
+`dotnet tool exec` does not resolve a stale fixed `0.1.0` tool package.
 
 Re-run the availability check immediately after refresh. If it still
-reports `stale-host-cli`, stop and repair the local install; do not
-continue to transition labels by hand.
+reports `stale-host-cli`, if `automationCommandSurfaceVersion` is
+missing from `automation summary --format json`, or if
+`automation pr-transition --help` is not recognized, stop and repair the
+local install; do not continue to transition labels by hand.
 
 ### Host review target preflight
 

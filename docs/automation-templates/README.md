@@ -89,23 +89,7 @@ cd "$HOST_ROOT"
 export CHILD_INTENT_SYSTEM="$HOST_ROOT/submodules/intent-system"
 
 git -C "$CHILD_INTENT_SYSTEM" rev-parse --show-toplevel
-dotnet pack "$CHILD_INTENT_SYSTEM/src/IntentSystem.Cli/IntentSystem.Cli.csproj" \
-  -o "$HOST_ROOT/.intent-cli/packages"
-
-mkdir -p "$HOST_ROOT/.intent-cli/bin"
-cat > "$HOST_ROOT/.intent-cli/bin/intent-cli.tmp" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-HOST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-exec dotnet tool exec \
-  --yes \
-  --source "$HOST_ROOT/.intent-cli/packages" \
-  --version 0.1.0 \
-  intent-cli \
-  "$@"
-EOF
-chmod +x "$HOST_ROOT/.intent-cli/bin/intent-cli.tmp"
-mv "$HOST_ROOT/.intent-cli/bin/intent-cli.tmp" "$HOST_ROOT/.intent-cli/bin/intent-cli"
+"$CHILD_INTENT_SYSTEM/ops/refresh-host-local-intent-cli.sh" "$HOST_ROOT"
 ```
 
 Run the refresh from the parent host root, not from an arbitrary child
@@ -115,12 +99,23 @@ worktree. The package source is the host's checked-out
 implementation worktrees, and do not commit generated packages or other
 local install artifacts from `.intent-cli/packages`.
 
+The refresh script packs the current child checkout with a unique local
+version such as `0.1.0-local.<utc-stamp>.<pid>.g<child-sha>`, removes
+older host-local `intent-cli.*.nupkg` files from `.intent-cli/packages`,
+and writes a wrapper pinned to that exact local version. Do not use a
+fixed `--version 0.1.0` wrapper for host-local automation refreshes; it
+can resolve a stale .NET tool package cache that does not contain the
+current `automation` command group.
+
 After refreshing, verify the installed command surfaces before any label
 transition:
 
 ```bash
 "$HOST_ROOT/.intent-cli/bin/intent-cli" automation doctor --format json \
-  | jq '{status, installedCliPath, unavailable: [.requiredCommands[] | select(.available == false)]}'
+  | jq '{status, installedCliPath, surface: .automationCommandSurfaceVersion, unavailable: [.requiredCommands[] | select(.available == false)]}'
+
+"$HOST_ROOT/.intent-cli/bin/intent-cli" automation summary --format json \
+  | jq '{surface: .automationCommandSurfaceVersion, capabilities: [.automationCommandCapabilities[] | .name]}'
 
 "$HOST_ROOT/.intent-cli/bin/intent-cli" automation host-review-preflight \
   --repo "$CHILD_REPO" \
@@ -129,8 +124,10 @@ transition:
 ```
 
 Both commands must succeed without unavailable command surfaces. If they
-still report `stale-host-cli`, stop and repair the local install; do not
-fall back to raw GitHub label mutation.
+still report `stale-host-cli`, if `automationCommandSurfaceVersion` is
+missing, or if `automation pr-transition --help` is not recognized, stop
+and repair the local install; do not fall back to raw GitHub label
+mutation.
 
 Supported installed transitions:
 

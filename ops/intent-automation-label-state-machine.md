@@ -106,13 +106,14 @@ for the real issue or PR being transitioned.
 If the smoke path reports `stale-host-cli`, refresh the host-local
 `.intent-cli/bin/intent-cli` wrapper from the parent host root using the
 current `submodules/intent-system` checkout. The supported refresh is:
-pack `src/IntentSystem.Cli/IntentSystem.Cli.csproj` into
-`$HOST_ROOT/.intent-cli/packages`, replace only
-`$HOST_ROOT/.intent-cli/bin/intent-cli` with a wrapper that executes
-`dotnet tool exec --yes --source "$HOST_ROOT/.intent-cli/packages"
---version 0.1.0 intent-cli "$@"`, then rerun `automation doctor` and
-`automation host-review-preflight`. Do not continue with raw `gh`
-label mutation while the installed command surface is stale.
+run
+`$HOST_ROOT/submodules/intent-system/ops/refresh-host-local-intent-cli.sh "$HOST_ROOT"`.
+The script packs the current child checkout with a unique local version,
+replaces only `$HOST_ROOT/.intent-cli/bin/intent-cli`, verifies
+`automationCommandSurfaceVersion`, and verifies `automation
+pr-transition --help`. Then rerun `automation doctor` and `automation
+host-review-preflight`. Do not continue with raw `gh` label mutation
+while the installed command surface is stale.
 
 ## 1. Issue Runner
 
