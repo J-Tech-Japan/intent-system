@@ -42,6 +42,7 @@ These templates assume:
 | G242  | `intent-cli intent search` / `intent explain` | Read-only intent discovery: substring search across packets/intents and execution-unit explainer |
 | G243  | `intent-cli intent next-slice --dry-run` | Read-only next-slice planning facts: WIP, clarification blockers, candidate packets, missing contract fields, recommended outcome |
 | G244  | `intent-cli packet draft`               | Scaffold packet.yaml / implementation.md / review-context.md / github-body.md skeletons with required Child Issue Contract sections; never overwrites existing files |
+| G245  | `intent-cli issue publish-flow`         | Validate packet, create the GitHub issue without intent-target, and report the durable-state + intent-target publish boundary as next steps |
 
 ## Installed host transition command adoption
 

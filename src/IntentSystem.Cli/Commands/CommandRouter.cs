@@ -106,7 +106,8 @@ internal static class CommandRouter
                 ["validate-body"] = IssueValidateBodyCommand.Execute,
                 ["prepare"] = IssuePrepareCommand.Execute,
                 ["publish-reviewed"] = IssuePublishReviewedCommand.Execute,
-                ["plan-candidate"] = IssuePlanCandidateCommand.Execute
+                ["plan-candidate"] = IssuePlanCandidateCommand.Execute,
+                ["publish-flow"] = IssuePublishFlowCommand.Execute
             },
             ["bug"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
