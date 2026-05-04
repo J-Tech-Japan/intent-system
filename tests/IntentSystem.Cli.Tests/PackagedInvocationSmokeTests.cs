@@ -44,8 +44,9 @@ public sealed class PackagedInvocationSmokeTests
 
             var packOutputPath = tempDirectory.GetPath("pack.stdout.txt");
             var packErrorPath = tempDirectory.GetPath("pack.stderr.txt");
+            var packageVersion = CreateLocalPackageVersion();
             var packResult = RunShellCommand(
-                $"dotnet pack {QuoteForShell(Path.Combine(GetSolutionRoot(), "src", "IntentSystem.Cli", "IntentSystem.Cli.csproj"))} -o {QuoteForShell(packageOutputDirectory)} > {QuoteForShell(packOutputPath)} 2> {QuoteForShell(packErrorPath)}",
+                $"dotnet pack {QuoteForShell(Path.Combine(GetSolutionRoot(), "src", "IntentSystem.Cli", "IntentSystem.Cli.csproj"))} -p:Version={QuoteForShell(packageVersion)} -o {QuoteForShell(packageOutputDirectory)} > {QuoteForShell(packOutputPath)} 2> {QuoteForShell(packErrorPath)}",
                 GetSolutionRoot());
 
             var packLog = File.ReadAllText(packOutputPath) + File.ReadAllText(packErrorPath);
@@ -56,7 +57,7 @@ public sealed class PackagedInvocationSmokeTests
             var invokeOutputPath = tempDirectory.GetPath("invoke.stdout.txt");
             var invokeErrorPath = tempDirectory.GetPath("invoke.stderr.txt");
             var invokeResult = RunShellCommand(
-                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version 0.1.0 intent-cli project status > {QuoteForShell(invokeOutputPath)} 2> {QuoteForShell(invokeErrorPath)}",
+                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli project status > {QuoteForShell(invokeOutputPath)} 2> {QuoteForShell(invokeErrorPath)}",
                 fixtureRoot);
 
             var invokeOutput = File.ReadAllText(invokeOutputPath);
@@ -70,14 +71,80 @@ public sealed class PackagedInvocationSmokeTests
     }
 
     [Fact]
+    public void DotnetToolExec_RunsPackagedAutomationSurfaceWithUniqueLocalVersion()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var packageOutputDirectory = tempDirectory.CreateDirectory("packages");
+            var fixtureRoot = tempDirectory.CreateDirectory(Path.Combine("smoke-repo"));
+            tempDirectory.CreateDirectory(Path.Combine("smoke-repo", ".intent-cli"));
+            tempDirectory.CreateFile(
+                Path.Combine("smoke-repo", ".intent-cli", "config.toml"),
+                """
+                default_domain = "intent-cli"
+                artifact_root = ".intent-cli"
+                worktree_root = ".intent-cli/worktrees"
+                """);
+
+            var packageVersion = CreateLocalPackageVersion();
+            var packResult = RunShellCommand(
+                $"dotnet pack {QuoteForShell(Path.Combine(GetSolutionRoot(), "src", "IntentSystem.Cli", "IntentSystem.Cli.csproj"))} -p:Version={QuoteForShell(packageVersion)} -o {QuoteForShell(packageOutputDirectory)} > {QuoteForShell(tempDirectory.GetPath("pack.stdout.txt"))} 2> {QuoteForShell(tempDirectory.GetPath("pack.stderr.txt"))}",
+                GetSolutionRoot());
+
+            Assert.Equal(0, packResult.ExitCode);
+
+            var summaryOutputPath = tempDirectory.GetPath("summary.stdout.txt");
+            var summaryErrorPath = tempDirectory.GetPath("summary.stderr.txt");
+            var summaryResult = RunShellCommand(
+                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli automation summary --format json > {QuoteForShell(summaryOutputPath)} 2> {QuoteForShell(summaryErrorPath)}",
+                fixtureRoot);
+
+            var summaryOutput = File.ReadAllText(summaryOutputPath);
+            var summaryError = File.ReadAllText(summaryErrorPath);
+
+            Assert.Equal(0, summaryResult.ExitCode);
+            Assert.Contains("\"automationCommandSurfaceVersion\"", summaryOutput, StringComparison.Ordinal);
+            Assert.Contains("\"automationCommandCapabilities\"", summaryOutput, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, summaryError.Trim(), ignoreCase: false);
+
+            var prTransitionHelpErrorPath = tempDirectory.GetPath("pr-transition.stderr.txt");
+            var prTransitionHelpResult = RunShellCommand(
+                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli automation pr-transition --help > {QuoteForShell(tempDirectory.GetPath("pr-transition.stdout.txt"))} 2> {QuoteForShell(prTransitionHelpErrorPath)}",
+                fixtureRoot);
+
+            var prTransitionHelpError = File.ReadAllText(prTransitionHelpErrorPath);
+
+            Assert.Equal(0, prTransitionHelpResult.ExitCode);
+            Assert.Equal(string.Empty, prTransitionHelpError.Trim(), ignoreCase: false);
+        }
+    }
+
+    [Fact]
     public void Readme_DocumentsHermeticPackagedInvocationPaths()
     {
         var readme = File.ReadAllText(Path.Combine(GetSolutionRoot(), "README.md"));
 
         Assert.Contains("mkdir -p .artifacts/smoke-repo/.intent-cli", readme, StringComparison.Ordinal);
         Assert.Contains("cat > .artifacts/smoke-repo/.intent-cli/config.toml <<'EOF'", readme, StringComparison.Ordinal);
-        Assert.Contains("(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version 0.1.0 intent-cli project status)", readme, StringComparison.Ordinal);
-        Assert.Contains("(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version 0.1.0 intent-cli project status)", readme, StringComparison.Ordinal);
+        Assert.Contains("export INTENT_CLI_LOCAL_VERSION=\"0.1.0-local.$(date -u +%Y%m%d%H%M%S)\"", readme, StringComparison.Ordinal);
+        Assert.Contains("(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" intent-cli project status)", readme, StringComparison.Ordinal);
+        Assert.Contains("(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" intent-cli project status)", readme, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostRefreshScript_UsesUniqueLocalVersionAndVerifiesAutomationSurface()
+    {
+        var script = File.ReadAllText(Path.Combine(GetSolutionRoot(), "ops", "refresh-host-local-intent-cli.sh"));
+
+        Assert.Contains("0.1.0-local.$LOCAL_STAMP.$$.g$CHILD_SHA", script, StringComparison.Ordinal);
+        Assert.Contains("-p:Version=\"$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
+        Assert.Contains("--version \"\\$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
+        Assert.Contains("find \"$PACKAGES_DIR\" -maxdepth 1 -type f -name 'intent-cli.*.nupkg' -delete", script, StringComparison.Ordinal);
+        Assert.Contains("automation summary --format json", script, StringComparison.Ordinal);
+        Assert.Contains("\"automationCommandSurfaceVersion\"", script, StringComparison.Ordinal);
+        Assert.Contains("automation pr-transition --help", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("--version 0.1.0", script, StringComparison.Ordinal);
     }
 
     private static ProcessResult RunShellCommand(string script, string workingDirectory)
@@ -118,6 +185,11 @@ public sealed class PackagedInvocationSmokeTests
     private static string QuoteForShell(string value)
     {
         return $"'{value.Replace("'", "'\"'\"'")}'";
+    }
+
+    private static string CreateLocalPackageVersion()
+    {
+        return $"0.1.0-local.{Guid.NewGuid():N}";
     }
 
     private sealed record ProcessResult(int ExitCode);
