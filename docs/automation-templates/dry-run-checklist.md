@@ -192,6 +192,14 @@ the runbook and refresh the wrapper/tool before using host runbooks; do
 not fall back to raw `gh issue edit` or `gh pr edit` label mutation for
 installed transitions.
 
+The runbook MUST also abort when `automationCommandCapabilities[]` is
+missing any of the required capability names — `issue-publish`,
+`pr-transition.review-start`, `pr-transition.request-update`,
+`pr-transition.approved` — even if `status` is `ok`. Capability presence
+is checked mechanically by name against the JSON; do not infer
+availability from `--help` output, prose summaries, or runbook
+paragraphs.
+
 ### Refresh stale host-local CLI
 
 If the availability check fails because the host-local
@@ -216,9 +224,12 @@ from the current child checkout and pins the wrapper to that version, so
 
 Re-run the availability check immediately after refresh. If it still
 reports `stale-host-cli`, if `automationCommandSurfaceVersion` is
-missing from `automation summary --format json`, or if
-`automation pr-transition --help` is not recognized, stop and repair the
-local install; do not continue to transition labels by hand.
+missing from `automation summary --format json`, or if any required
+capability name (`issue-publish`, `pr-transition.review-start`,
+`pr-transition.request-update`, `pr-transition.approved`) is absent from
+`automationCommandCapabilities[]`, stop and repair the local install; do
+not continue to transition labels by hand, and do not infer command
+availability from `--help` text.
 
 ### Host review target preflight
 

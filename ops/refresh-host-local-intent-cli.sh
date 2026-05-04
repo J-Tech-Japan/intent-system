@@ -70,7 +70,18 @@ if [[ "$SUMMARY_OUTPUT" != *'"automationCommandSurfaceVersion"'* ]]; then
   exit 1
 fi
 
-"$WRAPPER_PATH" automation pr-transition --help >/dev/null
+REQUIRED_CAPABILITIES=(
+  "issue-publish"
+  "pr-transition.review-start"
+  "pr-transition.request-update"
+  "pr-transition.approved"
+)
+for capability in "${REQUIRED_CAPABILITIES[@]}"; do
+  if [[ "$SUMMARY_OUTPUT" != *"\"$capability\""* ]]; then
+    echo "refreshed wrapper missing required automation capability: $capability" >&2
+    exit 1
+  fi
+done
 
 echo "Refreshed $WRAPPER_PATH"
 echo "Package version: $INTENT_CLI_LOCAL_VERSION"

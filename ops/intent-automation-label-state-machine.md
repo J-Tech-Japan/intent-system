@@ -92,8 +92,15 @@ transition mutation. These checks must name the host-local installed CLI
 path and fail with stale/missing surface detail before mutation when
 `automation summary`, `automation host-review-preflight`,
 `automation issue-publish`, or any `automation pr-transition`
-transition is unavailable. `intent-pr-created` remains issue-only and
-must not be applied to PRs by installed commands or fallback paths.
+transition is unavailable. Host runbooks consume the capability JSON
+emitted by `automation summary --format json` (or the same fields under
+`automation doctor --format json`) and abort before mutation when
+`automationCommandCapabilities[]` is missing any of `issue-publish`,
+`pr-transition.review-start`, `pr-transition.request-update`, or
+`pr-transition.approved`. Do not infer command availability by parsing
+`--help` text or other prose output. `intent-pr-created` remains
+issue-only and must not be applied to PRs by installed commands or
+fallback paths.
 
 For local smoke testing, run the dry-run examples in
 `docs/automation-templates/dry-run-checklist.md` before enabling
@@ -109,11 +116,14 @@ current `submodules/intent-system` checkout. The supported refresh is:
 run
 `$HOST_ROOT/submodules/intent-system/ops/refresh-host-local-intent-cli.sh "$HOST_ROOT"`.
 The script packs the current child checkout with a unique local version,
-replaces only `$HOST_ROOT/.intent-cli/bin/intent-cli`, verifies
-`automationCommandSurfaceVersion`, and verifies `automation
-pr-transition --help`. Then rerun `automation doctor` and `automation
-host-review-preflight`. Do not continue with raw `gh` label mutation
-while the installed command surface is stale.
+replaces only `$HOST_ROOT/.intent-cli/bin/intent-cli`, and verifies the
+expected `automationCommandSurfaceVersion` together with the required
+`automationCommandCapabilities[]` entries (`issue-publish`,
+`pr-transition.review-start`, `pr-transition.request-update`,
+`pr-transition.approved`). Then rerun `automation doctor` and
+`automation host-review-preflight`. Do not continue with raw `gh` label
+mutation while the installed command surface is stale, and do not
+substitute `--help` or other prose checks for the capability JSON.
 
 ## 1. Issue Runner
 

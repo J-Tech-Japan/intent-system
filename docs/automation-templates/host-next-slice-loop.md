@@ -143,13 +143,21 @@ intent-cli automation issue-publish \
   --format json
 ```
 
+Before invoking `--write`, mechanically check the capability JSON from
+`automation doctor --format json` (or `automation summary --format
+json`) and confirm `automationCommandCapabilities[]` contains
+`issue-publish`. If that capability is absent, if
+`automationCommandSurfaceVersion` is missing, or if `doctor` reports
+`stale-host-cli`, abort the publish step and refresh the installed CLI
+using
+[`README.md`](./README.md#refreshing-the-host-local-installed-cli)
+before mutating labels; do not fall back to raw `gh issue edit` label
+mutation, and do not infer command availability from `--help` output.
+
 Dry-run the same command without `--write` to capture the planned
 `intent-target` label action and JSON publish metadata before mutation.
 Raw `gh issue edit` label mutation is not the normal path for this
-installed transition. If the command is missing or stale, refresh the
-installed CLI using
-[`README.md`](./README.md#refreshing-the-host-local-installed-cli)
-before mutating labels.
+installed transition.
 
 ## What this template forbids
 
