@@ -41,6 +41,7 @@ These templates assume:
 | G241  | `intent-cli intent status`              | Read-only domain status: latest completed, WIP, queued packets, open clarifications |
 | G242  | `intent-cli intent search` / `intent explain` | Read-only intent discovery: substring search across packets/intents and execution-unit explainer |
 | G243  | `intent-cli intent next-slice --dry-run` | Read-only next-slice planning facts: WIP, clarification blockers, candidate packets, missing contract fields, recommended outcome |
+| G244  | `intent-cli packet draft`               | Scaffold packet.yaml / implementation.md / review-context.md / github-body.md skeletons with required Child Issue Contract sections; never overwrites existing files |
 
 ## Installed host transition command adoption
 
