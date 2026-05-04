@@ -80,7 +80,9 @@ internal static class CommandRouter
             {
                 ["start"] = InterviewStartCommand.Execute,
                 ["answer"] = InterviewAnswerCommand.Execute,
-                ["resume"] = InterviewResumeCommand.Execute
+                ["resume"] = InterviewResumeCommand.Execute,
+                ["next-question"] = InterviewNextQuestionCommand.Execute,
+                ["record-answer"] = InterviewRecordAnswerCommand.Execute
             },
             ["clarify"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
