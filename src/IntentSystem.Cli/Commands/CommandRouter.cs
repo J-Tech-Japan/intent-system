@@ -26,7 +26,8 @@ internal static class CommandRouter
         "worker",
         "metadata",
         "guide",
-        "intent"
+        "intent",
+        "packet"
     ];
 
     private static readonly IReadOnlyList<string> AutomationCommandHelp =
@@ -207,6 +208,10 @@ internal static class CommandRouter
                 ["search"] = IntentSearchCommand.Execute,
                 ["explain"] = IntentExplainCommand.Execute,
                 ["next-slice"] = IntentNextSliceCommand.Execute
+            },
+            ["packet"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["draft"] = PacketDraftCommand.Execute
             }
         };
 
