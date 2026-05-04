@@ -40,6 +40,7 @@ These templates assume:
 | G240  | `intent-cli guide automation`           | Emit the current recurring host-review or child implement/update automation setup prompt |
 | G241  | `intent-cli intent status`              | Read-only domain status: latest completed, WIP, queued packets, open clarifications |
 | G242  | `intent-cli intent search` / `intent explain` | Read-only intent discovery: substring search across packets/intents and execution-unit explainer |
+| G243  | `intent-cli intent next-slice --dry-run` | Read-only next-slice planning facts: WIP, clarification blockers, candidate packets, missing contract fields, recommended outcome |
 
 ## Installed host transition command adoption
 
