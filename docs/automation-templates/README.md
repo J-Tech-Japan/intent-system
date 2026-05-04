@@ -46,6 +46,7 @@ These templates assume:
 | G246  | `intent-cli closeout pr`                | Resolve linked execution unit by `linked_pr`, transition the queue item to completed, append `pr-merged`/`closeout-recorded` runs events, and emit a continuation hint plus the manual submodule sync next-step |
 | G247  | `intent-cli review closeout-plan`       | Read-only review-pass closeout plan: execution unit, linked issue, packet refs, contract validation, expected submodule path, validation/closeout steps, and blocking gaps |
 | G248  | `intent-cli guide review`               | Read-only PR review guidance: execution unit + packet refs, review-context excerpt, deterministic checklist, boundaries, and validation suggestions |
+| G249  | `intent-cli guide collaborate`          | Read-only operator-facing collaboration guide for early product-owner feature intake (responsibility boundaries + suggested command sequence + interview/draft rules) |
 
 ## Installed host transition command adoption
 
