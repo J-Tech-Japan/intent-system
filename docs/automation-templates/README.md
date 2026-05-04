@@ -48,6 +48,7 @@ These templates assume:
 | G248  | `intent-cli guide review`               | Read-only PR review guidance: execution unit + packet refs, review-context excerpt, deterministic checklist, boundaries, and validation suggestions |
 | G249  | `intent-cli guide collaborate`          | Read-only operator-facing collaboration guide for early product-owner feature intake (responsibility boundaries + suggested command sequence + interview/draft rules) |
 | G250  | `intent-cli interview next-question` / `interview record-answer` | Durable per-domain interview session store: returns first pending question and records (or appends new) answers under `intents/<domain>/interviews/<session>.json` |
+| G251  | `intent-cli interview compile` / `intent draft-from-interview` | Compile accepted interview answers into a draft intent under `intents/<domain>/drafts/<session>.md`; both commands are read-only by default (`--write` for the draft writer). |
 
 ## Installed host transition command adoption
 

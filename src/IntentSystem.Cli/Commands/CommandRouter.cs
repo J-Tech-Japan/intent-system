@@ -82,7 +82,8 @@ internal static class CommandRouter
                 ["answer"] = InterviewAnswerCommand.Execute,
                 ["resume"] = InterviewResumeCommand.Execute,
                 ["next-question"] = InterviewNextQuestionCommand.Execute,
-                ["record-answer"] = InterviewRecordAnswerCommand.Execute
+                ["record-answer"] = InterviewRecordAnswerCommand.Execute,
+                ["compile"] = InterviewCompileCommand.Execute
             },
             ["clarify"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -214,7 +215,8 @@ internal static class CommandRouter
                 ["status"] = IntentStatusCommand.Execute,
                 ["search"] = IntentSearchCommand.Execute,
                 ["explain"] = IntentExplainCommand.Execute,
-                ["next-slice"] = IntentNextSliceCommand.Execute
+                ["next-slice"] = IntentNextSliceCommand.Execute,
+                ["draft-from-interview"] = IntentDraftFromInterviewCommand.Execute
             },
             ["packet"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
