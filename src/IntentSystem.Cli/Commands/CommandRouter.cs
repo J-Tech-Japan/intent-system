@@ -24,7 +24,8 @@ internal static class CommandRouter
         "safety",
         "tasking",
         "worker",
-        "metadata"
+        "metadata",
+        "guide"
     ];
 
     private static readonly IReadOnlyList<string> AutomationCommandHelp =
@@ -193,6 +194,10 @@ internal static class CommandRouter
                 ["autostart"] = IntakeAutostartCommand.Execute,
                 ["launch"] = IntakeLaunchCommand.Execute,
                 ["start"] = IntakeStartCommand.Execute
+            },
+            ["guide"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["oneshot"] = GuideOneshotCommand.Execute
             }
         };
 
