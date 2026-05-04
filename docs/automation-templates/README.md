@@ -43,6 +43,7 @@ These templates assume:
 | G243  | `intent-cli intent next-slice --dry-run` | Read-only next-slice planning facts: WIP, clarification blockers, candidate packets, missing contract fields, recommended outcome |
 | G244  | `intent-cli packet draft`               | Scaffold packet.yaml / implementation.md / review-context.md / github-body.md skeletons with required Child Issue Contract sections; never overwrites existing files |
 | G245  | `intent-cli issue publish-flow`         | Validate packet, create the GitHub issue without intent-target, and report the durable-state + intent-target publish boundary as next steps |
+| G246  | `intent-cli closeout pr`                | Resolve linked execution unit by `linked_pr`, transition the queue item to completed, append `pr-merged`/`closeout-recorded` runs events, and emit a continuation hint plus the manual submodule sync next-step |
 
 ## Installed host transition command adoption
 
