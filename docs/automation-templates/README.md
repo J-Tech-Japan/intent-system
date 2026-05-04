@@ -44,6 +44,7 @@ These templates assume:
 | G244  | `intent-cli packet draft`               | Scaffold packet.yaml / implementation.md / review-context.md / github-body.md skeletons with required Child Issue Contract sections; never overwrites existing files |
 | G245  | `intent-cli issue publish-flow`         | Validate packet, create the GitHub issue without intent-target, and report the durable-state + intent-target publish boundary as next steps |
 | G246  | `intent-cli closeout pr`                | Resolve linked execution unit by `linked_pr`, transition the queue item to completed, append `pr-merged`/`closeout-recorded` runs events, and emit a continuation hint plus the manual submodule sync next-step |
+| G247  | `intent-cli review closeout-plan`       | Read-only review-pass closeout plan: execution unit, linked issue, packet refs, contract validation, expected submodule path, validation/closeout steps, and blocking gaps |
 
 ## Installed host transition command adoption
 
