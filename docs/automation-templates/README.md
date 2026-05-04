@@ -38,6 +38,7 @@ These templates assume:
 | G232  | host transition smoke examples | Read-only local verification before command-only host runbooks |
 | G239  | `intent-cli guide oneshot`              | Emit the current host or child one-shot prompt for manual single-wake operation |
 | G240  | `intent-cli guide automation`           | Emit the current recurring host-review or child implement/update automation setup prompt |
+| G241  | `intent-cli intent status`              | Read-only domain status: latest completed, WIP, queued packets, open clarifications |
 
 ## Installed host transition command adoption
 

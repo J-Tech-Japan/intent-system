@@ -25,7 +25,8 @@ internal static class CommandRouter
         "tasking",
         "worker",
         "metadata",
-        "guide"
+        "guide",
+        "intent"
     ];
 
     private static readonly IReadOnlyList<string> AutomationCommandHelp =
@@ -199,6 +200,10 @@ internal static class CommandRouter
             {
                 ["oneshot"] = GuideOneshotCommand.Execute,
                 ["automation"] = GuideAutomationCommand.Execute
+            },
+            ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["status"] = IntentStatusCommand.Execute
             }
         };
 
