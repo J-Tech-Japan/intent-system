@@ -47,6 +47,7 @@ These templates assume:
 | G247  | `intent-cli review closeout-plan`       | Read-only review-pass closeout plan: execution unit, linked issue, packet refs, contract validation, expected submodule path, validation/closeout steps, and blocking gaps |
 | G248  | `intent-cli guide review`               | Read-only PR review guidance: execution unit + packet refs, review-context excerpt, deterministic checklist, boundaries, and validation suggestions |
 | G249  | `intent-cli guide collaborate`          | Read-only operator-facing collaboration guide for early product-owner feature intake (responsibility boundaries + suggested command sequence + interview/draft rules) |
+| G250  | `intent-cli interview next-question` / `interview record-answer` | Durable per-domain interview session store: returns first pending question and records (or appends new) answers under `intents/<domain>/interviews/<session>.json` |
 
 ## Installed host transition command adoption
 
