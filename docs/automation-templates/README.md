@@ -50,6 +50,7 @@ These templates assume:
 | G250  | `intent-cli interview next-question` / `interview record-answer` | Durable per-domain interview session store: returns first pending question and records (or appends new) answers under `intents/<domain>/interviews/<session>.json` |
 | G251  | `intent-cli interview compile` / `intent draft-from-interview` | Compile accepted interview answers into a draft intent under `intents/<domain>/drafts/<session>.md`; both commands are read-only by default (`--write` for the draft writer). |
 | G252  | `intent-cli guide rules --topic`        | Read-only operator-facing rule summaries for label-ownership / child-issue-contract / clarification / review-closeout / intake-interview, each with source references and installed-command hints |
+| G253  | [`collaborative-intent-shaping.md`](./collaborative-intent-shaping.md) | Smoke guide for the prompt-to-intent flow using the G249–G252 + G241–G243 surfaces; read-only by default, names operator decision gates |
 
 ## Installed host transition command adoption
 
