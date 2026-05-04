@@ -49,6 +49,7 @@ These templates assume:
 | G249  | `intent-cli guide collaborate`          | Read-only operator-facing collaboration guide for early product-owner feature intake (responsibility boundaries + suggested command sequence + interview/draft rules) |
 | G250  | `intent-cli interview next-question` / `interview record-answer` | Durable per-domain interview session store: returns first pending question and records (or appends new) answers under `intents/<domain>/interviews/<session>.json` |
 | G251  | `intent-cli interview compile` / `intent draft-from-interview` | Compile accepted interview answers into a draft intent under `intents/<domain>/drafts/<session>.md`; both commands are read-only by default (`--write` for the draft writer). |
+| G252  | `intent-cli guide rules --topic`        | Read-only operator-facing rule summaries for label-ownership / child-issue-contract / clarification / review-closeout / intake-interview, each with source references and installed-command hints |
 
 ## Installed host transition command adoption
 

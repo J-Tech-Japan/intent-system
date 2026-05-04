@@ -75,7 +75,8 @@ internal static class Program
             && string.Equals(args[0], "guide", StringComparison.Ordinal)
             && (string.Equals(args[1], "oneshot", StringComparison.Ordinal)
                 || string.Equals(args[1], "automation", StringComparison.Ordinal)
-                || string.Equals(args[1], "collaborate", StringComparison.Ordinal));
+                || string.Equals(args[1], "collaborate", StringComparison.Ordinal)
+                || string.Equals(args[1], "rules", StringComparison.Ordinal));
     }
 
     private static CliContext CreateBootstrapContext(string currentDirectory, string[] args)
