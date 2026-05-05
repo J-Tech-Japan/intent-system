@@ -214,7 +214,8 @@ internal static class CommandRouter
                 ["model"] = GuideModelCommand.Execute,
                 ["commands"] = GuideCommandsCommand.Execute,
                 ["onboarding"] = GuideOnboardingCommand.Execute,
-                ["intent-work"] = GuideIntentWorkCommand.Execute
+                ["intent-work"] = GuideIntentWorkCommand.Execute,
+                ["worker"] = GuideWorkerCommand.Execute
             },
             ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
