@@ -240,7 +240,8 @@ internal static class CommandRouter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (args.Length == 0)
+        if (args.Length == 0
+            || (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal)))
         {
             WriteHelp(writer);
             return 0;
