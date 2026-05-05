@@ -211,7 +211,8 @@ internal static class CommandRouter
                 ["collaborate"] = GuideCollaborateCommand.Execute,
                 ["rules"] = GuideRulesCommand.Execute,
                 ["workflow"] = GuideWorkflowCommand.Execute,
-                ["model"] = GuideModelCommand.Execute
+                ["model"] = GuideModelCommand.Execute,
+                ["commands"] = GuideCommandsCommand.Execute
             },
             ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

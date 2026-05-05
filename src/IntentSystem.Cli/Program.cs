@@ -78,7 +78,8 @@ internal static class Program
                 || string.Equals(args[1], "collaborate", StringComparison.Ordinal)
                 || string.Equals(args[1], "rules", StringComparison.Ordinal)
                 || string.Equals(args[1], "workflow", StringComparison.Ordinal)
-                || string.Equals(args[1], "model", StringComparison.Ordinal));
+                || string.Equals(args[1], "model", StringComparison.Ordinal)
+                || string.Equals(args[1], "commands", StringComparison.Ordinal));
     }
 
     private static CliContext CreateBootstrapContext(string currentDirectory, string[] args)
