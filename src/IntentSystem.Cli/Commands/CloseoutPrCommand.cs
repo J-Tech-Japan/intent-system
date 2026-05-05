@@ -109,14 +109,17 @@ internal static class CloseoutPrCommand
         var beforeState = matchedItem.State.ToString().ToLowerInvariant();
         var mode = write ? ModeWrite : ModeDryRun;
 
-        // Plan the queue transition. Only Active/Review/Fixing → Completed is supported here.
+        // Plan the queue transition. Queued/Active/Review/Fixing → Completed is supported here.
+        // Queued is included because the publish/review loop may leave items in queued state
+        // when the PR is accepted before all intermediate state transitions are recorded.
         if (!alreadyCompleted
+            && matchedItem.State != QueueItemState.Queued
             && matchedItem.State != QueueItemState.Active
             && matchedItem.State != QueueItemState.Review
             && matchedItem.State != QueueItemState.Fixing)
         {
             EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr.Value, queueStatePath, runsLogPath, write,
-                $"queue item '{matchedItem.ExecutionUnit}' is in state '{beforeState}'; closeout supports active/review/fixing → completed only."));
+                $"queue item '{matchedItem.ExecutionUnit}' is in state '{beforeState}'; closeout supports queued/active/review/fixing → completed only."));
             return 1;
         }
 
@@ -515,6 +518,7 @@ internal static class CloseoutPrCommand
         writer.WriteLine("closeout pr");
         writer.WriteLine(UsageLine);
         writer.WriteLine("Records the queue/runs closeout for an accepted child PR. --dry-run plans only; --write applies queue + runs updates. Submodule sync remains a manual next step.");
+        writer.WriteLine("  Supported states: queued, active, review, fixing → completed.");
         writer.WriteLine("  --issue <n>  Optional: fallback linked-issue number for queue items where linked_pr is absent.");
     }
 
