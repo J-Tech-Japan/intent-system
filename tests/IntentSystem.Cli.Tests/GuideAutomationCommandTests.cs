@@ -217,6 +217,18 @@ public sealed class GuideAutomationCommandTests
         Assert.DoesNotContain("You may use implementation skills such as", GuideAutomationCommand.ChildImplementUpdateBody, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void HostReviewIntentCliPrompt_DoesNotContainIntentNextSliceSkillRef()
+    {
+        Assert.DoesNotContain("intent-next-slice", GuideAutomationCommand.HostReviewIntentCliPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostReviewSekibanAsAServicePrompt_DoesNotContainIntentNextSliceSkillRef()
+    {
+        Assert.DoesNotContain("intent-next-slice", GuideAutomationCommand.HostReviewSekibanAsAServicePrompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

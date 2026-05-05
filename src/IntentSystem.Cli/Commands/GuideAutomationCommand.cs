@@ -252,7 +252,7 @@ Wake contract:
 5. Stage 1: review at most one open `intent-target` PR. Use `intent-cli automation host-review-preflight` and `intent-cli automation pr-transition` for supported transitions.
 6. If review passes: merge the PR, close the linked issue, sync the child submodule, update parent queue/runs.
 7. If review requires repair: leave an actionable PR comment and move the PR to `intent-pr-request-update` via the installed transition.
-8. Stage 2: run `intent-next-slice` planning. Honor the WIP cap — do not cut a new child issue while any open child issue/PR carries `intent-target`.
+8. Stage 2: run `intent-cli intent next-slice --dry-run --domain intent-cli --target-repo J-Tech-Japan/intent-system --format json`. Honor the WIP cap — do not cut a new child issue while any open child issue/PR carries `intent-target`.
 9. If next-slice is clear and the WIP cap is empty, publish exactly one new child issue and apply `intent-target` only after parent state is durable.
 10. If clarification is required, stop and report: background, question, options, pros/cons, and recommendation.
 11. Commit and push parent host changes directly to `main` per `AGENTS.md`. Do not create a PR.
@@ -300,7 +300,7 @@ Wake contract:
 5. Stage 1: review at most one open `intent-target` PR. Use `intent-cli automation host-review-preflight` and `intent-cli automation pr-transition` for supported transitions.
 6. If review passes: merge the PR, close the linked issue, sync the child submodule, update parent queue/runs.
 7. If review requires repair: leave an actionable PR comment and move the PR to `intent-pr-request-update` via the installed transition.
-8. Stage 2: run `intent-next-slice` planning. Honor the WIP cap — do not cut a new child issue while any open child issue/PR carries `intent-target`.
+8. Stage 2: run `intent-cli intent next-slice --dry-run --domain sekiban-as-a-service --target-repo J-Tech-Japan/SekibanAsAService --format json`. Honor the WIP cap — do not cut a new child issue while any open child issue/PR carries `intent-target`.
 9. If next-slice is clear and the WIP cap is empty, publish exactly one new child issue and apply `intent-target` only after parent state is durable.
 10. If clarification is required, stop and report: background, question, options, pros/cons, and recommendation.
 11. Commit and push parent host changes directly to `main` per `AGENTS.md`. Do not create a PR.
