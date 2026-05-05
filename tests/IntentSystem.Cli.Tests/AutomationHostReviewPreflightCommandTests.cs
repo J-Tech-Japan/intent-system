@@ -321,6 +321,76 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         Assert.Contains("automation host-review-preflight", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // ── focused-guide-automation-setup-same-thread-and-wrapper-help-tests ───────────
+
+    [Fact]
+    public void Execute_HelpInterceptedByWrapper_SurfacesStillAvailableWhenCommandWorks()
+    {
+        // Simulate a wrapper that intercepts --help (returns dotnet help instead of intent-cli help)
+        // but allows direct command invocation to reach intent-cli.
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        var lister = new FakeLister();
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        // Override ProbeRunner to simulate help interception: direct invocations return
+        // intent-cli's own error (missing required args), not dotnet's help output.
+        AutomationInstalledCliSurfaceProbe.ProbeRunner = (_, args) =>
+        {
+            var joined = string.Join(" ", args);
+            if (joined.Contains("--help", StringComparison.Ordinal))
+            {
+                // Simulate dotnet tool exec intercepting --help (would have happened with old probes)
+                return new InstalledCliProbeResult(0, "dotnet tool exec help — not intent-cli", string.Empty);
+            }
+            return joined switch
+            {
+                "automation summary" => new InstalledCliProbeResult(1, string.Empty, "--domain is required."),
+                "automation host-review-preflight" => new InstalledCliProbeResult(1, string.Empty, "--repo is required."),
+                "automation issue-publish" => new InstalledCliProbeResult(1, string.Empty, "--issue is required."),
+                "automation pr-transition" => new InstalledCliProbeResult(
+                    1, string.Empty,
+                    "--transition is required (review-start, request-update, or approved)."),
+                _ => new InstalledCliProbeResult(1, $"unexpected probe: {joined}", string.Empty)
+            };
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("no-actionable-item", result.Action);
+        Assert.NotEqual("stale-host-cli", result.Action);
+    }
+
+    [Fact]
+    public void Execute_ProbeDoesNotUseHelpFlag_NoHelpInProbedArgs()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => new FakeLister();
+
+        var probedArgSets = new List<IReadOnlyList<string>>();
+        AutomationInstalledCliSurfaceProbe.ProbeRunner = (_, args) =>
+        {
+            probedArgSets.Add(args);
+            return new InstalledCliProbeResult(1, string.Empty,
+                "--transition is required (review-start, request-update, or approved).");
+        };
+
+        using var writer = new StringWriter();
+        AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.NotEmpty(probedArgSets);
+        Assert.All(probedArgSets, args =>
+            Assert.DoesNotContain("--help", args, StringComparer.Ordinal));
+    }
+
     [Fact]
     public void CommandRouter_RegistersAutomationHostReviewPreflight()
     {
@@ -437,17 +507,20 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
             var binPath = Path.Combine(RootPath, ".intent-cli", "bin");
             Directory.CreateDirectory(binPath);
             var scriptPath = Path.Combine(binPath, "intent-cli");
+            // Probes omit --help to avoid wrapper-layer interception. Each surface is probed
+            // without --help; the script returns intent-cli-style usage errors (not "not yet
+            // implemented") so the surface is detected as available.
             var prTransitionBlock = stalePrTransition
                 ? "  echo \"Command 'automation pr-transition' is not yet implemented.\"\n  exit 1\n"
-                : "  echo 'automation pr-transition'\n  echo 'review-start'\n  echo 'request-update'\n  echo 'approved'\n  exit 0\n";
+                : "  echo '--transition is required (review-start, request-update, or approved).'\n  exit 1\n";
             File.WriteAllText(
                 scriptPath,
                 "#!/bin/sh\n"
                 + "case \"$*\" in\n"
-                + "  'automation summary --help') echo 'automation summary'; exit 0 ;;\n"
-                + "  'automation host-review-preflight --help') echo 'automation host-review-preflight'; exit 0 ;;\n"
-                + "  'automation issue-publish --help') echo 'automation issue-publish'; exit 0 ;;\n"
-                + "  'automation pr-transition --help')\n"
+                + "  'automation summary') echo '--domain is required.'; exit 1 ;;\n"
+                + "  'automation host-review-preflight') echo '--repo is required.'; exit 1 ;;\n"
+                + "  'automation issue-publish') echo '--issue is required.'; exit 1 ;;\n"
+                + "  'automation pr-transition')\n"
                 + prTransitionBlock
                 + "    ;;\n"
                 + "  *) echo \"unexpected probe: $*\"; exit 1 ;;\n"

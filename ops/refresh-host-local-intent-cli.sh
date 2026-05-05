@@ -57,7 +57,7 @@ exec dotnet tool exec \\
   --yes \\
   --source "\$HOST_ROOT/.intent-cli/packages" \\
   --version "\$INTENT_CLI_LOCAL_VERSION" \\
-  intent-cli \\
+  intent-cli -- \\
   "\$@"
 EOF
 

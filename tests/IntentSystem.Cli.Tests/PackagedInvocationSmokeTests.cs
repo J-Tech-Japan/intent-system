@@ -108,15 +108,33 @@ public sealed class PackagedInvocationSmokeTests
             Assert.Contains("\"automationCommandCapabilities\"", summaryOutput, StringComparison.Ordinal);
             Assert.Equal(string.Empty, summaryError.Trim(), ignoreCase: false);
 
+            // Use -- to pass --help through dotnet tool exec to intent-cli rather than having
+            // dotnet tool exec intercept it and show its own help.
+            var prTransitionHelpOutputPath = tempDirectory.GetPath("pr-transition.stdout.txt");
             var prTransitionHelpErrorPath = tempDirectory.GetPath("pr-transition.stderr.txt");
             var prTransitionHelpResult = RunShellCommand(
-                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli automation pr-transition --help > {QuoteForShell(tempDirectory.GetPath("pr-transition.stdout.txt"))} 2> {QuoteForShell(prTransitionHelpErrorPath)}",
+                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli -- automation pr-transition --help > {QuoteForShell(prTransitionHelpOutputPath)} 2> {QuoteForShell(prTransitionHelpErrorPath)}",
                 fixtureRoot);
 
+            var prTransitionHelpOutput = File.ReadAllText(prTransitionHelpOutputPath);
             var prTransitionHelpError = File.ReadAllText(prTransitionHelpErrorPath);
 
             Assert.Equal(0, prTransitionHelpResult.ExitCode);
+            Assert.Contains("review-start", prTransitionHelpOutput, StringComparison.Ordinal);
+            Assert.Contains("request-update", prTransitionHelpOutput, StringComparison.Ordinal);
+            Assert.Contains("approved", prTransitionHelpOutput, StringComparison.Ordinal);
             Assert.Equal(string.Empty, prTransitionHelpError.Trim(), ignoreCase: false);
+
+            var topLevelHelpOutputPath = tempDirectory.GetPath("help.stdout.txt");
+            var topLevelHelpErrorPath = tempDirectory.GetPath("help.stderr.txt");
+            var topLevelHelpResult = RunShellCommand(
+                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli -- --help > {QuoteForShell(topLevelHelpOutputPath)} 2> {QuoteForShell(topLevelHelpErrorPath)}",
+                fixtureRoot);
+
+            var topLevelHelpOutput = File.ReadAllText(topLevelHelpOutputPath);
+
+            Assert.Equal(0, topLevelHelpResult.ExitCode);
+            Assert.Contains("Available command groups", topLevelHelpOutput, StringComparison.Ordinal);
         }
     }
 
@@ -147,6 +165,7 @@ public sealed class PackagedInvocationSmokeTests
         Assert.Contains("\"pr-transition.review-start\"", script, StringComparison.Ordinal);
         Assert.Contains("\"pr-transition.request-update\"", script, StringComparison.Ordinal);
         Assert.Contains("\"pr-transition.approved\"", script, StringComparison.Ordinal);
+        Assert.Contains("intent-cli -- \\\\", script, StringComparison.Ordinal);
         Assert.DoesNotContain("automation pr-transition --help", script, StringComparison.Ordinal);
         Assert.DoesNotContain("--version 0.1.0", script, StringComparison.Ordinal);
     }

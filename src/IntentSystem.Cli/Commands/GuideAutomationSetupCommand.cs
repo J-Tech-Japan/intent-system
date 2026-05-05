@@ -151,13 +151,17 @@ Hard rules:
     private static GuideAutomationSetupResult BuildHostReviewNextSlice(string domain, string targetRepo)
     {
         var prompt =
-$@"Set up the host review and next-slice loop for domain `{domain}` against `{targetRepo}` once. Do not register any cron, monitor, reminder, scheduler, or recurring wakeup as part of this setup unless the operator explicitly asks.
+$@"Set up the host review and next-slice loop for domain `{domain}` against `{targetRepo}` once, in this existing chat thread.
+
+IMPORTANT — do not create a new chat, a new Claude Code session, a cron job, a monitor, a cloud schedule, or any other recurring wakeup unless the operator explicitly asks for one. Run the loop body exactly once, in the current thread, then stop.
+
+Cloud and new-thread schedulers CANNOT access local paths (e.g. `/Users/.../.intent-cli`) or local dotnet packages. Only use a remote/cloud scheduler if the operator explicitly provides a cloud-compatible intent-cli endpoint.
 
 First-call sequence (read-only; required before any mutation):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
 2. `intent-cli guide onboarding --format json` — first-call sequence for a fresh agent.
 3. `intent-cli guide commands list --format json` — surface `primary` / `support` / `advanced` / `experimental` buckets.
-4. `intent-cli automation summary --format json` — canonical label-driven contract and capability JSON.
+4. `intent-cli automation summary --domain {domain} --format json` — canonical label-driven contract and capability JSON.
 5. `intent-cli intent status --domain {domain} --format json` — current baseline / WIP / queued / clarifications.
 6. `intent-cli intent next-slice --dry-run --domain {domain} --target-repo {targetRepo} --format json` — verify WIP cap and clarification gates.
 
@@ -179,6 +183,7 @@ Hard rules:
 - Do not call `intent-cli run`. `run` is advanced runtime, not the host review/closeout path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
+- Do not open a new chat, session, cron, monitor, or scheduler. Run one wake in this thread; the operator controls subsequent wakes.
 - Every label transition (`intent-target`, `intent-pr-reviewing`, `intent-pr-request-update`, `intent-pr-approved`, `intent-pr-rereview-ready`, `intent-pr-update-in-progress`, `intent-issue-in-progress`, `intent-pr-created`) goes through installed `intent-cli automation pr-transition` / `intent-cli automation issue-publish` / `intent-cli worker claim` / `intent-cli worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback.
 - Never apply `intent-pr-created` to a PR.
 - Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains in `{targetRepo}`.
@@ -196,7 +201,7 @@ Hard rules:
                 "intent-cli guide model --format json",
                 "intent-cli guide onboarding --format json",
                 "intent-cli guide commands list --format json",
-                "intent-cli automation summary --format json",
+                $"intent-cli automation summary --domain {domain} --format json",
                 $"intent-cli intent status --domain {domain} --format json",
                 $"intent-cli intent next-slice --dry-run --domain {domain} --target-repo {targetRepo} --format json"
             },
