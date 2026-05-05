@@ -57,6 +57,7 @@ These templates assume:
 | G257  | `intent-cli guide commands list`        | Read-only listing of intent-cli command groups with primary / support / advanced / experimental classification, mutability, and recommended caller |
 | G258  | `guide workflow suggest --include-advanced-runtime` | Default chat-first guidance excludes `intent-cli run` / supervisor subprocess; the new flag opts the relevant workflow into advanced runtime suggestions |
 | G259  | `intent-cli guide onboarding`           | Read-only first-call sequence for an AI agent with no local skill files or copied rules: model → rules list → commands list → workflow suggest → status → next-slice dry-run → interview → automation summary; each step names its no-mutation behavior and the host data boundary |
+| G260  | `intent-cli guide automation setup`     | Read-only paste-ready setup prompts for child implementation loop or host review/next-slice loop: forces guide model/onboarding/commands list/automation summary as first calls, forbids `intents/rules/**` and local skill files, delegates label transitions to installed `intent-cli automation`/`worker` commands |
 
 ## Installed host transition command adoption
 
