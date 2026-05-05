@@ -37,6 +37,12 @@ internal static class GuideAutomationCommand
             return 0;
         }
 
+        // G260: nested `guide automation setup ...` paste-ready setup-prompt subcommand.
+        if (args.Length >= 1 && string.Equals(args[0], "setup", StringComparison.Ordinal))
+        {
+            return GuideAutomationSetupCommand.Execute(context, args[1..], writer);
+        }
+
         if (!TryParseArguments(args, out var kind, out var domain, out var repo, out var format, out var error))
         {
             writer.WriteLine(error);
