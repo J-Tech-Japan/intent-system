@@ -146,11 +146,31 @@ internal static class CloseoutPrCommand
 
         var continuation = ClassifyContinuation(queueState, matchedItem.ExecutionUnit);
 
-        var nextSteps = new List<string>
+        var nextSteps = new List<string>();
+
+        var linkedIssue = matchedItem.LinkedIssue;
+        if (linkedIssue is not null)
         {
-            $"Sync the parent submodule pointer for {repo} to the merge commit (manual step: git -C submodules/<child> fetch && git -C submodules/<child> reset --hard <merge-sha>; git add submodules/<child>).",
-            "Commit and push the parent durable state (queue-state, runs, submodule pointer)."
-        };
+            if (linkedIssue.Number.HasValue)
+            {
+                nextSteps.Add($"Close the linked issue: `gh issue close {linkedIssue.Number.Value} --repo {linkedIssue.Repo} --comment 'Closed by PR #{pr}.'`");
+            }
+            else if (!string.IsNullOrWhiteSpace(linkedIssue.Url))
+            {
+                nextSteps.Add($"Close the linked issue at {linkedIssue.Url}: `gh issue close <n> --repo {linkedIssue.Repo} --comment 'Closed by PR #{pr}.'`");
+            }
+            else
+            {
+                nextSteps.Add($"Confirm and close the linked issue in {linkedIssue.Repo} (number not resolved): `gh issue close <n> --repo {linkedIssue.Repo} --comment 'Closed by PR #{pr}.'`");
+            }
+        }
+        else
+        {
+            nextSteps.Add("Confirm and close the linked issue if one exists (linked_issue not set in queue state).");
+        }
+
+        nextSteps.Add($"Sync the parent submodule pointer for {repo} to the merge commit (manual step: git -C submodules/<child> fetch && git -C submodules/<child> reset --hard <merge-sha>; git add submodules/<child>).");
+        nextSteps.Add("Commit and push the parent durable state (queue-state, runs, submodule pointer).");
 
         var result = new CloseoutPrResult
         {
