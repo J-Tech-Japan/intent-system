@@ -21,7 +21,7 @@ public sealed class PackagedInvocationSmokeTests
         Assert.Equal("true", GetPropertyValue(propertyGroup!, "PackAsTool"));
         Assert.Equal("intent-cli", GetPropertyValue(propertyGroup, "ToolCommandName"));
         Assert.Equal("intent-cli", GetPropertyValue(propertyGroup, "PackageId"));
-        Assert.Equal("0.1.0", GetPropertyValue(propertyGroup, "Version"));
+        Assert.Equal("0.2.0", GetPropertyValue(propertyGroup, "Version"));
         Assert.Equal("README.md", GetPropertyValue(propertyGroup, "PackageReadmeFile"));
     }
 
@@ -127,7 +127,7 @@ public sealed class PackagedInvocationSmokeTests
 
         Assert.Contains("mkdir -p .artifacts/smoke-repo/.intent-cli", readme, StringComparison.Ordinal);
         Assert.Contains("cat > .artifacts/smoke-repo/.intent-cli/config.toml <<'EOF'", readme, StringComparison.Ordinal);
-        Assert.Contains("export INTENT_CLI_LOCAL_VERSION=\"0.1.0-local.$(date -u +%Y%m%d%H%M%S)\"", readme, StringComparison.Ordinal);
+        Assert.Contains("export INTENT_CLI_LOCAL_VERSION=\"0.2.0-local.$(date -u +%Y%m%d%H%M%S)\"", readme, StringComparison.Ordinal);
         Assert.Contains("(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" intent-cli project status)", readme, StringComparison.Ordinal);
         Assert.Contains("(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" intent-cli project status)", readme, StringComparison.Ordinal);
     }
@@ -137,7 +137,7 @@ public sealed class PackagedInvocationSmokeTests
     {
         var script = File.ReadAllText(Path.Combine(GetSolutionRoot(), "ops", "refresh-host-local-intent-cli.sh"));
 
-        Assert.Contains("0.1.0-local.$LOCAL_STAMP.$$.g$CHILD_SHA", script, StringComparison.Ordinal);
+        Assert.Contains("0.2.0-local.$LOCAL_STAMP.$$.g$CHILD_SHA", script, StringComparison.Ordinal);
         Assert.Contains("-p:Version=\"$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
         Assert.Contains("--version \"\\$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
         Assert.Contains("find \"$PACKAGES_DIR\" -maxdepth 1 -type f -name 'intent-cli.*.nupkg' -delete", script, StringComparison.Ordinal);
@@ -193,7 +193,7 @@ public sealed class PackagedInvocationSmokeTests
 
     private static string CreateLocalPackageVersion()
     {
-        return $"0.1.0-local.{Guid.NewGuid():N}";
+        return $"0.2.0-local.{Guid.NewGuid():N}";
     }
 
     private sealed record ProcessResult(int ExitCode);

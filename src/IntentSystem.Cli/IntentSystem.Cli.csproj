@@ -8,7 +8,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>intent-cli</ToolCommandName>
     <PackageId>intent-cli</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>J-Tech-Japan</Authors>
     <Description>Intent System CLI packaged as a .NET tool.</Description>
     <PackageTags>intent-cli;dotnet-tool</PackageTags>

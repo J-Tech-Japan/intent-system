@@ -227,7 +227,7 @@ internal static class GuideOneshotCommand
 Run MyIntentHost host-side review & next-slice exactly once. Do not create or update any automation, loop, cron, monitor, reminder, or recurring wakeup.
 
 Domain / repo:
-- host repo root: `/Users/tomohisa/dev/GitHub/MyIntentHost`
+- host repo root: cwd at start; confirm with `pwd` before executing
 - domain: `intent-cli`
 - child repo: `J-Tech-Japan/intent-system`
 - child submodule: `submodules/intent-system`
@@ -235,16 +235,14 @@ Domain / repo:
 Current baseline:
 - Use the host-local installed `intent-cli` on PATH or at `$HOST_ROOT/.intent-cli/bin/intent-cli`.
 - First run `intent-cli automation summary --format text` and use it as the label-contract source.
-- At the current G238-in-progress baseline, do not make `automation doctor` / capability JSON a hard gate unless the checked-in runbook explicitly requires it.
 - Use installed `intent-cli` commands for command surfaces that exist and work.
 - If an installed `intent-cli` command clearly fails for a transition, stop and report the failure. Do not invent raw `gh` fallback for intent-cli-owned transitions.
-- For steps not yet owned by installed `intent-cli`, follow `intents/rules/automations/runbook.md` and existing checked-in rule docs.
 
 Workflow:
-1. `cd /Users/tomohisa/dev/GitHub/MyIntentHost`.
+1. Confirm cwd is the host repo root.
 2. Run `git pull --ff-only origin main`.
 3. Run `git submodule update --init submodules/intent-system`.
-4. Read `intents/intent-cli/automation/bindings.md` and `intents/rules/automations/runbook.md`.
+4. Read `intents/intent-cli/automation/bindings.md` (if present).
 5. Execute one wake only: Stage 1 review/closeout, then Stage 2 next-slice.
 6. If an eligible `intent-target` PR exists, review it deterministically against parent intent state.
 7. If review passes: merge the PR, close the linked issue, sync child main/submodule, update parent queue/runs, then classify continuation.
@@ -273,7 +271,7 @@ Final report must include:
 Run MyIntentHost host-side review & next-slice exactly once. Do not create or update any automation, loop, cron, monitor, reminder, or recurring wakeup.
 
 Domain / repo:
-- host repo root: `/Users/tomohisa/dev/GitHub/MyIntentHost`
+- host repo root: cwd at start; confirm with `pwd` before executing
 - domain: `sekiban-as-a-service`
 - child repo: `J-Tech-Japan/SekibanAsAService`
 - child submodule: `submodules/SekibanAsAService`
@@ -281,16 +279,14 @@ Domain / repo:
 Current baseline:
 - Use the host-local installed `intent-cli` on PATH or at `$HOST_ROOT/.intent-cli/bin/intent-cli`.
 - First run `intent-cli automation summary --format text` and use it as the label-contract source.
-- At the current G238-in-progress baseline, do not make `automation doctor` / capability JSON a hard gate unless the checked-in runbook explicitly requires it.
 - Use installed `intent-cli` commands for command surfaces that exist and work.
 - If an installed `intent-cli` command clearly fails for a transition, stop and report the failure. Do not invent raw `gh` fallback for intent-cli-owned transitions.
-- For steps not yet owned by installed `intent-cli`, follow `intents/rules/automations/runbook.md` and existing checked-in rule docs.
 
 Workflow:
-1. `cd /Users/tomohisa/dev/GitHub/MyIntentHost`.
+1. Confirm cwd is the host repo root.
 2. Run `git pull --ff-only origin main`.
 3. Run `git submodule update --init submodules/SekibanAsAService`.
-4. Read `intents/sekiban-as-a-service/automation/bindings.md` and `intents/rules/automations/runbook.md`.
+4. Read `intents/sekiban-as-a-service/automation/bindings.md` (if present).
 5. Execute one wake only: Stage 1 review/closeout, then Stage 2 next-slice.
 6. If an eligible `intent-target` PR exists, review it deterministically against parent intent state.
 7. If review passes: merge the PR, close the linked issue, sync child main/submodule, update parent queue/runs, then classify continuation.

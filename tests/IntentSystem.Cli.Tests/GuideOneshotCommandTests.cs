@@ -178,6 +178,32 @@ public sealed class GuideOneshotCommandTests
         Assert.Contains("child-implement-or-update", output, StringComparison.Ordinal);
     }
 
+    // ── G270 stale-guidance regression ───────────────────────────────────────
+
+    [Fact]
+    public void HostIntentCliPrompt_DoesNotContainHardCodedHostPath()
+    {
+        Assert.DoesNotContain("/Users/tomohisa", GuideOneshotCommand.HostIntentCliPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostIntentCliPrompt_DoesNotContainStaleRuleFileReference()
+    {
+        Assert.DoesNotContain("intents/rules/automations/runbook.md", GuideOneshotCommand.HostIntentCliPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostSekibanAsAServicePrompt_DoesNotContainHardCodedHostPath()
+    {
+        Assert.DoesNotContain("/Users/tomohisa", GuideOneshotCommand.HostSekibanAsAServicePrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostSekibanAsAServicePrompt_DoesNotContainStaleRuleFileReference()
+    {
+        Assert.DoesNotContain("intents/rules/automations/runbook.md", GuideOneshotCommand.HostSekibanAsAServicePrompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

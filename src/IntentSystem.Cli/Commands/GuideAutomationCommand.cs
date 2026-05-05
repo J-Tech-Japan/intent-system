@@ -233,7 +233,7 @@ internal static class GuideAutomationCommand
 Run MyIntentHost host-side review and next-slice on a recurring schedule. Each wake performs Stage 1 (review/closeout) then Stage 2 (next-slice). At most one PR review and at most one new child issue per wake.
 
 Cwd / repo:
-- host repo root: `/Users/tomohisa/dev/GitHub/MyIntentHost`
+- host repo root: cwd at start; confirm with `pwd` and capture `HOST_ROOT="$PWD"` before entering any subdirectory
 - domain: `intent-cli`
 - child repo: `J-Tech-Japan/intent-system`
 - child submodule: `submodules/intent-system`
@@ -242,14 +242,13 @@ Current baseline:
 - Use the host-local installed `intent-cli` on PATH or at `$HOST_ROOT/.intent-cli/bin/intent-cli`.
 - First run `intent-cli automation summary --format text` and use it as the label-contract source.
 - Use installed `intent-cli` commands for command surfaces that exist and work; do not invent raw `gh` fallback for intent-cli-owned transitions.
-- For steps not yet owned by installed `intent-cli`, follow `intents/rules/automations/host-review-loop.md` and existing checked-in rule docs.
 - `intent-cli` must not launch Claude, Codex, or any AI provider.
 
 Wake contract:
-1. `cd /Users/tomohisa/dev/GitHub/MyIntentHost`.
+1. Confirm cwd is the host repo root; capture `HOST_ROOT="$PWD"`.
 2. Run `git pull --ff-only origin main`.
 3. Run `git submodule update --init submodules/intent-system`.
-4. Read `intents/intent-cli/automation/bindings.md` and `intents/rules/automations/host-review-loop.md`.
+4. Read `intents/intent-cli/automation/bindings.md` (if present).
 5. Stage 1: review at most one open `intent-target` PR. Use `intent-cli automation host-review-preflight` and `intent-cli automation pr-transition` for supported transitions.
 6. If review passes: merge the PR, close the linked issue, sync the child submodule, update parent queue/runs.
 7. If review requires repair: leave an actionable PR comment and move the PR to `intent-pr-request-update` via the installed transition.
@@ -282,7 +281,7 @@ Final report must include:
 Run MyIntentHost host-side review and next-slice on a recurring schedule. Each wake performs Stage 1 (review/closeout) then Stage 2 (next-slice). At most one PR review and at most one new child issue per wake.
 
 Cwd / repo:
-- host repo root: `/Users/tomohisa/dev/GitHub/MyIntentHost`
+- host repo root: cwd at start; confirm with `pwd` and capture `HOST_ROOT="$PWD"` before entering any subdirectory
 - domain: `sekiban-as-a-service`
 - child repo: `J-Tech-Japan/SekibanAsAService`
 - child submodule: `submodules/SekibanAsAService`
@@ -291,14 +290,13 @@ Current baseline:
 - Use the host-local installed `intent-cli` on PATH or at `$HOST_ROOT/.intent-cli/bin/intent-cli`.
 - First run `intent-cli automation summary --format text` and use it as the label-contract source.
 - Use installed `intent-cli` commands for command surfaces that exist and work; do not invent raw `gh` fallback for intent-cli-owned transitions.
-- For steps not yet owned by installed `intent-cli`, follow `intents/rules/automations/host-review-loop.md` and existing checked-in rule docs.
 - `intent-cli` must not launch Claude, Codex, or any AI provider.
 
 Wake contract:
-1. `cd /Users/tomohisa/dev/GitHub/MyIntentHost`.
+1. Confirm cwd is the host repo root; capture `HOST_ROOT="$PWD"`.
 2. Run `git pull --ff-only origin main`.
 3. Run `git submodule update --init submodules/SekibanAsAService`.
-4. Read `intents/sekiban-as-a-service/automation/bindings.md` and `intents/rules/automations/host-review-loop.md`.
+4. Read `intents/sekiban-as-a-service/automation/bindings.md` (if present).
 5. Stage 1: review at most one open `intent-target` PR. Use `intent-cli automation host-review-preflight` and `intent-cli automation pr-transition` for supported transitions.
 6. If review passes: merge the PR, close the linked issue, sync the child submodule, update parent queue/runs.
 7. If review requires repair: leave an actionable PR comment and move the PR to `intent-pr-request-update` via the installed transition.
@@ -333,9 +331,8 @@ Run one wake of the child coding automation loop on a recurring schedule. Each w
 Assumptions:
 - Current working directory is the target repository worktree root.
 - `intent-cli` must be available on PATH.
-- The parent host root is `/Users/tomohisa/dev/GitHub/MyIntentHost`.
 - Use `gh` CLI for GitHub operations.
-- You may use implementation skills such as `gh-issue-to-pr` and `gh-fix-pr-comment`.
+- Do not use `gh-issue-to-pr`, `gh-fix-pr-comment`, or any local skill file; use `intent-cli guide ...` instead.
 - Do not use GitHub MCP.
 - Do not call `intent-cli run`.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
@@ -368,14 +365,14 @@ Wake steps:
 8. If `action` is `none`: stop with status `idle`. Do not push. Do not mutate labels.
 9. If `action` is `issue-to-pr`:
    - Claim with `intent-cli worker claim --kind issue --number <n> --write --format json`.
-   - Run the `gh-issue-to-pr` workflow on the returned issue URL only.
+   - Follow the issue-to-PR workflow for the returned issue URL. Do not use the `gh-issue-to-pr` local skill.
    - Use the issue body as the standalone contract; do not read parent host packet files to fill gaps.
    - Create at most one draft PR. Do not add `intent-target` or `intent-pr-created` to the PR.
    - Classify the outcome as one of: `pr-created`, `declined-contract-incomplete`, `clarification-required`, `already-resolved`, `failed`, `label-cleanup-required`.
    - From the parent host root run `intent-cli worker result-summary --kind issue-to-pr ...` then `intent-cli worker complete --kind issue --number <n> --outcome <outcome> --write --format json`.
 10. If `action` is `pr-comment-fix`:
     - Claim with `intent-cli worker claim --kind pr --number <n> --write --format json`.
-    - Run the `gh-fix-pr-comment` workflow on the returned PR URL only.
+    - Follow the PR-comment-fix workflow for the returned PR URL. Do not use the `gh-fix-pr-comment` local skill.
     - Repair only the narrow requested change. Push only the PR branch.
     - Classify the outcome as one of: `repair-pushed`, `no-actionable-comments`, `already-resolved`, `clarification-required`, `failed`, `label-cleanup-required`.
     - From the parent host root run `intent-cli worker result-summary --kind pr-comment-fix ...` then `intent-cli worker complete --kind pr --number <n> --outcome <outcome> --write --format json`.
