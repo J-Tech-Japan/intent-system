@@ -53,6 +53,7 @@ These templates assume:
 | G253  | [`collaborative-intent-shaping.md`](./collaborative-intent-shaping.md) | Smoke guide for the prompt-to-intent flow using the G249–G252 + G241–G243 surfaces; read-only by default, names operator decision gates |
 | G254  | `intent-cli guide rules list`           | Read-only listing of supported `guide rules --topic` ids, categories (automation / issue-contract / interview / review), and short descriptions |
 | G255  | `intent-cli guide workflow suggest`     | Read-only workflow recommendation: classifies a broad operator goal (`--goal` text or `--from-file` path) into feature-intake / next-slice-planning / review / child-implementation / clarification, returns the suggested command sequence and rule topics |
+| G256  | `intent-cli guide model`                | Read-only summary of the chat-first / CLI-internal collaboration model: roles (human, AI agent, intent-cli, host repo), primary data paths, optional advanced runtime, hard rules |
 
 ## Installed host transition command adoption
 
