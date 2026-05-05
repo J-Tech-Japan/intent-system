@@ -164,6 +164,12 @@ internal static class GuideRulesCommand
             return 0;
         }
 
+        // G254: nested `guide rules list` discovery sub-subcommand.
+        if (args.Length >= 1 && string.Equals(args[0], "list", StringComparison.Ordinal))
+        {
+            return GuideRulesListCommand.Execute(context, args[1..], writer);
+        }
+
         if (!TryParseArguments(args, out var topic, out var format, out var error))
         {
             writer.WriteLine(error);

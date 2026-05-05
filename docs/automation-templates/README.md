@@ -51,6 +51,7 @@ These templates assume:
 | G251  | `intent-cli interview compile` / `intent draft-from-interview` | Compile accepted interview answers into a draft intent under `intents/<domain>/drafts/<session>.md`; both commands are read-only by default (`--write` for the draft writer). |
 | G252  | `intent-cli guide rules --topic`        | Read-only operator-facing rule summaries for label-ownership / child-issue-contract / clarification / review-closeout / intake-interview, each with source references and installed-command hints |
 | G253  | [`collaborative-intent-shaping.md`](./collaborative-intent-shaping.md) | Smoke guide for the prompt-to-intent flow using the G249–G252 + G241–G243 surfaces; read-only by default, names operator decision gates |
+| G254  | `intent-cli guide rules list`           | Read-only listing of supported `guide rules --topic` ids, categories (automation / issue-contract / interview / review), and short descriptions |
 
 ## Installed host transition command adoption
 
