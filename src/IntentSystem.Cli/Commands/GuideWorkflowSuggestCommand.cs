@@ -24,7 +24,7 @@ internal static class GuideWorkflowSuggestCommand
     private const string WorkflowUnknown = "unknown";
 
     private const string UsageLine =
-        "Usage: intent-cli guide workflow suggest [--domain <name>] (--goal <text> | --from-file <path>) [--format markdown|json]";
+        "Usage: intent-cli guide workflow suggest [--domain <name>] (--goal <text> | --from-file <path>) [--include-advanced-runtime] [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -38,7 +38,7 @@ internal static class GuideWorkflowSuggestCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var goalInline, out var goalFile, out var domainOverride, out var format, out var error))
+        if (!TryParseArguments(args, out var goalInline, out var goalFile, out var domainOverride, out var includeAdvancedRuntime, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -80,7 +80,7 @@ internal static class GuideWorkflowSuggestCommand
             : domainOverride!;
 
         var (workflow, matchedKeywords) = Classify(goalText);
-        var recommendation = BuildRecommendation(workflow, domain, goalText, matchedKeywords);
+        var recommendation = BuildRecommendation(workflow, domain, goalText, matchedKeywords, includeAdvancedRuntime);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -143,7 +143,7 @@ internal static class GuideWorkflowSuggestCommand
         return (WorkflowUnknown, matched);
     }
 
-    private static GuideWorkflowSuggestion BuildRecommendation(string workflow, string domain, string goalText, IReadOnlyList<string> matchedKeywords)
+    private static GuideWorkflowSuggestion BuildRecommendation(string workflow, string domain, string goalText, IReadOnlyList<string> matchedKeywords, bool includeAdvancedRuntime)
     {
         var (commands, ruleTopics, summary) = workflow switch
         {
@@ -214,6 +214,18 @@ internal static class GuideWorkflowSuggestCommand
                 "Goal did not match a known workflow shape; start with collaborate and search to disambiguate.")
         };
 
+        var advancedRuntime = AdvancedRuntimeFor(workflow);
+        var defaultExcludesAdvancedRuntime = !includeAdvancedRuntime;
+        IReadOnlyList<string> finalCommands = includeAdvancedRuntime && advancedRuntime.Count > 0
+            ? commands.Concat(advancedRuntime).ToArray()
+            : commands;
+
+        var advancedRuntimeWarning = advancedRuntime.Count == 0
+            ? "no advanced-runtime suggestions for this workflow."
+            : (includeAdvancedRuntime
+                ? "advanced-runtime suggestions are included because --include-advanced-runtime was supplied; intent-cli run is integration smoke / replay / dogfooding, not the primary chat-first path."
+                : "advanced-runtime suggestions (intent-cli run, supervisor subprocess) are gated by --include-advanced-runtime; the chat-first default path does not recommend them.");
+
         return new GuideWorkflowSuggestion
         {
             Domain = domain,
@@ -221,8 +233,30 @@ internal static class GuideWorkflowSuggestCommand
             Goal = goalText,
             MatchedKeywords = matchedKeywords,
             Summary = summary,
-            RecommendedCommands = commands,
-            RuleTopics = ruleTopics
+            RecommendedCommands = finalCommands,
+            RuleTopics = ruleTopics,
+            DefaultExcludesAdvancedRuntime = defaultExcludesAdvancedRuntime,
+            AdvancedRuntimeIncluded = includeAdvancedRuntime,
+            AdvancedRuntimeSuggestions = advancedRuntime,
+            AdvancedRuntimeWarning = advancedRuntimeWarning
+        };
+    }
+
+    private static IReadOnlyList<string> AdvancedRuntimeFor(string workflow)
+    {
+        return workflow switch
+        {
+            WorkflowChildImplementation => new[]
+            {
+                "intent-cli run start --execution-unit <id> — integration smoke / deterministic replay; not the chat-first default path.",
+                "intent-cli run supervise --execution-unit <id> — supervisor backend orchestration; advanced runtime only."
+            },
+            WorkflowReview => new[]
+            {
+                "intent-cli run rereview --pr <n> — replay-mode rereview integration smoke; not the default review path."
+            },
+            WorkflowFeatureIntake or WorkflowNextSlicePlanning or WorkflowClarification or WorkflowUnknown => Array.Empty<string>(),
+            _ => Array.Empty<string>()
         };
     }
 
@@ -236,6 +270,8 @@ internal static class GuideWorkflowSuggestCommand
         {
             writer.WriteLine($"- matched keywords: {string.Join(", ", result.MatchedKeywords)}");
         }
+        writer.WriteLine($"- default excludes advanced runtime: {(result.DefaultExcludesAdvancedRuntime ? "yes" : "no")}");
+        writer.WriteLine($"- advanced runtime included: {(result.AdvancedRuntimeIncluded ? "yes" : "no")}");
         writer.WriteLine();
         writer.WriteLine($"## Summary");
         writer.WriteLine();
@@ -252,6 +288,18 @@ internal static class GuideWorkflowSuggestCommand
         {
             writer.WriteLine($"- `intent-cli guide rules --topic {topic} --format markdown`");
         }
+        writer.WriteLine();
+        writer.WriteLine("## Advanced runtime");
+        writer.WriteLine();
+        writer.WriteLine(result.AdvancedRuntimeWarning);
+        if (result.AdvancedRuntimeSuggestions.Count > 0)
+        {
+            writer.WriteLine();
+            foreach (var item in result.AdvancedRuntimeSuggestions)
+            {
+                writer.WriteLine($"- {item}");
+            }
+        }
     }
 
     private static bool TryParseArguments(
@@ -259,12 +307,14 @@ internal static class GuideWorkflowSuggestCommand
         out string? goalInline,
         out string? goalFile,
         out string? domainOverride,
+        out bool includeAdvancedRuntime,
         out string format,
         out string error)
     {
         goalInline = null;
         goalFile = null;
         domainOverride = null;
+        includeAdvancedRuntime = false;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -304,6 +354,10 @@ internal static class GuideWorkflowSuggestCommand
 
                     domainOverride = args[index + 1];
                     index++;
+                    break;
+
+                case "--include-advanced-runtime":
+                    includeAdvancedRuntime = true;
                     break;
 
                 case "--format":
@@ -370,4 +424,16 @@ internal sealed record GuideWorkflowSuggestion
 
     [JsonPropertyName("rule_topics")]
     public required IReadOnlyList<string> RuleTopics { get; init; }
+
+    [JsonPropertyName("default_excludes_advanced_runtime")]
+    public required bool DefaultExcludesAdvancedRuntime { get; init; }
+
+    [JsonPropertyName("advanced_runtime_included")]
+    public required bool AdvancedRuntimeIncluded { get; init; }
+
+    [JsonPropertyName("advanced_runtime_suggestions")]
+    public required IReadOnlyList<string> AdvancedRuntimeSuggestions { get; init; }
+
+    [JsonPropertyName("advanced_runtime_warning")]
+    public required string AdvancedRuntimeWarning { get; init; }
 }
