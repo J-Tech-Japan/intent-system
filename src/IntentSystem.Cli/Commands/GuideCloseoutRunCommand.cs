@@ -80,7 +80,10 @@ Stage 1 — select an accepted PR (read-only; required before any mutation):
 
 Stage 2 — plan (dry-run; required before any write):
 1. `intent-cli closeout pr --pr <n> --repo {targetRepoPlaceholder} --domain {domainPlaceholder} --dry-run --format json` → inspect planned queue transition, runs events, continuation hint, and next_steps.
-   - If the result has an `error` field, stop and report the error. Do not apply.
+   - If the result contains `linked_issue but not linked_pr` or `retry with --issue`: the queue item has a linked_issue but no linked_pr. Resolve the linked issue number:
+     a. `gh pr view <n> --repo {targetRepoPlaceholder} --json closingIssuesReferences` → extract the issue number from `closingIssuesReferences[0].number`.
+     b. Retry: `intent-cli closeout pr --pr <n> --issue <linked-issue-n> --repo {targetRepoPlaceholder} --domain {domainPlaceholder} --dry-run --format json`
+   - If the result still has an `error` field after the retry, stop and report the error. Do not apply.
    - Confirm: execution_unit, queue_state_before → completed, linked issue close command in next_steps.
 2. Note the linked issue close command from `next_steps[0]` if present.
 
@@ -99,7 +102,8 @@ Stage 4 — submodule pointer sync (manual operator step):
 2. Do not guess the merge SHA; read it from `gh pr view <n> --repo {targetRepoPlaceholder} --json mergeCommit`.
 
 Stage 5 — apply queue/runs state (write):
-1. `intent-cli closeout pr --pr <n> --repo {targetRepoPlaceholder} --domain {domainPlaceholder} --write --format json` → applies queue-state completed transition and appends runs events.
+1. `intent-cli closeout pr --pr <n> [--issue <linked-issue-n>] --repo {targetRepoPlaceholder} --domain {domainPlaceholder} --write --format json` → applies queue-state completed transition and appends runs events.
+   - Include `--issue <n>` if it was required in Stage 2 dry-run.
    - If the result has an `error` field, stop and report the error.
    - Confirm: mode is `write`, queue_state_after is `completed`.
 

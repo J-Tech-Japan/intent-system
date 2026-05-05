@@ -28,7 +28,7 @@ internal static class CloseoutPrCommand
     private const string ContinuationClarificationRequired = "clarification-required";
 
     private const string UsageLine =
-        "Usage: intent-cli closeout pr --pr <n> --repo <owner/repo> [--domain <name>] [--dry-run|--write] [--format json|markdown]";
+        "Usage: intent-cli closeout pr --pr <n> --repo <owner/repo> [--issue <n>] [--domain <name>] [--dry-run|--write] [--format json|markdown]";
 
     /// <summary>
     /// Test seam — replaces the default UTC timestamp source for runs events.
@@ -47,7 +47,7 @@ internal static class CloseoutPrCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var pr, out var repo, out var domainOverride, out var write, out var format, out var error))
+        if (!TryParseArguments(args, out var pr, out var repo, out var domainOverride, out var linkedIssueNumber, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -88,10 +88,20 @@ internal static class CloseoutPrCommand
 
         var prToken = pr!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, prToken));
+
+        // Fallback: when linked_pr is absent, resolve via --issue (linked_issue.Number).
+        if (matchedItem is null && linkedIssueNumber.HasValue)
+        {
+            matchedItem = queueState.Items.FirstOrDefault(item =>
+                item.LinkedIssue?.Number == linkedIssueNumber.Value);
+        }
+
         if (matchedItem is null)
         {
-            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr.Value, queueStatePath, runsLogPath, write,
-                $"no queue item found with linked_pr matching #{pr}."));
+            var hint = linkedIssueNumber.HasValue
+                ? $"no queue item found with linked_pr matching #{pr} or linked_issue.number {linkedIssueNumber.Value}."
+                : $"no queue item found with linked_pr matching #{pr}. If the queue item has linked_issue but not linked_pr, retry with --issue <n>.";
+            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr.Value, queueStatePath, runsLogPath, write, hint));
             return 1;
         }
 
@@ -365,6 +375,7 @@ internal static class CloseoutPrCommand
         out int? pr,
         out string? repo,
         out string? domainOverride,
+        out int? linkedIssueNumber,
         out bool write,
         out string format,
         out string error)
@@ -372,6 +383,7 @@ internal static class CloseoutPrCommand
         pr = null;
         repo = null;
         domainOverride = null;
+        linkedIssueNumber = null;
         write = false;
         var dryRun = false;
         format = FormatMarkdown;
@@ -418,6 +430,23 @@ internal static class CloseoutPrCommand
                     }
 
                     domainOverride = args[index + 1];
+                    index++;
+                    break;
+
+                case "--issue":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--issue requires a value.";
+                        return false;
+                    }
+
+                    if (!int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var issueValue) || issueValue <= 0)
+                    {
+                        error = $"--issue must be a positive integer (got '{args[index + 1]}').";
+                        return false;
+                    }
+
+                    linkedIssueNumber = issueValue;
                     index++;
                     break;
 
@@ -486,6 +515,7 @@ internal static class CloseoutPrCommand
         writer.WriteLine("closeout pr");
         writer.WriteLine(UsageLine);
         writer.WriteLine("Records the queue/runs closeout for an accepted child PR. --dry-run plans only; --write applies queue + runs updates. Submodule sync remains a manual next step.");
+        writer.WriteLine("  --issue <n>  Optional: fallback linked-issue number for queue items where linked_pr is absent.");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
