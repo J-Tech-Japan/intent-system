@@ -173,7 +173,7 @@ public sealed class GuideIntentWorkNextSliceExecutionCommandTests
     }
 
     [Fact]
-    public void Execute_Json_PromptIncludesParentStateCommitAndPushBoundary()
+    public void Execute_Json_PromptIncludesNarrowParentStateCommitAndPushBoundary()
     {
         using var writer = new StringWriter();
         GuideIntentWorkNextSliceExecutionCommand.Execute(
@@ -184,9 +184,28 @@ public sealed class GuideIntentWorkNextSliceExecutionCommandTests
         using var document = JsonDocument.Parse(writer.ToString());
         var prompt = document.RootElement.GetProperty("prompt").GetString()!;
         Assert.Contains("git add", prompt, StringComparison.Ordinal);
+        Assert.Contains(".intent-cli/queue-state.json", prompt, StringComparison.Ordinal);
+        Assert.Contains(".intent-cli/runs.jsonl", prompt, StringComparison.Ordinal);
         Assert.Contains("git commit", prompt, StringComparison.Ordinal);
         Assert.Contains("git push", prompt, StringComparison.Ordinal);
         Assert.Contains("durable", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_Json_PromptForbidsGitAddAll()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkNextSliceExecutionCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        // Ensure git add -A does not appear as a command (followed by &&, space+&&, or end-of-line)
+        Assert.DoesNotContain("git add -A &&", prompt, StringComparison.Ordinal);
+        // Ensure the prompt explicitly forbids git add -A
+        Assert.Contains("Do not use `git add -A`", prompt, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -111,8 +111,12 @@ Execution steps (only when dry-run gate passes):
 6. Publish at most one GitHub issue per wake regardless of how many packets are preloaded.
 
 Parent state commit and push:
-After writing packet files and before calling `intent-cli automation issue-publish`, commit and push the parent state:
-`git add -A && git commit -m ""G<n>: <title>"" && git push`
+After writing packet files and before calling `intent-cli automation issue-publish`, commit and push only the relevant parent durable files for the selected execution unit:
+```
+git add .intent-cli/queue-state.json .intent-cli/runs.jsonl .intent-cli/issues/<EU>/ intents/{domain}/issues/<EU>/ && git commit -m ""G<n>: <title>"" && git push
+```
+Also stage the child submodule pointer when applicable: `git add submodules/<child-repo-name>`.
+Do NOT use `git add -A`; staging unrelated local changes into a publish commit corrupts the durable parent state.
 This is the durable publish boundary. `intent-target` is applied only after parent state is durably committed.
 
 Hard rules:
@@ -124,6 +128,7 @@ Hard rules:
 - All label transitions go through installed `intent-cli automation` commands.
 - `intent-target` is the host-owned publish boundary; apply it only via `intent-cli automation issue-publish` after parent state is pushed.
 - Publish at most one GitHub issue per wake.
+- Do not use `git add -A` for the parent state commit; always stage only the relevant durable files explicitly.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.";
 
         return new GuideIntentWorkNextSliceExecutionResult
