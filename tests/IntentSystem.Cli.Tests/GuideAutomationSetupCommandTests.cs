@@ -24,7 +24,7 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Contains("intent-cli guide model --format json", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli guide onboarding --format json", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli guide commands list --format json", output, StringComparison.Ordinal);
-        Assert.Contains("intent-cli automation summary --format json", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli automation summary --domain", output, StringComparison.Ordinal);
         Assert.Contains("## Forbidden rule sources", output, StringComparison.Ordinal);
         Assert.Contains("intents/rules/**", output, StringComparison.Ordinal);
         Assert.Contains("local skill files", output, StringComparison.Ordinal);
@@ -140,17 +140,110 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Contains("--kind must be 'child-implement' or 'host-review-next-slice'", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // ── focused-guide-automation-setup-child-domain-repo-tests ───────────
+
     [Fact]
-    public void Execute_ChildImplementMissingRepo_ReturnsUsageError()
+    public void Execute_ChildImplementNoRepo_EmitsRepoCwdGuidanceAndDomainPlaceholder()
     {
         using var writer = new StringWriter();
         var exitCode = GuideAutomationSetupCommand.Execute(
             CreateContext(),
-            ["--kind", "child-implement"],
+            ["--kind", "child-implement", "--format", "json"],
             writer);
 
-        Assert.Equal(1, exitCode);
-        Assert.Contains("--repo is required for --kind child-implement.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("gh repo view --json nameWithOwner", prompt, StringComparison.Ordinal);
+        Assert.Contains("git remote get-url origin", prompt, StringComparison.Ordinal);
+        Assert.Contains("<DOMAIN>", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("/Users/", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementNoRepo_FirstCallsContainDomainPlaceholder()
+    {
+        using var writer = new StringWriter();
+        GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var firstCalls = document.RootElement.GetProperty("first_calls")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(firstCalls,
+            c => c!.Contains("automation summary --domain <DOMAIN>", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_ChildImplementWithDomain_UsesDomainInAutomationSummary()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var firstCalls = document.RootElement.GetProperty("first_calls")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(firstCalls,
+            c => c!.Contains("automation summary --domain intent-cli --format json", StringComparison.Ordinal));
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("automation summary --domain intent-cli --format json", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("<DOMAIN>", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementWithRepoAndDomain_EmitsExplicitValuesAndNoCwdPath()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--repo", "J-Tech-Japan/intent-system",
+             "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("J-Tech-Japan/intent-system", document.RootElement.GetProperty("repo").GetString());
+        Assert.Equal("intent-cli", document.RootElement.GetProperty("domain").GetString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("`J-Tech-Japan/intent-system`", prompt, StringComparison.Ordinal);
+        Assert.Contains("automation summary --domain intent-cli --format json", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("/Users/", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementPrompt_SeparatesChildWorktreeFromParentHostRoot()
+    {
+        using var writer = new StringWriter();
+        GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("CHILD_WORKTREE", prompt, StringComparison.Ordinal);
+        Assert.Contains("parent host root", prompt, StringComparison.Ordinal);
+        Assert.Contains("--workdir $CHILD_WORKTREE", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementMarkdown_NoDomain_EmitsDomainPlaceholderInSection()
+    {
+        using var writer = new StringWriter();
+        GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "markdown"],
+            writer);
+
+        var output = writer.ToString();
+        Assert.Contains("<DOMAIN>", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("/Users/", output, StringComparison.Ordinal);
     }
 
     [Fact]
