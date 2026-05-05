@@ -50,14 +50,7 @@ internal static class GuideAutomationSetupCommand
         switch (kind)
         {
             case KindChildImplement:
-                if (string.IsNullOrWhiteSpace(repo))
-                {
-                    writer.WriteLine("--repo is required for --kind child-implement.");
-                    writer.WriteLine(UsageLine);
-                    return 1;
-                }
-
-                return EmitResult(writer, format, BuildChildImplement(repo!));
+                return EmitResult(writer, format, BuildChildImplement(repo, domain));
 
             case KindHostReviewNextSlice:
                 if (string.IsNullOrWhiteSpace(domain))
@@ -98,22 +91,25 @@ internal static class GuideAutomationSetupCommand
         return 0;
     }
 
-    private static GuideAutomationSetupResult BuildChildImplement(string repo)
+    private static GuideAutomationSetupResult BuildChildImplement(string? repo, string? domain)
     {
+        var repoLabel = string.IsNullOrWhiteSpace(repo) ? "the repo in the current worktree" : $"`{repo}`";
+        var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
+
         var prompt =
-$@"Set up the child implementation loop for `{repo}` once. Do not register any cron, monitor, reminder, scheduler, or recurring wakeup as part of this setup unless the operator explicitly asks.
+$@"Set up the child implementation loop for {repoLabel} once. Do not register any cron, monitor, reminder, scheduler, or recurring wakeup as part of this setup unless the operator explicitly asks.
 
 First-call sequence (read-only; required before any mutation):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
 2. `intent-cli guide onboarding --format json` — first-call sequence for a fresh agent.
 3. `intent-cli guide commands list --format json` — `primary` vs `support` vs `advanced` (`run`) vs `experimental` classification.
-4. `intent-cli automation summary --format json` — current label-driven contract and capability JSON.
+4. `intent-cli automation summary --domain {domainPlaceholder} --format json` — canonical label-driven contract and capability JSON for the parent intent domain.
 
 Loop body (single wake; the operator drives subsequent wakes if any):
-1. Confirm cwd is the child repo worktree root for `{repo}`. Stop with `wrong-worktree` if not.
-2. Resolve `<OWNER>/<REPO>` via `gh repo view --json nameWithOwner --jq .nameWithOwner` (fall back to `git remote get-url origin`).
+1. Save the child worktree path: `CHILD_WORKTREE=""$PWD""`. Confirm it is a git worktree root. Stop with `wrong-worktree` if not.
+2. Resolve `<OWNER>/<REPO>` from the child cwd: `gh repo view --json nameWithOwner --jq .nameWithOwner` (fall back to `git remote get-url origin`).
 3. `git fetch --all --prune` and `git status --short`. If dirty in a dedicated automation worktree, clean local residue (`git reset --hard`, `git clean -fd`, submodule reset). Never `git clean -fdx`. Never clean a personal/shared checkout.
-4. From the parent host root, run `intent-cli worker next-action --repo <OWNER>/<REPO> --workdir $CHILD_WORKTREE --format json`. Dispatch on `action`:
+4. From the parent host root (NOT the child cwd), run `intent-cli worker next-action --repo <OWNER>/<REPO> --workdir $CHILD_WORKTREE --format json`. Dispatch on `action`:
    - `none` → stop with `idle`.
    - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr ...` and `worker complete --kind issue --number <n> --outcome <outcome> --write --format json`.
    - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix ...` and `worker complete --kind pr --number <n> --outcome <outcome> --write --format json`.
@@ -131,14 +127,15 @@ Hard rules:
         return new GuideAutomationSetupResult
         {
             Kind = KindChildImplement,
-            Repo = repo,
+            Repo = string.IsNullOrWhiteSpace(repo) ? null : repo,
+            Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
             Prompt = prompt,
             FirstCalls = new[]
             {
                 "intent-cli guide model --format json",
                 "intent-cli guide onboarding --format json",
                 "intent-cli guide commands list --format json",
-                "intent-cli automation summary --format json"
+                $"intent-cli automation summary --domain {domainPlaceholder} --format json"
             },
             ForbiddenSources = new[]
             {
@@ -147,7 +144,7 @@ Hard rules:
                 "copied prompt files"
             },
             LabelOwnership = "All label transitions delegated to installed intent-cli automation / worker commands. Manual `gh ... edit --label` fallback is forbidden.",
-            WorktreeFriendly = "The prompt resolves the repo from the child worktree's `gh` / `git remote` and runs the selector from the parent host root with --workdir; no hard-coded paths beyond the parent host root, and the same prompt works across local worktrees."
+            WorktreeFriendly = "The prompt resolves the repo from the child worktree's `gh` / `git remote` and runs the selector from the parent host root with --workdir; no hard-coded paths, and the same prompt works across local worktrees."
         };
     }
 
@@ -367,6 +364,10 @@ Hard rules:
         writer.WriteLine("guide automation setup");
         writer.WriteLine(UsageLine);
         writer.WriteLine("Read-only paste-ready setup prompts for the child implementation loop or the host review / next-slice loop.");
+        writer.WriteLine();
+        writer.WriteLine("For --kind child-implement:");
+        writer.WriteLine("  --repo is optional; omit to derive the repo from the current child worktree via gh/git.");
+        writer.WriteLine("  --domain is optional; omit to emit a <DOMAIN> placeholder in the generated prompt.");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
