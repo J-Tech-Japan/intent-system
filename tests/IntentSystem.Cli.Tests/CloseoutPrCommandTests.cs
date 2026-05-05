@@ -92,7 +92,7 @@ public sealed class CloseoutPrCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_GivenQueuedItem_FailsWithUnsupportedTransition()
+    public void Execute_GivenQueuedItem_TransitionsToCompleted()
     {
         using var workspace = new CloseoutPrWorkspace();
         workspace.WriteQueueState(BuildQueueState("G246", "queued", linkedPr: "594"));
@@ -103,9 +103,10 @@ public sealed class CloseoutPrCommandTests : IDisposable
             ["--repo", "J-Tech-Japan/intent-system", "--pr", "594", "--write", "--format", "json"],
             writer);
 
-        Assert.Equal(1, exitCode);
+        Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
-        Assert.Contains("active/review/fixing → completed only", document.RootElement.GetProperty("error").GetString()!, StringComparison.Ordinal);
+        Assert.Equal("queued", document.RootElement.GetProperty("queue_state_before").GetString());
+        Assert.Equal("completed", document.RootElement.GetProperty("queue_state_after").GetString());
     }
 
     [Fact]
@@ -253,6 +254,175 @@ public sealed class CloseoutPrCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Contains("closeout pr", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    // ── focused-closeout-pr-skill-replacement-tests ───────────
+
+    [Fact]
+    public void Execute_GivenQueuedStateWithLinkedIssueAndNoLinkedPr_ResolvesViaIssueFlagDryRun()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G268", "queued", linkedIssueNumber: 639));
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "640", "--issue", "639", "--dry-run", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("G268", root.GetProperty("execution_unit").GetString());
+        Assert.Equal("dry-run", root.GetProperty("mode").GetString());
+        Assert.Equal("queued", root.GetProperty("queue_state_before").GetString());
+        Assert.Equal("completed", root.GetProperty("queue_state_after").GetString());
+    }
+
+    [Fact]
+    public void Execute_GivenQueuedStateWithLinkedIssueAndNoLinkedPr_ResolvesViaIssueFlagWrite()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G268", "queued", linkedIssueNumber: 639));
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "640", "--issue", "639", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("write", root.GetProperty("mode").GetString());
+        Assert.Equal("queued", root.GetProperty("queue_state_before").GetString());
+        Assert.Equal("completed", root.GetProperty("queue_state_after").GetString());
+
+        var queueOnDisk = File.ReadAllText(workspace.Context.GetQueueStatePath());
+        Assert.Contains("\"state\": \"completed\"", queueOnDisk, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenLinkedIssueWithNoLinkedPr_ResolvesViaIssueFlagDryRun()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G268", "review", linkedIssueNumber: 639));
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "640", "--issue", "639", "--dry-run", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("G268", root.GetProperty("execution_unit").GetString());
+        Assert.Equal("dry-run", root.GetProperty("mode").GetString());
+        Assert.Equal("review", root.GetProperty("queue_state_before").GetString());
+        Assert.Equal("completed", root.GetProperty("queue_state_after").GetString());
+    }
+
+    [Fact]
+    public void Execute_GivenLinkedIssueWithNoLinkedPr_ResolvesViaIssueFlagWrite()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G268", "review", linkedIssueNumber: 639));
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "640", "--issue", "639", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("write", root.GetProperty("mode").GetString());
+        Assert.Equal("completed", root.GetProperty("queue_state_after").GetString());
+
+        var queueOnDisk = File.ReadAllText(workspace.Context.GetQueueStatePath());
+        Assert.Contains("\"state\": \"completed\"", queueOnDisk, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenNoLinkedPrAndNoIssueFlagProvided_HintsRetryWithIssueFlag()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G268", "review", linkedIssueNumber: 639));
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "640", "--dry-run", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("retry with --issue", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenLinkedIssueWithNoLinkedPr_NextStepsContainsIssueCloseCommand()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G268", "review", linkedIssueNumber: 639));
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "640", "--issue", "639", "--dry-run", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var nextSteps = document.RootElement.GetProperty("next_steps")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(nextSteps, s => s!.Contains("gh issue close 639", StringComparison.Ordinal));
+        Assert.Contains(nextSteps, s => s!.Contains("Closed by PR #640", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_GivenIssueFlagWithBothLinkedPrAndIssuePresent_PrefersLinkedPrMatch()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G246", "review", linkedPr: "594"));
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "594", "--issue", "100", "--dry-run", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("G246", document.RootElement.GetProperty("execution_unit").GetString());
+    }
+
+    private static string BuildQueueStateWithLinkedIssue(string executionUnit, string state, int linkedIssueNumber)
+    {
+        return $$"""
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "{{executionUnit}}",
+                  "title": "title",
+                  "state": "{{state}}",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {"repo": "J-Tech-Japan/intent-system", "number": {{linkedIssueNumber}}},
+                  "linked_pr": null,
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """;
     }
 
     private static string BuildQueueState(string executionUnit, string state, string? linkedPr)
