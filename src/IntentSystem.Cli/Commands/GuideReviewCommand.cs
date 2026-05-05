@@ -63,6 +63,12 @@ internal static class GuideReviewCommand
             return 0;
         }
 
+        // G267: nested `guide review run` paste-ready review-prompt subcommand.
+        if (args.Length >= 1 && string.Equals(args[0], "run", StringComparison.Ordinal))
+        {
+            return GuideReviewRunCommand.Execute(context, args[1..], writer);
+        }
+
         if (!TryParseArguments(args, out var pr, out var repo, out var domainOverride, out var format, out var error))
         {
             writer.WriteLine(error);
