@@ -210,7 +210,8 @@ internal static class CommandRouter
                 ["review"] = GuideReviewCommand.Execute,
                 ["collaborate"] = GuideCollaborateCommand.Execute,
                 ["rules"] = GuideRulesCommand.Execute,
-                ["workflow"] = GuideWorkflowCommand.Execute
+                ["workflow"] = GuideWorkflowCommand.Execute,
+                ["model"] = GuideModelCommand.Execute
             },
             ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
