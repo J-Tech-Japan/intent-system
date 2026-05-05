@@ -52,6 +52,7 @@ These templates assume:
 | G252  | `intent-cli guide rules --topic`        | Read-only operator-facing rule summaries for label-ownership / child-issue-contract / clarification / review-closeout / intake-interview, each with source references and installed-command hints |
 | G253  | [`collaborative-intent-shaping.md`](./collaborative-intent-shaping.md) | Smoke guide for the prompt-to-intent flow using the G249–G252 + G241–G243 surfaces; read-only by default, names operator decision gates |
 | G254  | `intent-cli guide rules list`           | Read-only listing of supported `guide rules --topic` ids, categories (automation / issue-contract / interview / review), and short descriptions |
+| G255  | `intent-cli guide workflow suggest`     | Read-only workflow recommendation: classifies a broad operator goal (`--goal` text or `--from-file` path) into feature-intake / next-slice-planning / review / child-implementation / clarification, returns the suggested command sequence and rule topics |
 
 ## Installed host transition command adoption
 
