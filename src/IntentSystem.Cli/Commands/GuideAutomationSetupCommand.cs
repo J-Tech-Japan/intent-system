@@ -122,7 +122,14 @@ Hard rules:
 - All label transitions go through installed `intent-cli automation` / `intent-cli worker` commands. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
 - Never apply `intent-target` from the child loop; it is host-owned.
 - Never apply `intent-pr-created` to a PR; it is an issue-side completion marker.
-- Process at most one action per wake.";
+- Process at most one action per wake.
+
+Frequency policy (applies only when a recurring local loop is explicitly requested; the default is one-wake execution):
+- This setup prompt describes a single-wake run, not a recurring loop. One-wake execution does not create any scheduler.
+- If the operator asks for a recurring loop, ask for the frequency before creating any cron, monitor, or scheduler. Never guess or use a tool-default interval.
+- High-frequency local loops (active development): 5 minutes.
+- Low-frequency local loops (background / idle polling): about 20 minutes.
+- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.";
 
         return new GuideAutomationSetupResult
         {
@@ -188,7 +195,14 @@ Hard rules:
 - Never apply `intent-pr-created` to a PR.
 - Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains in `{targetRepo}`.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
-- Process at most one PR review and one new child issue per wake.";
+- Process at most one PR review and one new child issue per wake.
+
+Frequency policy (applies only when a recurring local loop is explicitly requested; the default is one-wake execution):
+- This setup prompt describes a single-wake run, not a recurring loop. One-wake execution does not create any scheduler.
+- If the operator asks for a recurring loop, ask for the frequency before creating any cron, monitor, or scheduler. Never guess or use a tool-default interval.
+- High-frequency local loops (active development): 5 minutes.
+- Low-frequency local loops (background / idle polling): about 20 minutes.
+- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.";
 
         return new GuideAutomationSetupResult
         {

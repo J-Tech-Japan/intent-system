@@ -402,6 +402,113 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Contains("local paths", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── focused-guide-automation-setup-frequency-policy-tests ───────────
+
+    [Fact]
+    public void Execute_ChildImplementJson_PromptContainsFrequencyPolicy()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("5 minutes", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("20 minutes", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ask for the frequency", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("one-wake execution", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementJson_PromptDistinguishesOneWakeFromRecurring()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("one-wake execution does not create any scheduler", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("recurring loop", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Never guess or use a tool-default interval", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementMarkdown_ContainsFrequencyPolicy()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("5 minutes", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("20 minutes", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ask for the frequency", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_HostReviewNextSliceJson_PromptContainsFrequencyPolicy()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("5 minutes", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("20 minutes", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ask for the frequency", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("one-wake execution", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_HostReviewNextSliceJson_PromptDistinguishesOneWakeFromRecurring()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("one-wake execution does not create any scheduler", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("recurring loop", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Never guess or use a tool-default interval", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostReviewNextSliceMarkdown_ContainsFrequencyPolicy()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("5 minutes", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("20 minutes", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ask for the frequency", output, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
