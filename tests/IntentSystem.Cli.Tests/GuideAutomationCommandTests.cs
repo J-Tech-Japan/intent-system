@@ -179,6 +179,56 @@ public sealed class GuideAutomationCommandTests
         Assert.Contains("child-implement-update", output, StringComparison.Ordinal);
     }
 
+    // ── G270 stale-guidance regression ───────────────────────────────────────
+
+    [Fact]
+    public void HostReviewIntentCliPrompt_DoesNotContainHardCodedHostPath()
+    {
+        Assert.DoesNotContain("/Users/tomohisa", GuideAutomationCommand.HostReviewIntentCliPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostReviewIntentCliPrompt_DoesNotContainStaleRuleFileReference()
+    {
+        Assert.DoesNotContain("intents/rules/automations/host-review-loop.md", GuideAutomationCommand.HostReviewIntentCliPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostReviewSekibanAsAServicePrompt_DoesNotContainHardCodedHostPath()
+    {
+        Assert.DoesNotContain("/Users/tomohisa", GuideAutomationCommand.HostReviewSekibanAsAServicePrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostReviewSekibanAsAServicePrompt_DoesNotContainStaleRuleFileReference()
+    {
+        Assert.DoesNotContain("intents/rules/automations/host-review-loop.md", GuideAutomationCommand.HostReviewSekibanAsAServicePrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChildImplementUpdateBody_DoesNotContainHardCodedHostPath()
+    {
+        Assert.DoesNotContain("/Users/tomohisa", GuideAutomationCommand.ChildImplementUpdateBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChildImplementUpdateBody_DoesNotRecommendLocalSkillFiles()
+    {
+        Assert.DoesNotContain("You may use implementation skills such as", GuideAutomationCommand.ChildImplementUpdateBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostReviewIntentCliPrompt_DoesNotContainIntentNextSliceSkillRef()
+    {
+        Assert.DoesNotContain("intent-next-slice", GuideAutomationCommand.HostReviewIntentCliPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostReviewSekibanAsAServicePrompt_DoesNotContainIntentNextSliceSkillRef()
+    {
+        Assert.DoesNotContain("intent-next-slice", GuideAutomationCommand.HostReviewSekibanAsAServicePrompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

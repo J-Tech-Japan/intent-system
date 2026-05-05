@@ -24,7 +24,7 @@ The CLI is packaged as a .NET tool with:
 Local package smoke path:
 
 ```bash
-export INTENT_CLI_LOCAL_VERSION="0.1.0-local.$(date -u +%Y%m%d%H%M%S)"
+export INTENT_CLI_LOCAL_VERSION="0.2.0-local.$(date -u +%Y%m%d%H%M%S)"
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
   -p:Version="$INTENT_CLI_LOCAL_VERSION" \
   -o .artifacts/packages

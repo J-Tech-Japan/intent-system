@@ -34,10 +34,10 @@ fi
 
 CHILD_SHA="$(git -C "$CHILD_INTENT_SYSTEM" rev-parse --short=12 HEAD)"
 LOCAL_STAMP="$(date -u +%Y%m%d%H%M%S)"
-INTENT_CLI_LOCAL_VERSION="${INTENT_CLI_LOCAL_VERSION:-0.1.0-local.$LOCAL_STAMP.$$.g$CHILD_SHA}"
+INTENT_CLI_LOCAL_VERSION="${INTENT_CLI_LOCAL_VERSION:-0.2.0-local.$LOCAL_STAMP.$$.g$CHILD_SHA}"
 
-if [[ "$INTENT_CLI_LOCAL_VERSION" == "0.1.0" ]]; then
-  echo "INTENT_CLI_LOCAL_VERSION must not be the fixed package version 0.1.0." >&2
+if [[ "$INTENT_CLI_LOCAL_VERSION" == "0.2.0" ]]; then
+  echo "INTENT_CLI_LOCAL_VERSION must not be the fixed package version 0.2.0." >&2
   exit 1
 fi
 
