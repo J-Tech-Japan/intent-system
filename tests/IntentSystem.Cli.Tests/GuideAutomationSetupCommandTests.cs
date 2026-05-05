@@ -314,6 +314,94 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Equal("child-implement", document.RootElement.GetProperty("kind").GetString());
     }
 
+    // ── focused-guide-automation-setup-same-thread-and-wrapper-help-tests ───────────
+
+    [Fact]
+    public void Execute_HostReviewNextSliceJson_PromptPreventsNewThreadCreation()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("do not create a new chat", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Run the loop body exactly once", prompt, StringComparison.Ordinal);
+        Assert.Contains("in the current thread", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_HostReviewNextSliceJson_PromptWarnsAboutCloudSchedulers()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("cloud", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("local paths", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(".intent-cli", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostReviewNextSliceJson_PromptBansNewSchedulerUnlessOperatorAsks()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Do not open a new chat, session, cron, monitor, or scheduler", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostReviewNextSliceJson_FirstCallsAutomationSummaryIncludesDomain()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var firstCalls = document.RootElement.GetProperty("first_calls")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(firstCalls,
+            c => c!.Contains("automation summary --domain intent-cli --format json", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_HostReviewNextSliceMarkdown_ContainsSameThreadGuidance()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("do not create a new chat", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("local paths", output, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

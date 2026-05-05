@@ -44,22 +44,29 @@ internal static class AutomationInstalledCliSurfaceProbe
         }
 
         var output = $"{probe.Stdout}\n{probe.Stderr}";
-        var hasSurface = probe.ExitCode == 0
-            && surface.ExpectedTokens.All(token => output.Contains(token, StringComparison.Ordinal));
-        if (hasSurface)
+
+        // A surface is absent only when the router explicitly reports it is not implemented.
+        // Accept non-zero exit codes — probes intentionally omit required args so the command
+        // reaches intent-cli but fails validation, avoiding --help interception by wrapper layers
+        // such as dotnet tool exec.
+        if (output.Contains("not yet implemented", StringComparison.OrdinalIgnoreCase))
         {
-            return new InstalledCliSurfaceCheck(
-                surface.Command,
-                surface.Transition,
-                true,
-                null);
+            return Missing(surface, "installed CLI reports the command surface is not yet implemented");
         }
 
-        var reason = output.Contains("not yet implemented", StringComparison.OrdinalIgnoreCase)
-            ? "installed CLI reports the command surface is not yet implemented"
-            : $"installed CLI help did not expose required surface tokens: {string.Join(", ", surface.ExpectedTokens)}";
+        if (surface.ExpectedTokens.Count > 0)
+        {
+            var missing = surface.ExpectedTokens
+                .Where(t => !output.Contains(t, StringComparison.Ordinal))
+                .ToArray();
+            if (missing.Length > 0)
+            {
+                return Missing(surface,
+                    $"installed CLI output did not include required capability tokens: {string.Join(", ", missing)}");
+            }
+        }
 
-        return Missing(surface, reason);
+        return new InstalledCliSurfaceCheck(surface.Command, surface.Transition, true, null);
     }
 
     private static InstalledCliSurfaceCheck Missing(RequiredSurface surface, string reason) =>
@@ -98,38 +105,42 @@ internal static class AutomationInstalledCliSurfaceProbe
         return Path.Combine(repoRoot, CliRuntimeContracts.IntentCliDirectoryName, "bin", executableName);
     }
 
+    // Probes intentionally omit --help to avoid wrapper-layer interception (e.g., dotnet tool exec
+    // consuming --help before intent-cli sees it). Each probe runs the command with no required args
+    // so the router dispatches to intent-cli, which returns a usage/validation error instead of the
+    // wrapper's own help. Absence is detected by "not yet implemented" in the output.
     private static readonly IReadOnlyList<RequiredSurface> RequiredSurfaces =
     [
         new(
             "intent-cli automation summary",
             null,
-            ["automation", "summary", "--help"],
-            ["automation summary"]),
+            ["automation", "summary"],
+            []),
         new(
             "intent-cli automation host-review-preflight",
             null,
-            ["automation", "host-review-preflight", "--help"],
-            ["automation host-review-preflight"]),
+            ["automation", "host-review-preflight"],
+            []),
         new(
             "intent-cli automation issue-publish",
             null,
-            ["automation", "issue-publish", "--help"],
-            ["automation issue-publish"]),
+            ["automation", "issue-publish"],
+            []),
         new(
             "intent-cli automation pr-transition",
             "review-start",
-            ["automation", "pr-transition", "--help"],
-            ["automation pr-transition", "review-start"]),
+            ["automation", "pr-transition"],
+            ["review-start"]),
         new(
             "intent-cli automation pr-transition",
             "request-update",
-            ["automation", "pr-transition", "--help"],
-            ["automation pr-transition", "request-update"]),
+            ["automation", "pr-transition"],
+            ["request-update"]),
         new(
             "intent-cli automation pr-transition",
             "approved",
-            ["automation", "pr-transition", "--help"],
-            ["automation pr-transition", "approved"]),
+            ["automation", "pr-transition"],
+            ["approved"]),
     ];
 
     private sealed record RequiredSurface(

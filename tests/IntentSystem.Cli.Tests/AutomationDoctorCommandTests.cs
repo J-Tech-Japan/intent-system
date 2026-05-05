@@ -267,15 +267,15 @@ public sealed class AutomationDoctorCommandTests
             var scriptPath = Path.Combine(binPath, "intent-cli");
             var prTransitionBlock = stalePrTransition
                 ? "  echo \"Command 'automation pr-transition' is not yet implemented.\"\n  exit 1\n"
-                : "  echo 'automation pr-transition'\n  echo 'review-start'\n  echo 'request-update'\n  echo 'approved'\n  exit 0\n";
+                : "  echo '--transition is required (review-start, request-update, or approved).'\n  exit 1\n";
             File.WriteAllText(
                 scriptPath,
                 "#!/bin/sh\n"
                 + "case \"$*\" in\n"
-                + "  'automation summary --help') echo 'automation summary'; exit 0 ;;\n"
-                + "  'automation host-review-preflight --help') echo 'automation host-review-preflight'; exit 0 ;;\n"
-                + "  'automation issue-publish --help') echo 'automation issue-publish'; exit 0 ;;\n"
-                + "  'automation pr-transition --help')\n"
+                + "  'automation summary') echo '--domain is required.'; exit 1 ;;\n"
+                + "  'automation host-review-preflight') echo '--repo is required.'; exit 1 ;;\n"
+                + "  'automation issue-publish') echo '--issue is required.'; exit 1 ;;\n"
+                + "  'automation pr-transition')\n"
                 + prTransitionBlock
                 + "    ;;\n"
                 + "  *) echo \"unexpected probe: $*\"; exit 1 ;;\n"
