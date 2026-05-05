@@ -55,6 +55,7 @@ These templates assume:
 | G255  | `intent-cli guide workflow suggest`     | Read-only workflow recommendation: classifies a broad operator goal (`--goal` text or `--from-file` path) into feature-intake / next-slice-planning / review / child-implementation / clarification, returns the suggested command sequence and rule topics |
 | G256  | `intent-cli guide model`                | Read-only summary of the chat-first / CLI-internal collaboration model: roles (human, AI agent, intent-cli, host repo), primary data paths, optional advanced runtime, hard rules |
 | G257  | `intent-cli guide commands list`        | Read-only listing of intent-cli command groups with primary / support / advanced / experimental classification, mutability, and recommended caller |
+| G258  | `guide workflow suggest --include-advanced-runtime` | Default chat-first guidance excludes `intent-cli run` / supervisor subprocess; the new flag opts the relevant workflow into advanced runtime suggestions |
 
 ## Installed host transition command adoption
 
