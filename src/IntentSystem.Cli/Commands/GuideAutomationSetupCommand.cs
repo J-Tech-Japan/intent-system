@@ -177,12 +177,17 @@ First-call sequence (read-only; required before any mutation):
 Loop body (single wake):
 1. Confirm cwd is the parent host repo root.
 2. Stage 1 — review/closeout:
-   - `intent-cli automation host-review-preflight --repo {targetRepo} --format json` to find an eligible PR.
-   - For the selected PR: `intent-cli review closeout-plan --pr <n> --repo {targetRepo} --domain {domain} --format json` and `intent-cli guide review --pr <n> --repo {targetRepo} --domain {domain} --format json`.
-   - If review passes: `intent-cli automation pr-transition --transition approved --repo {targetRepo} --pr <n> --write --format json`, merge via the host's existing merge step, then `intent-cli closeout pr --pr <n> --repo {targetRepo} --write --format json`.
-   - If review needs repair: leave an actionable PR comment, then `intent-cli automation pr-transition --transition request-update --repo {targetRepo} --pr <n> --write --format json`.
-3. Stage 2 — next-slice (only if WIP cap and clarification gates allow):
-   - `intent-cli intent next-slice --dry-run --domain {domain} --target-repo {targetRepo} --format json` — confirm `recommended_outcome` is `issue-cut-ready`.
+   Run `intent-cli automation host-review-preflight --repo {targetRepo} --format json` and dispatch on `action`:
+   - `stale-host-cli` → Abort the wake immediately. Refresh or reinstall `intent-cli` on PATH before the next wake. Do NOT fall back to direct DLL invocation, raw `gh` label mutation, or report `no-actionable-item`. Missing or stale CLI surfaces are an infrastructure error, not an idle state.
+   - `skip-next-slice-due-to-wip` → WIP cap is active. Skip Stage 2. Stop the wake. Do not publish a new child issue while open `intent-target` items remain in `{targetRepo}`.
+   - `review-pr` → Review the selected PR: `intent-cli review closeout-plan --pr <n> --repo {targetRepo} --domain {domain} --format json` and `intent-cli guide review --pr <n> --repo {targetRepo} --domain {domain} --format json`. If review passes: `intent-cli automation pr-transition --transition approved --repo {targetRepo} --pr <n> --write --format json`, merge via the host's existing merge step, then `intent-cli closeout pr --pr <n> --repo {targetRepo} --write --format json`. If review needs repair: leave an actionable PR comment, then `intent-cli automation pr-transition --transition request-update --repo {targetRepo} --pr <n> --write --format json`. After Stage 1 closes out or requests repair, proceed to Stage 2 only if the WIP cap is clear.
+   - `no-actionable-item` or `candidate-ready` → No eligible PR found in Stage 1. This is NOT the final idle decision. Proceed directly to Stage 2.
+3. Stage 2 — next-slice (run when Stage 1 result is `no-actionable-item`, `candidate-ready`, or when Stage 1 review/closeout has cleared the WIP):
+   - `intent-cli intent next-slice --dry-run --domain {domain} --target-repo {targetRepo} --format json` — read `recommended_outcome` and dispatch:
+   - `issue-cut-ready` → proceed to packet draft and publication below. Queued unpublished packets with satisfied dependencies must be published here rather than ignored.
+   - `clarification-required` → stop and surface the open blocker or ambiguous question to the operator. Do NOT declare idle; the operator must unblock before the next-slice can proceed.
+   - `no-actionable-item` → stop with truly `no-actionable-item`. This is the only valid idle stop: Stage 1 found no eligible PR AND Stage 2 found no actionable packet.
+   - Any other outcome → stop and surface it as a blocker to the operator. Do NOT declare idle.
    - `intent-cli packet draft --execution-unit <id> --target-repo {targetRepo} --dry-run --format markdown` — preview the packet.
    - With operator acceptance: `intent-cli packet draft --execution-unit <id> --target-repo {targetRepo} --format json` then `intent-cli issue publish-flow <id> --repo {targetRepo} --write --format json`.
    - After parent durable state is pushed: `intent-cli automation issue-publish --repo {targetRepo} --issue <n> --write --format json`.
@@ -198,6 +203,7 @@ Hard rules:
 - Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains in `{targetRepo}`.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
 - Process at most one PR review and one new child issue per wake.
+- `no-actionable-item` from Stage 1 preflight is NOT idle; it means no PR was found. Stage 2 must still run before declaring the wake truly idle.
 
 Frequency policy (applies only when a recurring local loop is explicitly requested; the default is one-wake execution):
 - This setup prompt describes a single-wake run, not a recurring loop. One-wake execution does not create any scheduler.
