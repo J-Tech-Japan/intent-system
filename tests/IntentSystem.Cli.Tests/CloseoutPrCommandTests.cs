@@ -127,6 +127,56 @@ public sealed class CloseoutPrCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenSamePrNumberInDifferentRepo_SkipsOtherRepo()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState("""
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G192",
+                  "title": "wrong repo",
+                  "state": "completed",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_pr": {"repo": "J-Tech-Japan/intent-system", "number": 490, "url": "https://github.com/J-Tech-Japan/intent-system/pull/490"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                },
+                {
+                  "execution_unit": "SKS-G185",
+                  "title": "right repo",
+                  "state": "review",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/sekiban-as-a-service/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_pr": {"repo": "J-Tech-Japan/SekibanAsAService", "number": 490, "url": "https://github.com/J-Tech-Japan/SekibanAsAService/pull/490"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--pr", "490", "--dry-run", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("SKS-G185", document.RootElement.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
     public void Execute_GivenAnotherQueuedSlice_RecommendsNextSliceReady()
     {
         using var workspace = new CloseoutPrWorkspace();

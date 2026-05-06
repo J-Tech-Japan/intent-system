@@ -48,6 +48,7 @@ internal static class AutomationPrTransitionCommand
                 out var error))
         {
             writer.WriteLine(error);
+            WriteHelp(writer);
             return 1;
         }
 

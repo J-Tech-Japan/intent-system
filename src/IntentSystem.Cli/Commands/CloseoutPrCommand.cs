@@ -87,7 +87,7 @@ internal static class CloseoutPrCommand
         }
 
         var prToken = pr!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, prToken));
+        var matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, repo!, prToken));
 
         // Fallback: when linked_pr is absent, resolve via --issue (linked_issue.Number).
         if (matchedItem is null && linkedIssueNumber.HasValue)
@@ -207,7 +207,7 @@ internal static class CloseoutPrCommand
         return 0;
     }
 
-    private static bool MatchesLinkedPr(string? linkedPr, string prToken)
+    private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
     {
         if (string.IsNullOrWhiteSpace(linkedPr))
         {
@@ -217,6 +217,12 @@ internal static class CloseoutPrCommand
         if (string.Equals(linkedPr, prToken, StringComparison.Ordinal))
         {
             return true;
+        }
+
+        if (linkedPr!.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase))
+        {
+            return linkedPr.StartsWith($"https://github.com/{repo}/pull/", StringComparison.OrdinalIgnoreCase)
+                && linkedPr.EndsWith($"/{prToken}", StringComparison.Ordinal);
         }
 
         return linkedPr!.EndsWith($"/{prToken}", StringComparison.Ordinal);

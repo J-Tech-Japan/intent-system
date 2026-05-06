@@ -74,6 +74,33 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_PrAlreadyMarkedReviewingStillSelectsReviewPr()
+    {
+        using var workspace = new AutomationHostReviewPreflightWorkspace();
+        var lister = new FakeLister
+        {
+            Prs =
+            [
+                BuildPr(490, "reviewing", "https://github.com/J-Tech-Japan/SekibanAsAService/pull/490",
+                    "2026-05-06T02:00:00Z", ["intent-target", "intent-pr-reviewing"]),
+            ],
+        };
+        AutomationHostReviewPreflightCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewPreflightCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal("review-pr", result.Action);
+        Assert.Equal(490, result.TargetPr);
+        Assert.Equal([490], result.InFlightPrs);
+    }
+
+    [Fact]
     public void Execute_PrimaryIntentTargetPrWinsOverOlderIssueLinkedFallback()
     {
         using var workspace = new AutomationHostReviewPreflightWorkspace();

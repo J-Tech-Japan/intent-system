@@ -85,6 +85,7 @@ internal static class AutomationInstalledCliSurfaceProbe
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        startInfo.Environment["INTENT_CLI_SURFACE_PROBE"] = "1";
 
         foreach (var argument in arguments)
         {

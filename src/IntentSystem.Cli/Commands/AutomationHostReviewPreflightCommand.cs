@@ -40,6 +40,14 @@ internal static class AutomationHostReviewPreflightCommand
             return 0;
         }
 
+        if (args.Length == 0
+            && string.Equals(Environment.GetEnvironmentVariable("INTENT_CLI_SURFACE_PROBE"), "1", StringComparison.Ordinal))
+        {
+            writer.WriteLine("automation host-review-preflight");
+            writer.WriteLine("Usage: intent-cli automation host-review-preflight [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--format text|json]");
+            return 1;
+        }
+
         if (!TryParseArguments(args, out var repo, out var workdir, out var candidate, out var clarificationRequired, out var format, out var error))
         {
             writer.WriteLine(error);
@@ -273,8 +281,7 @@ internal static class AutomationHostReviewPreflightCommand
     {
         var labels = LabelNames(pr.Labels);
         var hasBlockingState =
-            labels.Contains(WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing, StringComparer.Ordinal)
-            || labels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate, StringComparer.Ordinal)
+            labels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate, StringComparer.Ordinal)
             || labels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress, StringComparer.Ordinal)
             || labels.Contains(WorkerNextActionConstants.Labels.IntentPrApproved, StringComparer.Ordinal);
 

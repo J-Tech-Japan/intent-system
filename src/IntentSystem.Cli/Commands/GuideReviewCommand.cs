@@ -108,7 +108,7 @@ internal static class GuideReviewCommand
         if (queueState is not null)
         {
             var prToken = pr!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, prToken));
+            matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, repo!, prToken));
             if (matchedItem is null)
             {
                 gaps.Add($"no queue item found with linked_pr matching #{pr}.");
@@ -172,7 +172,7 @@ internal static class GuideReviewCommand
         return result.Ready ? 0 : 1;
     }
 
-    private static bool MatchesLinkedPr(string? linkedPr, string prToken)
+    private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
     {
         if (string.IsNullOrWhiteSpace(linkedPr))
         {
@@ -182,6 +182,12 @@ internal static class GuideReviewCommand
         if (string.Equals(linkedPr, prToken, StringComparison.Ordinal))
         {
             return true;
+        }
+
+        if (linkedPr!.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase))
+        {
+            return linkedPr.StartsWith($"https://github.com/{repo}/pull/", StringComparison.OrdinalIgnoreCase)
+                && linkedPr.EndsWith($"/{prToken}", StringComparison.Ordinal);
         }
 
         return linkedPr!.EndsWith($"/{prToken}", StringComparison.Ordinal);
