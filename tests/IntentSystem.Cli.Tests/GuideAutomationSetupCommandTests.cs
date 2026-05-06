@@ -31,7 +31,7 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Contains("## Label ownership", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli automation", output, StringComparison.Ordinal);
         Assert.Contains("## Prompt", output, StringComparison.Ordinal);
-        Assert.Contains("Set up the child implementation loop for `J-Tech-Japan/intent-system`", output, StringComparison.Ordinal);
+        Assert.Contains("Set up the child implementation and PR-comment-update loop for `J-Tech-Japan/intent-system`", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -50,7 +50,7 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Equal("J-Tech-Japan/intent-system", root.GetProperty("repo").GetString());
         Assert.Equal(4, root.GetProperty("first_calls").GetArrayLength());
         Assert.True(root.GetProperty("forbidden_sources").GetArrayLength() >= 3);
-        Assert.Contains("Set up the child implementation loop", root.GetProperty("prompt").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("Set up the child implementation and PR-comment-update loop", root.GetProperty("prompt").GetString()!, StringComparison.Ordinal);
         Assert.Contains("Manual `gh ... edit", root.GetProperty("label_ownership").GetString()!, StringComparison.Ordinal);
         Assert.Contains("worktree", root.GetProperty("worktree_friendly").GetString()!, StringComparison.Ordinal);
     }
@@ -507,6 +507,90 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Contains("5 minutes", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("20 minutes", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("ask for the frequency", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── focused-guide-automation-setup-pr-comment-fix-hardening-tests ───────────
+
+    [Fact]
+    public void Execute_ChildImplementPrompt_PrCommentFixTreatsSelectedPRAsAuthoritative()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("authoritative work input", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("queue-state", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementPrompt_PrCommentFixForbidsHostBookkeepingEdits()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("queue-state.json", prompt, StringComparison.Ordinal);
+        Assert.Contains("linked_issue", prompt, StringComparison.Ordinal);
+        Assert.Contains("linked_pr", prompt, StringComparison.Ordinal);
+        Assert.Contains("host-owned durable bookkeeping", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementPrompt_PrCommentFixForbidsAutomationIssuePublish()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("automation issue-publish", prompt, StringComparison.Ordinal);
+        Assert.Contains("never run `intent-cli automation issue-publish`", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementPrompt_PrCommentFixInstructsCheckoutExistingBranch()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("gh pr checkout", prompt, StringComparison.Ordinal);
+        Assert.Contains("existing PR head branch", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementPrompt_ContainsMinimalOperatorTriggerPhrase()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("PR comment update loop", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-cli に聞いて", prompt, StringComparison.Ordinal);
     }
 
     private static CliContext CreateContext()

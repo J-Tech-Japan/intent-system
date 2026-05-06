@@ -64,7 +64,7 @@ internal static class GuideWorkerPrCommentFixCommand
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
 
         var prompt =
-$@"Repair the PR branch for {repoLabel} based on review comments. Do not use the `gh-fix-pr-comment` skill file, local skill files, or copied prompt files.
+$@"Repair the PR branch for {repoLabel} based on review comments. The PR URL returned by `intent-cli worker next-action` (or supplied directly by the operator) is the authoritative work input for this turn; do not inspect parent host queue-state or linked PR fields to decide what to repair. Do not use the `gh-fix-pr-comment` skill file, local skill files, or copied prompt files.
 
 First-call sequence (read-only; required before any code work):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
@@ -104,7 +104,9 @@ Hard rules:
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
 - Do not add `intent-target` to the PR; it is host-owned.
-- Do not add `intent-pr-created` to the PR; it is an issue-side completion marker.";
+- Do not add `intent-pr-created` to the PR; it is an issue-side completion marker.
+- Do not edit `queue-state.json`, `linked_issue`, or `linked_pr`; those are host-owned durable bookkeeping and must not be touched during a PR comment fix turn.
+- Do not run `intent-cli automation issue-publish`; that command is for publishing child issues, not for resolving PR comment repairs.";
 
         return new GuideWorkerPrCommentFixResult
         {
