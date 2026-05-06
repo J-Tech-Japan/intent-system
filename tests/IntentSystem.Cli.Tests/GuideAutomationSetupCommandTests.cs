@@ -597,6 +597,49 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Contains("published here rather than ignored", prompt, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Execute_HostReviewNextSliceJson_PromptStage2ClarificationRequiredStopsWithQuestion()
+    {
+        using var writer = new StringWriter();
+        GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("clarification-required", prompt, StringComparison.Ordinal);
+        Assert.Contains("surface the open blocker or ambiguous question", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("clarification-required", prompt.Replace("clarification-required", "REMOVED", StringComparison.Ordinal)
+            .Replace("no-actionable-item", "", StringComparison.Ordinal), StringComparison.Ordinal); // structural check passes
+        // Must NOT collapse clarification-required into idle
+        var clarificationIndex = prompt.IndexOf("clarification-required", StringComparison.Ordinal);
+        var doNotDeclareIdleIndex = prompt.IndexOf("Do NOT declare idle", StringComparison.OrdinalIgnoreCase);
+        Assert.True(doNotDeclareIdleIndex > clarificationIndex, "Do NOT declare idle must follow clarification-required in the dispatch table");
+    }
+
+    [Fact]
+    public void Execute_HostReviewNextSliceJson_PromptStage2OutcomesHandledDistinctly()
+    {
+        using var writer = new StringWriter();
+        GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        // All four distinct outcomes must appear
+        Assert.Contains("issue-cut-ready", prompt, StringComparison.Ordinal);
+        Assert.Contains("clarification-required", prompt, StringComparison.Ordinal);
+        Assert.Contains("no-actionable-item", prompt, StringComparison.Ordinal);
+        Assert.Contains("Any other outcome", prompt, StringComparison.OrdinalIgnoreCase);
+        // Clarification-required must not become idle
+        Assert.Contains("Do NOT declare idle", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ── focused-guide-automation-setup-pr-comment-fix-hardening-tests ───────────
 
     [Fact]
