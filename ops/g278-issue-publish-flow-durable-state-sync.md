@@ -21,10 +21,18 @@ created issue.
     advances to `issue-created` with the GitHub issue number/URL.
   - `.intent-cli/runs.jsonl` — an `issue-created` event is appended
     (one per successful create).
-- Re-running `--write` after a successful create is **idempotent**:
-  `publish.yaml`'s `issue-created` marker short-circuits both the
-  `gh issue create` call and the durable-state writes. The result reports
-  `created: false`, `idempotent: true`, `durable_state_synced: true`.
+- Re-running `--write` after a successful create is **idempotent**.
+  Two independent artifacts can short-circuit the rerun before any
+  `gh issue create` call:
+  - `publish.yaml` with `publish_status: issue-created` and a non-empty
+    `created_issue_url`, OR
+  - `queue-state.json` whose matching execution-unit already has
+    `linked_issue` populated.
+  Either match returns `created: false`, `idempotent: true`,
+  `durable_state_synced: true` and performs no GitHub call and no
+  durable-state writes, so a stale or missing `publish.yaml` cannot
+  cause a duplicate child issue when queue-state already records the
+  link.
 - If `gh issue create` fails, no durable artifact is mutated.
 - If a durable write fails after the GitHub issue is created, the result
   reports `created: false`, `durable_state_synced: false`, returns exit

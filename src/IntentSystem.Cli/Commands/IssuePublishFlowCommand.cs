@@ -163,6 +163,8 @@ internal static class IssuePublishFlowCommand
             return 0;
         }
 
+        var queueStatePathForIdempotency = context.GetQueueStatePath();
+
         // G278 idempotency: if publish.yaml already records issue-created with a
         // URL, do NOT call gh again and do NOT re-mutate durable state.
         if (TryReadExistingIssueCreatedArtifact(publishYamlPath, out var existing))
@@ -182,6 +184,30 @@ internal static class IssuePublishFlowCommand
                 runsAppended: false,
                 error: null);
             EmitResult(writer, idempotentResult, format);
+            return 0;
+        }
+
+        // G278 idempotency (PR #660 follow-up): if publish.yaml is missing or stale
+        // but queue-state.json already records linked_issue for this execution
+        // unit, treat as idempotent so a rerun cannot create a duplicate GitHub
+        // issue. Both artifact-level checks must short-circuit before any gh call.
+        if (TryReadExistingQueueStateLinkedIssue(queueStatePathForIdempotency, executionUnit!, out var queueLinkedIssue))
+        {
+            var queueIdempotentResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: true,
+                durableStateSynced: true,
+                issueUrl: queueLinkedIssue.Url,
+                issueNumber: queueLinkedIssue.Number,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: null);
+            EmitResult(writer, queueIdempotentResult, format);
             return 0;
         }
 
@@ -329,6 +355,44 @@ internal static class IssuePublishFlowCommand
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
             // fall through; treat as no existing publish artifact
+        }
+
+        return false;
+    }
+
+    private static bool TryReadExistingQueueStateLinkedIssue(
+        string queueStatePath,
+        string executionUnit,
+        out LinkedIssue linkedIssue)
+    {
+        linkedIssue = default!;
+        if (!File.Exists(queueStatePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            foreach (var item in queueState.Items)
+            {
+                if (!string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (item.LinkedIssue is { } existing && !string.IsNullOrWhiteSpace(existing.Url))
+                {
+                    linkedIssue = existing;
+                    return true;
+                }
+
+                break;
+            }
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            // fall through; treat as no idempotency hit
         }
 
         return false;

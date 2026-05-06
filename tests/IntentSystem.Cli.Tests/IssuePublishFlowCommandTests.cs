@@ -244,6 +244,48 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenLinkedIssueInQueueStateButPublishYamlMissing_IsIdempotentAndDoesNotCallGitHub()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody("G278 Fix issue publish-flow durable state synchronization"));
+        workspace.SeedQueueStateWithLinkedIssue(
+            "G278",
+            "G278 Fix issue publish-flow durable state synchronization",
+            repo: "J-Tech-Japan/intent-system",
+            issueNumber: 659,
+            issueUrl: "https://github.com/J-Tech-Japan/intent-system/issues/659");
+
+        Assert.False(File.Exists(workspace.PublishYamlPath("G278")));
+
+        var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/9999");
+        IssuePublishFlowCommand.CreatorFactory = () => stub;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(0, stub.CallCount);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("created").GetBoolean());
+        Assert.True(root.GetProperty("idempotent").GetBoolean());
+        Assert.True(root.GetProperty("durable_state_synced").GetBoolean());
+        Assert.Equal(659, root.GetProperty("issue_number").GetInt32());
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/659", root.GetProperty("issue_url").GetString());
+        Assert.False(root.GetProperty("queue_state_patched").GetBoolean());
+        Assert.False(root.GetProperty("publish_yaml_patched").GetBoolean());
+        Assert.False(root.GetProperty("runs_appended").GetBoolean());
+
+        // queue-state must remain unchanged; no duplicate gh issue create was made
+        Assert.False(File.Exists(workspace.PublishYamlPath("G278")));
+        Assert.False(File.Exists(workspace.RunsLogPath));
+    }
+
+    [Fact]
     public void Execute_GivenWriteRerunAfterIssueCreated_IsIdempotentAndDoesNotCallGitHub()
     {
         using var workspace = new IssuePublishFlowWorkspace();
@@ -507,7 +549,26 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
             File.WriteAllText(Path.Combine(directory, "github-body.md"), content);
         }
 
-        public void SeedQueueState(string executionUnit, string title)
+        public void SeedQueueState(string executionUnit, string title) =>
+            WriteQueueStateForUnit(executionUnit, title, linkedIssue: null);
+
+        public void SeedQueueStateWithLinkedIssue(
+            string executionUnit,
+            string title,
+            string repo,
+            int issueNumber,
+            string issueUrl) =>
+            WriteQueueStateForUnit(
+                executionUnit,
+                title,
+                linkedIssue: new LinkedIssue
+                {
+                    Repo = repo,
+                    Number = issueNumber,
+                    Url = issueUrl,
+                });
+
+        private void WriteQueueStateForUnit(string executionUnit, string title, LinkedIssue? linkedIssue)
         {
             Directory.CreateDirectory(Path.Combine(rootPath, ".intent-cli"));
             var state = new QueueState
@@ -530,6 +591,7 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
                             ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
                             Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml",
                         },
+                        LinkedIssue = linkedIssue,
                         WorkerRole = "child-impl",
                         ReviewRole = "host-review",
                         Priority = "normal",
