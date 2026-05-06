@@ -565,6 +565,132 @@ public sealed class IntentNextSliceCommandTests
         Assert.Equal("no-actionable-item", root.GetProperty("recommended_outcome").GetString());
     }
 
+    [Fact]
+    public void Execute_G275_CrossDomainActiveItem_DoesNotBlockIntentCliIssueCutReady()
+    {
+        // G275 WIP filter regression: an SKS item in Active state must not block
+        // an intent-cli G-series issue-cut-ready candidate when --domain intent-cli
+        // is specified.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G280/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G183",
+                  "title": "sks wip item",
+                  "state": "active",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/sks/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {
+                    "repo": "J-Tech-Japan/SekibanAsAService",
+                    "number": 50,
+                    "url": "https://github.com/J-Tech-Japan/SekibanAsAService/issues/50"
+                  },
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                },
+                {
+                  "execution_unit": "G280",
+                  "title": "intent-cli queued slice",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // SKS active item is filtered out of WIP; G280 is the intent-cli candidate.
+        Assert.NotEqual("skip-next-slice-due-to-wip", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal(0, root.GetProperty("wip").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_G275_CrossDomainReviewItem_DoesNotBlockIntentCliIssueCutReady()
+    {
+        // G275 WIP filter regression: an SKS item in Review state must not block
+        // an intent-cli G-series issue-cut-ready candidate when --domain intent-cli
+        // is specified.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G280/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G183",
+                  "title": "sks wip item in review",
+                  "state": "review",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/sks/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_pr": {
+                    "repo": "J-Tech-Japan/SekibanAsAService",
+                    "number": 99,
+                    "url": "https://github.com/J-Tech-Japan/SekibanAsAService/pull/99"
+                  },
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                },
+                {
+                  "execution_unit": "G280",
+                  "title": "intent-cli queued slice",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // SKS review item is filtered out of WIP; not skip-next-slice-due-to-wip.
+        Assert.NotEqual("skip-next-slice-due-to-wip", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal(0, root.GetProperty("wip").GetArrayLength());
+    }
+
     private sealed class IntentNextSliceWorkspace : IDisposable
     {
         private readonly string rootPath = Directory

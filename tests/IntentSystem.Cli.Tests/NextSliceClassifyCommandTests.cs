@@ -399,6 +399,104 @@ public sealed class NextSliceClassifyCommandTests
         Assert.NotNull(result);
     }
 
+    [Fact]
+    public void Execute_G275_CrossDomainActiveItem_DoesNotBlockIntentCliIssueCutReady()
+    {
+        // G275 WIP filter regression: an SKS item in Active state must not cause
+        // SkipDueToWip when classifying for the intent-cli domain.
+        using var workspace = new NextSliceWorkspace();
+        workspace.WriteIssuePacket("G280", "# intent-cli ready packet\n");
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G183",
+                  "title": "sks wip active",
+                  "state": "active",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/sks/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {
+                    "repo": "J-Tech-Japan/SekibanAsAService",
+                    "number": 50,
+                    "url": "https://github.com/J-Tech-Japan/SekibanAsAService/issues/50"
+                  },
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = NextSliceClassifyCommand.Execute(
+            workspace.Context,
+            ["--format", "json", "--domain", "intent-cli"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<NextSliceClassifyResult>(writer.ToString());
+        Assert.NotNull(result);
+        // SKS active item filtered out; G280 packet is ready → IssueCutReady, not SkipDueToWip.
+        Assert.NotEqual(NextSliceClassification.SkipDueToWip, result!.Classification);
+        Assert.Equal(NextSliceClassification.IssueCutReady, result.Classification);
+        Assert.Empty(result.WipRefs);
+    }
+
+    [Fact]
+    public void Execute_G275_CrossDomainReviewItem_DoesNotBlockIntentCliIssueCutReady()
+    {
+        // G275 WIP filter regression: an SKS item in Review state must not cause
+        // SkipDueToWip when classifying for the intent-cli domain.
+        using var workspace = new NextSliceWorkspace();
+        workspace.WriteIssuePacket("G280", "# intent-cli ready packet\n");
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G183",
+                  "title": "sks wip in review",
+                  "state": "review",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/sks/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_pr": {
+                    "repo": "J-Tech-Japan/SekibanAsAService",
+                    "number": 99,
+                    "url": "https://github.com/J-Tech-Japan/SekibanAsAService/pull/99"
+                  },
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = NextSliceClassifyCommand.Execute(
+            workspace.Context,
+            ["--format", "json", "--domain", "intent-cli"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<NextSliceClassifyResult>(writer.ToString());
+        Assert.NotNull(result);
+        // SKS review item filtered out; G280 packet is ready → IssueCutReady, not SkipDueToWip.
+        Assert.NotEqual(NextSliceClassification.SkipDueToWip, result!.Classification);
+        Assert.Equal(NextSliceClassification.IssueCutReady, result.Classification);
+        Assert.Empty(result.WipRefs);
+    }
+
     private sealed class NextSliceWorkspace : IDisposable
     {
         private readonly string rootPath = Directory

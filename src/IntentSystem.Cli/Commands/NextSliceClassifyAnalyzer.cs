@@ -53,11 +53,37 @@ internal static class NextSliceClassifyAnalyzer
             }
         }
 
-        // (2) WIP precedence — reuse StatusBriefAnalyzer's canonical predicate.
+        // (2) WIP precedence — filtered by domain/targetRepo so cross-domain
+        // in-flight items do not block the requested lane (G275).
         var wipRefs = new List<string>();
         if (queueState is not null)
         {
-            StatusBriefAnalyzer.CollectWipUnits(queueState, wipRefs, reviewUnits: null);
+            var issuesRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
+            foreach (var item in queueState.Items)
+            {
+                switch (item.State)
+                {
+                    case QueueItemState.Active:
+                    case QueueItemState.Review:
+                    case QueueItemState.Fixing:
+                        if (!MatchesDomainFilter(domain, queueState, item.ExecutionUnit))
+                        {
+                            break;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(targetRepo))
+                        {
+                            var dir = Path.Combine(issuesRoot, item.ExecutionUnit);
+                            if (!MatchesTargetRepoFilter(targetRepo, dir))
+                            {
+                                break;
+                            }
+                        }
+
+                        wipRefs.Add(item.ExecutionUnit);
+                        break;
+                }
+            }
         }
 
         if (wipRefs.Count > 0)

@@ -112,6 +112,8 @@ internal static class IntentNextSliceCommand
             notes.Add($"no queue-state file at {queueStatePath}");
         }
 
+        var packetRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
+
         var wip = new List<string>();
         var queued = new List<string>();
         var completed = new HashSet<string>(StringComparer.Ordinal);
@@ -124,7 +126,13 @@ internal static class IntentNextSliceCommand
                     case QueueItemState.Active:
                     case QueueItemState.Review:
                     case QueueItemState.Fixing:
-                        wip.Add(item.ExecutionUnit);
+                        // G275: filter WIP by the same domain/repo predicates as candidate selection
+                        // so cross-domain in-flight items do not block the requested lane.
+                        if (MatchesDomainAndRepoFilter(domain, targetRepo, queueState, item.ExecutionUnit, Path.Combine(packetRoot, item.ExecutionUnit)))
+                        {
+                            wip.Add(item.ExecutionUnit);
+                        }
+
                         break;
 
                     case QueueItemState.Queued:
@@ -142,8 +150,6 @@ internal static class IntentNextSliceCommand
         var clarificationFilePresent = File.Exists(clarificationPath);
         var clarificationOpen = clarificationFilePresent
             && ClarificationOpenDetector.HasOpenBlocker(File.ReadAllText(clarificationPath));
-
-        var packetRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
         IntentNextSliceCandidate? candidate = null;
         if (Directory.Exists(packetRoot))
         {
