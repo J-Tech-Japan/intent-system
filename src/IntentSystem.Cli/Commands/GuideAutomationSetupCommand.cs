@@ -97,7 +97,7 @@ internal static class GuideAutomationSetupCommand
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
 
         var prompt =
-$@"Set up the child implementation loop for {repoLabel} once. Do not register any cron, monitor, reminder, scheduler, or recurring wakeup as part of this setup unless the operator explicitly asks.
+$@"Set up the child implementation and PR-comment-update loop for {repoLabel} once. Operator minimal trigger phrase: ""intent-cli に聞いて、この repo の実装と PR comment update loop を設定してください"" — the detailed procedure below is what intent-cli emits. Do not register any cron, monitor, reminder, scheduler, or recurring wakeup as part of this setup unless the operator explicitly asks.
 
 First-call sequence (read-only; required before any mutation):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
@@ -112,7 +112,7 @@ Loop body (single wake; the operator drives subsequent wakes if any):
 4. From the parent host root (NOT the child cwd), run `intent-cli worker next-action --repo <OWNER>/<REPO> --workdir $CHILD_WORKTREE --format json`. Dispatch on `action`:
    - `none` → stop with `idle`.
    - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr ...` and `worker complete --kind issue --number <n> --outcome <outcome> --write --format json`.
-   - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix ...` and `worker complete --kind pr --number <n> --outcome <outcome> --write --format json`.
+   - `pr-comment-fix` → The PR URL returned by `worker next-action` (or supplied directly by the operator) is the authoritative work input; do not look up queue-state or linked PR to decide what to repair. Claim with `intent-cli worker claim --kind pr --number <n> --write --format json`. Check out the existing PR head branch: `gh pr checkout <n> --repo <OWNER>/<REPO>`. Apply only the narrow change requested in review comments. Run targeted tests. Push to the same branch: `git push`. From the parent host root, run `worker result-summary --kind pr-comment-fix --pr <n> --repo <OWNER>/<REPO> --format json`, then `worker complete --kind pr --number <n> --outcome <outcome> --write --format json`.
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.), or copied prompt files for routine collaboration. Use `intent-cli guide ...` instead.
@@ -123,6 +123,8 @@ Hard rules:
 - Never apply `intent-target` from the child loop; it is host-owned.
 - Never apply `intent-pr-created` to a PR; it is an issue-side completion marker.
 - Process at most one action per wake.
+- For `pr-comment-fix` turns: never edit `queue-state.json`, `linked_issue`, or `linked_pr`; those are host-owned durable bookkeeping and must not be repaired from the child loop.
+- For `pr-comment-fix` turns: never run `intent-cli automation issue-publish`; that command is for publishing child issues, not for resolving PR comment repairs.
 
 Frequency policy (applies only when a recurring local loop is explicitly requested; the default is one-wake execution):
 - This setup prompt describes a single-wake run, not a recurring loop. One-wake execution does not create any scheduler.

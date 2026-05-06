@@ -261,6 +261,58 @@ public sealed class GuideWorkerPrCommentFixCommandTests
         Assert.Contains("## Worktree-friendly assumption", output, StringComparison.Ordinal);
     }
 
+    // ── focused-guide-worker-pr-comment-fix-host-bookkeeping-tests ───────────
+
+    [Fact]
+    public void Execute_Json_PromptForbidsParentHostBookkeepingEdits()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("queue-state.json", prompt, StringComparison.Ordinal);
+        Assert.Contains("linked_issue", prompt, StringComparison.Ordinal);
+        Assert.Contains("linked_pr", prompt, StringComparison.Ordinal);
+        Assert.Contains("host-owned durable bookkeeping", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_Json_PromptForbidsAutomationIssuePublish()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("automation issue-publish", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not run `intent-cli automation issue-publish`", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_PromptTreatsSelectedPRURLAsAuthoritativeWorkInput()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("authoritative work input", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("worker next-action", prompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
