@@ -43,6 +43,12 @@ internal static class GuideAutomationCommand
             return GuideAutomationSetupCommand.Execute(context, args[1..], writer);
         }
 
+        // G274: nested `guide automation local-loop ...` agent-specific local recurring loop guide.
+        if (args.Length >= 1 && string.Equals(args[0], "local-loop", StringComparison.Ordinal))
+        {
+            return GuideAutomationLocalLoopCommand.Execute(context, args[1..], writer);
+        }
+
         if (!TryParseArguments(args, out var kind, out var domain, out var repo, out var format, out var error))
         {
             writer.WriteLine(error);
