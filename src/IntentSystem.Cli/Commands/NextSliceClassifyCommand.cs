@@ -16,13 +16,13 @@ internal static class NextSliceClassifyCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var domainOverride, out var format, out var error))
+        if (!TryParseArguments(args, out var domainOverride, out var targetRepo, out var format, out var error))
         {
             writer.WriteLine(error);
             return 1;
         }
 
-        var result = NextSliceClassifyAnalyzer.Analyze(context, domainOverride);
+        var result = NextSliceClassifyAnalyzer.Analyze(context, domainOverride, targetRepo);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -39,10 +39,12 @@ internal static class NextSliceClassifyCommand
     private static bool TryParseArguments(
         string[] args,
         out string? domainOverride,
+        out string? targetRepo,
         out string format,
         out string error)
     {
         domainOverride = null;
+        targetRepo = null;
         format = FormatText;
         error = string.Empty;
 
@@ -59,6 +61,17 @@ internal static class NextSliceClassifyCommand
                     }
 
                     domainOverride = args[index + 1];
+                    index++;
+                    break;
+
+                case "--target-repo":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--target-repo requires a value.";
+                        return false;
+                    }
+
+                    targetRepo = args[index + 1];
                     index++;
                     break;
 
@@ -82,7 +95,7 @@ internal static class NextSliceClassifyCommand
                     break;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: --domain <name> --format text|json.";
+                    error = $"Unknown argument '{argument}'. Supported: --domain <name> --target-repo <owner/repo> --format text|json.";
                     return false;
             }
         }

@@ -112,6 +112,8 @@ internal static class IntentNextSliceCommand
             notes.Add($"no queue-state file at {queueStatePath}");
         }
 
+        var packetRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
+
         var wip = new List<string>();
         var queued = new List<string>();
         var completed = new HashSet<string>(StringComparer.Ordinal);
@@ -124,7 +126,13 @@ internal static class IntentNextSliceCommand
                     case QueueItemState.Active:
                     case QueueItemState.Review:
                     case QueueItemState.Fixing:
-                        wip.Add(item.ExecutionUnit);
+                        // G275: filter WIP by the same domain/repo predicates as candidate selection
+                        // so cross-domain in-flight items do not block the requested lane.
+                        if (MatchesDomainAndRepoFilter(domain, targetRepo, queueState, item.ExecutionUnit, Path.Combine(packetRoot, item.ExecutionUnit)))
+                        {
+                            wip.Add(item.ExecutionUnit);
+                        }
+
                         break;
 
                     case QueueItemState.Queued:
@@ -142,18 +150,27 @@ internal static class IntentNextSliceCommand
         var clarificationFilePresent = File.Exists(clarificationPath);
         var clarificationOpen = clarificationFilePresent
             && ClarificationOpenDetector.HasOpenBlocker(File.ReadAllText(clarificationPath));
-
-        var packetRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
         IntentNextSliceCandidate? candidate = null;
         if (Directory.Exists(packetRoot))
         {
             // Pick the first queued execution_unit in queue-state order whose packet
-            // directory exists. Falls back to the alphabetically-first packet
-            // directory not in completed if no queued match exists.
+            // directory exists AND whose domain/target-repo matches the filter.
+            // Falls back to the alphabetically-first packet directory not in completed
+            // if no queued match exists.
+            //
+            // G275: When --domain and/or --target-repo are specified, packets are
+            // filtered by those values. Domain is derived from the queue item's
+            // clarification_return_path (shape: intents/<domain>/clarifications/open.md).
+            // Target-repo is read from the packet.yaml file inside the packet directory.
             foreach (var executionUnit in queued)
             {
                 var directory = Path.Combine(packetRoot, executionUnit);
                 if (!Directory.Exists(directory))
+                {
+                    continue;
+                }
+
+                if (!MatchesDomainAndRepoFilter(domain, targetRepo, queueState, executionUnit, directory))
                 {
                     continue;
                 }
@@ -170,6 +187,11 @@ internal static class IntentNextSliceCommand
                 {
                     var executionUnit = Path.GetFileName(directory)!;
                     if (completed.Contains(executionUnit))
+                    {
+                        continue;
+                    }
+
+                    if (!MatchesDomainAndRepoFilter(domain, targetRepo, queueState, executionUnit, directory))
                     {
                         continue;
                     }
@@ -281,6 +303,161 @@ internal static class IntentNextSliceCommand
         }
 
         return OutcomeIssueCutReady;
+    }
+
+    /// <summary>
+    /// G275: Returns true when the given execution unit / packet directory matches
+    /// the requested domain and target-repo filters.
+    ///
+    /// Domain is inferred from the queue item's <c>clarification_return_path</c>
+    /// field (shape: <c>intents/&lt;domain&gt;/clarifications/open.md</c>).
+    /// When no queue item exists for the unit, domain filtering is skipped for
+    /// that unit (it remains a candidate).
+    ///
+    /// Target-repo is read from <c>packet.yaml</c> in the packet directory.
+    /// When the file is absent or unreadable, target-repo filtering is skipped
+    /// (the unit remains a candidate).
+    /// </summary>
+    private static bool MatchesDomainAndRepoFilter(
+        string domain,
+        string? targetRepo,
+        QueueState? queueState,
+        string executionUnit,
+        string directory)
+    {
+        // Domain filter: derive domain from queue item's clarification_return_path.
+        // Path shape: intents/<domain>/clarifications/open.md
+        if (queueState is not null)
+        {
+            QueueItem? item = null;
+            foreach (var candidate in queueState.Items)
+            {
+                if (string.Equals(candidate.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+                {
+                    item = candidate;
+                    break;
+                }
+            }
+
+            if (item is not null)
+            {
+                var itemDomain = ExtractDomainFromReturnPath(item.ClarificationReturnPath);
+                if (itemDomain is not null
+                    && !string.Equals(itemDomain, domain, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+        }
+
+        // Target-repo filter: read packet.yaml to get target_repo field.
+        if (!string.IsNullOrWhiteSpace(targetRepo))
+        {
+            var packetYamlPath = Path.Combine(directory, "packet.yaml");
+            if (File.Exists(packetYamlPath))
+            {
+                var packetTargetRepo = TryReadPacketTargetRepo(packetYamlPath);
+                if (packetTargetRepo is not null
+                    && !string.Equals(packetTargetRepo, targetRepo, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Extracts the domain segment from a clarification return path of the form
+    /// <c>intents/&lt;domain&gt;/clarifications/open.md</c>.
+    /// Returns null when the path does not match the expected shape.
+    /// </summary>
+    private static string? ExtractDomainFromReturnPath(string returnPath)
+    {
+        if (string.IsNullOrWhiteSpace(returnPath))
+        {
+            return null;
+        }
+
+        // Normalise path separators so this works on all platforms.
+        var normalised = returnPath.Replace('\\', '/');
+        var parts = normalised.Split('/');
+
+        // Expected: ["intents", "<domain>", "clarifications", "open.md"]
+        if (parts.Length < 4)
+        {
+            return null;
+        }
+
+        if (!string.Equals(parts[0], "intents", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return parts[1];
+    }
+
+    /// <summary>
+    /// Reads the <c>target_repo</c> scalar from a <c>packet.yaml</c> file using a
+    /// lightweight line scanner. Returns null when the file cannot be parsed or the
+    /// field is absent.
+    /// </summary>
+    private static string? TryReadPacketTargetRepo(string packetYamlPath)
+    {
+        try
+        {
+            var content = File.ReadAllText(packetYamlPath);
+            using var reader = new StringReader(content);
+            var inImplementationSection = false;
+            string? line;
+
+            while ((line = reader.ReadLine()) is not null)
+            {
+                var trimmedLine = line.TrimEnd();
+
+                // Track section headers (zero-indent, ends with colon).
+                if (!char.IsWhiteSpace(trimmedLine.Length > 0 ? trimmedLine[0] : ' ')
+                    && trimmedLine.EndsWith(":", StringComparison.Ordinal))
+                {
+                    var sectionName = trimmedLine[..^1];
+                    inImplementationSection = string.Equals(
+                        sectionName,
+                        "implementation_issue_packet",
+                        StringComparison.OrdinalIgnoreCase);
+                    continue;
+                }
+
+                if (!inImplementationSection)
+                {
+                    continue;
+                }
+
+                // Look for `  target_repo: <value>` (two-space indent).
+                if (!trimmedLine.StartsWith("  target_repo:", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var value = trimmedLine["  target_repo:".Length..].Trim();
+                if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+                {
+                    value = value[1..^1];
+                }
+
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+        catch (IOException)
+        {
+            // File unreadable — skip filter.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // File unreadable — skip filter.
+        }
+
+        return null;
     }
 
     private static void WriteMarkdown(TextWriter writer, IntentNextSliceResult result)
