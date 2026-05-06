@@ -299,6 +299,106 @@ public sealed class NextSliceClassifyCommandTests
         Assert.Equal(NextSliceClassification.NoActionableItem, result!.Classification);
     }
 
+    // ─── G275 tests ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G275_CrossDomainPacketExcluded_WhenDomainAndTargetRepoSpecified()
+    {
+        // SKS-G183 has clarification_return_path pointing to sks domain.
+        // When --domain intent-cli is passed, it must be excluded.
+        using var workspace = new NextSliceWorkspace();
+        workspace.WriteIssuePacketWithQueueEntry(
+            "SKS-G183",
+            "# SKS packet body\n",
+            "intents/sks/clarifications/open.md");
+
+        using var writer = new StringWriter();
+        var exitCode = NextSliceClassifyCommand.Execute(
+            workspace.Context,
+            ["--format", "json", "--domain", "intent-cli"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<NextSliceClassifyResult>(writer.ToString());
+        Assert.NotNull(result);
+        // SKS packet excluded → no actionable item.
+        Assert.Equal(NextSliceClassification.NoActionableItem, result!.Classification);
+        Assert.Null(result.CandidateExecutionUnit);
+    }
+
+    [Fact]
+    public void Execute_G275_ClarifiedIntentState_DoesNotBlock()
+    {
+        // A clarification file with intent_state: clarified must not classify as
+        // ClarificationRequired, even when there are bullet items in the section.
+        using var workspace = new NextSliceWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            ---
+            intent_state: clarified
+            ---
+            ## Current Open Blockers
+
+            - This note is present but the file is clarified
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = NextSliceClassifyCommand.Execute(
+            workspace.Context,
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<NextSliceClassifyResult>(writer.ToString());
+        Assert.NotNull(result);
+        Assert.NotEqual(NextSliceClassification.ClarificationRequired, result!.Classification);
+    }
+
+    [Fact]
+    public void Execute_G275_ClarificationSectionNone_DoesNotBlock()
+    {
+        // A clarification file whose "Current Open Blockers" section contains only
+        // "None" (bare text) must not classify as ClarificationRequired.
+        using var workspace = new NextSliceWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            # intent-cli clarifications
+
+            ## Current Open Blockers
+
+            None
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = NextSliceClassifyCommand.Execute(
+            workspace.Context,
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<NextSliceClassifyResult>(writer.ToString());
+        Assert.NotNull(result);
+        Assert.NotEqual(NextSliceClassification.ClarificationRequired, result!.Classification);
+        Assert.Equal(NextSliceClassification.NoActionableItem, result.Classification);
+    }
+
+    [Fact]
+    public void Execute_G275_TargetRepoFlag_IsAccepted()
+    {
+        // --target-repo flag must be parseable without error.
+        using var workspace = new NextSliceWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = NextSliceClassifyCommand.Execute(
+            workspace.Context,
+            ["--format", "json", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<NextSliceClassifyResult>(writer.ToString());
+        Assert.NotNull(result);
+    }
+
     private sealed class NextSliceWorkspace : IDisposable
     {
         private readonly string rootPath = Directory
@@ -358,6 +458,39 @@ public sealed class NextSliceClassifyCommandTests
             var path = Path.Combine(rootPath, ".intent-cli", "issues", executionUnit);
             Directory.CreateDirectory(path);
             File.WriteAllText(Path.Combine(path, "github-body.md"), body);
+        }
+
+        /// <summary>
+        /// G275: Writes a complete packet AND a queue-state entry with the given
+        /// clarification_return_path so domain filtering can be tested.
+        /// </summary>
+        public void WriteIssuePacketWithQueueEntry(
+            string executionUnit,
+            string body,
+            string clarificationReturnPath)
+        {
+            WriteIssuePacket(executionUnit, body);
+            WriteQueueState(
+                $$"""
+                {
+                  "schema_version": "1",
+                  "updated_at": "2026-05-01T00:00:00Z",
+                  "items": [
+                    {
+                      "execution_unit": "{{executionUnit}}",
+                      "title": "test packet",
+                      "state": "queued",
+                      "dependencies": [],
+                      "blocked_by": [],
+                      "clarification_return_path": "{{clarificationReturnPath}}",
+                      "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                      "worker_role": "coder",
+                      "review_role": "reviewer",
+                      "priority": "normal"
+                    }
+                  ]
+                }
+                """);
         }
 
         public void Dispose()

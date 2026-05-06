@@ -16,7 +16,7 @@ internal static class NextSliceClassifyAnalyzer
 {
     private const int ClarificationSummaryCharLimit = 240;
 
-    public static NextSliceClassifyResult Analyze(CliContext context, string? domainOverride)
+    public static NextSliceClassifyResult Analyze(CliContext context, string? domainOverride, string? targetRepo = null)
     {
         ArgumentNullException.ThrowIfNull(context);
 
@@ -114,7 +114,9 @@ internal static class NextSliceClassifyAnalyzer
         // existing issue prepare/publish-reviewed flow without operator
         // intervention, so they degrade to `inspect-manually` rather than
         // `issue-cut-ready`.
-        var candidate = FindIssueCutCandidate(context, queueState);
+        //
+        // G275: Apply domain and target-repo filters when supplied.
+        var candidate = FindIssueCutCandidate(context, queueState, domain, targetRepo);
         if (candidate.Kind == IssueCutCandidateKind.Ambiguous)
         {
             return new NextSliceClassifyResult
@@ -260,7 +262,9 @@ internal static class NextSliceClassifyAnalyzer
 
     private static IssueCutCandidate FindIssueCutCandidate(
         CliContext context,
-        QueueState? queueState)
+        QueueState? queueState,
+        string domain,
+        string? targetRepo)
     {
         var issuesRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
         if (!Directory.Exists(issuesRoot))
@@ -288,6 +292,19 @@ internal static class NextSliceClassifyAnalyzer
             }
 
             if (linkedUnits.Contains(unit))
+            {
+                continue;
+            }
+
+            // G275: Apply domain filter using the queue item's clarification_return_path.
+            if (!MatchesDomainFilter(domain, queueState, unit))
+            {
+                continue;
+            }
+
+            // G275: Apply target-repo filter by reading packet.yaml.
+            if (!string.IsNullOrWhiteSpace(targetRepo)
+                && !MatchesTargetRepoFilter(targetRepo, unitDir))
             {
                 continue;
             }
@@ -330,6 +347,154 @@ internal static class NextSliceClassifyAnalyzer
         }
 
         return new IssueCutCandidate(IssueCutCandidateKind.None, null, null);
+    }
+
+    /// <summary>
+    /// G275: Returns true when the execution unit's domain (derived from its queue
+    /// item clarification_return_path) matches the requested domain, or when the
+    /// unit has no queue item (cannot be filtered).
+    /// </summary>
+    private static bool MatchesDomainFilter(string domain, QueueState? queueState, string executionUnit)
+    {
+        if (queueState is null)
+        {
+            return true;
+        }
+
+        QueueItem? item = null;
+        foreach (var candidate in queueState.Items)
+        {
+            if (string.Equals(candidate.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            {
+                item = candidate;
+                break;
+            }
+        }
+
+        if (item is null)
+        {
+            // No queue entry — cannot derive domain; keep as candidate.
+            return true;
+        }
+
+        var itemDomain = ExtractDomainFromReturnPath(item.ClarificationReturnPath);
+        if (itemDomain is null)
+        {
+            return true;
+        }
+
+        return string.Equals(itemDomain, domain, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G275: Returns true when the packet.yaml in the given directory contains a
+    /// <c>target_repo</c> field matching <paramref name="targetRepo"/>, or when
+    /// the file is absent / unreadable (cannot be filtered).
+    /// </summary>
+    private static bool MatchesTargetRepoFilter(string targetRepo, string directory)
+    {
+        var packetYamlPath = Path.Combine(directory, "packet.yaml");
+        if (!File.Exists(packetYamlPath))
+        {
+            return true;
+        }
+
+        var packetTargetRepo = TryReadPacketTargetRepo(packetYamlPath);
+        if (packetTargetRepo is null)
+        {
+            return true;
+        }
+
+        return string.Equals(packetTargetRepo, targetRepo, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Extracts the domain segment from a clarification return path of the form
+    /// <c>intents/&lt;domain&gt;/clarifications/open.md</c>.
+    /// Returns null when the path does not match the expected shape.
+    /// </summary>
+    private static string? ExtractDomainFromReturnPath(string returnPath)
+    {
+        if (string.IsNullOrWhiteSpace(returnPath))
+        {
+            return null;
+        }
+
+        var normalised = returnPath.Replace('\\', '/');
+        var parts = normalised.Split('/');
+
+        // Expected: ["intents", "<domain>", "clarifications", "open.md"]
+        if (parts.Length < 4)
+        {
+            return null;
+        }
+
+        if (!string.Equals(parts[0], "intents", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return parts[1];
+    }
+
+    /// <summary>
+    /// Reads the <c>target_repo</c> scalar from a <c>packet.yaml</c> file using a
+    /// lightweight line scanner. Returns null when the file cannot be parsed or the
+    /// field is absent.
+    /// </summary>
+    private static string? TryReadPacketTargetRepo(string packetYamlPath)
+    {
+        try
+        {
+            var content = File.ReadAllText(packetYamlPath);
+            using var reader = new StringReader(content);
+            var inImplementationSection = false;
+            string? line;
+
+            while ((line = reader.ReadLine()) is not null)
+            {
+                var trimmedLine = line.TrimEnd();
+
+                if (!char.IsWhiteSpace(trimmedLine.Length > 0 ? trimmedLine[0] : ' ')
+                    && trimmedLine.EndsWith(":", StringComparison.Ordinal))
+                {
+                    var sectionName = trimmedLine[..^1];
+                    inImplementationSection = string.Equals(
+                        sectionName,
+                        "implementation_issue_packet",
+                        StringComparison.OrdinalIgnoreCase);
+                    continue;
+                }
+
+                if (!inImplementationSection)
+                {
+                    continue;
+                }
+
+                if (!trimmedLine.StartsWith("  target_repo:", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var value = trimmedLine["  target_repo:".Length..].Trim();
+                if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+                {
+                    value = value[1..^1];
+                }
+
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+        catch (IOException)
+        {
+            // File unreadable — skip filter.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // File unreadable — skip filter.
+        }
+
+        return null;
     }
 
     private static HashSet<string> BuildLinkedUnitSet(QueueState? queueState)

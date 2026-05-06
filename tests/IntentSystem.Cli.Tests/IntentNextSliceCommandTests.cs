@@ -291,6 +291,280 @@ public sealed class IntentNextSliceCommandTests
             """;
     }
 
+    // ─── G275 tests ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G275_QueuedPacketNoLinkedIssue_ReturnsIssueCutReady()
+    {
+        // Queued packet with complete github-body.md, no linked issue → issue-cut-ready
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G275/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G275",
+                  "title": "next slice domain filter",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        var candidate = root.GetProperty("candidate");
+        Assert.Equal("G275", candidate.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_G275_CrossDomainPacketExcluded_WhenDomainFilterActive()
+    {
+        // SKS-* packet has clarification_return_path pointing to sks domain.
+        // When domain=intent-cli is requested, it must be excluded.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/SKS-G183/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G183",
+                  "title": "sks packet",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/sks/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // SKS packet was excluded, so no candidate and no-actionable-item.
+        Assert.Equal("no-actionable-item", root.GetProperty("recommended_outcome").GetString());
+        Assert.False(root.TryGetProperty("candidate", out _));
+    }
+
+    [Fact]
+    public void Execute_G275_ClarificationFileWithIntentStateClarified_DoesNotBlock()
+    {
+        // A clarification file with `intent_state: clarified` in front-matter
+        // must not block next-slice, even if there are bullet items.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            ---
+            intent_state: clarified
+            ---
+            ## Current Open Blockers
+
+            - Some old note that should no longer block
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("clarification_open").GetBoolean(),
+            "clarification_open must be false when intent_state is clarified");
+        // With no WIP and no candidate, falls to no-actionable-item (not clarification-required).
+        Assert.NotEqual("clarification-required", root.GetProperty("recommended_outcome").GetString());
+    }
+
+    [Fact]
+    public void Execute_G275_ClarificationSectionWithNone_DoesNotBlock()
+    {
+        // A clarification file where "## Current Open Blockers" contains only "None"
+        // must not block next-slice.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            # intent-cli clarifications
+
+            ## Current Open Blockers
+
+            None
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("clarification_open").GetBoolean(),
+            "clarification_open must be false when 'None' is the only content");
+        Assert.NotEqual("clarification-required", root.GetProperty("recommended_outcome").GetString());
+    }
+
+    [Fact]
+    public void Execute_G275_WipPresent_ReturnsSkipDueToWip()
+    {
+        // When there is a WIP item, skip-next-slice-due-to-wip takes precedence.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G275/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G275",
+                  "title": "wip item",
+                  "state": "active",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {
+                    "repo": "J-Tech-Japan/intent-system",
+                    "number": 100,
+                    "url": "https://github.com/J-Tech-Japan/intent-system/issues/100"
+                  },
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("skip-next-slice-due-to-wip", root.GetProperty("recommended_outcome").GetString());
+    }
+
+    [Fact]
+    public void Execute_G275_TargetRepoFilter_ExcludesPacketWithDifferentRepo()
+    {
+        // A packet with target_repo != requested targetRepo must be excluded.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G275/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G275/packet.yaml",
+            """
+            implementation_issue_packet:
+              source_execution_unit: G275
+              target_repo: J-Tech-Japan/other-repo
+              issue_title: something
+              issue_kind: feature
+              goal: x
+              in_scope: []
+              out_of_scope: []
+              target_path: .
+              target_part: x
+              dependencies: []
+              technical_baseline: []
+              project_local_guide: []
+              intent_baseline: []
+              intent_references: []
+              rules_and_specs: []
+              acceptance_criteria: []
+              verification_evidence: []
+              review_mode: full
+              completion_action: close
+              landing_policy: merge
+            review_context_packet:
+              source_execution_unit: G275
+              parent_intent_root: .
+              intent_references: []
+              rules_and_specs: []
+              acceptance_criteria: []
+              deterministic_review_checks: []
+              clarification_return_path: intents/intent-cli/clarifications/open.md
+            """);
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G275",
+                  "title": "wrong repo packet",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": ".intent-cli/issues/G275/packet.yaml"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // Packet excluded because target_repo doesn't match.
+        Assert.Equal("no-actionable-item", root.GetProperty("recommended_outcome").GetString());
+    }
+
     private sealed class IntentNextSliceWorkspace : IDisposable
     {
         private readonly string rootPath = Directory
