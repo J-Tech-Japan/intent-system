@@ -66,6 +66,7 @@ internal static class Program
                 || string.Equals(args[1], "host-review-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "issue-publish", StringComparison.Ordinal)
                 || string.Equals(args[1], "pr-transition", StringComparison.Ordinal)
+                || string.Equals(args[1], "reconcile", StringComparison.Ordinal)
                 || string.Equals(args[1], "summary", StringComparison.Ordinal));
     }
 

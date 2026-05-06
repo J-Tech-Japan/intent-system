@@ -58,6 +58,7 @@ These templates assume:
 | G258  | `guide workflow suggest --include-advanced-runtime` | Default chat-first guidance excludes `intent-cli run` / supervisor subprocess; the new flag opts the relevant workflow into advanced runtime suggestions |
 | G259  | `intent-cli guide onboarding`           | Read-only first-call sequence for an AI agent with no local skill files or copied rules: model → rules list → commands list → workflow suggest → status → next-slice dry-run → interview → automation summary; each step names its no-mutation behavior and the host data boundary |
 | G260  | `intent-cli guide automation setup`     | Read-only paste-ready setup prompts for child implementation loop or host review/next-slice loop: forces guide model/onboarding/commands list/automation summary as first calls, forbids `intents/rules/**` and local skill files, delegates label transitions to installed `intent-cli automation`/`worker` commands |
+| G277  | [`safe-reconcile-lane.md`](./safe-reconcile-lane.md) / `intent-cli automation reconcile` | Host-only safe reconcile lane: dry-run plan + opt-in `--write` for mechanically provable label drift; advisory entries point at the existing closeout/packet/next-slice surface; child loops are forbidden from invoking it |
 
 ## Installed host transition command adoption
 

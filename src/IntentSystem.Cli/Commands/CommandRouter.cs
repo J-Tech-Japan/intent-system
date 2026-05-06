@@ -42,6 +42,7 @@ internal static class CommandRouter
         "automation pr-transition --transition review-start --write",
         "automation pr-transition --transition request-update --write",
         "automation pr-transition --transition approved --write",
+        "automation reconcile [--lane host-review|next-slice|all] [--write]",
         "automation summary"
     ];
 
@@ -150,6 +151,7 @@ internal static class CommandRouter
                 ["host-review-preflight"] = AutomationHostReviewPreflightCommand.Execute,
                 ["issue-publish"] = AutomationIssuePublishCommand.Execute,
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,
+                ["reconcile"] = AutomationReconcileCommand.Execute,
                 ["summary"] = AutomationSummaryCommand.Execute
             },
             ["safety"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)

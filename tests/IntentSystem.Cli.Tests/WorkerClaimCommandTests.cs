@@ -536,6 +536,14 @@ public sealed class WorkerClaimCommandTests : IDisposable
                 RemoveLabels = removeLabels.ToArray(),
             });
         }
+
+        public void ApplyReconcileTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels) =>
+            throw new NotSupportedException("reconcile path not exercised by these tests");
     }
 
     internal sealed record AppliedTransition

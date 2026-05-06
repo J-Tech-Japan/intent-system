@@ -32,6 +32,20 @@ internal interface IGitHubLabelMutator
         int number,
         IReadOnlyCollection<string> addLabels,
         IReadOnlyCollection<string> removeLabels);
+
+    /// <summary>
+    /// G277: Apply reconcile-mode label changes from the host-side safe
+    /// reconcile lane. Allows specifically the misplacement-repair cases
+    /// the strict transition path forbids — namely removing a misplaced
+    /// <c>intent-pr-created</c> from a PR. Adding <c>intent-pr-created</c>
+    /// to a PR is still rejected as a hard policy violation.
+    /// </summary>
+    void ApplyReconcileTransitions(
+        string repo,
+        string kind,
+        int number,
+        IReadOnlyCollection<string> addLabels,
+        IReadOnlyCollection<string> removeLabels);
 }
 
 /// <summary>
@@ -187,6 +201,38 @@ internal sealed class GhCliGitHubLabelMutator : IGitHubLabelMutator
         var args = BuildEditArguments(repo, kind, number, addLabels, removeLabels);
         RunGh(args,
             $"apply label transitions on {kind} #{number} in {repo}");
+    }
+
+    public void ApplyReconcileTransitions(
+        string repo,
+        string kind,
+        int number,
+        IReadOnlyCollection<string> addLabels,
+        IReadOnlyCollection<string> removeLabels)
+    {
+        ArgumentNullException.ThrowIfNull(addLabels);
+        ArgumentNullException.ThrowIfNull(removeLabels);
+
+        // G277 reconcile policy: the strict transition path bars any touch
+        // of intent-pr-created on a PR. Reconcile is the lane that exists
+        // precisely to clean up misplacement, so removing a misplaced
+        // intent-pr-created from a PR is allowed. Adding intent-pr-created
+        // to a PR is still a hard policy violation.
+        if (string.Equals(kind, Kinds.Pr, StringComparison.Ordinal)
+            && addLabels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"label policy violation: '{WorkerNextActionConstants.Labels.IntentPrCreated}' is issue-only and must not be added to a PR even from the reconcile lane.");
+        }
+
+        if (addLabels.Count == 0 && removeLabels.Count == 0)
+        {
+            return; // nothing to do
+        }
+
+        var args = BuildEditArguments(repo, kind, number, addLabels, removeLabels);
+        RunGh(args,
+            $"apply reconcile label transitions on {kind} #{number} in {repo}");
     }
 
     private static string RunGh(IReadOnlyList<string> arguments, string description)

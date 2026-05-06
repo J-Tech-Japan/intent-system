@@ -498,6 +498,14 @@ public sealed class AutomationCompleteCommandTests : IDisposable
                 addLabels.ToArray(),
                 removeLabels.ToArray()));
         }
+
+        public void ApplyReconcileTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels) =>
+            throw new NotSupportedException("reconcile path not exercised by these tests");
     }
 
     private sealed record AppliedTransition(

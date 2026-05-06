@@ -199,16 +199,22 @@ Loop body (single wake):
    - `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --dry-run --format markdown` — preview the packet.
    - With operator acceptance: `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --format json` then `intent-cli issue publish-flow <id> --repo {targetRepoPlaceholder} --write --format json`.
    - After parent durable state is pushed: `intent-cli automation issue-publish --repo {targetRepoPlaceholder} --issue <n> --write --format json`.
+4. Stage 3 — safe reconcile (host-only; only if Stage 1 and Stage 2 would otherwise stop with idle / no-actionable-item / clarification-required):
+   - `intent-cli automation reconcile --lane host-review --repo {targetRepoPlaceholder} --format json` — dry-run plan with evidence and confidence per drift entry.
+   - High-confidence repairs are mechanically provable label drift only; advisory entries point at the existing closeout/packet/next-slice surface and must not be applied through this lane.
+   - With operator acceptance: re-run with `--write` to apply only high-confidence repairs through the host-owned reconcile mutator.
+   - If `unsafe_stops` is non-empty, stop with structured clarification rather than guessing.
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files for routine review/closeout. Use `intent-cli guide ...` and `intent-cli automation ...` instead.
 - Do not call `intent-cli run`. `run` is advanced runtime, not the host review/closeout path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
-- Every label transition goes through installed `intent-cli automation pr-transition` / `automation issue-publish` / `worker claim` / `worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback.
+- Every label transition goes through installed `intent-cli automation pr-transition` / `automation issue-publish` / `automation reconcile` / `worker claim` / `worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback.
 - Never apply `intent-pr-created` to a PR.
 - Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
+- `automation reconcile --write` must come from this host loop only; child implementation loops never invoke it.
 - Process at most one PR review and one new child issue per wake.";
 
         return new GuidePromptMatrixEntry
@@ -309,16 +315,22 @@ Loop body (single wake only — do not repeat):
    - `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --dry-run --format markdown` — preview the packet.
    - With operator acceptance: `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --format json` then `intent-cli issue publish-flow <id> --repo {targetRepoPlaceholder} --write --format json`.
    - After parent durable state is pushed: `intent-cli automation issue-publish --repo {targetRepoPlaceholder} --issue <n> --write --format json`.
+4. Stage 3 — safe reconcile (host-only; only if Stage 1 and Stage 2 would otherwise stop with idle / no-actionable-item / clarification-required):
+   - `intent-cli automation reconcile --lane host-review --repo {targetRepoPlaceholder} --format json` — dry-run plan with evidence and confidence per drift entry.
+   - High-confidence repairs are mechanically provable label drift only; advisory entries point at the existing closeout/packet/next-slice surface and must not be applied through this lane.
+   - With operator acceptance: re-run with `--write` to apply only high-confidence repairs through the host-owned reconcile mutator.
+   - If `unsafe_stops` is non-empty, stop with structured clarification rather than guessing.
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files for routine review/closeout. Use `intent-cli guide ...` and `intent-cli automation ...` instead.
 - Do not call `intent-cli run`. `run` is advanced runtime, not the host review/closeout path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
-- Every label transition goes through installed `intent-cli automation pr-transition` / `automation issue-publish` / `worker claim` / `worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback.
+- Every label transition goes through installed `intent-cli automation pr-transition` / `automation issue-publish` / `automation reconcile` / `worker claim` / `worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback.
 - Never apply `intent-pr-created` to a PR.
 - Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
+- `automation reconcile --write` must come from this host one-shot only; child implementation loops never invoke it.
 - Process at most one PR review and one new child issue per wake.
 - Do not create a cron, monitor, scheduler, reminder, or new thread after completing this wake.";
 
