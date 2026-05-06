@@ -316,6 +316,155 @@ public sealed class GuideIntentWorkSetupCommandTests
         Assert.Equal("next-slice", document.RootElement.GetProperty("kind").GetString());
     }
 
+    // ── intent-shape (G272) ───────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_IntentShapeMarkdown_EmitsPasteReadyPromptWithExplainAndInterview()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "intent-shape", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("# Guide intent-work setup — intent-shape", output, StringComparison.Ordinal);
+        Assert.Contains("domain: intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("target repo: J-Tech-Japan/intent-system", output, StringComparison.Ordinal);
+        Assert.Contains("## First-call sequence", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli guide model --format json", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli intent status --domain intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli intent search --domain intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli intent next-slice --dry-run --domain intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli intent explain", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli interview", output, StringComparison.Ordinal);
+        Assert.Contains("## Forbidden rule sources", output, StringComparison.Ordinal);
+        Assert.Contains("intents/rules/**", output, StringComparison.Ordinal);
+        Assert.Contains("## Clarification format", output, StringComparison.Ordinal);
+        Assert.Contains("background, question, options, pros/cons, and recommendation", output, StringComparison.Ordinal);
+        Assert.Contains("## Issue publish boundary", output, StringComparison.Ordinal);
+        Assert.Contains("at most one GitHub issue", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_IntentShapeJson_EmitsStructuredFields()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "intent-shape", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("intent-shape", root.GetProperty("kind").GetString());
+        Assert.Equal("intent-cli", root.GetProperty("domain").GetString());
+        Assert.Equal("J-Tech-Japan/intent-system", root.GetProperty("target_repo").GetString());
+        Assert.Equal(7, root.GetProperty("first_calls").GetArrayLength());
+        Assert.True(root.GetProperty("forbidden_sources").GetArrayLength() >= 3);
+        Assert.Contains("background, question, options, pros/cons", root.GetProperty("clarification_format").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("worktree", root.GetProperty("worktree_friendly").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_IntentShapeJson_PromptCoversExplainAndInterviewCommands()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "intent-shape", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("intent-cli intent explain", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-cli interview", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_IntentShapeJson_PromptCoversStatusSearchNextSlicePacketFlow()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "intent-shape", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("intent status", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent search", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent explain", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent next-slice", prompt, StringComparison.Ordinal);
+        Assert.Contains("interview", prompt, StringComparison.Ordinal);
+        Assert.Contains("packet draft", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_IntentShapeJson_PromptEnforcesAtMostOnePublicationAndDurableCommit()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "intent-shape", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("at most one GitHub issue per wake", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("durable", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_IntentShapeJson_PromptForbidsLocalRulesAndSkillsAndProvider()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "intent-shape", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("intents/rules/**", prompt, StringComparison.Ordinal);
+        Assert.Contains("local skill files", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not call `intent-cli run`", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not run `dotnet run`", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_IntentShapeJson_ClarificationFormatRequiresFiveParts()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "intent-shape", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Background", prompt, StringComparison.Ordinal);
+        Assert.Contains("Question", prompt, StringComparison.Ordinal);
+        Assert.Contains("Options", prompt, StringComparison.Ordinal);
+        Assert.Contains("Pros", prompt, StringComparison.Ordinal);
+        Assert.Contains("Recommendation", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HelpFlag_ListsIntentShapeKind()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--help"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("intent-shape", writer.ToString(), StringComparison.Ordinal);
+    }
+
     // ── shared contract ───────────────────────────────────────────────────
 
     [Theory]
@@ -323,6 +472,7 @@ public sealed class GuideIntentWorkSetupCommandTests
     [InlineData("next-slice")]
     [InlineData("packet-preload")]
     [InlineData("clarification")]
+    [InlineData("intent-shape")]
     public void Execute_AllKinds_PromptForbidsLocalRulesFilesAndSkillFiles(string kind)
     {
         using var writer = new StringWriter();
@@ -342,6 +492,7 @@ public sealed class GuideIntentWorkSetupCommandTests
     [InlineData("next-slice")]
     [InlineData("packet-preload")]
     [InlineData("clarification")]
+    [InlineData("intent-shape")]
     public void Execute_AllKinds_FirstCallsIncludeModelOnboardingAndCommandsList(string kind)
     {
         using var writer = new StringWriter();
@@ -363,6 +514,7 @@ public sealed class GuideIntentWorkSetupCommandTests
     [InlineData("next-slice")]
     [InlineData("packet-preload")]
     [InlineData("clarification")]
+    [InlineData("intent-shape")]
     public void Execute_AllKinds_PromptRequiresClarificationFormat(string kind)
     {
         using var writer = new StringWriter();

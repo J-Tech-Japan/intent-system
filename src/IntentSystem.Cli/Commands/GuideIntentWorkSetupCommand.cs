@@ -4,12 +4,13 @@ using System.Text.Json.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G261: Read-only <c>intent-cli guide intent-work setup</c>. Returns
+/// G261/G272: Read-only <c>intent-cli guide intent-work setup</c>. Returns
 /// paste-ready, worktree-friendly prompts for parent-side intent work so
 /// an AI agent can ask intent-cli how to organize intents, analyze next
-/// slices, preload packets, ask clarifications, and prepare one issue
-/// without reading local rules files, local skill files, or copied prompt
-/// files. Never mutates state. Never launches an AI provider.
+/// slices, preload packets, ask clarifications, shape intents via
+/// explain/interview, and prepare one issue without reading local rules
+/// files, local skill files, or copied prompt files.
+/// Never mutates state. Never launches an AI provider.
 /// </summary>
 internal static class GuideIntentWorkSetupCommand
 {
@@ -20,9 +21,10 @@ internal static class GuideIntentWorkSetupCommand
     private const string KindNextSlice = "next-slice";
     private const string KindPacketPreload = "packet-preload";
     private const string KindClarification = "clarification";
+    private const string KindIntentShape = "intent-shape";
 
     private const string UsageLine =
-        "Usage: intent-cli guide intent-work setup --kind <domain-organize|next-slice|packet-preload|clarification> "
+        "Usage: intent-cli guide intent-work setup --kind <domain-organize|next-slice|packet-preload|clarification|intent-shape> "
         + "--domain <domain> --target-repo <owner/repo> [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -64,13 +66,14 @@ internal static class GuideIntentWorkSetupCommand
             KindNextSlice => BuildNextSlice(domain!, targetRepo!),
             KindPacketPreload => BuildPacketPreload(domain!, targetRepo!),
             KindClarification => BuildClarification(domain!, targetRepo!),
+            KindIntentShape => BuildIntentShape(domain!, targetRepo!),
             _ => null
         };
 
         if (result is null)
         {
             writer.WriteLine(
-                $"--kind must be '{KindDomainOrganize}', '{KindNextSlice}', '{KindPacketPreload}', or '{KindClarification}' (got '{kind}').");
+                $"--kind must be '{KindDomainOrganize}', '{KindNextSlice}', '{KindPacketPreload}', '{KindClarification}', or '{KindIntentShape}' (got '{kind}').");
             writer.WriteLine(UsageLine);
             return 1;
         }
@@ -342,6 +345,91 @@ Hard rules:
         };
     }
 
+    private static GuideIntentWorkSetupResult BuildIntentShape(string domain, string targetRepo)
+    {
+        var prompt =
+$@"Shape and adjust intents for domain `{domain}` against `{targetRepo}`. Conduct clarification interviews with the product owner as needed, preload future packets, and publish at most one GitHub issue per wake.
+
+First-call sequence (read-only; required before any mutation):
+1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
+2. `intent-cli guide onboarding --format json` — first-call sequence for a fresh agent.
+3. `intent-cli guide commands list --format json` — surface `primary` / `support` / `advanced` / `experimental` buckets.
+4. `intent-cli automation summary --format json` — canonical label-driven contract and capability JSON.
+5. `intent-cli intent status --domain {domain} --format json` — current baseline / WIP / queued / clarifications.
+6. `intent-cli intent search --domain {domain} --format json` — locate related intents across the domain.
+7. `intent-cli intent next-slice --dry-run --domain {domain} --target-repo {targetRepo} --format json` — verify WIP cap and clarification gates.
+
+For each intent needing deeper review:
+- `intent-cli intent explain <id> --format json` — surface the full intent tree, dependencies, and current execution state.
+
+If PO input is needed for a clarification:
+- `intent-cli interview <flow> [--format json]` — run a structured intake interview to record PO answers. Use the result to update the clarification record before proceeding.
+
+Each clarification question must include:
+- **Background**: what accepted parent state is known; what the ambiguity is.
+- **Question**: one focused, answerable question.
+- **Options**: 2–4 concrete options with short labels.
+- **Pros / Cons**: for each option, 1–2 bullet pros and 1–2 bullet cons.
+- **Recommendation**: the agent's recommended option with a single-sentence rationale.
+
+Intent-shaping steps:
+1. Confirm cwd is the parent host repo root.
+2. Read `intent status` and `intent search` output to map accepted intents, execution units, open clarifications, and WIP.
+3. For intents needing adjustment: run `intent explain <id>` to get full context before proposing any change.
+4. Identify: intents to merge, split, re-scope, or retire; clarifications that must be resolved first.
+5. Present the proposed adjustments to the operator for acceptance. Do not write anything until accepted.
+6. After acceptance: apply only the operator-approved adjustments to the intent tree. Commit and push before packet work.
+
+Packet preload (optional, after intent shaping is accepted):
+1. For each accepted continuation candidate: `intent-cli packet draft --execution-unit <id> --target-repo {targetRepo} --dry-run --format markdown`.
+2. Present each preview to the operator. Accept or reject independently.
+3. For accepted packets: `intent-cli packet draft --execution-unit <id> --target-repo {targetRepo} --format json`.
+4. Multiple packets may be preloaded; mark each as `queued` in queue-state without linked issues.
+
+Issue publication (at most one per wake):
+1. After parent durable state (intent files, packet files, queue-state) is committed and pushed:
+   `intent-cli issue publish-flow <id> --repo {targetRepo} --write --format json`
+2. After parent state is pushed: `intent-cli automation issue-publish --repo {targetRepo} --issue <n> --write --format json`.
+3. Publish at most one GitHub issue per wake regardless of how many packets are preloaded.
+
+Hard rules:
+- Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...`, `intent-cli intent ...`, and `intent-cli interview ...` instead.
+- Do not call `intent-cli run`. `run` is advanced runtime, not the intent-work path.
+- Do not run `dotnet run` as a fallback for `intent-cli`.
+- Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
+- All label transitions go through installed `intent-cli automation` commands.
+- `intent-target` is the host-owned publish boundary; apply it only via `intent-cli automation issue-publish` after parent state is pushed.
+- Publish at most one GitHub issue per wake.
+- Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.";
+
+        return new GuideIntentWorkSetupResult
+        {
+            Kind = KindIntentShape,
+            Domain = domain,
+            TargetRepo = targetRepo,
+            Prompt = prompt,
+            FirstCalls = new[]
+            {
+                "intent-cli guide model --format json",
+                "intent-cli guide onboarding --format json",
+                "intent-cli guide commands list --format json",
+                "intent-cli automation summary --format json",
+                $"intent-cli intent status --domain {domain} --format json",
+                $"intent-cli intent search --domain {domain} --format json",
+                $"intent-cli intent next-slice --dry-run --domain {domain} --target-repo {targetRepo} --format json"
+            },
+            ForbiddenSources = new[]
+            {
+                "intents/rules/**",
+                "local skill files",
+                "copied prompt files"
+            },
+            ClarificationFormat = "background, question, options, pros/cons, and recommendation",
+            IssuePublishBoundary = "Publish at most one GitHub issue per wake even when multiple packets are preloaded. Use `intent-cli issue publish-flow` then `intent-cli automation issue-publish` after parent durable state is committed and pushed.",
+            WorktreeFriendly = "The prompt names the parent host repo worktree root as cwd and references domain/target-repo from arguments; no operator-specific paths are hard-coded, so it works across host-side worktrees."
+        };
+    }
+
     private static void WriteMarkdown(TextWriter writer, GuideIntentWorkSetupResult result)
     {
         writer.WriteLine($"# Guide intent-work setup — {result.Kind}");
@@ -476,13 +564,14 @@ Hard rules:
     {
         writer.WriteLine("guide intent-work setup");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Read-only paste-ready prompts for parent-side intent work: domain organization, next-slice analysis, packet preload, and clarification drafting.");
+        writer.WriteLine("Read-only paste-ready prompts for parent-side intent work: domain organization, next-slice analysis, packet preload, clarification drafting, and intent shaping.");
         writer.WriteLine();
         writer.WriteLine("Supported kinds:");
         writer.WriteLine($"- {KindDomainOrganize}  (--domain, --target-repo required)");
         writer.WriteLine($"- {KindNextSlice}        (--domain, --target-repo required)");
         writer.WriteLine($"- {KindPacketPreload}    (--domain, --target-repo required)");
         writer.WriteLine($"- {KindClarification}   (--domain, --target-repo required)");
+        writer.WriteLine($"- {KindIntentShape}     (--domain, --target-repo required)");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
