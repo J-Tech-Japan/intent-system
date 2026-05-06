@@ -435,6 +435,64 @@ public sealed class AutomationHostReviewPreflightCommandTests : IDisposable
         Assert.Equal("no-actionable-item", result.Action);
     }
 
+    // ── G276-regression-analyze-unit-tests ───────────────────────────────
+
+    [Fact]
+    public void Analyze_NoPrWipClearCandidateProvided_ReturnsCandidateReady()
+    {
+        var result = AutomationHostReviewPreflightCommand.Analyze(
+            "test-owner/test-repo",
+            reviewCandidatePrs: Array.Empty<GitHubAutomationPrCandidate>(),
+            inFlightPrCandidates: Array.Empty<GitHubAutomationPrCandidate>(),
+            intentTargetIssues: Array.Empty<GitHubAutomationIssueCandidate>(),
+            candidateExecutionUnit: "G99",
+            clarificationRequired: false);
+
+        Assert.Equal("candidate-ready", result.Action);
+        Assert.Equal("G99", result.CandidateExecutionUnit);
+        Assert.Empty(result.InFlightPrs);
+        Assert.Empty(result.InFlightIssues);
+    }
+
+    [Fact]
+    public void Analyze_NoPrWipClearNoCandidate_ReturnsNoActionableItemNotStaleCli()
+    {
+        // no-actionable-item from Analyze() is NOT the same as stale-host-cli.
+        // stale-host-cli is a surface-probe result emitted before Analyze() is called.
+        // The guide (G276) requires Stage 2 next-slice dry-run before treating
+        // no-actionable-item as a truly idle wake.
+        var result = AutomationHostReviewPreflightCommand.Analyze(
+            "test-owner/test-repo",
+            reviewCandidatePrs: Array.Empty<GitHubAutomationPrCandidate>(),
+            inFlightPrCandidates: Array.Empty<GitHubAutomationPrCandidate>(),
+            intentTargetIssues: Array.Empty<GitHubAutomationIssueCandidate>(),
+            candidateExecutionUnit: null,
+            clarificationRequired: false);
+
+        Assert.Equal("no-actionable-item", result.Action);
+        Assert.NotEqual("stale-host-cli", result.Action);
+        Assert.Null(result.CandidateExecutionUnit);
+        Assert.Empty(result.InFlightPrs);
+        Assert.Empty(result.InFlightIssues);
+    }
+
+    [Fact]
+    public void Analyze_NoPrInFlightIssueBlocking_ReturnsSkipNextSliceDueToWip()
+    {
+        var inFlightIssue = BuildIssue(42, "G42", "https://github.com/t/r/issues/42", "2024-01-01", ["intent-target"]);
+
+        var result = AutomationHostReviewPreflightCommand.Analyze(
+            "test-owner/test-repo",
+            reviewCandidatePrs: Array.Empty<GitHubAutomationPrCandidate>(),
+            inFlightPrCandidates: Array.Empty<GitHubAutomationPrCandidate>(),
+            intentTargetIssues: [inFlightIssue],
+            candidateExecutionUnit: "G99",
+            clarificationRequired: false);
+
+        Assert.Equal("skip-next-slice-due-to-wip", result.Action);
+        Assert.Contains(42, result.InFlightIssues);
+    }
+
     private static GitHubAutomationPrCandidate BuildPr(
         int number,
         string title,
