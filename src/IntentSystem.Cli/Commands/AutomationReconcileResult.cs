@@ -200,6 +200,14 @@ internal static class AutomationReconcileUnsafeStopKinds
     /// <summary>G284: more than one queue item references the same source issue, so the
     /// host loop cannot deterministically pick which queue row should receive linked_pr.</summary>
     public const string AmbiguousQueueLinkage = "ambiguous-queue-linkage";
+
+    /// <summary>
+    /// G291: the matched queue item already has a non-empty <c>linked_pr</c>
+    /// pointing at a DIFFERENT PR than the one closing the source issue. Two
+    /// PRs claiming the same queue row is an unsafe state to repair without
+    /// operator clarification — overwriting silently could lose review state.
+    /// </summary>
+    public const string ConflictingLinkedPr = "conflicting-linked-pr";
 }
 
 /// <summary>G284: minimal queue-state snapshot the host-review reconcile analyzer

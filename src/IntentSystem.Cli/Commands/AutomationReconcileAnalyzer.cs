@@ -150,8 +150,17 @@ internal static class AutomationReconcileAnalyzer
                     if (matchedLinks.Length == 1)
                     {
                         var match = matchedLinks[0];
-                        if (!string.Equals(match.LinkedPrUrl, prUrl, StringComparison.Ordinal))
+                        if (string.Equals(match.LinkedPrUrl, prUrl, StringComparison.Ordinal))
                         {
+                            // No drift — queue-state already points at this PR.
+                            // Skip silently (no advisory, no high-confidence repair).
+                        }
+                        else if (string.IsNullOrWhiteSpace(match.LinkedPrUrl))
+                        {
+                            // G284 + G291: linked_pr is empty AND PR closes the
+                            // source issue uniquely AND queue-state has exactly
+                            // one matching row. This is the deterministic high-
+                            // confidence repair the host loop relies on.
                             safeRepairs.Add(new AutomationReconcileRepair
                             {
                                 Type = AutomationReconcileRepairTypes.MissingLinkedPrMetadata,
@@ -164,7 +173,7 @@ internal static class AutomationReconcileAnalyzer
                                 [
                                     $"PR #{pr.Number} closing-issue references uniquely include #{issueNumber}",
                                     $"issue #{issueNumber} is a published intent-target issue",
-                                    $"queue-state has exactly one item ('{match.ExecutionUnit}') with linked_issue.number={issueNumber} and current linked_pr={(string.IsNullOrEmpty(match.LinkedPrUrl) ? "(none)" : match.LinkedPrUrl)}"
+                                    $"queue-state has exactly one item ('{match.ExecutionUnit}') with linked_issue.number={issueNumber} and no current linked_pr (empty)"
                                 ],
                                 Confidence = AutomationReconcileConfidence.High,
                                 Applied = false,
@@ -173,6 +182,27 @@ internal static class AutomationReconcileAnalyzer
                                 PrNumberToLink = pr.Number,
                                 QueueStateLinkedPrUrl = prUrl,
                                 QueueStateExecutionUnit = match.ExecutionUnit,
+                            });
+                        }
+                        else
+                        {
+                            // G291: linked_pr already points at a DIFFERENT PR.
+                            // Two PRs claiming the same queue row is an unsafe
+                            // state — overwriting could clobber review history.
+                            // Surface a structured operator clarification.
+                            unsafeStops.Add(new AutomationReconcileUnsafeStop
+                            {
+                                Kind = AutomationReconcileUnsafeStopKinds.ConflictingLinkedPr,
+                                TargetKind = "queue-state",
+                                TargetNumber = issueNumber,
+                                TargetUrl = publishedIssuesByNumber[issueNumber].Url,
+                                Reason = $"PR #{pr.Number} closes source issue #{issueNumber}, but queue-state item '{match.ExecutionUnit}' already has linked_pr={match.LinkedPrUrl}; cannot overwrite without operator confirmation.",
+                                MissingEvidence =
+                                [
+                                    $"queue-state item '{match.ExecutionUnit}' already has linked_pr={match.LinkedPrUrl}",
+                                    $"closing PR #{pr.Number} URL {prUrl} does not match the existing linked_pr",
+                                    "operator must confirm which PR is the correct linked_pr before reconcile rewrites the row"
+                                ],
                             });
                         }
                     }
