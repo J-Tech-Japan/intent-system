@@ -682,6 +682,41 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_GatesPrCommentsOnHostMetadataClassification_G287()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        // The host-metadata gating block names both classifications and the
+        // host-side recovery command path.
+        Assert.Contains("host-metadata-blocked", prompt, StringComparison.Ordinal);
+        Assert.Contains("implementation-review-finding", prompt, StringComparison.Ordinal);
+        Assert.Contains("blocker_classification", prompt, StringComparison.Ordinal);
+        Assert.Contains("do NOT post a PR comment", prompt, StringComparison.Ordinal);
+        Assert.Contains("automation reconcile", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostOneshotPrompt_GatesPrCommentsOnHostMetadataClassification_G287()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("host-metadata-blocked", prompt, StringComparison.Ordinal);
+        Assert.Contains("implementation-review-finding", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostLoopPrompt_MentionsConvergenceClassifications_G286()
     {
         using var writer = new StringWriter();

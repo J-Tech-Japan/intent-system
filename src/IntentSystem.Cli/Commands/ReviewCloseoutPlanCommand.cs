@@ -14,9 +14,30 @@ namespace IntentSystem.Cli.Commands;
 /// validation/closeout steps the operator must run separately. Reports
 /// blocking ambiguities as actionable gaps. Never mutates state. Never
 /// launches an AI provider.
+///
+/// G287: Each gap is now classified into one of two terminal blocker
+/// classes so the host loop can route the gap correctly. Gaps that
+/// describe parent-host metadata drift (missing <c>linked_pr</c>,
+/// missing/invalid queue-state, missing <c>linked_issue</c>) are
+/// classified as <c>host-metadata-blocked</c>; the host loop must
+/// run <c>automation reconcile</c> rather than turn the gap into a
+/// PR repair comment / <c>request-update</c> transition. Gaps that
+/// describe packet content the implementer can repair (missing
+/// github-body, missing contract sections) are classified as
+/// <c>implementation-review-finding</c>. The aggregate
+/// <c>blocker_classification</c> field surfaces the dominant class
+/// for the wake.
 /// </summary>
 internal static class ReviewCloseoutPlanCommand
 {
+    /// <summary>G287: aggregate blocker classifications surfaced on the result.</summary>
+    public const string BlockerClassificationReady = "ready";
+    public const string BlockerClassificationHostMetadataBlocked = "host-metadata-blocked";
+    public const string BlockerClassificationImplementationReviewFinding = "implementation-review-finding";
+
+    /// <summary>G287: per-gap classification kinds.</summary>
+    public const string GapClassificationHostMetadata = "host-metadata";
+    public const string GapClassificationImplementationReview = "implementation-review";
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
 
@@ -47,12 +68,13 @@ internal static class ReviewCloseoutPlanCommand
             : domainOverride!;
 
         var queueStatePath = context.GetQueueStatePath();
-        var gaps = new List<string>();
+        var gaps = new List<ReviewCloseoutPlanGap>();
 
         QueueState? queueState = null;
         if (!File.Exists(queueStatePath))
         {
-            gaps.Add($"queue-state file not found: {queueStatePath}");
+            // G287: parent-host owned durable state.
+            gaps.Add(HostMetadataGap($"queue-state file not found: {queueStatePath}"));
         }
         else
         {
@@ -62,11 +84,11 @@ internal static class ReviewCloseoutPlanCommand
             }
             catch (JsonException jsonException)
             {
-                gaps.Add($"queue-state JSON could not be parsed: {jsonException.Message}");
+                gaps.Add(HostMetadataGap($"queue-state JSON could not be parsed: {jsonException.Message}"));
             }
             catch (InvalidOperationException invalidOperation)
             {
-                gaps.Add($"queue-state payload was invalid: {invalidOperation.Message}");
+                gaps.Add(HostMetadataGap($"queue-state payload was invalid: {invalidOperation.Message}"));
             }
         }
 
@@ -77,7 +99,10 @@ internal static class ReviewCloseoutPlanCommand
             matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, repo!, prToken));
             if (matchedItem is null)
             {
-                gaps.Add($"no queue item found with linked_pr matching #{pr}.");
+                // G287: this is the PR #670-shaped gap — host metadata drift,
+                // not an implementation defect. The host loop must run
+                // `automation reconcile`, not request a child PR repair.
+                gaps.Add(HostMetadataGap($"no queue item found with linked_pr matching #{pr}."));
             }
         }
 
@@ -98,7 +123,10 @@ internal static class ReviewCloseoutPlanCommand
                 var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
                 if (!File.Exists(githubBodyPath))
                 {
-                    gaps.Add($"github-body.md not found in packet directory: {packetDirectory}");
+                    // G287: missing github-body.md is a parent-host packet
+                    // sync issue (the implementer cannot write it from the
+                    // PR branch).
+                    gaps.Add(HostMetadataGap($"github-body.md not found in packet directory: {packetDirectory}"));
                     missingSections = PacketDraftCommand.RequiredContractSections;
                 }
                 else
@@ -109,19 +137,25 @@ internal static class ReviewCloseoutPlanCommand
                         .ToArray();
                     if (missingSections.Count > 0)
                     {
-                        gaps.Add("Child Issue Contract is incomplete; sections missing: " + string.Join(", ", missingSections));
+                        // G287: contract sections are part of the published
+                        // child issue body; an incomplete contract is an
+                        // implementation/review finding the implementer can
+                        // address by amending the PR head against the
+                        // packet/issue body.
+                        gaps.Add(ImplementationReviewGap(
+                            "Child Issue Contract is incomplete; sections missing: " + string.Join(", ", missingSections)));
                     }
                 }
             }
             else
             {
-                gaps.Add($"packet directory not found: {packetDirectory}");
+                gaps.Add(HostMetadataGap($"packet directory not found: {packetDirectory}"));
                 missingSections = PacketDraftCommand.RequiredContractSections;
             }
 
             if (matchedItem.LinkedIssue is null)
             {
-                gaps.Add("queue item has no linked_issue; closeout requires a linked issue to close.");
+                gaps.Add(HostMetadataGap("queue item has no linked_issue; closeout requires a linked issue to close."));
             }
             else
             {
@@ -151,6 +185,29 @@ internal static class ReviewCloseoutPlanCommand
             "Commit and push the parent durable state (queue-state, runs, submodule pointer)."
         };
 
+        // G287: the dominant blocker class. host-metadata-blocked dominates
+        // implementation-review-finding when both are present so the host
+        // loop runs reconcile first. Posting a PR comment for a wake that is
+        // host-metadata-blocked is forbidden by the host-loop guide.
+        var ready = gaps.Count == 0 && matchedItem is not null;
+        string blockerClassification;
+        string? recommendedRecoveryCommand;
+        if (ready)
+        {
+            blockerClassification = BlockerClassificationReady;
+            recommendedRecoveryCommand = null;
+        }
+        else if (gaps.Any(g => string.Equals(g.Classification, GapClassificationHostMetadata, StringComparison.Ordinal)))
+        {
+            blockerClassification = BlockerClassificationHostMetadataBlocked;
+            recommendedRecoveryCommand = $"intent-cli automation reconcile --lane host-review --repo {repo} --format json";
+        }
+        else
+        {
+            blockerClassification = BlockerClassificationImplementationReviewFinding;
+            recommendedRecoveryCommand = null;
+        }
+
         var result = new ReviewCloseoutPlanResult
         {
             Domain = domain,
@@ -166,8 +223,11 @@ internal static class ReviewCloseoutPlanCommand
             ExpectedSubmodulePath = expectedSubmodulePath,
             ValidationSteps = validationSteps,
             ClosingSteps = closeoutSteps,
-            Gaps = gaps,
-            Ready = gaps.Count == 0 && matchedItem is not null
+            Gaps = gaps.Select(g => g.Description).ToArray(),
+            ClassifiedGaps = gaps,
+            BlockerClassification = blockerClassification,
+            RecommendedRecoveryCommand = recommendedRecoveryCommand,
+            Ready = ready
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -182,6 +242,12 @@ internal static class ReviewCloseoutPlanCommand
 
         return result.Ready ? 0 : 1;
     }
+
+    private static ReviewCloseoutPlanGap HostMetadataGap(string description) =>
+        new() { Description = description, Classification = GapClassificationHostMetadata };
+
+    private static ReviewCloseoutPlanGap ImplementationReviewGap(string description) =>
+        new() { Description = description, Classification = GapClassificationImplementationReview };
 
     private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
     {
@@ -245,6 +311,12 @@ internal static class ReviewCloseoutPlanCommand
         }
         writer.WriteLine($"- expected submodule path: {result.ExpectedSubmodulePath}");
         writer.WriteLine($"- ready: {(result.Ready ? "yes" : "no")}");
+        writer.WriteLine($"- blocker classification: {result.BlockerClassification}");
+        if (!string.IsNullOrWhiteSpace(result.RecommendedRecoveryCommand))
+        {
+            writer.WriteLine($"- recommended recovery command: {result.RecommendedRecoveryCommand}");
+        }
+
         writer.WriteLine();
 
         writer.WriteLine("## Linked issue");
@@ -315,12 +387,12 @@ internal static class ReviewCloseoutPlanCommand
         }
         writer.WriteLine();
 
-        if (result.Gaps.Count > 0)
+        if (result.ClassifiedGaps.Count > 0)
         {
             writer.WriteLine("## Gaps");
-            foreach (var gap in result.Gaps)
+            foreach (var gap in result.ClassifiedGaps)
             {
-                writer.WriteLine($"- {gap}");
+                writer.WriteLine($"- ({gap.Classification}) {gap.Description}");
             }
         }
     }
@@ -482,8 +554,53 @@ internal sealed record ReviewCloseoutPlanResult
     [JsonPropertyName("gaps")]
     public required IReadOnlyList<string> Gaps { get; init; }
 
+    /// <summary>
+    /// G287: per-gap classification (kind + description). The
+    /// <c>gaps</c> list is preserved as a flat string list for backward
+    /// compatibility with existing callers/tests.
+    /// </summary>
+    [JsonPropertyName("classified_gaps")]
+    public required IReadOnlyList<ReviewCloseoutPlanGap> ClassifiedGaps { get; init; }
+
+    /// <summary>
+    /// G287: aggregate terminal class for the wake — <c>ready</c>,
+    /// <c>host-metadata-blocked</c>, or <c>implementation-review-finding</c>.
+    /// The host loop must NOT post a PR repair comment or transition the PR
+    /// to <c>intent-pr-request-update</c> when the value is
+    /// <c>host-metadata-blocked</c>; instead it runs the
+    /// <c>recommended_recovery_command</c> (host-owned reconcile) and
+    /// retries the wake.
+    /// </summary>
+    [JsonPropertyName("blocker_classification")]
+    public required string BlockerClassification { get; init; }
+
+    /// <summary>
+    /// G287: deterministic recovery command for host-metadata-blocked wakes.
+    /// Null for ready wakes and for implementation-review findings (the
+    /// implementer addresses those by amending the PR head).
+    /// </summary>
+    [JsonPropertyName("recommended_recovery_command")]
+    public required string? RecommendedRecoveryCommand { get; init; }
+
     [JsonPropertyName("ready")]
     public required bool Ready { get; init; }
+}
+
+/// <summary>
+/// G287: one gap entry with a classification kind so the host loop can
+/// route gaps to host-owned reconcile vs PR-side review comments.
+/// </summary>
+internal sealed record ReviewCloseoutPlanGap
+{
+    [JsonPropertyName("description")]
+    public required string Description { get; init; }
+
+    /// <summary>
+    /// One of <see cref="ReviewCloseoutPlanCommand.GapClassificationHostMetadata"/>
+    /// or <see cref="ReviewCloseoutPlanCommand.GapClassificationImplementationReview"/>.
+    /// </summary>
+    [JsonPropertyName("classification")]
+    public required string Classification { get; init; }
 }
 
 internal sealed record ReviewCloseoutLinkedIssue
