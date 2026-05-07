@@ -52,6 +52,13 @@ internal sealed record GitHubAutomationPrCandidate
     [JsonPropertyName("closingIssuesReferences")]
     public IReadOnlyList<GitHubPrClosingIssueReference> ClosingIssuesReferences { get; init; }
         = Array.Empty<GitHubPrClosingIssueReference>();
+
+    /// <summary>
+    /// G289: GitHub PR state ("OPEN" / "CLOSED" / "MERGED"). Empty for
+    /// callers that pre-date the field; treated as open for backward compat.
+    /// </summary>
+    [JsonPropertyName("state")]
+    public string State { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -75,6 +82,13 @@ internal sealed record GitHubAutomationIssueCandidate
     [JsonPropertyName("labels")]
     public IReadOnlyList<GitHubAutomationLabel> Labels { get; init; }
         = Array.Empty<GitHubAutomationLabel>();
+
+    /// <summary>
+    /// G289: GitHub issue state ("OPEN" / "CLOSED"). Empty for callers that
+    /// pre-date the field; treated as open for backward compat.
+    /// </summary>
+    [JsonPropertyName("state")]
+    public string State { get; init; } = string.Empty;
 }
 
 internal sealed record GitHubAutomationLabel
@@ -98,9 +112,12 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     /// internally so adapter-shape regression tests can lock the supported
     /// subset.
     /// </summary>
-    internal const string ListJsonFields = "number,title,url,createdAt,labels";
+    // G289: also request `state` so the analyzer can defensively filter
+    // closed issues / PRs from WIP detection even when callers (e.g. test
+    // fakes) don't pre-apply `--state open`.
+    internal const string ListJsonFields = "number,title,url,createdAt,labels,state";
 
-    internal const string PrListJsonFields = "number,title,url,body,createdAt,updatedAt,labels,closingIssuesReferences";
+    internal const string PrListJsonFields = "number,title,url,body,createdAt,updatedAt,labels,closingIssuesReferences,state";
 
     /// <summary>
     /// G206: builds the <c>gh pr list</c> argument list shared by the live
