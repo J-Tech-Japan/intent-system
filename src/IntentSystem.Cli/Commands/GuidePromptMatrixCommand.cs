@@ -33,8 +33,12 @@ internal static class GuidePromptMatrixCommand
     private const string FrequencyGuidanceOneshot =
         "N/A — one-shot execution; frequency is forbidden";
 
+    private const string AgentClaude = "claude";
+    private const string AgentCodex = "codex";
+    private const string AgentGeneric = "generic";
+
     private const string UsageLine =
-        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--format markdown|json]";
+        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic] [--frequency <NNm|NNh>] [--format markdown|json]";
 
     private static readonly string[] ForbiddenSources =
     [
@@ -55,14 +59,14 @@ internal static class GuidePromptMatrixCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var targetRepo, out var error))
+        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var targetRepo, out var agent, out var frequency, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var entries = BuildEntries(mode, domain, targetRepo);
+        var entries = BuildEntries(mode, domain, targetRepo, agent, frequency);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -88,15 +92,17 @@ internal static class GuidePromptMatrixCommand
     private static IReadOnlyList<GuidePromptMatrixEntry> BuildEntries(
         string? mode,
         string? domain,
-        string? targetRepo)
+        string? targetRepo,
+        string? agent,
+        string? frequency)
     {
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
         var targetRepoPlaceholder = string.IsNullOrWhiteSpace(targetRepo) ? "<TARGET-REPO>" : targetRepo;
 
         var all = new[]
         {
-            BuildChildLoop(domainPlaceholder),
-            BuildHostLoop(domainPlaceholder, targetRepoPlaceholder),
+            BuildChildLoop(domainPlaceholder, agent, frequency),
+            BuildHostLoop(domainPlaceholder, targetRepoPlaceholder, agent, frequency),
             BuildChildOneshot(domainPlaceholder),
             BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder)
         };
@@ -116,15 +122,63 @@ internal static class GuidePromptMatrixCommand
         };
     }
 
-    private static GuidePromptMatrixEntry BuildChildLoop(string domainPlaceholder)
+    /// <summary>
+    /// G279: Frequency block for the recurring loop modes. When the operator
+    /// supplies <c>--frequency</c> the rendered prompt names the resolved
+    /// interval and the agent-specific scheduling primitive; when omitted the
+    /// rendered prompt explicitly tells the agent to ask the operator before
+    /// creating any cron / monitor / wakeup so a default interval is never
+    /// silently chosen.
+    /// </summary>
+    private static string RenderFrequencyBlock(string? agent, string? frequency)
     {
+        var resolvedAgent = NormalizeAgent(agent);
+        if (string.IsNullOrWhiteSpace(frequency))
+        {
+            return
+$@"IMPORTANT — frequency is unresolved; ask the operator for the desired frequency before creating any cron, monitor, or recurring wakeup. Never guess or use a tool-default interval.
+- High-frequency local loops (active development): 5 minutes.
+- Low-frequency local loops (background / idle polling): ~20 minutes.
+- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.";
+        }
+
+        var schedulingHint = resolvedAgent switch
+        {
+            AgentClaude => $"Schedule via Claude Code same-thread `/loop {frequency} <prompt>` so each wake reuses this thread's local paths and `.intent-cli` packages.",
+            AgentCodex => $"Schedule via Codex current-thread local automation / heartbeat at {frequency}; do not spawn a new thread or remote scheduler that cannot reach local paths.",
+            _ => $"Schedule via the agent's local same-thread/current-thread automation at {frequency}; cloud or new-thread schedulers cannot access local paths."
+        };
+
+        return
+$@"Frequency: {frequency} (operator-resolved). {schedulingHint}
+- High-frequency local loops (active development): 5 minutes.
+- Low-frequency local loops (background / idle polling): ~20 minutes.";
+    }
+
+    private static string NormalizeAgent(string? agent)
+    {
+        if (string.IsNullOrWhiteSpace(agent))
+        {
+            return AgentGeneric;
+        }
+        return agent.Trim().ToLowerInvariant();
+    }
+
+    private static string ResolvedFrequencyGuidance(string? frequency) =>
+        string.IsNullOrWhiteSpace(frequency)
+            ? FrequencyGuidanceRecurring
+            : $"{frequency} (operator-resolved)";
+
+    private static GuidePromptMatrixEntry BuildChildLoop(string domainPlaceholder, string? agent, string? frequency)
+    {
+        var resolvedAgent = NormalizeAgent(agent);
+        var frequencyBlock = RenderFrequencyBlock(agent, frequency);
         var prompt =
 $@"Set up the child implementation loop for the repo in the current worktree. Run the loop body exactly once per wake; the operator or scheduler drives subsequent wakes.
 
-IMPORTANT — ask the operator for the desired frequency before creating any cron, monitor, or recurring wakeup. Never guess or use a tool-default interval.
-- High-frequency local loops (active development): 5 minutes.
-- Low-frequency local loops (background / idle polling): ~20 minutes.
-- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.
+{frequencyBlock}
+
+If the installed CLI surface is stale or any required automation command is missing, abort the wake before any mutation: `intent-cli automation doctor --format json` (or `automation host-review-preflight` reporting `stale-host-cli`) is the canonical signal — refresh the installed CLI; never fall back to raw `gh` label mutation.
 
 First-call sequence (read-only; required before any mutation):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
@@ -156,7 +210,7 @@ Hard rules:
             Mode = ModeChildLoop,
             Kind = KindLoop,
             Target = TargetChild,
-            FrequencyGuidance = FrequencyGuidanceRecurring,
+            FrequencyGuidance = ResolvedFrequencyGuidance(frequency),
             ForbiddenSources = ForbiddenSources,
             FirstCalls =
             [
@@ -165,19 +219,22 @@ Hard rules:
                 "intent-cli guide commands list --format json",
                 $"intent-cli automation summary --domain {domainPlaceholder} --format json"
             ],
-            Prompt = prompt
+            Prompt = prompt,
+            Agent = resolvedAgent,
+            Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency,
         };
     }
 
-    private static GuidePromptMatrixEntry BuildHostLoop(string domainPlaceholder, string targetRepoPlaceholder)
+    private static GuidePromptMatrixEntry BuildHostLoop(string domainPlaceholder, string targetRepoPlaceholder, string? agent, string? frequency)
     {
+        var resolvedAgent = NormalizeAgent(agent);
+        var frequencyBlock = RenderFrequencyBlock(agent, frequency);
         var prompt =
 $@"Set up the host review and next-slice loop for domain `{domainPlaceholder}` against `{targetRepoPlaceholder}`. Run the loop body exactly once per wake; the operator or scheduler drives subsequent wakes.
 
-IMPORTANT — ask the operator for the desired frequency before creating any cron, monitor, or recurring wakeup. Never guess or use a tool-default interval.
-- High-frequency local loops (active development): 5 minutes.
-- Low-frequency local loops (background / idle polling): ~20 minutes.
-- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.
+{frequencyBlock}
+
+If the installed CLI surface is stale or any required automation command is missing, abort the wake before any mutation: `intent-cli automation doctor --format json` (or `automation host-review-preflight` reporting `stale-host-cli`) is the canonical signal — refresh the installed CLI; never fall back to raw `gh` label mutation.
 
 First-call sequence (read-only; required before any mutation):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
@@ -197,7 +254,8 @@ Loop body (single wake):
 3. Stage 2 — next-slice (only if WIP cap and clarification gates allow):
    - `intent-cli intent next-slice --dry-run --domain {domainPlaceholder} --target-repo {targetRepoPlaceholder} --format json` — confirm `recommended_outcome` is `issue-cut-ready`.
    - `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --dry-run --format markdown` — preview the packet.
-   - With operator acceptance: `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --format json` then `intent-cli issue publish-flow <id> --repo {targetRepoPlaceholder} --write --format json`.
+   - The operator's request to set up this host loop is pre-approval to publish exactly one next-slice issue per wake when ALL of the following hold: `intent next-slice --dry-run` returned `issue-cut-ready`, no open `intent-target` issue/PR is in flight (WIP empty), no Hard Clarification is open for the candidate, and the candidate's standalone Child Issue Contract is complete. In that case proceed without an additional operator acceptance prompt: `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --format json` then `intent-cli issue publish-flow <id> --repo {targetRepoPlaceholder} --write --format json`.
+   - If any of those preconditions fails, stop and surface the gap (clarification or contract repair); do not silently publish.
    - After parent durable state is pushed: `intent-cli automation issue-publish --repo {targetRepoPlaceholder} --issue <n> --write --format json`.
 4. Stage 3 — safe reconcile (host-only; only if Stage 1 and Stage 2 would otherwise stop with idle / no-actionable-item / clarification-required):
    - `intent-cli automation reconcile --lane host-review --repo {targetRepoPlaceholder} --format json` — dry-run plan with evidence and confidence per drift entry.
@@ -222,7 +280,7 @@ Hard rules:
             Mode = ModeHostLoop,
             Kind = KindLoop,
             Target = TargetHost,
-            FrequencyGuidance = FrequencyGuidanceRecurring,
+            FrequencyGuidance = ResolvedFrequencyGuidance(frequency),
             ForbiddenSources = ForbiddenSources,
             FirstCalls =
             [
@@ -233,7 +291,9 @@ Hard rules:
                 $"intent-cli intent status --domain {domainPlaceholder} --format json",
                 $"intent-cli intent next-slice --dry-run --domain {domainPlaceholder} --target-repo {targetRepoPlaceholder} --format json"
             ],
-            Prompt = prompt
+            Prompt = prompt,
+            Agent = resolvedAgent,
+            Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency
         };
     }
 
@@ -399,12 +459,16 @@ Hard rules:
         out string format,
         out string? domain,
         out string? targetRepo,
+        out string? agent,
+        out string? frequency,
         out string error)
     {
         mode = null;
         format = FormatMarkdown;
         domain = null;
         targetRepo = null;
+        agent = null;
+        frequency = null;
         error = string.Empty;
 
         for (var index = 0; index < args.Length; index++)
@@ -474,6 +538,34 @@ Hard rules:
                     index++;
                     break;
 
+                case "--agent":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--agent requires a value (claude, codex, or generic).";
+                        return false;
+                    }
+                    var requestedAgent = args[index + 1].Trim().ToLowerInvariant();
+                    if (!string.Equals(requestedAgent, AgentClaude, StringComparison.Ordinal)
+                        && !string.Equals(requestedAgent, AgentCodex, StringComparison.Ordinal)
+                        && !string.Equals(requestedAgent, AgentGeneric, StringComparison.Ordinal))
+                    {
+                        error = $"--agent must be 'claude', 'codex', or 'generic' (got '{requestedAgent}').";
+                        return false;
+                    }
+                    agent = requestedAgent;
+                    index++;
+                    break;
+
+                case "--frequency":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--frequency requires a value (e.g. 5m, 20m, 1h).";
+                        return false;
+                    }
+                    frequency = args[index + 1].Trim();
+                    index++;
+                    break;
+
                 default:
                     error = $"Unknown argument '{argument}'.";
                     return false;
@@ -496,7 +588,9 @@ Hard rules:
         writer.WriteLine($"- {ModeHostOneshot}  one-shot host review/next-slice");
         writer.WriteLine();
         writer.WriteLine("Omit --mode to get all four entries.");
-        writer.WriteLine("--domain and --target-repo are optional; omit to use placeholders.");
+        writer.WriteLine("--domain, --target-repo, --agent, and --frequency are optional; provide them to render a concrete paste-ready prompt instead of one with placeholders.");
+        writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic.");
+        writer.WriteLine("--frequency examples: 5m, 20m, 1h. Omit to keep the rendered prompt's ask-the-operator instruction.");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -529,4 +623,10 @@ internal sealed record GuidePromptMatrixEntry
 
     [JsonPropertyName("prompt")]
     public required string Prompt { get; init; }
+
+    [JsonPropertyName("agent")]
+    public string? Agent { get; init; }
+
+    [JsonPropertyName("frequency")]
+    public string? Frequency { get; init; }
 }
