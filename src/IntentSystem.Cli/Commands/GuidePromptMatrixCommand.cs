@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -36,6 +37,18 @@ internal static class GuidePromptMatrixCommand
     private const string AgentClaude = "claude";
     private const string AgentCodex = "codex";
     private const string AgentGeneric = "generic";
+
+    /// <summary>
+    /// G279 follow-up (PR #662): the rendered prompts only contain meaningful
+    /// scheduler instructions when <c>--frequency</c> matches the documented
+    /// shape. Accept positive integers followed by the unit token: <c>m</c>
+    /// (minutes) or <c>h</c> (hours). Anything else is rejected with a usage
+    /// error so unparseable values like <c>--frequency bananas</c> never reach
+    /// the rendered guidance.
+    /// </summary>
+    private static readonly Regex FrequencyPattern = new(
+        @"^[1-9][0-9]*[mh]$",
+        RegexOptions.Compiled);
 
     private const string UsageLine =
         "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic] [--frequency <NNm|NNh>] [--format markdown|json]";
@@ -562,7 +575,13 @@ Hard rules:
                         error = "--frequency requires a value (e.g. 5m, 20m, 1h).";
                         return false;
                     }
-                    frequency = args[index + 1].Trim();
+                    var requestedFrequency = args[index + 1].Trim();
+                    if (!FrequencyPattern.IsMatch(requestedFrequency))
+                    {
+                        error = $"--frequency must match <NNm|NNh> (positive integer followed by 'm' for minutes or 'h' for hours; e.g. 5m, 20m, 1h). Got '{requestedFrequency}'.";
+                        return false;
+                    }
+                    frequency = requestedFrequency;
                     index++;
                     break;
 

@@ -697,6 +697,47 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("abort the wake before any mutation", prompt, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("bananas")]
+    [InlineData("5")]
+    [InlineData("m")]
+    [InlineData("0m")]
+    [InlineData("5min")]
+    [InlineData("5d")]
+    [InlineData("-5m")]
+    [InlineData("5 m")]
+    public void Execute_InvalidFrequencyValue_ReturnsUsageError(string invalidFrequency)
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--frequency", invalidFrequency, "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("--frequency must match <NNm|NNh>", output, StringComparison.Ordinal);
+        Assert.Contains($"Got '{invalidFrequency}'", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("5m")]
+    [InlineData("20m")]
+    [InlineData("1h")]
+    [InlineData("12h")]
+    public void Execute_ValidFrequencyValue_IsAccepted(string validFrequency)
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--frequency", validFrequency, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(validFrequency, document.RootElement.GetProperty("frequency").GetString());
+    }
+
     [Fact]
     public void Execute_InvalidAgentValue_ReturnsUsageError()
     {

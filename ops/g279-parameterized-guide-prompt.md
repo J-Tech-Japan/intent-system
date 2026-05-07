@@ -20,11 +20,15 @@ in exactly that gap.
   Claude renders a same-thread `/loop <interval>` hint; Codex renders a
   current-thread local automation / heartbeat hint; generic stays neutral.
   Default: `generic`.
-- `--frequency <NNm|NNh>` — operator-resolved interval. When provided, the
-  rendered prompt names the interval and the agent-specific scheduling
-  primitive. When omitted, the rendered prompt explicitly tells the agent
-  to ask the operator for the desired frequency before creating any cron,
-  monitor, or wakeup; no default interval is silently chosen.
+- `--frequency <NNm|NNh>` — operator-resolved interval. The value must
+  match `^[1-9][0-9]*[mh]$` (positive integer followed by `m` for
+  minutes or `h` for hours; e.g. `5m`, `20m`, `1h`); other values are
+  rejected with a usage error so unparseable inputs never reach the
+  rendered guidance. When provided, the rendered prompt names the
+  interval and the agent-specific scheduling primitive. When omitted,
+  the rendered prompt explicitly tells the agent to ask the operator
+  for the desired frequency before creating any cron, monitor, or
+  wakeup; no default interval is silently chosen.
 
 Two new fields are added to the `prompt-matrix` JSON entries: `agent` and
 `frequency` (the latter omitted when not resolved).
