@@ -296,7 +296,7 @@ Hard rules:
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
 - Every label transition goes through installed `intent-cli automation pr-transition` / `automation issue-publish` / `automation reconcile` / `worker claim` / `worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback.
 - Never apply `intent-pr-created` to a PR.
-- Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains.
+- Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains. **Operator-approved queue warming (G288)**: only when the operator explicitly asks to keep the child queue warm beyond the cap, pass `--allow-wip-cap-override` to `automation host-review-diagnostics`. With that flag and a complete candidate, the diagnostic returns `issue-publish-ready` with `wip-cap-overridden` in `warnings`. The override publishes at most one prepared next-slice issue per wake; clarification gates and contract completeness are still hard blockers, and the override never lands without an operator ask.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
 - `automation reconcile --write` must come from this host loop only; child implementation loops never invoke it.
 - `automation host-review-diagnostics` is read-only and must not be used to mutate labels or parent files.
@@ -422,7 +422,7 @@ Hard rules:
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
 - Every label transition goes through installed `intent-cli automation pr-transition` / `automation issue-publish` / `automation reconcile` / `worker claim` / `worker complete`. No manual `gh ... edit --add-label` / `--remove-label` fallback.
 - Never apply `intent-pr-created` to a PR.
-- Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains.
+- Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains. **Operator-approved queue warming (G288)**: only when the operator explicitly asks to keep the child queue warm beyond the cap, pass `--allow-wip-cap-override` to `automation host-review-diagnostics`. With that flag and a complete candidate, the diagnostic returns `issue-publish-ready` with `wip-cap-overridden` in `warnings`. The override publishes at most one prepared next-slice issue per wake; clarification gates and contract completeness are still hard blockers, and the override never lands without an operator ask.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
 - `automation reconcile --write` must come from this host one-shot only; child implementation loops never invoke it.
 - `automation host-review-diagnostics` is read-only and must not be used to mutate labels or parent files.

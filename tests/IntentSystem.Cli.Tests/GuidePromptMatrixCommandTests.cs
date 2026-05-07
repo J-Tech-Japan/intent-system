@@ -682,6 +682,22 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_MentionsOperatorApprovedWipCapOverride_G288()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("--allow-wip-cap-override", prompt, StringComparison.Ordinal);
+        Assert.Contains("wip-cap-overridden", prompt, StringComparison.Ordinal);
+        Assert.Contains("Operator-approved queue warming (G288)", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostLoopPrompt_GatesPrCommentsOnHostMetadataClassification_G287()
     {
         using var writer = new StringWriter();
