@@ -98,6 +98,7 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     {
         using var workspace = new IssuePublishFlowWorkspace();
         workspace.WriteGithubBody("G245", BuildCompleteContractBody("G245 Add intent-cli issue publish-flow command"));
+        workspace.SeedQueueState("G245", "G245 Add intent-cli issue publish-flow command");
 
         var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/593");
         IssuePublishFlowCommand.CreatorFactory = () => stub;
@@ -241,6 +242,66 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         Assert.Equal("issue-publish-flow", runEvent.By);
         Assert.Equal("J-Tech-Japan/intent-system#659", runEvent.LinkedIssue);
         Assert.Equal(fixedNow, runEvent.Ts);
+    }
+
+    [Fact]
+    public void Execute_GivenWriteWithMissingQueueState_RefusesSuccessAfterCreate()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody("G278 Fix issue publish-flow durable state synchronization"));
+        // intentionally do NOT seed queue-state.json
+        Assert.False(File.Exists(workspace.QueueStatePath));
+
+        var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/659");
+        IssuePublishFlowCommand.CreatorFactory = () => stub;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("created").GetBoolean());
+        Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
+        Assert.False(root.GetProperty("queue_state_patched").GetBoolean());
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/659", root.GetProperty("issue_url").GetString());
+        var error = root.GetProperty("error").GetString()!;
+        Assert.Contains("durable state is not fully synchronized", error, StringComparison.Ordinal);
+        Assert.Contains("queue-state.json", error, StringComparison.Ordinal);
+        Assert.Contains("automation reconcile", error, StringComparison.Ordinal);
+
+        // queue-state stays absent; reconcile is the operator-driven repair path.
+        Assert.False(File.Exists(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_GivenWriteWithQueueStateMissingExecutionUnit_RefusesSuccessAfterCreate()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody("G278 Fix issue publish-flow durable state synchronization"));
+        // queue-state has a different unit, not G278
+        workspace.SeedQueueState("G999", "G999 unrelated unit");
+
+        var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/659");
+        IssuePublishFlowCommand.CreatorFactory = () => stub;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("created").GetBoolean());
+        Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
+        Assert.False(root.GetProperty("queue_state_patched").GetBoolean());
+        var error = root.GetProperty("error").GetString()!;
+        Assert.Contains("execution_unit 'G278'", error, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -39,6 +39,15 @@ created issue.
   code `1`, and points the operator at
   `intent-cli automation reconcile` for repair. The command never claims
   `created: true` while local artifacts remain unmodified.
+- The success path now requires all three artifacts to be patched.
+  If `queue-state.json` is missing entirely or has no item with the
+  given `execution_unit`, the command returns exit code `1` with
+  `created: false`, `durable_state_synced: false`,
+  `queue_state_patched: false`, and an actionable
+  `error` message naming the missing artifact and pointing at
+  `intent-cli automation reconcile` (or operator-driven seeding) before
+  re-running. Same treatment applies if `publish.yaml` or `runs.jsonl`
+  silently fails to patch.
 - Dry-run mode (no `--write`) remains read-only.
 
 ## Boundaries

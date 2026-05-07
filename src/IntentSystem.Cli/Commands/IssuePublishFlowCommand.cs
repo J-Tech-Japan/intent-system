@@ -316,6 +316,47 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
+        // G278 follow-up (PR #660 review): all three durable artifacts must be in
+        // sync for success. If any required artifact was not patched (most
+        // commonly the queue-state item, e.g. queue-state.json missing or the
+        // execution unit absent), refuse to claim created:true.
+        if (!queueStatePatched || !publishYamlPatched || !runsAppended)
+        {
+            var unsynchronizedReasons = new List<string>();
+            if (!queueStatePatched)
+            {
+                unsynchronizedReasons.Add(
+                    File.Exists(queueStatePath)
+                        ? $"queue-state.json has no item with execution_unit '{executionUnit}'"
+                        : $"queue-state.json not found at {queueStatePath}");
+            }
+            if (!publishYamlPatched)
+            {
+                unsynchronizedReasons.Add($"publish.yaml at {publishYamlPath} was not written");
+            }
+            if (!runsAppended)
+            {
+                unsynchronizedReasons.Add($"runs.jsonl at {runLogPath} did not receive the issue-created event");
+            }
+
+            var unsynchronizedResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: outcome.IssueUrl,
+                issueNumber: issueNumber,
+                queueStatePatched: queueStatePatched,
+                publishYamlPatched: publishYamlPatched,
+                runsAppended: runsAppended,
+                error: $"GitHub issue {outcome.IssueUrl} was created but parent durable state is not fully synchronized: {string.Join("; ", unsynchronizedReasons)}. Reconcile via 'intent-cli automation reconcile' or seed the missing parent artifact, then re-run.");
+            EmitResult(writer, unsynchronizedResult, format);
+            return 1;
+        }
+
         var successResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
             packetExists: true,
             githubBodyPresent: true,
