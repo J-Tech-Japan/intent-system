@@ -115,6 +115,112 @@ public sealed class ReviewCloseoutPlanCommandTests
         Assert.Contains(gaps, gap => gap!.Contains("no queue item found with linked_pr", StringComparison.Ordinal));
     }
 
+    // ─── G287 tests ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G287_NoMatchingLinkedPr_ClassifiesHostMetadataBlocked()
+    {
+        // PR #670-shaped: no queue item has linked_pr matching the selected PR.
+        // This is host metadata drift, not an implementation defect — must NOT
+        // become a PR repair comment / request-update.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review", linkedPr: "999", linkedIssue: null));
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "670", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("host-metadata-blocked", root.GetProperty("blocker_classification").GetString());
+        Assert.Contains("automation reconcile", root.GetProperty("recommended_recovery_command").GetString()!, StringComparison.Ordinal);
+        var classifiedGap = root.GetProperty("classified_gaps")[0];
+        Assert.Equal("host-metadata", classifiedGap.GetProperty("classification").GetString());
+        Assert.Contains("linked_pr", classifiedGap.GetProperty("description").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G287_MissingContractSections_ClassifiesImplementationReviewFinding()
+    {
+        // Real implementation finding: contract sections missing on the
+        // packet body. The implementer can fix this by amending the PR head /
+        // packet content. This is the path that may legitimately become a PR
+        // repair comment / request-update.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review", linkedPr: "596", linkedIssue: ("J-Tech-Japan/intent-system", 595, null)));
+        workspace.WriteFile(".intent-cli/issues/G247/github-body.md", "## Goal\nx\n\n## In Scope\nx\n");
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("implementation-review-finding", root.GetProperty("blocker_classification").GetString());
+        // No host-side recovery command for implementation findings — the
+        // serializer drops null fields (WhenWritingNull) so the property is
+        // absent rather than null-valued.
+        Assert.False(
+            root.TryGetProperty("recommended_recovery_command", out _),
+            "implementation-review-finding must not surface a host-recovery command");
+        var classifiedGap = root.GetProperty("classified_gaps")[0];
+        Assert.Equal("implementation-review", classifiedGap.GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_G287_HostMetadataDominatesImplementationReview_WhenBothPresent()
+    {
+        // Host metadata drift dominates: even if the packet body also has
+        // missing contract sections, the host loop must run reconcile first
+        // (and not post a PR comment) because the implementer cannot repair
+        // parent host metadata from the PR branch.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        // queue item exists but linked_pr points elsewhere → host-metadata gap
+        workspace.WriteQueueState(BuildQueueState("G247", "review", linkedPr: "999", linkedIssue: null));
+        // packet directory exists with incomplete body — would be impl finding
+        workspace.WriteFile(".intent-cli/issues/G247/github-body.md", "## Goal\nx\n");
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "670", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("host-metadata-blocked", root.GetProperty("blocker_classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_G287_Ready_BlockerClassificationIsReady()
+    {
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review", linkedPr: "596", linkedIssue: ("J-Tech-Japan/intent-system", 595, "https://github.com/J-Tech-Japan/intent-system/issues/595")));
+        workspace.WriteFile(".intent-cli/issues/G247/github-body.md", BuildCompleteContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("ready", root.GetProperty("blocker_classification").GetString());
+        Assert.False(root.TryGetProperty("recommended_recovery_command", out _));
+    }
+
     [Fact]
     public void Execute_GivenSamePrNumberInDifferentRepo_SkipsOtherRepo()
     {
