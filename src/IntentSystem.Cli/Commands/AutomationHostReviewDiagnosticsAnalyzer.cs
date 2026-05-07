@@ -23,11 +23,23 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
         IReadOnlyList<GitHubAutomationIssueCandidate> publishedIntentTargetIssues,
         bool clarificationRequired,
-        string? candidateExecutionUnit)
+        string? candidateExecutionUnit,
+        bool staleClarificationMetadata = false,
+        IReadOnlyList<string>? reconcileUnsafeStopKinds = null,
+        int reconcileHighConfidenceRepairsAvailable = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(openPrs);
         ArgumentNullException.ThrowIfNull(publishedIntentTargetIssues);
+
+        // G286: surface stale clarification metadata as a non-fatal warning on
+        // every classification so the host loop can re-stamp the file later
+        // without flipping the terminal class.
+        var warnings = staleClarificationMetadata
+            ? new List<string> { "stale-clarification-metadata" }
+            : new List<string>();
+
+        var unsafeStopKinds = reconcileUnsafeStopKinds ?? Array.Empty<string>();
 
         var details = new List<AutomationHostReviewDiagnosticsDetail>();
 
@@ -130,7 +142,32 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                         $"intent-pr-request-update (treat the previous repair as still incomplete): operator removes intent-pr-rereview-ready and leaves request-update; child loop will re-claim with worker claim --kind pr."
                     ],
                 },
-                details);
+                details,
+                warnings);
+        }
+
+        // G286: reconcile-reported unsafe stops dominate every other terminal
+        // classification (except request-update-rereview-conflict, which is a
+        // PR-label conflict the operator must resolve first). The host loop
+        // must not guess past ambiguous metadata.
+        if (unsafeStopKinds.Count > 0)
+        {
+            details.Add(new AutomationHostReviewDiagnosticsDetail
+            {
+                Kind = AutomationHostReviewDiagnosticsClassifications.UnsafeMetadata,
+                TargetKind = null,
+                TargetNumber = null,
+                TargetUrl = null,
+                Description = $"reconcile reported unsafe_stops: {string.Join(", ", unsafeStopKinds)}",
+            });
+            return Build(
+                repo,
+                AutomationHostReviewDiagnosticsClassifications.UnsafeMetadata,
+                $"Reconcile surfaced {unsafeStopKinds.Count} unsafe stop(s) ({string.Join(", ", unsafeStopKinds)}); the host loop must stop with structured clarification rather than guess past ambiguous parent state.",
+                recommendedNextCommand: $"intent-cli automation reconcile --lane host-review --repo {repo} --format json",
+                clarification: null,
+                details,
+                warnings);
         }
 
         if (stuckReviewingPr is not null)
@@ -142,7 +179,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 $"PR #{stuckReviewingPr.TargetNumber} appears to be stuck mid-review. The host loop will not advance until intent-pr-reviewing is paired with an exit-transition label.",
                 recommendedNextCommand: $"intent-cli automation pr-transition --transition request-update --repo {repo} --pr {stuckReviewingPr.TargetNumber} --write --format json (or --transition approved when review is complete)",
                 clarification: null,
-                details);
+                details,
+                warnings);
         }
 
         if (missingTargetPr is not null)
@@ -154,7 +192,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 $"PR #{missingTargetPr.TargetNumber} links a published intent-target issue but lacks 'intent-target'; host review preflight will skip it until reconcile applies the label.",
                 recommendedNextCommand: $"intent-cli automation reconcile --lane host-review --repo {repo} --write --format json",
                 clarification: null,
-                details);
+                details,
+                warnings);
         }
 
         if (clarificationRequired)
@@ -165,7 +204,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 "Host review preflight was told a clarification is required; resolve the source clarification before resuming the host loop.",
                 recommendedNextCommand: null,
                 clarification: null,
-                details);
+                details,
+                warnings);
         }
 
         var inFlightIssues = publishedIntentTargetIssues
@@ -188,7 +228,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 $"PR #{actionableReviewPr.TargetNumber} is eligible for host review; preflight should not have returned no-actionable.",
                 recommendedNextCommand: $"intent-cli automation host-review-preflight --repo {repo} --format json",
                 clarification: null,
-                details);
+                details,
+                warnings);
         }
 
         if (inFlightPrs.Length > 0 || inFlightIssues.Length > 0)
@@ -207,14 +248,20 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 "WIP cap blocks new next-slice publication; an open intent-target issue or PR is still in flight.",
                 recommendedNextCommand: null,
                 clarification: null,
-                details);
+                details,
+                warnings);
         }
 
         if (!string.IsNullOrWhiteSpace(candidateExecutionUnit))
         {
+            // G286: a complete queued candidate with no review/WIP/clarification
+            // blocker is the deterministic publish path. Surface
+            // `issue-publish-ready` and a recommended chain that walks the
+            // operator straight through `packet draft` → `issue publish-flow
+            // --write` → `automation issue-publish --write`.
             details.Add(new AutomationHostReviewDiagnosticsDetail
             {
-                Kind = AutomationHostReviewDiagnosticsClassifications.CandidateReady,
+                Kind = AutomationHostReviewDiagnosticsClassifications.IssuePublishReady,
                 TargetKind = null,
                 TargetNumber = null,
                 TargetUrl = null,
@@ -222,11 +269,39 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
             });
             return Build(
                 repo,
-                AutomationHostReviewDiagnosticsClassifications.CandidateReady,
+                AutomationHostReviewDiagnosticsClassifications.IssuePublishReady,
                 $"No host review work and no WIP; next-slice candidate {candidateExecutionUnit} is ready to publish per the host loop's pre-approval gate.",
-                recommendedNextCommand: $"intent-cli packet draft --execution-unit {candidateExecutionUnit} --target-repo {repo} --dry-run --format markdown",
+                recommendedNextCommand:
+                    $"intent-cli packet draft --execution-unit {candidateExecutionUnit} --target-repo {repo} --format json"
+                    + $" && intent-cli issue publish-flow {candidateExecutionUnit} --repo {repo} --write --format json"
+                    + $" && intent-cli automation issue-publish --repo {repo} --issue <new-issue-number> --write --format json",
                 clarification: null,
-                details);
+                details,
+                warnings);
+        }
+
+        // G286: when reconcile has unapplied high-confidence repairs and no
+        // other terminal classification fits, surface `repaired-and-retry` so
+        // the host loop knows to apply the safe repair and retry the wake
+        // rather than reporting a misleading `true-idle`.
+        if (reconcileHighConfidenceRepairsAvailable > 0)
+        {
+            details.Add(new AutomationHostReviewDiagnosticsDetail
+            {
+                Kind = AutomationHostReviewDiagnosticsClassifications.RepairedAndRetry,
+                TargetKind = null,
+                TargetNumber = null,
+                TargetUrl = null,
+                Description = $"reconcile reports {reconcileHighConfidenceRepairsAvailable} unapplied high-confidence repair(s).",
+            });
+            return Build(
+                repo,
+                AutomationHostReviewDiagnosticsClassifications.RepairedAndRetry,
+                $"Reconcile has {reconcileHighConfidenceRepairsAvailable} unapplied high-confidence repair(s); apply them and retry the host wake before reporting idle.",
+                recommendedNextCommand: $"intent-cli automation reconcile --lane host-review --repo {repo} --write --format json",
+                clarification: null,
+                details,
+                warnings);
         }
 
         return Build(
@@ -235,7 +310,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
             "No host review PR, no in-flight intent-target item, and no next-slice candidate. The host loop is correctly idle.",
             recommendedNextCommand: null,
             clarification: null,
-            details);
+            details,
+            warnings);
     }
 
     private static AutomationHostReviewDiagnosticsResult Build(
@@ -244,7 +320,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         string summary,
         string? recommendedNextCommand,
         AutomationHostReviewDiagnosticsClarification? clarification,
-        IReadOnlyList<AutomationHostReviewDiagnosticsDetail> details) =>
+        IReadOnlyList<AutomationHostReviewDiagnosticsDetail> details,
+        IReadOnlyList<string> warnings) =>
         new()
         {
             Repo = repo,
@@ -254,7 +331,7 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
             RecommendedNextCommand = recommendedNextCommand,
             StructuredClarification = clarification,
             Details = details,
-            Warnings = Array.Empty<string>(),
+            Warnings = warnings,
         };
 
     private static IReadOnlyList<int> ExtractLinkedIssueNumbers(string repo, GitHubAutomationPrCandidate pr)

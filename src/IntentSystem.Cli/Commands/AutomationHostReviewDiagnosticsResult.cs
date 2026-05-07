@@ -97,4 +97,30 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     public const string StaleHostCli = "stale-host-cli";
     public const string ReviewPrActionable = "review-pr-actionable";
     public const string CandidateReady = "candidate-ready";
+
+    /// <summary>
+    /// G286: terminal class returned when a host wake should publish exactly one
+    /// next-slice issue without further operator acceptance: WIP empty, no review
+    /// PR actionable, no Hard Clarification, candidate contract complete.
+    /// Distinct from <see cref="CandidateReady"/> historically (preserved for
+    /// backward compatibility on existing callers); the analyzer now returns
+    /// <c>IssuePublishReady</c> together with the deterministic publish chain
+    /// in <c>recommended_next_command</c>.
+    /// </summary>
+    public const string IssuePublishReady = "issue-publish-ready";
+
+    /// <summary>
+    /// G286: terminal class returned when reconcile reports unsafe stops
+    /// (e.g. <c>ambiguous-queue-linkage</c>) — the host loop must surface
+    /// structured clarification rather than guess past ambiguous metadata.
+    /// </summary>
+    public const string UnsafeMetadata = "unsafe-metadata";
+
+    /// <summary>
+    /// G286: terminal class returned when reconcile has unapplied
+    /// high-confidence repairs available and no review/WIP/clarification
+    /// blocker is present. The host loop should re-run reconcile with
+    /// <c>--write</c> and retry the wake.
+    /// </summary>
+    public const string RepairedAndRetry = "repaired-and-retry";
 }
