@@ -209,13 +209,19 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 warnings);
         }
 
+        // G289: defensively exclude closed issues / merged-or-closed PRs from
+        // WIP, even when callers (e.g. fakes in tests, or future paths that
+        // bypass `--state open`) pass them through. A historically-labeled
+        // closed issue must NOT keep the host loop wip-cap-blocked.
         var inFlightIssues = publishedIntentTargetIssues
-            .Where(issue => LabelNames(issue.Labels).Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal))
+            .Where(issue => IsOpenState(issue.State)
+                && LabelNames(issue.Labels).Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal))
             .Select(issue => issue.Number)
             .OrderBy(n => n)
             .ToArray();
         var inFlightPrs = openPrs
-            .Where(pr => LabelNames(pr.Labels).Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal))
+            .Where(pr => IsOpenState(pr.State)
+                && LabelNames(pr.Labels).Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal))
             .Select(pr => pr.Number)
             .OrderBy(n => n)
             .ToArray();
@@ -417,6 +423,24 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         }
 
         return numbers;
+    }
+
+    /// <summary>
+    /// G289: returns true when a candidate's <c>state</c> field indicates the
+    /// item is still active. The empty / unset state is treated as open for
+    /// backward compatibility with callers that pre-date the field. Closed
+    /// or merged states (case-insensitive) explicitly drop the candidate
+    /// from WIP detection.
+    /// </summary>
+    private static bool IsOpenState(string? state)
+    {
+        if (string.IsNullOrWhiteSpace(state))
+        {
+            return true;
+        }
+
+        return !string.Equals(state, "CLOSED", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(state, "MERGED", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyCollection<string> LabelNames(IReadOnlyList<GitHubAutomationLabel>? labels)

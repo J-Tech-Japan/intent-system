@@ -146,6 +146,117 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Equal("wip-cap-blocked", result.Classification);
     }
 
+    // ─── G289 tests ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G289_ClosedIntentTargetIssue_NotCountedAsWipBlocker()
+    {
+        // SekibanAsAService PR #498 / SKS-G189 closeout regression: a closed
+        // GitHub issue that still carries `intent-target` label must not flip
+        // a publish-ready candidate to wip-cap-blocked.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            PublishedIssues =
+            [
+                BuildIssue(497, "SKS-G189 (closed)", "https://github.com/J-Tech-Japan/intent-system/issues/497",
+                    labels: ["intent-target", "intent-pr-created"], state: "CLOSED"),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G190", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.NotEqual("wip-cap-blocked", result.Classification);
+        Assert.Equal("issue-publish-ready", result.Classification);
+    }
+
+    [Fact]
+    public void Execute_G289_OpenIntentTargetIssue_StillBlocksAsWip()
+    {
+        // Regression guard: an actually-open `intent-target` issue still
+        // produces wip-cap-blocked. The G289 filter only excludes closed
+        // items.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            PublishedIssues =
+            [
+                BuildIssue(700, "G300 in flight (open)", "https://github.com/J-Tech-Japan/intent-system/issues/700",
+                    labels: ["intent-target", "intent-issue-in-progress"], state: "OPEN"),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G301", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("wip-cap-blocked", result.Classification);
+    }
+
+    [Fact]
+    public void Execute_G289_EmptyState_StillTreatedAsOpen_ForBackwardCompat()
+    {
+        // Backward compat: legacy callers that don't populate `state` (e.g.
+        // tests written before G289) must continue to behave as if the issue
+        // is open. Empty/missing state is NOT a free pass to ignore the
+        // candidate — the existing wip-cap-blocked behavior is preserved.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            PublishedIssues =
+            [
+                BuildIssue(700, "G300 in flight (legacy)", "https://github.com/J-Tech-Japan/intent-system/issues/700",
+                    labels: ["intent-target", "intent-issue-in-progress"], state: ""),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G301", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("wip-cap-blocked", result.Classification);
+    }
+
+    [Fact]
+    public void Execute_G289_MergedPrAlsoExcludedFromWip()
+    {
+        // Defensive: a PR with state=MERGED (closed-after-merge) carrying
+        // `intent-target` is no longer in flight either.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(498, "SKS-G189 merged", "https://github.com/J-Tech-Japan/intent-system/pull/498",
+                    body: "Closes #497", labels: ["intent-target", "intent-pr-approved"], state: "MERGED"),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "SKS-G190", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("issue-publish-ready", result.Classification);
+    }
+
     // ─── G288 tests ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -501,7 +612,8 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         string title,
         string url,
         string body,
-        IReadOnlyList<string> labels) =>
+        IReadOnlyList<string> labels,
+        string state = "OPEN") =>
         new()
         {
             Number = number,
@@ -511,13 +623,15 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
             CreatedAt = "2026-05-07T00:00:00Z",
             UpdatedAt = "2026-05-07T00:00:00Z",
             Labels = labels.Select(label => new GitHubAutomationLabel { Name = label }).ToArray(),
+            State = state,
         };
 
     private static GitHubAutomationIssueCandidate BuildIssue(
         int number,
         string title,
         string url,
-        IReadOnlyList<string> labels) =>
+        IReadOnlyList<string> labels,
+        string state = "OPEN") =>
         new()
         {
             Number = number,
@@ -525,6 +639,7 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
             Url = url,
             CreatedAt = "2026-05-07T00:00:00Z",
             Labels = labels.Select(label => new GitHubAutomationLabel { Name = label }).ToArray(),
+            State = state,
         };
 
     private sealed class FakeLister : IGitHubAutomationCandidateLister
