@@ -87,5 +87,6 @@ internal static class WorkerNextActionConstants
         public const string IntentPrApproved = "intent-pr-approved";
         public const string IntentIssueInProgress = "intent-issue-in-progress";
         public const string IntentPrCreated = "intent-pr-created";
+        public const string IntentPrReviewing = "intent-pr-reviewing";
     }
 }

@@ -275,6 +275,10 @@ Loop body (single wake):
    - High-confidence repairs are mechanically provable label drift only; advisory entries point at the existing closeout/packet/next-slice surface and must not be applied through this lane.
    - With operator acceptance: re-run with `--write` to apply only high-confidence repairs through the host-owned reconcile mutator.
    - If `unsafe_stops` is non-empty, stop with structured clarification rather than guessing.
+5. Stage 4 — recovery diagnostics before idle (read-only):
+   - Before reporting a no-actionable / idle wake, run `intent-cli automation host-review-diagnostics --repo {targetRepoPlaceholder} --format json` and report the returned `classification` and `summary` instead of saying no-actionable.
+   - Classifications: `true-idle`, `stuck-reviewing`, `missing-target-on-pr`, `request-update-rereview-conflict`, `wip-cap-blocked`, `clarification-required`, `stale-host-cli`, `review-pr-actionable`, `candidate-ready`. Anything other than `true-idle` is a signal that the loop did not stop because the system is genuinely idle.
+   - When the diagnostic surfaces a `recommended_next_command`, surface it to the operator; when it surfaces `structured_clarification`, present background/question/options instead of guessing.
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files for routine review/closeout. Use `intent-cli guide ...` and `intent-cli automation ...` instead.
@@ -286,6 +290,7 @@ Hard rules:
 - Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
 - `automation reconcile --write` must come from this host loop only; child implementation loops never invoke it.
+- `automation host-review-diagnostics` is read-only and must not be used to mutate labels or parent files.
 - Process at most one PR review and one new child issue per wake.";
 
         return new GuidePromptMatrixEntry
@@ -393,6 +398,9 @@ Loop body (single wake only — do not repeat):
    - High-confidence repairs are mechanically provable label drift only; advisory entries point at the existing closeout/packet/next-slice surface and must not be applied through this lane.
    - With operator acceptance: re-run with `--write` to apply only high-confidence repairs through the host-owned reconcile mutator.
    - If `unsafe_stops` is non-empty, stop with structured clarification rather than guessing.
+5. Stage 4 — recovery diagnostics before idle (read-only):
+   - Before reporting a no-actionable / idle wake, run `intent-cli automation host-review-diagnostics --repo {targetRepoPlaceholder} --format json` and report the returned `classification` and `summary` instead of saying no-actionable.
+   - Anything other than `true-idle` (stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, candidate-ready) is a signal the system is not genuinely idle; surface the `recommended_next_command` or `structured_clarification` to the operator.
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files for routine review/closeout. Use `intent-cli guide ...` and `intent-cli automation ...` instead.
@@ -404,6 +412,7 @@ Hard rules:
 - Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
 - `automation reconcile --write` must come from this host one-shot only; child implementation loops never invoke it.
+- `automation host-review-diagnostics` is read-only and must not be used to mutate labels or parent files.
 - Process at most one PR review and one new child issue per wake.
 - Do not create a cron, monitor, scheduler, reminder, or new thread after completing this wake.";
 
