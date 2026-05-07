@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -184,10 +186,16 @@ internal static class AutomationReconcileCommand
                 return 1;
             }
 
+            // G284: feed the analyzer the host's queue-state so missing
+            // linked_pr can be promoted from advisory to High when exactly
+            // one queue item references the source issue.
+            var queueLinks = TryReadQueueLinks(context);
+
             hostReviewAnalysis = AutomationReconcileAnalyzer.AnalyzeHostReview(
                 repo!,
                 openPrs,
-                publishedIssues);
+                publishedIssues,
+                queueLinks);
         }
 
         if (includeNextSlice)
@@ -217,7 +225,7 @@ internal static class AutomationReconcileCommand
                 return 1;
             }
 
-            appliedRepairs = ApplyHighConfidenceRepairs(repo!, mutator, combined.SafeRepairs, warnings);
+            appliedRepairs = ApplyHighConfidenceRepairs(context, repo!, mutator, combined.SafeRepairs, warnings);
         }
 
         var result = new AutomationReconcileResult
@@ -237,6 +245,7 @@ internal static class AutomationReconcileCommand
     }
 
     private static IReadOnlyList<AutomationReconcileRepair> ApplyHighConfidenceRepairs(
+        CliContext context,
         string repo,
         IGitHubLabelMutator mutator,
         IReadOnlyList<AutomationReconcileRepair> repairs,
@@ -245,8 +254,31 @@ internal static class AutomationReconcileCommand
         var applied = new List<AutomationReconcileRepair>(repairs.Count);
         foreach (var repair in repairs)
         {
-            if (!string.Equals(repair.Confidence, AutomationReconcileConfidence.High, StringComparison.Ordinal)
-                || repair.TargetNumber is null
+            if (!string.Equals(repair.Confidence, AutomationReconcileConfidence.High, StringComparison.Ordinal))
+            {
+                applied.Add(repair);
+                continue;
+            }
+
+            // G284: high-confidence queue-state linked_pr write.
+            if (string.Equals(repair.TargetKind, "queue-state", StringComparison.Ordinal)
+                && string.Equals(repair.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal))
+            {
+                try
+                {
+                    PatchQueueStateLinkedPr(context, repair);
+                    applied.Add(repair with { Applied = true });
+                }
+                catch (Exception exception) when (exception is IOException or InvalidOperationException or System.Text.Json.JsonException)
+                {
+                    warnings.Add($"failed to apply repair '{repair.Type}' on queue-state for execution-unit '{repair.QueueStateExecutionUnit}': {exception.Message}");
+                    applied.Add(repair);
+                }
+                continue;
+            }
+
+            // Label transitions: route through the host-owned reconcile mutator.
+            if (repair.TargetNumber is null
                 || (string.Equals(repair.TargetKind, GhCliGitHubLabelMutator.Kinds.Pr, StringComparison.Ordinal) == false
                     && string.Equals(repair.TargetKind, GhCliGitHubLabelMutator.Kinds.Issue, StringComparison.Ordinal) == false))
             {
@@ -272,6 +304,98 @@ internal static class AutomationReconcileCommand
         }
 
         return applied;
+    }
+
+    /// <summary>G284: read the host's queue-state.json and project the minimal
+    /// shape the analyzer needs (execution unit, source issue repo/number,
+    /// current linked_pr URL). Returns null when the file is absent or
+    /// malformed; the analyzer treats that as "no queue evidence" and keeps
+    /// the existing advisory behavior.</summary>
+    private static IReadOnlyList<ReconcileQueueLink>? TryReadQueueLinks(CliContext context)
+    {
+        var queueStatePath = context.GetQueueStatePath();
+        if (!File.Exists(queueStatePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            var links = new List<ReconcileQueueLink>();
+            foreach (var item in queueState.Items)
+            {
+                var li = item.LinkedIssue;
+                if (li is { Number: { } number } && !string.IsNullOrWhiteSpace(li.Repo))
+                {
+                    links.Add(new ReconcileQueueLink
+                    {
+                        ExecutionUnit = item.ExecutionUnit,
+                        LinkedIssueRepo = li.Repo,
+                        LinkedIssueNumber = number,
+                        LinkedPrUrl = item.LinkedPr,
+                    });
+                }
+            }
+            return links;
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>G284: write linked_pr into the queue-state.json item identified by
+    /// the analyzer-supplied execution unit. Throws on missing file, missing item,
+    /// or any I/O / JSON failure so the caller can surface the failure as a
+    /// reconcile warning instead of claiming success.</summary>
+    private static void PatchQueueStateLinkedPr(CliContext context, AutomationReconcileRepair repair)
+    {
+        if (string.IsNullOrWhiteSpace(repair.QueueStateExecutionUnit)
+            || string.IsNullOrWhiteSpace(repair.QueueStateLinkedPrUrl))
+        {
+            throw new InvalidOperationException(
+                "missing queue-state execution unit or PR URL on linked_pr reconcile repair");
+        }
+
+        var queueStatePath = context.GetQueueStatePath();
+        if (!File.Exists(queueStatePath))
+        {
+            throw new InvalidOperationException(
+                $"queue-state.json not found at {queueStatePath}; cannot apply linked_pr repair without parent queue evidence");
+        }
+
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        var matchedIndex = -1;
+        for (var index = 0; index < queueState.Items.Count; index++)
+        {
+            if (string.Equals(queueState.Items[index].ExecutionUnit, repair.QueueStateExecutionUnit, StringComparison.Ordinal))
+            {
+                matchedIndex = index;
+                break;
+            }
+        }
+
+        if (matchedIndex < 0)
+        {
+            throw new InvalidOperationException(
+                $"queue-state.json has no item with execution_unit '{repair.QueueStateExecutionUnit}'");
+        }
+
+        var existing = queueState.Items[matchedIndex];
+        if (string.Equals(existing.LinkedPr, repair.QueueStateLinkedPrUrl, StringComparison.Ordinal))
+        {
+            return; // idempotent: already in sync
+        }
+
+        var newItems = queueState.Items.ToArray();
+        newItems[matchedIndex] = existing with { LinkedPr = repair.QueueStateLinkedPrUrl };
+        var updatedState = queueState with
+        {
+            Items = newItems,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
     }
 
     private static string BuildSummary(

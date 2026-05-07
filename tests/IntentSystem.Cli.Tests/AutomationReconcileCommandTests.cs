@@ -2,6 +2,8 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -407,6 +409,221 @@ public sealed class AutomationReconcileCommandTests : IDisposable
         Assert.DoesNotContain("automation reconcile", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // ── G284: selected-PR linkage recovery ─────────────────────────────
+
+    [Fact]
+    public void Execute_DryRun_PromotesMissingLinkedPrToHighWhenUniqueQueueItemMatches()
+    {
+        using var workspace = new ReconcileWorkspace();
+        workspace.SeedQueueState(
+            ("G284", "G284 source unit", "J-Tech-Japan/intent-system", 491, null));
+
+        AutomationReconcileCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(492, "selected for review", "https://github.com/J-Tech-Japan/intent-system/pull/492",
+                    body: "Closes #491", labels: ["intent-target"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(491, "G284 src", "https://github.com/J-Tech-Japan/intent-system/issues/491",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+
+        var linkedPrRepair = Assert.Single(result.SafeRepairs.Where(r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal)));
+        Assert.Equal(AutomationReconcileConfidence.High, linkedPrRepair.Confidence);
+        Assert.Equal("queue-state", linkedPrRepair.TargetKind);
+        Assert.Equal("G284", linkedPrRepair.QueueStateExecutionUnit);
+        Assert.Equal(492, linkedPrRepair.PrNumberToLink);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/492", linkedPrRepair.QueueStateLinkedPrUrl);
+        Assert.False(linkedPrRepair.Applied);
+        Assert.Empty(result.UnsafeStops.Where(s =>
+            string.Equals(s.Kind, AutomationReconcileUnsafeStopKinds.AmbiguousQueueLinkage, StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Execute_Write_PatchesQueueStateLinkedPrAndMarksRepairApplied()
+    {
+        using var workspace = new ReconcileWorkspace();
+        workspace.SeedQueueState(
+            ("G284", "G284 source unit", "J-Tech-Japan/intent-system", 491, null));
+
+        AutomationReconcileCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(492, "ready", "https://github.com/J-Tech-Japan/intent-system/pull/492",
+                    body: "Closes #491", labels: ["intent-target"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(491, "G284 src", "https://github.com/J-Tech-Japan/intent-system/issues/491",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+        var linkedPrRepair = Assert.Single(result.SafeRepairs.Where(r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal)));
+        Assert.True(linkedPrRepair.Applied);
+
+        var patched = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var item = Assert.Single(patched.Items);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/492", item.LinkedPr);
+    }
+
+    [Fact]
+    public void Execute_AmbiguousMultipleQueueItemsForSameIssue_ReportsUnsafeStopAndDoesNotWrite()
+    {
+        using var workspace = new ReconcileWorkspace();
+        // Two queue items both reference issue #491 — operator must dedupe before reconcile can write.
+        workspace.SeedQueueState(
+            ("G284-a", "first", "J-Tech-Japan/intent-system", 491, null),
+            ("G284-b", "second", "J-Tech-Japan/intent-system", 491, null));
+
+        AutomationReconcileCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(492, "ambiguous", "https://github.com/J-Tech-Japan/intent-system/pull/492",
+                    body: "Closes #491", labels: ["intent-target"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(491, "G284 src", "https://github.com/J-Tech-Japan/intent-system/issues/491",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+
+        var beforeBytes = File.ReadAllBytes(workspace.QueueStatePath);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+        var stop = Assert.Single(result.UnsafeStops.Where(s =>
+            string.Equals(s.Kind, AutomationReconcileUnsafeStopKinds.AmbiguousQueueLinkage, StringComparison.Ordinal)));
+        Assert.Equal(491, stop.TargetNumber);
+        Assert.Contains("G284-a", stop.Reason, StringComparison.Ordinal);
+        Assert.Contains("G284-b", stop.Reason, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(result.SafeRepairs, r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal));
+
+        // queue-state.json was not mutated.
+        Assert.Equal(beforeBytes, File.ReadAllBytes(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_QueueItemAlreadyHasMatchingLinkedPr_NoLinkedPrRepairEmitted()
+    {
+        using var workspace = new ReconcileWorkspace();
+        workspace.SeedQueueState(
+            ("G284", "already-linked", "J-Tech-Japan/intent-system", 491,
+                "https://github.com/J-Tech-Japan/intent-system/pull/492"));
+
+        AutomationReconcileCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(492, "already-linked", "https://github.com/J-Tech-Japan/intent-system/pull/492",
+                    body: "Closes #491", labels: ["intent-target"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(491, "G284 src", "https://github.com/J-Tech-Japan/intent-system/issues/491",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+        Assert.DoesNotContain(result.SafeRepairs, r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_WithoutQueueState_KeepsLinkedPrRepairAdvisory()
+    {
+        using var workspace = new ReconcileWorkspace();
+        // intentionally no SeedQueueState call — backward compatibility check.
+        Assert.False(File.Exists(workspace.QueueStatePath));
+
+        AutomationReconcileCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(492, "no queue evidence", "https://github.com/J-Tech-Japan/intent-system/pull/492",
+                    body: "Closes #491", labels: ["intent-target"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(491, "G284 src", "https://github.com/J-Tech-Japan/intent-system/issues/491",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+        var advisory = Assert.Single(result.SafeRepairs.Where(r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal)));
+        Assert.Equal(AutomationReconcileConfidence.Advisory, advisory.Confidence);
+        Assert.NotNull(advisory.RequiresFollowupCommand);
+        Assert.Contains("intent-cli closeout pr", advisory.RequiresFollowupCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GuidePromptMatrix_HostLoopMentionsSelectedPrLinkageRecoveryAndRetryOnce()
+    {
+        using var workspace = new ReconcileWorkspace();
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            workspace.Context,
+            ["--mode", "host-loop", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Selected-PR linkage recovery", output, StringComparison.Ordinal);
+        Assert.Contains("retry the same selected PR exactly once", output, StringComparison.Ordinal);
+        Assert.Contains("ambiguous-queue-linkage", output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Adapter_ApplyReconcileTransitions_RejectsAddingIntentPrCreatedToPr()
     {
@@ -528,6 +745,47 @@ public sealed class AutomationReconcileCommandTests : IDisposable
 
     private sealed class ReconcileWorkspace : IDisposable
     {
+        public string QueueStatePath => Path.Combine(RootPath, ".intent-cli", "queue-state.json");
+
+        /// <summary>G284: seed queue-state.json with an arbitrary set of items
+        /// so the linked_pr promotion / ambiguous-queue-linkage paths are
+        /// covered without coupling tests to the production publish-flow.</summary>
+        public void SeedQueueState(params (string ExecutionUnit, string Title, string IssueRepo, int IssueNumber, string? LinkedPrUrl)[] items)
+        {
+            Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
+            var state = new QueueState
+            {
+                SchemaVersion = "1",
+                UpdatedAt = new DateTimeOffset(2026, 5, 7, 0, 0, 0, TimeSpan.Zero),
+                Items = items.Select(item => new QueueItem
+                {
+                    ExecutionUnit = item.ExecutionUnit,
+                    Title = item.Title,
+                    State = QueueItemState.Queued,
+                    Dependencies = Array.Empty<string>(),
+                    BlockedBy = Array.Empty<string>(),
+                    ClarificationReturnPath = string.Empty,
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = $".intent-cli/issues/{item.ExecutionUnit}/implementation.md",
+                        ReviewContext = $".intent-cli/issues/{item.ExecutionUnit}/review-context.md",
+                        Yaml = $".intent-cli/issues/{item.ExecutionUnit}/packet.yaml",
+                    },
+                    LinkedIssue = new LinkedIssue
+                    {
+                        Repo = item.IssueRepo,
+                        Number = item.IssueNumber,
+                        Url = $"https://github.com/{item.IssueRepo}/issues/{item.IssueNumber}",
+                    },
+                    LinkedPr = item.LinkedPrUrl,
+                    WorkerRole = "child-impl",
+                    ReviewRole = "host-review",
+                    Priority = "normal",
+                }).ToArray(),
+            };
+            File.WriteAllText(QueueStatePath, QueueStateSerializer.Serialize(state));
+        }
+
         public ReconcileWorkspace()
         {
             RootPath = Directory.CreateTempSubdirectory("automation-reconcile-tests-").FullName;
