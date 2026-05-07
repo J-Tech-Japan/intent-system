@@ -104,6 +104,25 @@ internal static class WorkerNextActionCommand
             return 1;
         }
 
+        // G281: --workdir is child worktree CONTEXT only — selection runs against
+        // GitHub state for --repo, never against the workdir's local filesystem.
+        // We surface diagnostic warnings when workdir is supplied but does not
+        // look like a git worktree (or does not exist), without ever flipping
+        // the selection to no-actionable. The parent host's `.intent-cli`
+        // remains the durable state root from the command's cwd.
+        if (!string.IsNullOrWhiteSpace(workdir))
+        {
+            var workdirWarnings = new List<string>(result.Warnings);
+            foreach (var warning in BuildWorkdirWarnings(workdir!))
+            {
+                workdirWarnings.Add(warning);
+            }
+            if (workdirWarnings.Count != result.Warnings.Count)
+            {
+                result = result with { Warnings = workdirWarnings };
+            }
+        }
+
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
@@ -113,10 +132,29 @@ internal static class WorkerNextActionCommand
             WriteText(writer, result);
         }
 
-        // Suppress unused-warning for workdir — accepted for forward-compat
-        // with other worker commands that consume it.
-        _ = workdir;
         return 0;
+    }
+
+    /// <summary>
+    /// G281: emit advisory warnings when <c>--workdir</c> is supplied but does
+    /// not look like a usable child git worktree. Selection itself does NOT
+    /// depend on the child workdir state — the warnings are operator-facing
+    /// hints that the worktree may be missing or stale before they try to
+    /// run the chosen workflow against it.
+    /// </summary>
+    internal static IEnumerable<string> BuildWorkdirWarnings(string workdir)
+    {
+        if (!Directory.Exists(workdir))
+        {
+            yield return $"workdir '{workdir}' does not exist; selection used GitHub state from --repo only";
+            yield break;
+        }
+
+        var gitPath = Path.Combine(workdir, ".git");
+        if (!Directory.Exists(gitPath) && !File.Exists(gitPath))
+        {
+            yield return $"workdir '{workdir}' is not a git worktree (no .git entry); selection used GitHub state from --repo only";
+        }
     }
 
     private static void WriteText(TextWriter writer, WorkerNextActionResult result)
