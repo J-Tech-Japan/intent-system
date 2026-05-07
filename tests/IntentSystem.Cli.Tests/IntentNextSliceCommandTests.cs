@@ -691,6 +691,254 @@ public sealed class IntentNextSliceCommandTests
         Assert.Equal(0, root.GetProperty("wip").GetArrayLength());
     }
 
+    // ─── G285 tests ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G285_StaleOpenFrontMatterWithBodyNone_RecommendsIssueCutReadyAndWarns()
+    {
+        // Front-matter still says `intent_state: open` but the body's
+        // "Current Open Blockers" section is empty / None. With a complete
+        // candidate and empty WIP, this must publish, not Hard Clarification,
+        // and surface `stale-clarification-metadata` in `warnings`.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            ---
+            intent_state: open
+            ---
+            ## Current Open Blockers
+
+            None
+
+            ## Open Questions
+
+            - None
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G285/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-07T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G285",
+                  "title": "stale clarification metadata",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.False(root.GetProperty("clarification_open").GetBoolean());
+        Assert.True(root.GetProperty("stale_clarification_metadata").GetBoolean());
+
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("stale-clarification-metadata", warnings);
+    }
+
+    [Fact]
+    public void Execute_G285_StaleOpenFrontMatterButRealOpenQuestion_RecommendsClarificationRequired()
+    {
+        // Front-matter says `intent_state: open` and the body's "Open Questions"
+        // section has a substantive bullet. This is a true Hard Clarification —
+        // must NOT surface stale-clarification-metadata, must NOT publish.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            ---
+            intent_state: open
+            ---
+            ## Current Open Blockers
+
+            - None
+
+            ## Open Questions
+
+            - Need to confirm storage strategy with the host before cutting.
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G285/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-07T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G285",
+                  "title": "real open question",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("clarification-required", root.GetProperty("recommended_outcome").GetString());
+        Assert.True(root.GetProperty("clarification_open").GetBoolean());
+        Assert.False(root.GetProperty("stale_clarification_metadata").GetBoolean());
+        Assert.Equal(0, root.GetProperty("warnings").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_G285_BulletNoneSentinel_DoesNotBlock()
+    {
+        // A "Current Open Blockers" section whose only bullet is "- None"
+        // (the form actually used in some host files) must be treated as
+        // cleared, not as a substantive blocker.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            # intent-cli clarifications
+
+            ## Current Open Blockers
+
+            - None
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("clarification_open").GetBoolean(),
+            "clarification_open must be false when '- None' is the only bullet");
+        Assert.NotEqual("clarification-required", root.GetProperty("recommended_outcome").GetString());
+    }
+
+    [Fact]
+    public void Execute_G285_StaleOpenButCandidateMissingSections_RecommendsClarificationRequired()
+    {
+        // Candidate has missing required contract sections — that path must
+        // still surface clarification-required regardless of stale metadata.
+        // The stale warning may still appear so the operator sees the file
+        // also needs a metadata repair, but the outcome is not issue-cut-ready.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            ---
+            intent_state: open
+            ---
+            ## Current Open Blockers
+
+            None
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G285/github-body.md",
+            """
+            ## Goal
+            x
+
+            ## In Scope
+            x
+            """);
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-07T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G285",
+                  "title": "missing contract sections",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("clarification-required", root.GetProperty("recommended_outcome").GetString());
+        var missing = root.GetProperty("candidate").GetProperty("missing_contract_sections");
+        Assert.True(missing.GetArrayLength() > 0);
+    }
+
+    [Fact]
+    public void Execute_G285_NormalOpenWithoutBodyNoneSignal_DoesNotEmitStaleWarning()
+    {
+        // Front-matter says `intent_state: open` but the body has no
+        // "Current Open Blockers" or "Open Questions" sections at all. We
+        // must not synthesise a stale-clarification-metadata warning out of
+        // thin air — the body has no explicit no-blocker signal.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteClarificationOpen(
+            """
+            ---
+            intent_state: open
+            ---
+            # Some clarification doc
+
+            Random prose.
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("stale_clarification_metadata").GetBoolean());
+        Assert.Equal(0, root.GetProperty("warnings").GetArrayLength());
+    }
+
     private sealed class IntentNextSliceWorkspace : IDisposable
     {
         private readonly string rootPath = Directory
