@@ -21,6 +21,101 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         IssuePublishFlowCommand.UtcNowFactory = null;
     }
 
+    // ─── G290 tests ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G290_PacketYamlTitle_PreferredOverBodyH1()
+    {
+        // The SKS-G190 case: packet.yaml has a meaningful title, body has no
+        // H1. Title resolution must prefer packet.yaml and report
+        // `title_source: packet-yaml` with no `title-fallback` warning.
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WritePacketYaml("SKS-G190",
+            "SKS-G190 Approval-Gated Production Credential Issuance And Rotation Lifecycle Baseline");
+        workspace.WriteGithubBody("SKS-G190", BuildContractBodyWithoutH1());
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["SKS-G190", "--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal(
+            "SKS-G190 Approval-Gated Production Credential Issuance And Rotation Lifecycle Baseline",
+            root.GetProperty("title").GetString());
+        Assert.Equal("packet-yaml", root.GetProperty("title_source").GetString());
+        Assert.Equal(0, root.GetProperty("warnings").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_G290_NoPacketYaml_FallsBackToBodyH1()
+    {
+        // Older packets without packet.yaml fall through to the body H1.
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WriteGithubBody("G245", BuildCompleteContractBody("G245 Add intent-cli issue publish-flow command"));
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G245", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("G245 Add intent-cli issue publish-flow command", root.GetProperty("title").GetString());
+        Assert.Equal("github-body-h1", root.GetProperty("title_source").GetString());
+        Assert.Equal(0, root.GetProperty("warnings").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_G290_NoPacketTitleAndNoBodyH1_FallsBackUntitledWithWarning()
+    {
+        // Last-resort: no packet.yaml AND no body H1 → fallback to
+        // "<execution-unit> (untitled)" and surface `title-fallback` warning.
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WriteGithubBody("G900", BuildContractBodyWithoutH1());
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G900", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("G900 (untitled)", root.GetProperty("title").GetString());
+        Assert.Equal("fallback-untitled", root.GetProperty("title_source").GetString());
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("title-fallback", warnings);
+    }
+
+    [Fact]
+    public void Execute_G290_EmptyPacketTitle_FallsBackToBodyH1()
+    {
+        // packet.yaml present but title is empty/blank → fall through to body
+        // H1 rather than treating empty as a real title.
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WritePacketYaml("G246", "");
+        workspace.WriteGithubBody("G246", BuildCompleteContractBody("G246 Real H1 title"));
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G246", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("G246 Real H1 title", root.GetProperty("title").GetString());
+        Assert.Equal("github-body-h1", root.GetProperty("title_source").GetString());
+    }
+
     [Fact]
     public void Execute_GivenCompletePacketDryRun_ReportsValidationOk()
     {
@@ -536,6 +631,45 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
             """;
     }
 
+    /// <summary>
+    /// G290: complete contract body with NO leading H1. Mirrors the
+    /// SKS-G190-style packet that triggered the `(untitled)` regression.
+    /// </summary>
+    private static string BuildContractBodyWithoutH1()
+    {
+        return """
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            - x
+
+            ## Out Of Scope
+            - x
+
+            ## Acceptance Criteria
+            - x
+
+            ## Verification
+            x
+
+            ## Related Links
+            - x
+            """;
+    }
+
     private sealed class StubIssueCreator : IIssueCreator
     {
         private readonly string url;
@@ -608,6 +742,15 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
             var directory = Path.Combine(rootPath, ".intent-cli", "issues", executionUnit);
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "github-body.md"), content);
+        }
+
+        public void WritePacketYaml(string executionUnit, string title)
+        {
+            var directory = Path.Combine(rootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                Path.Combine(directory, "packet.yaml"),
+                $"execution_unit: {executionUnit}\ntitle: {title}\n");
         }
 
         public void SeedQueueState(string executionUnit, string title) =>

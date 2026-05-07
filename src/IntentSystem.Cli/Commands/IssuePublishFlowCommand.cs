@@ -117,9 +117,17 @@ internal static class IssuePublishFlowCommand
                 .ToArray()
             : PacketDraftCommand.RequiredContractSections;
 
-        var title = githubBodyPresent
-            ? ResolveTitle(executionUnit!, githubBodyPath)
-            : null;
+        // G290: prefer `packet.yaml` `title:` over the body H1 fallback so a
+        // packet with valid metadata never publishes as `<id> (untitled)`.
+        // Body H1 remains a fallback for older packets / Sekiban-style
+        // bodies that start at `## Goal`. Title source is reported on the
+        // result so the operator can audit which path resolved the title.
+        string? title = null;
+        string? titleSource = null;
+        if (githubBodyPresent)
+        {
+            (title, titleSource) = ResolveTitleWithSource(executionUnit!, packetDirectory, githubBodyPath);
+        }
 
         if (!githubBodyPresent || missing.Count > 0)
         {
@@ -138,7 +146,8 @@ internal static class IssuePublishFlowCommand
                 runsAppended: false,
                 error: githubBodyPresent
                     ? "Child Issue Contract is incomplete; required sections are missing."
-                    : "github-body.md is missing in the packet directory.");
+                    : "github-body.md is missing in the packet directory.",
+                titleSource: titleSource);
             EmitResult(writer, validationResult, format);
             return 1;
         }
@@ -158,7 +167,8 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: null);
+                error: null,
+                titleSource: titleSource);
             EmitResult(writer, dryRunResult, format);
             return 0;
         }
@@ -182,7 +192,8 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: null);
+                error: null,
+                titleSource: titleSource);
             EmitResult(writer, idempotentResult, format);
             return 0;
         }
@@ -206,7 +217,8 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: null);
+                error: null,
+                titleSource: titleSource);
             EmitResult(writer, queueIdempotentResult, format);
             return 0;
         }
@@ -231,7 +243,8 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: $"failed to initialize GitHub issue creator: {exception.Message}");
+                error: $"failed to initialize GitHub issue creator: {exception.Message}",
+                titleSource: titleSource);
             EmitResult(writer, creatorErrorResult, format);
             return 1;
         }
@@ -256,7 +269,8 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: $"gh issue create failed: {exception.Message}");
+                error: $"gh issue create failed: {exception.Message}",
+                titleSource: titleSource);
             EmitResult(writer, createErrorResult, format);
             return 1;
         }
@@ -311,7 +325,8 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: $"GitHub issue {outcome.IssueUrl} was created but parent durable state could not be updated: {exception.Message}. Reconcile via 'intent-cli automation reconcile' before re-running.");
+                error: $"GitHub issue {outcome.IssueUrl} was created but parent durable state could not be updated: {exception.Message}. Reconcile via 'intent-cli automation reconcile' before re-running.",
+                titleSource: titleSource);
             EmitResult(writer, partialResult, format);
             return 1;
         }
@@ -352,6 +367,7 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: queueStatePatched,
                 publishYamlPatched: publishYamlPatched,
                 runsAppended: runsAppended,
+                titleSource: titleSource,
                 error: $"GitHub issue {outcome.IssueUrl} was created but parent durable state is not fully synchronized: {string.Join("; ", unsynchronizedReasons)}. Reconcile via 'intent-cli automation reconcile' or seed the missing parent artifact, then re-run.");
             EmitResult(writer, unsynchronizedResult, format);
             return 1;
@@ -370,7 +386,8 @@ internal static class IssuePublishFlowCommand
             queueStatePatched: queueStatePatched,
             publishYamlPatched: publishYamlPatched,
             runsAppended: runsAppended,
-            error: null);
+            error: null,
+            titleSource: titleSource);
         EmitResult(writer, successResult, format);
         return 0;
     }
@@ -600,7 +617,8 @@ internal static class IssuePublishFlowCommand
         bool queueStatePatched,
         bool publishYamlPatched,
         bool runsAppended,
-        string? error)
+        string? error,
+        string? titleSource = null)
     {
         var nextSteps = new List<string>();
         if (created)
@@ -640,6 +658,14 @@ internal static class IssuePublishFlowCommand
             RunsAppended = runsAppended,
             IntentTargetApplied = false,
             NextSteps = nextSteps,
+            // G290: surface the structured title source so the operator can
+            // audit `packet-yaml` vs `github-body-h1` vs `fallback-untitled`.
+            // The fallback case adds a `title-fallback` warning so a fallback
+            // publish never fails silently.
+            TitleSource = titleSource,
+            Warnings = string.Equals(titleSource, TitleSourceFallbackUntitled, StringComparison.Ordinal)
+                ? new[] { "title-fallback" }
+                : Array.Empty<string>(),
             Error = error
         };
     }
@@ -672,6 +698,17 @@ internal static class IssuePublishFlowCommand
         {
             writer.WriteLine($"- title: {result.Title}");
         }
+
+        if (!string.IsNullOrWhiteSpace(result.TitleSource))
+        {
+            writer.WriteLine($"- title source: {result.TitleSource}");
+        }
+
+        if (result.Warnings.Count > 0)
+        {
+            writer.WriteLine($"- warnings: {string.Join(", ", result.Warnings)}");
+        }
+
         writer.WriteLine();
 
         writer.WriteLine("## Contract validation");
@@ -742,26 +779,114 @@ internal static class IssuePublishFlowCommand
         return false;
     }
 
-    private static string ResolveTitle(string executionUnit, string githubBodyPath)
+    /// <summary>
+    /// G290: title source constants reported on the publish result so the
+    /// operator can audit which path resolved the title.
+    /// </summary>
+    public const string TitleSourcePacketYaml = "packet-yaml";
+    public const string TitleSourceGithubBodyH1 = "github-body-h1";
+    public const string TitleSourceFallbackUntitled = "fallback-untitled";
+
+    /// <summary>
+    /// G290: resolves the title in priority order: `packet.yaml` `title:` →
+    /// body H1 (`# Title`) → fallback `<execution-unit> (untitled)`. Returns
+    /// both the title and a structured source string so the caller can
+    /// report which path resolved it (and emit a warning when the fallback
+    /// fired).
+    /// </summary>
+    internal static (string Title, string Source) ResolveTitleWithSource(
+        string executionUnit,
+        string packetDirectory,
+        string githubBodyPath)
     {
-        var lines = File.ReadAllLines(githubBodyPath);
-        foreach (var raw in lines)
+        // (1) Prefer packet.yaml `title:` when present and non-empty.
+        var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+        if (File.Exists(packetYamlPath))
         {
-            var line = raw.Trim();
-            if (string.IsNullOrEmpty(line))
+            var packetTitle = TryReadPacketTitle(packetYamlPath);
+            if (!string.IsNullOrWhiteSpace(packetTitle))
             {
-                continue;
+                return (packetTitle!, TitleSourcePacketYaml);
             }
-
-            if (line.StartsWith("# ", StringComparison.Ordinal))
-            {
-                return line[2..].Trim();
-            }
-
-            break;
         }
 
-        return $"{executionUnit} (untitled)";
+        // (2) Fall back to body H1 for packets that don't carry the title in
+        // metadata (older packets, hand-authored bodies).
+        if (File.Exists(githubBodyPath))
+        {
+            var lines = File.ReadAllLines(githubBodyPath);
+            foreach (var raw in lines)
+            {
+                var line = raw.Trim();
+                if (string.IsNullOrEmpty(line))
+                {
+                    continue;
+                }
+
+                if (line.StartsWith("# ", StringComparison.Ordinal))
+                {
+                    return (line[2..].Trim(), TitleSourceGithubBodyH1);
+                }
+
+                break;
+            }
+        }
+
+        // (3) Last-resort deterministic fallback. The caller surfaces this
+        // as a warning so the operator can repair packet metadata.
+        return ($"{executionUnit} (untitled)", TitleSourceFallbackUntitled);
+    }
+
+    /// <summary>
+    /// G290: reads the top-level <c>title:</c> scalar from packet.yaml. The
+    /// packet schema places the field at the root (older packets) or under
+    /// `implementation_issue_packet:` (Sekiban-style); we accept either by
+    /// scanning for the first `title:` line that has a non-empty value, with
+    /// optional surrounding quotes stripped.
+    /// </summary>
+    private static string? TryReadPacketTitle(string packetYamlPath)
+    {
+        try
+        {
+            using var reader = new StreamReader(packetYamlPath);
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                var trimmed = line.TrimStart();
+                if (!trimmed.StartsWith("title:", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var value = trimmed["title:".Length..].Trim();
+                if (value.Length == 0)
+                {
+                    continue;
+                }
+
+                if (value.Length >= 2
+                    && ((value[0] == '"' && value[^1] == '"')
+                        || (value[0] == '\'' && value[^1] == '\'')))
+                {
+                    value = value[1..^1];
+                }
+
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+        }
+        catch (IOException)
+        {
+            // Unreadable packet.yaml — fall through to body H1 / untitled.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Permission denied — fall through.
+        }
+
+        return null;
     }
 
     private static bool TryParseArguments(
@@ -957,6 +1082,23 @@ internal sealed record IssuePublishFlowResult
 
     [JsonPropertyName("title")]
     public string? Title { get; init; }
+
+    /// <summary>
+    /// G290: which path resolved <see cref="Title"/>. One of
+    /// <see cref="IssuePublishFlowCommand.TitleSourcePacketYaml"/>,
+    /// <see cref="IssuePublishFlowCommand.TitleSourceGithubBodyH1"/>, or
+    /// <see cref="IssuePublishFlowCommand.TitleSourceFallbackUntitled"/>.
+    /// Null for early-exit cases where the title was never resolved.
+    /// </summary>
+    [JsonPropertyName("title_source")]
+    public string? TitleSource { get; init; }
+
+    /// <summary>
+    /// G290: structured warnings, e.g. <c>title-fallback</c> when the title
+    /// resolved to <c>&lt;execution-unit&gt; (untitled)</c>.
+    /// </summary>
+    [JsonPropertyName("warnings")]
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 
     [JsonPropertyName("created")]
     public required bool Created { get; init; }
