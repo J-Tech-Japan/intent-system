@@ -109,28 +109,39 @@ internal static class WorkerCompleteCommand
 
         var currentNames = LabelNames(currentLabels);
         var decision = WorkerCompleteAnalyzer.Analyze(kind!, outcome!, currentNames);
+        var isAlreadyPrCreatedIssue = isPrCreatedOutcome
+            && currentNames.Contains(WorkerResultSummaryConstants.Labels.IntentPrCreated, StringComparer.Ordinal);
 
         var applied = false;
         bool? prTargetApplied = null;
         bool? linkedPrSynced = null;
         var publishWarnings = new List<string>();
         var publishErrors = new List<string>();
-        if (decision.Proceed
+        var shouldPublishPr = isPrCreatedOutcome && prNumber is { } && (decision.Proceed || isAlreadyPrCreatedIssue);
+        if ((decision.Proceed || isAlreadyPrCreatedIssue)
             && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
         {
-            try
+            if (decision.Proceed)
             {
-                mutator.ApplyLabelTransitions(
-                    repo!, kind!, number, decision.AddLabels, decision.RemoveLabels);
-                applied = true;
+                try
+                {
+                    mutator.ApplyLabelTransitions(
+                        repo!, kind!, number, decision.AddLabels, decision.RemoveLabels);
+                    applied = true;
+                }
+                catch (Exception exception) when (
+                    exception is InvalidOperationException
+                    or IOException)
+                {
+                    writer.WriteLine(
+                        $"failed to apply complete transition on {kind} #{number} in {repo}: {exception.Message}");
+                    return 1;
+                }
             }
-            catch (Exception exception) when (
-                exception is InvalidOperationException
-                or IOException)
+            else if (isAlreadyPrCreatedIssue)
             {
-                writer.WriteLine(
-                    $"failed to apply complete transition on {kind} #{number} in {repo}: {exception.Message}");
-                return 1;
+                publishWarnings.Add(
+                    $"source issue #{number.ToString(System.Globalization.CultureInfo.InvariantCulture)} already carries '{WorkerResultSummaryConstants.Labels.IntentPrCreated}'; issue-side completion was skipped while repairing PR publication metadata.");
             }
 
             // G283: pr-created on an issue must also publish PR-side intent-target
@@ -138,7 +149,7 @@ internal static class WorkerCompleteCommand
             // pick up the PR. The created-PR write happens only after the
             // issue-side mutation succeeded; if the PR write fails, surface
             // an error and refuse to claim full completion.
-            if (isPrCreatedOutcome && prNumber is { } prNumberValue)
+            if (shouldPublishPr && prNumber is { } prNumberValue)
             {
                 try
                 {
@@ -149,6 +160,7 @@ internal static class WorkerCompleteCommand
                         new[] { WorkerNextActionConstants.Labels.IntentTarget },
                         Array.Empty<string>());
                     prTargetApplied = true;
+                    applied = true;
                 }
                 catch (Exception exception) when (
                     exception is InvalidOperationException
@@ -173,13 +185,25 @@ internal static class WorkerCompleteCommand
 
         var summary = decision.Summary;
         var proceed = decision.Proceed;
-        var aggregatedErrors = decision.Errors.Concat(publishErrors).ToArray();
+        var baseErrors = isAlreadyPrCreatedIssue
+            && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
+            && publishErrors.Count == 0
+            ? Array.Empty<string>()
+            : decision.Errors;
+        var aggregatedErrors = baseErrors.Concat(publishErrors).ToArray();
         var aggregatedWarnings = decision.Warnings.Concat(publishWarnings).ToArray();
         if (publishErrors.Count > 0)
         {
             proceed = false;
             applied = false;
             summary = $"Issue-to-PR completion partially applied: source issue updated, but PR review publication failed for PR #{prNumber}.";
+        }
+        else if (isAlreadyPrCreatedIssue
+            && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
+            && prTargetApplied == true)
+        {
+            proceed = true;
+            summary = $"Issue-to-PR completion was already recorded on source issue; ensured PR review publication metadata for PR #{prNumber}.";
         }
 
         var result = new WorkerCompleteResult
@@ -229,7 +253,7 @@ internal static class WorkerCompleteCommand
         string repo,
         int prNumber)
     {
-        var queueStatePath = context.GetQueueStatePath();
+        var queueStatePath = ResolveQueueStatePath(context);
         if (!File.Exists(queueStatePath))
         {
             return (false, $"queue-state.json not found at {queueStatePath}; PR-side intent-target was applied but linked_pr could not be synced. Reconcile via 'intent-cli automation reconcile' if this host owns the parent durable state.");
@@ -277,6 +301,26 @@ internal static class WorkerCompleteCommand
         {
             return (false, $"failed to sync linked_pr for issue #{sourceIssueNumber} in queue-state.json: {exception.Message}");
         }
+    }
+
+    private static string ResolveQueueStatePath(CliContext context)
+    {
+        var localQueueStatePath = context.GetQueueStatePath();
+        if (File.Exists(localQueueStatePath))
+        {
+            return localQueueStatePath;
+        }
+
+        var parentRoot = context.ResolveParentIntentRepoRootPath();
+        if (string.IsNullOrWhiteSpace(parentRoot))
+        {
+            return localQueueStatePath;
+        }
+
+        var parentQueueStatePath = CliRuntimeContracts.GetQueueStatePath(parentRoot);
+        return File.Exists(parentQueueStatePath)
+            ? parentQueueStatePath
+            : localQueueStatePath;
     }
 
     private static IReadOnlyList<string> LabelNames(IReadOnlyList<GitHubAutomationLabel>? labels)
