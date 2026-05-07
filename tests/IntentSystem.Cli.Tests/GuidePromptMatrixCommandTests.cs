@@ -584,6 +584,205 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains(sources, s => s!.Contains("copied prompt files", StringComparison.Ordinal));
     }
 
+    // ── G279: parameterized rendering tests ──────────────────────────────
+
+    [Fact]
+    public void Execute_ChildLoopWithDomainAndAgentClaude_RendersConcretePromptWithoutPlaceholdersAndMentionsLoop()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("claude", root.GetProperty("agent").GetString());
+        Assert.Equal("5m", root.GetProperty("frequency").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.DoesNotContain("<DOMAIN>", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-system", prompt, StringComparison.Ordinal);
+        Assert.Contains("/loop 5m", prompt, StringComparison.Ordinal);
+        Assert.Contains("same-thread", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopWithRepoAndAgentCodex_RendersConcretePromptWithoutPlaceholdersAndMentionsCurrentThread()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "codex", "--frequency", "20m", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("codex", root.GetProperty("agent").GetString());
+        Assert.Equal("20m", root.GetProperty("frequency").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.DoesNotContain("<DOMAIN>", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("<TARGET-REPO>", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-system", prompt, StringComparison.Ordinal);
+        Assert.Contains("J-Tech-Japan/intent-system", prompt, StringComparison.Ordinal);
+        Assert.Contains("Codex current-thread", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopOmittedFrequency_RendersAskBeforeScheduleInsteadOfDefaultInterval()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("claude", root.GetProperty("agent").GetString());
+        Assert.False(root.TryGetProperty("frequency", out _));
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.Contains("ask the operator for the desired frequency", prompt, StringComparison.Ordinal);
+        Assert.Contains("Never guess", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("/loop 5m", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Frequency: ", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopWithConcreteParams_NamesNextSlicePreApprovalForOnePublishPerWake()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("pre-approval to publish exactly one next-slice issue per wake", prompt, StringComparison.Ordinal);
+        Assert.Contains("issue-cut-ready", prompt, StringComparison.Ordinal);
+        Assert.Contains("WIP empty", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostOneshot_StillRequiresExplicitOperatorAcceptance()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("With operator acceptance", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("pre-approval to publish exactly one next-slice issue per wake", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopWithFrequencyAndAgentClaude_PromptNamesStaleCliAbort()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("stale", prompt, StringComparison.Ordinal);
+        Assert.Contains("automation doctor", prompt, StringComparison.Ordinal);
+        Assert.Contains("abort the wake before any mutation", prompt, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("bananas")]
+    [InlineData("5")]
+    [InlineData("m")]
+    [InlineData("0m")]
+    [InlineData("5min")]
+    [InlineData("5d")]
+    [InlineData("-5m")]
+    [InlineData("5 m")]
+    public void Execute_InvalidFrequencyValue_ReturnsUsageError(string invalidFrequency)
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--frequency", invalidFrequency, "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("--frequency must match <NNm|NNh>", output, StringComparison.Ordinal);
+        Assert.Contains($"Got '{invalidFrequency}'", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("5m")]
+    [InlineData("20m")]
+    [InlineData("1h")]
+    [InlineData("12h")]
+    public void Execute_ValidFrequencyValue_IsAccepted(string validFrequency)
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--frequency", validFrequency, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(validFrequency, document.RootElement.GetProperty("frequency").GetString());
+    }
+
+    [Fact]
+    public void Execute_InvalidAgentValue_ReturnsUsageError()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--agent", "gemini", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--agent must be 'claude', 'codex', or 'generic'", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopFrequencyResolved_FrequencyGuidanceFieldReflectsResolution()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var freqGuidance = document.RootElement.GetProperty("frequency_guidance").GetString();
+        Assert.Equal("5m (operator-resolved)", freqGuidance);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopAgentGenericDefault_OmitsAgentSpecificSchedulingPrimitive()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("generic", root.GetProperty("agent").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.DoesNotContain("/loop 5m", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Codex current-thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("local same-thread/current-thread automation", prompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
