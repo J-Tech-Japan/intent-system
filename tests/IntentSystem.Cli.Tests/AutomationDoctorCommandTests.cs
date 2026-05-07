@@ -170,6 +170,10 @@ public sealed class AutomationDoctorCommandTests
         var originalError = Console.Error;
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
+        // G282: cwd-local shim is intentionally absent. Force the PATH fallback
+        // to also miss so we exercise the original "neither shim nor global
+        // tool present" branch and the doctor still emits stale-host-cli.
+        AutomationInstalledCliSurfaceProbe.PathResolver = _ => null;
 
         try
         {
@@ -189,9 +193,216 @@ public sealed class AutomationDoctorCommandTests
         }
         finally
         {
+            AutomationInstalledCliSurfaceProbe.PathResolver = null;
             Console.SetOut(originalOut);
             Console.SetError(originalError);
             Directory.SetCurrentDirectory(originalDirectory);
+        }
+    }
+
+    [Fact]
+    public void Execute_GlobalDotnetToolOnPathSatisfiesDoctorWhenCwdShimIsAbsent()
+    {
+        using var workspace = new AutomationDoctorWorkspace(createIntentCliDirectory: false);
+        // Simulate a global dotnet tool install at $HOME/.dotnet/tools/intent-cli.
+        var pretendGlobalDir = Directory.CreateTempSubdirectory("g282-global-tool-").FullName;
+        var pretendGlobalBinary = Path.Combine(pretendGlobalDir, OperatingSystem.IsWindows() ? "intent-cli.exe" : "intent-cli");
+        WriteHealthyShim(pretendGlobalBinary);
+        AutomationInstalledCliSurfaceProbe.PathResolver = name =>
+            string.Equals(name, Path.GetFileName(pretendGlobalBinary), StringComparison.Ordinal)
+                ? pretendGlobalBinary
+                : null;
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationDoctorCommand.Execute(
+                workspace.Context,
+                ["--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationDoctorResult>(writer.ToString())!;
+            Assert.Equal("ok", result.Status);
+            Assert.Equal(pretendGlobalBinary, result.InstalledCliPath);
+            Assert.Equal("path-global-tool", result.BinarySource);
+            Assert.Equal(Path.Combine(workspace.RootPath, ".intent-cli"), result.HostDataRoot);
+            Assert.Contains("binary_source=path-global-tool", result.Summary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationInstalledCliSurfaceProbe.PathResolver = null;
+            if (Directory.Exists(pretendGlobalDir))
+            {
+                Directory.Delete(pretendGlobalDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void Execute_NoCwdShimAndNoPathBinary_ReportsStaleHostCliWithBinarySourceMissing()
+    {
+        using var workspace = new AutomationDoctorWorkspace(createIntentCliDirectory: false);
+        AutomationInstalledCliSurfaceProbe.PathResolver = _ => null;
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationDoctorCommand.Execute(
+                workspace.Context,
+                ["--format", "json"],
+                writer);
+
+            Assert.Equal(1, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationDoctorResult>(writer.ToString())!;
+            Assert.Equal("stale-host-cli", result.Status);
+            Assert.Equal("missing", result.BinarySource);
+            Assert.Equal(Path.Combine(workspace.RootPath, ".intent-cli"), result.HostDataRoot);
+        }
+        finally
+        {
+            AutomationInstalledCliSurfaceProbe.PathResolver = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_PathGlobalToolWithStaleSurface_ReportsStaleHostCliAndKeepsPathGlobalToolSource()
+    {
+        using var workspace = new AutomationDoctorWorkspace(createIntentCliDirectory: false);
+        var pretendGlobalDir = Directory.CreateTempSubdirectory("g282-global-tool-stale-").FullName;
+        var pretendGlobalBinary = Path.Combine(pretendGlobalDir, OperatingSystem.IsWindows() ? "intent-cli.exe" : "intent-cli");
+        WriteShimWithStalePrTransition(pretendGlobalBinary);
+        AutomationInstalledCliSurfaceProbe.PathResolver = name =>
+            string.Equals(name, Path.GetFileName(pretendGlobalBinary), StringComparison.Ordinal)
+                ? pretendGlobalBinary
+                : null;
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationDoctorCommand.Execute(
+                workspace.Context,
+                ["--format", "json"],
+                writer);
+
+            Assert.Equal(1, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationDoctorResult>(writer.ToString())!;
+            Assert.Equal("stale-host-cli", result.Status);
+            Assert.Equal("path-global-tool", result.BinarySource);
+            Assert.Equal(pretendGlobalBinary, result.InstalledCliPath);
+        }
+        finally
+        {
+            AutomationInstalledCliSurfaceProbe.PathResolver = null;
+            if (Directory.Exists(pretendGlobalDir))
+            {
+                Directory.Delete(pretendGlobalDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void Execute_ExplicitInstalledPathOverrideWinsOverCwdShimAndPath()
+    {
+        using var workspace = new AutomationDoctorWorkspace();
+        // workspace.WriteInstalledCliScript(false) was already called by ctor, so cwd shim is a healthy binary.
+        var explicitBinaryDir = Directory.CreateTempSubdirectory("g282-explicit-").FullName;
+        var explicitBinary = Path.Combine(explicitBinaryDir, OperatingSystem.IsWindows() ? "intent-cli.exe" : "intent-cli");
+        WriteHealthyShim(explicitBinary);
+        AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = () => explicitBinary;
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationDoctorCommand.Execute(
+                workspace.Context,
+                ["--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationDoctorResult>(writer.ToString())!;
+            Assert.Equal("ok", result.Status);
+            Assert.Equal(explicitBinary, result.InstalledCliPath);
+            Assert.Equal("explicit-override", result.BinarySource);
+        }
+        finally
+        {
+            AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = null;
+            if (Directory.Exists(explicitBinaryDir))
+            {
+                Directory.Delete(explicitBinaryDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void Execute_CwdLocalShimPresent_BinarySourceIsCwdLocalShim()
+    {
+        using var workspace = new AutomationDoctorWorkspace(); // ctor writes a healthy cwd shim
+        AutomationInstalledCliSurfaceProbe.PathResolver = _ => null; // ensure PATH lookup is not the source
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationDoctorCommand.Execute(
+                workspace.Context,
+                ["--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationDoctorResult>(writer.ToString())!;
+            Assert.Equal("ok", result.Status);
+            Assert.Equal("cwd-local-shim", result.BinarySource);
+            Assert.EndsWith(Path.Combine(".intent-cli", "bin", OperatingSystem.IsWindows() ? "intent-cli.exe" : "intent-cli"),
+                result.InstalledCliPath, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationInstalledCliSurfaceProbe.PathResolver = null;
+        }
+    }
+
+    private static void WriteHealthyShim(string scriptPath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
+        File.WriteAllText(
+            scriptPath,
+            "#!/bin/sh\n"
+            + "case \"$*\" in\n"
+            + "  'automation summary') echo '--domain is required.'; exit 1 ;;\n"
+            + "  'automation host-review-preflight') echo '--repo is required.'; exit 1 ;;\n"
+            + "  'automation issue-publish') echo '--issue is required.'; exit 1 ;;\n"
+            + "  'automation pr-transition') echo '--transition is required (review-start, request-update, or approved).'; exit 1 ;;\n"
+            + "  *) echo \"unexpected probe: $*\"; exit 1 ;;\n"
+            + "esac\n");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(scriptPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        }
+    }
+
+    private static void WriteShimWithStalePrTransition(string scriptPath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
+        File.WriteAllText(
+            scriptPath,
+            "#!/bin/sh\n"
+            + "case \"$*\" in\n"
+            + "  'automation summary') echo '--domain is required.'; exit 1 ;;\n"
+            + "  'automation host-review-preflight') echo '--repo is required.'; exit 1 ;;\n"
+            + "  'automation issue-publish') echo '--issue is required.'; exit 1 ;;\n"
+            + "  'automation pr-transition') echo \"Command 'automation pr-transition' is not yet implemented.\"; exit 1 ;;\n"
+            + "  *) echo \"unexpected probe: $*\"; exit 1 ;;\n"
+            + "esac\n");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(scriptPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
         }
     }
 

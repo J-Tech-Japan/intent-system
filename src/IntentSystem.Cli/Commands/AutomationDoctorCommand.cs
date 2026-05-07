@@ -68,13 +68,15 @@ internal static class AutomationDoctorCommand
             Status = surfaceReport.Available ? "ok" : "stale-host-cli",
             ReadOnly = true,
             InstalledCliPath = surfaceReport.InstalledCliPath,
+            BinarySource = surfaceReport.BinarySource,
+            HostDataRoot = surfaceReport.HostDataRoot,
             RequiredCommands = requiredCommands,
             AutomationCapabilitySchemaVersion = AutomationSummaryConstants.AutomationCapabilitySchemaVersion,
             AutomationCommandSurfaceVersion = AutomationSummaryConstants.AutomationCommandSurfaceVersion,
             AutomationCommandCapabilities = AutomationSummaryConstants.AutomationCommandCapabilities,
             Summary = surfaceReport.Available
-                ? "Host automation command preflight passed: required installed automation command surfaces are available."
-                : $"Host automation command preflight failed: installed CLI at {surfaceReport.InstalledCliPath} is missing or stale for {string.Join(", ", missing.Select(command => command.Usage))}. Abort before label transitions; refresh the installed CLI instead of falling back to raw gh label mutation.",
+                ? $"Host automation command preflight passed: required installed automation command surfaces are available (binary_source={surfaceReport.BinarySource}, host_data_root={surfaceReport.HostDataRoot})."
+                : $"Host automation command preflight failed: installed CLI at {surfaceReport.InstalledCliPath} (binary_source={surfaceReport.BinarySource}) is missing or stale for {string.Join(", ", missing.Select(command => command.Usage))}. Abort before label transitions; refresh the installed CLI instead of falling back to raw gh label mutation.",
         };
     }
 
@@ -150,6 +152,8 @@ internal static class AutomationDoctorCommand
         writer.WriteLine($"status: {result.Status}");
         writer.WriteLine($"read_only: {result.ReadOnly.ToString().ToLowerInvariant()}");
         writer.WriteLine($"installed_cli_path: {result.InstalledCliPath}");
+        writer.WriteLine($"binary_source: {result.BinarySource}");
+        writer.WriteLine($"host_data_root: {result.HostDataRoot}");
         writer.WriteLine(result.Summary);
         writer.WriteLine();
         writer.WriteLine("## Required installed automation command surfaces");
@@ -192,6 +196,18 @@ internal sealed record AutomationDoctorResult
 
     [JsonPropertyName("installedCliPath")]
     public string InstalledCliPathCamel => InstalledCliPath;
+
+    [JsonPropertyName("binary_source")]
+    public required string BinarySource { get; init; }
+
+    [JsonPropertyName("binarySource")]
+    public string BinarySourceCamel => BinarySource;
+
+    [JsonPropertyName("host_data_root")]
+    public required string HostDataRoot { get; init; }
+
+    [JsonPropertyName("hostDataRoot")]
+    public string HostDataRootCamel => HostDataRoot;
 
     [JsonPropertyName("required_commands")]
     public required IReadOnlyList<AutomationDoctorRequiredCommand> RequiredCommands { get; init; }
