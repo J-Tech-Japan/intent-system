@@ -105,6 +105,27 @@ internal sealed record AutomationReconcileRepair
 
     [JsonPropertyName("requiresFollowupCommand")]
     public string? RequiresFollowupCommandCamel => RequiresFollowupCommand;
+
+    /// <summary>G284: PR number this repair would link to (queue-state linked_pr writes).</summary>
+    [JsonPropertyName("pr_number_to_link")]
+    public int? PrNumberToLink { get; init; }
+
+    [JsonPropertyName("prNumberToLink")]
+    public int? PrNumberToLinkCamel => PrNumberToLink;
+
+    /// <summary>G284: PR URL to write into queue-state.json's linked_pr field.</summary>
+    [JsonPropertyName("queue_state_linked_pr_url")]
+    public string? QueueStateLinkedPrUrl { get; init; }
+
+    [JsonPropertyName("queueStateLinkedPrUrl")]
+    public string? QueueStateLinkedPrUrlCamel => QueueStateLinkedPrUrl;
+
+    /// <summary>G284: execution unit identifier for the queue-state row this repair targets.</summary>
+    [JsonPropertyName("queue_state_execution_unit")]
+    public string? QueueStateExecutionUnit { get; init; }
+
+    [JsonPropertyName("queueStateExecutionUnit")]
+    public string? QueueStateExecutionUnitCamel => QueueStateExecutionUnit;
 }
 
 internal sealed record AutomationReconcileUnsafeStop
@@ -175,4 +196,20 @@ internal static class AutomationReconcileUnsafeStopKinds
     public const string AmbiguousIssueLink = "ambiguous-issue-link";
     public const string MissingPublishedIssueEvidence = "missing-published-issue-evidence";
     public const string ChildLoopProhibited = "child-loop-prohibited";
+
+    /// <summary>G284: more than one queue item references the same source issue, so the
+    /// host loop cannot deterministically pick which queue row should receive linked_pr.</summary>
+    public const string AmbiguousQueueLinkage = "ambiguous-queue-linkage";
+}
+
+/// <summary>G284: minimal queue-state snapshot the host-review reconcile analyzer
+/// needs to decide whether a missing linked_pr can be deterministically filled.
+/// Avoids tying the analyzer to the full QueueState model so test fakes can
+/// supply only the fields the analyzer reads.</summary>
+internal sealed record ReconcileQueueLink
+{
+    public required string ExecutionUnit { get; init; }
+    public required string LinkedIssueRepo { get; init; }
+    public required int LinkedIssueNumber { get; init; }
+    public required string? LinkedPrUrl { get; init; }
 }

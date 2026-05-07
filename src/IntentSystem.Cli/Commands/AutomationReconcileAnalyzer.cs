@@ -20,7 +20,8 @@ internal static class AutomationReconcileAnalyzer
     public static AutomationReconcileAnalysis AnalyzeHostReview(
         string repo,
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
-        IReadOnlyList<GitHubAutomationIssueCandidate> publishedIntentTargetIssues)
+        IReadOnlyList<GitHubAutomationIssueCandidate> publishedIntentTargetIssues,
+        IReadOnlyList<ReconcileQueueLink>? queueLinks = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(openPrs);
@@ -32,6 +33,13 @@ internal static class AutomationReconcileAnalyzer
         var publishedIssuesByNumber = publishedIntentTargetIssues
             .Where(IsPublishedIntentTargetIssue)
             .ToDictionary(issue => issue.Number);
+
+        // G284: index queue items by their source issue number for the
+        // linked_pr promotion check below.
+        var queueLinksByIssueNumber = (queueLinks ?? Array.Empty<ReconcileQueueLink>())
+            .Where(link => string.Equals(link.LinkedIssueRepo, repo, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(link => link.LinkedIssueNumber)
+            .ToDictionary(g => g.Key, g => g.ToArray());
 
         var prsLinkingPublishedIssue = new Dictionary<int, List<int>>();
 
@@ -124,30 +132,90 @@ internal static class AutomationReconcileAnalyzer
                 });
             }
 
-            // Advisory: PR closes a published issue, so linked_pr metadata is derivable.
-            // We do not mutate queue-state here; we surface the followup for a host
-            // closeout/packet command to apply through its existing surface.
+            // G277/G284: PR closes a published issue, so linked_pr metadata is derivable.
+            // Without queue-state evidence, the repair stays Advisory and points the operator
+            // at the existing closeout surface. With queue-state evidence:
+            //   - exactly one queue item references the source issue and has no/different
+            //     linked_pr → promote to High and target a queue-state write,
+            //   - more than one queue item references the issue → ambiguous-queue-linkage
+            //     unsafe stop (operator clarification),
+            //   - the queue item already has the matching linked_pr → skip (no drift).
             if (publishedLinkedIssues.Length == 1)
             {
                 var issueNumber = publishedLinkedIssues[0];
-                safeRepairs.Add(new AutomationReconcileRepair
+                var prUrl = pr.Url;
+                if (queueLinksByIssueNumber.TryGetValue(issueNumber, out var matchedLinks)
+                    && matchedLinks.Length > 0)
                 {
-                    Type = AutomationReconcileRepairTypes.MissingLinkedPrMetadata,
-                    TargetKind = "queue-state",
-                    TargetNumber = issueNumber,
-                    TargetUrl = publishedIssuesByNumber[issueNumber].Url,
-                    AddLabels = Array.Empty<string>(),
-                    RemoveLabels = Array.Empty<string>(),
-                    Evidence =
-                    [
-                        $"PR #{pr.Number} closing-issue references uniquely include #{issueNumber}",
-                        $"issue #{issueNumber} is a published intent-target issue"
-                    ],
-                    Confidence = AutomationReconcileConfidence.Advisory,
-                    Applied = false,
-                    Summary = $"linked_pr for execution-unit of issue #{issueNumber} can be derived as PR #{pr.Number}; apply through the host closeout/packet surface, not this lane.",
-                    RequiresFollowupCommand = $"intent-cli closeout pr --pr {pr.Number} --repo {repo}",
-                });
+                    if (matchedLinks.Length == 1)
+                    {
+                        var match = matchedLinks[0];
+                        if (!string.Equals(match.LinkedPrUrl, prUrl, StringComparison.Ordinal))
+                        {
+                            safeRepairs.Add(new AutomationReconcileRepair
+                            {
+                                Type = AutomationReconcileRepairTypes.MissingLinkedPrMetadata,
+                                TargetKind = "queue-state",
+                                TargetNumber = issueNumber,
+                                TargetUrl = publishedIssuesByNumber[issueNumber].Url,
+                                AddLabels = Array.Empty<string>(),
+                                RemoveLabels = Array.Empty<string>(),
+                                Evidence =
+                                [
+                                    $"PR #{pr.Number} closing-issue references uniquely include #{issueNumber}",
+                                    $"issue #{issueNumber} is a published intent-target issue",
+                                    $"queue-state has exactly one item ('{match.ExecutionUnit}') with linked_issue.number={issueNumber} and current linked_pr={(string.IsNullOrEmpty(match.LinkedPrUrl) ? "(none)" : match.LinkedPrUrl)}"
+                                ],
+                                Confidence = AutomationReconcileConfidence.High,
+                                Applied = false,
+                                Summary = $"Set linked_pr for execution-unit '{match.ExecutionUnit}' (source issue #{issueNumber}) to PR #{pr.Number} in queue-state.json.",
+                                RequiresFollowupCommand = null,
+                                PrNumberToLink = pr.Number,
+                                QueueStateLinkedPrUrl = prUrl,
+                                QueueStateExecutionUnit = match.ExecutionUnit,
+                            });
+                        }
+                    }
+                    else
+                    {
+                        unsafeStops.Add(new AutomationReconcileUnsafeStop
+                        {
+                            Kind = AutomationReconcileUnsafeStopKinds.AmbiguousQueueLinkage,
+                            TargetKind = "queue-state",
+                            TargetNumber = issueNumber,
+                            TargetUrl = publishedIssuesByNumber[issueNumber].Url,
+                            Reason = $"PR #{pr.Number} uniquely references source issue #{issueNumber}, but queue-state has {matchedLinks.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)} items pointing at it ({string.Join(", ", matchedLinks.Select(m => "'" + m.ExecutionUnit + "'"))}); cannot deterministically pick which row should receive linked_pr.",
+                            MissingEvidence =
+                            [
+                                $"queue-state has multiple items with linked_issue.number={issueNumber}",
+                                "operator must dedupe queue-state before reconcile can write linked_pr"
+                            ],
+                        });
+                    }
+                }
+                else
+                {
+                    // Backward-compat: when the host did not pass queue-state evidence,
+                    // surface the existing advisory pointing at the closeout surface.
+                    safeRepairs.Add(new AutomationReconcileRepair
+                    {
+                        Type = AutomationReconcileRepairTypes.MissingLinkedPrMetadata,
+                        TargetKind = "queue-state",
+                        TargetNumber = issueNumber,
+                        TargetUrl = publishedIssuesByNumber[issueNumber].Url,
+                        AddLabels = Array.Empty<string>(),
+                        RemoveLabels = Array.Empty<string>(),
+                        Evidence =
+                        [
+                            $"PR #{pr.Number} closing-issue references uniquely include #{issueNumber}",
+                            $"issue #{issueNumber} is a published intent-target issue"
+                        ],
+                        Confidence = AutomationReconcileConfidence.Advisory,
+                        Applied = false,
+                        Summary = $"linked_pr for execution-unit of issue #{issueNumber} can be derived as PR #{pr.Number}; apply through the host closeout/packet surface, not this lane.",
+                        RequiresFollowupCommand = $"intent-cli closeout pr --pr {pr.Number} --repo {repo}",
+                    });
+                }
             }
         }
 
