@@ -23,6 +23,11 @@ internal static class IntentNextSliceCommand
     private const string OutcomeClarificationRequired = "clarification-required";
     private const string OutcomeNoActionableItem = "no-actionable-item";
 
+    // G285: surfaced in `warnings` when the clarification file has stale
+    // front-matter (`intent_state: open`) but the body explicitly records no
+    // current blockers / open questions. The candidate may still publish.
+    internal const string WarningStaleClarificationMetadata = "stale-clarification-metadata";
+
     private const string UsageLine =
         "Usage: intent-cli intent next-slice --dry-run [--domain <name>] [--target-repo <owner/repo>] [--format json|markdown]";
 
@@ -148,8 +153,14 @@ internal static class IntentNextSliceCommand
 
         var clarificationPath = Path.Combine(context.RepoRoot, "intents", domain, "clarifications", "open.md");
         var clarificationFilePresent = File.Exists(clarificationPath);
-        var clarificationOpen = clarificationFilePresent
-            && ClarificationOpenDetector.HasOpenBlocker(File.ReadAllText(clarificationPath));
+        ClarificationStateAnalysis? clarificationAnalysis = null;
+        if (clarificationFilePresent)
+        {
+            clarificationAnalysis = ClarificationOpenDetector.Analyze(File.ReadAllText(clarificationPath));
+        }
+
+        var clarificationOpen = clarificationAnalysis?.HasOpenBlocker ?? false;
+        var staleClarificationMetadata = clarificationAnalysis?.StaleClarificationMetadata ?? false;
         IntentNextSliceCandidate? candidate = null;
         if (Directory.Exists(packetRoot))
         {
@@ -207,6 +218,16 @@ internal static class IntentNextSliceCommand
             wip.Count > 0,
             candidate);
 
+        var warnings = new List<string>();
+        if (staleClarificationMetadata)
+        {
+            // G285: surface stale front-matter so the host can repair the file
+            // later. The boolean `clarificationOpen` is already false because
+            // the body explicitly records no current blockers / questions, so
+            // a complete candidate still proceeds to `issue-cut-ready`.
+            warnings.Add(WarningStaleClarificationMetadata);
+        }
+
         return new IntentNextSliceResult
         {
             Domain = domain,
@@ -218,9 +239,11 @@ internal static class IntentNextSliceCommand
             ClarificationPath = clarificationPath,
             ClarificationFilePresent = clarificationFilePresent,
             ClarificationOpen = clarificationOpen,
+            StaleClarificationMetadata = staleClarificationMetadata,
             PacketRoot = packetRoot,
             Candidate = candidate,
             RecommendedOutcome = recommendedOutcome,
+            Warnings = warnings,
             Notes = notes
         };
     }
@@ -488,6 +511,7 @@ internal static class IntentNextSliceCommand
         writer.WriteLine($"- file: {result.ClarificationPath}");
         writer.WriteLine($"- file present: {(result.ClarificationFilePresent ? "yes" : "no")}");
         writer.WriteLine($"- has open blocker: {(result.ClarificationOpen ? "yes" : "no")}");
+        writer.WriteLine($"- stale clarification metadata: {(result.StaleClarificationMetadata ? "yes" : "no")}");
         writer.WriteLine();
 
         writer.WriteLine("## Candidate");
@@ -514,6 +538,17 @@ internal static class IntentNextSliceCommand
             }
         }
         writer.WriteLine();
+
+        if (result.Warnings.Count > 0)
+        {
+            writer.WriteLine("## Warnings");
+            foreach (var warning in result.Warnings)
+            {
+                writer.WriteLine($"- {warning}");
+            }
+
+            writer.WriteLine();
+        }
 
         if (result.Notes.Count > 0)
         {
@@ -642,6 +677,9 @@ internal sealed record IntentNextSliceResult
     [JsonPropertyName("clarification_open")]
     public required bool ClarificationOpen { get; init; }
 
+    [JsonPropertyName("stale_clarification_metadata")]
+    public required bool StaleClarificationMetadata { get; init; }
+
     [JsonPropertyName("packet_root")]
     public required string PacketRoot { get; init; }
 
@@ -650,6 +688,9 @@ internal sealed record IntentNextSliceResult
 
     [JsonPropertyName("recommended_outcome")]
     public required string RecommendedOutcome { get; init; }
+
+    [JsonPropertyName("warnings")]
+    public required IReadOnlyList<string> Warnings { get; init; }
 
     [JsonPropertyName("notes")]
     public required IReadOnlyList<string> Notes { get; init; }

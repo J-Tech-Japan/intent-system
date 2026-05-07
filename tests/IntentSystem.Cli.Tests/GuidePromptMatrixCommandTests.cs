@@ -682,6 +682,38 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_MentionsStaleClarificationMetadataAsNonStop_G285()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("stale-clarification-metadata", prompt, StringComparison.Ordinal);
+        Assert.Contains("Stale clarification metadata (G285)", prompt, StringComparison.Ordinal);
+        // The warning is explicitly classified as non-stop / not Hard Clarification.
+        Assert.Contains("do NOT treat it as Hard Clarification", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostOneshotPrompt_MentionsStaleClarificationMetadataAsNonStop_G285()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("stale-clarification-metadata", prompt, StringComparison.Ordinal);
+        Assert.Contains("Stale clarification metadata (G285)", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_ChildLoopWithFrequencyAndAgentClaude_PromptNamesStaleCliAbort()
     {
         using var writer = new StringWriter();
