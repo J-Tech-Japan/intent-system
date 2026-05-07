@@ -469,6 +469,211 @@ public sealed class WorkerNextActionCommandTests : IDisposable
         Assert.DoesNotContain("resolveReviewThread", combined, StringComparison.Ordinal);
     }
 
+    // ── G281: --workdir is child worktree context only ──────────────────
+
+    [Fact]
+    public void Execute_GivenPrCommentFixWithWorkdirAndSourceIssuePrCreated_StillSelectsPrCommentFix()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        // Child worktree directory that does NOT contain .intent-cli — mimics
+        // the operator's setup: parent host state lives in the cwd, the child
+        // worktree is a separate git checkout.
+        var childWorktree = Directory.CreateTempSubdirectory("g281-child-worktree-").FullName;
+        Directory.CreateDirectory(Path.Combine(childWorktree, ".git"));
+        Assert.False(Directory.Exists(Path.Combine(childWorktree, ".intent-cli")));
+
+        try
+        {
+            var lister = new FakeLister
+            {
+                Prs = new[]
+                {
+                    BuildPr(660, "G278 PR with repair feedback",
+                        "https://github.com/J-Tech-Japan/intent-system/pull/660",
+                        createdAt: "2026-05-06T20:00:00Z",
+                        labels: new[] { "intent-target", "intent-pr-request-update" }),
+                },
+                Issues = new[]
+                {
+                    // Source issue carries intent-pr-created and must NOT
+                    // suppress PR comment-fix selection.
+                    BuildIssue(659, "G278 source issue (already created)",
+                        "https://github.com/J-Tech-Japan/intent-system/issues/659",
+                        createdAt: "2026-05-06T19:00:00Z",
+                        labels: new[] { "intent-target", "intent-pr-created" }),
+                },
+            };
+            WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+            using var writer = new StringWriter();
+            var exitCode = WorkerNextActionCommand.Execute(
+                workspace.Context,
+                new[]
+                {
+                    "--repo", "J-Tech-Japan/intent-system",
+                    "--workdir", childWorktree,
+                    "--format", "json",
+                },
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+            Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+            Assert.Equal(660, result.Number);
+            // No workdir-related warning when the workdir IS a git worktree.
+            Assert.DoesNotContain(result.Warnings, w => w.Contains("workdir", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(childWorktree))
+            {
+                Directory.Delete(childWorktree, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenWorkdirWithoutGitDirectory_EmitsWarningButStillSelectsPrCommentFix()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var notAGitWorktree = Directory.CreateTempSubdirectory("g281-not-a-git-worktree-").FullName;
+
+        try
+        {
+            var lister = new FakeLister
+            {
+                Prs = new[]
+                {
+                    BuildPr(660, "G278 PR with repair feedback",
+                        "https://github.com/J-Tech-Japan/intent-system/pull/660",
+                        createdAt: "2026-05-06T20:00:00Z",
+                        labels: new[] { "intent-target", "intent-pr-request-update" }),
+                },
+            };
+            WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+            using var writer = new StringWriter();
+            var exitCode = WorkerNextActionCommand.Execute(
+                workspace.Context,
+                new[]
+                {
+                    "--repo", "J-Tech-Japan/intent-system",
+                    "--workdir", notAGitWorktree,
+                    "--format", "json",
+                },
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+            Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+            Assert.Contains(result.Warnings, w =>
+                w.Contains("not a git worktree", StringComparison.Ordinal)
+                && w.Contains("selection used GitHub state from --repo only", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(notAGitWorktree))
+            {
+                Directory.Delete(notAGitWorktree, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenWorkdirThatDoesNotExist_EmitsWarningButStillSelects()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var missingWorktree = Path.Combine(Path.GetTempPath(), "g281-definitely-missing-" + Guid.NewGuid().ToString("N"));
+        Assert.False(Directory.Exists(missingWorktree));
+
+        var lister = new FakeLister
+        {
+            Issues = new[]
+            {
+                BuildIssue(700, "G300 ready", "https://github.com/J-Tech-Japan/intent-system/issues/700",
+                    createdAt: "2026-05-07T00:00:00Z",
+                    labels: new[] { "intent-target" }),
+            },
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--workdir", missingWorktree,
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.IssueToPr, result.Action);
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("does not exist", StringComparison.Ordinal)
+            && w.Contains("selection used GitHub state from --repo only", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AutomationCheck_AndWorkerNextAction_AgreeOnPrCommentFixUnderChildWorkdirContext()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        var childWorktree = Directory.CreateTempSubdirectory("g281-aligned-workdir-").FullName;
+        // give it both a .git and an origin-like config so automation check's
+        // repo inference succeeds against the same workdir.
+        Directory.CreateDirectory(Path.Combine(childWorktree, ".git"));
+        File.WriteAllText(
+            Path.Combine(childWorktree, ".git", "config"),
+            "[remote \"origin\"]\n\turl = https://github.com/J-Tech-Japan/intent-system.git\n");
+
+        try
+        {
+            var lister = new FakeLister
+            {
+                Prs = new[]
+                {
+                    BuildPr(660, "G278 PR with repair feedback",
+                        "https://github.com/J-Tech-Japan/intent-system/pull/660",
+                        createdAt: "2026-05-06T20:00:00Z",
+                        labels: new[] { "intent-target", "intent-pr-request-update" }),
+                },
+            };
+            WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+            using var workerWriter = new StringWriter();
+            Assert.Equal(0, WorkerNextActionCommand.Execute(
+                workspace.Context,
+                new[]
+                {
+                    "--repo", "J-Tech-Japan/intent-system",
+                    "--workdir", childWorktree,
+                    "--format", "json",
+                },
+                workerWriter));
+
+            using var checkWriter = new StringWriter();
+            Assert.Equal(0, AutomationCheckCommand.Execute(
+                workspace.Context,
+                new[] { "--workdir", childWorktree, "--format", "json" },
+                checkWriter));
+
+            var workerResult = JsonSerializer.Deserialize<WorkerNextActionResult>(workerWriter.ToString())!;
+            var checkResult = JsonSerializer.Deserialize<WorkerNextActionResult>(checkWriter.ToString())!;
+            Assert.Equal(workerResult.Action, checkResult.Action);
+            Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, checkResult.Action);
+            Assert.Equal(workerResult.Number, checkResult.Number);
+        }
+        finally
+        {
+            if (Directory.Exists(childWorktree))
+            {
+                Directory.Delete(childWorktree, recursive: true);
+            }
+        }
+    }
+
     private static string StripCsharpComments(string source)
     {
         // Remove block comments (/* … */) including XML doc blocks like
