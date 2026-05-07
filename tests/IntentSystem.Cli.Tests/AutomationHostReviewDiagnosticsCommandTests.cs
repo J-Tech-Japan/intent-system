@@ -146,6 +146,117 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Equal("wip-cap-blocked", result.Classification);
     }
 
+    // ─── G288 tests ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G288_WipBlockedDefault_StillReturnsWipCapBlocked()
+    {
+        // Regression: without --allow-wip-cap-override, default WIP cap
+        // behavior is unchanged even when a candidate is provided.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            PublishedIssues =
+            [
+                BuildIssue(700, "G300 in flight", "https://github.com/J-Tech-Japan/intent-system/issues/700",
+                    labels: ["intent-target", "intent-issue-in-progress"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G301", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("wip-cap-blocked", result.Classification);
+        Assert.DoesNotContain("wip-cap-overridden", result.Warnings);
+    }
+
+    [Fact]
+    public void Execute_G288_AllowWipCapOverrideWithCandidate_ClassifiesIssuePublishReadyAndWarns()
+    {
+        // With --allow-wip-cap-override AND a candidate, the wake routes to
+        // issue-publish-ready and surfaces wip-cap-overridden in warnings so
+        // the override is auditable. The publish chain is still emitted.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            PublishedIssues =
+            [
+                BuildIssue(700, "G300 in flight", "https://github.com/J-Tech-Japan/intent-system/issues/700",
+                    labels: ["intent-target", "intent-issue-in-progress"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G301", "--allow-wip-cap-override", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("issue-publish-ready", result.Classification);
+        Assert.Contains("wip-cap-overridden", result.Warnings);
+        Assert.Contains("G301", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Contains("packet draft", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G288_AllowWipCapOverrideWithoutCandidate_StillBlocked()
+    {
+        // The override only triggers a publish when a candidate is provided.
+        // With WIP > 0 and no candidate, the wake remains wip-cap-blocked.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            PublishedIssues =
+            [
+                BuildIssue(700, "G300 in flight", "https://github.com/J-Tech-Japan/intent-system/issues/700",
+                    labels: ["intent-target", "intent-issue-in-progress"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--allow-wip-cap-override", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("wip-cap-blocked", result.Classification);
+        Assert.DoesNotContain("wip-cap-overridden", result.Warnings);
+    }
+
+    [Fact]
+    public void Execute_G288_AllowWipCapOverrideWithClarificationRequired_StillStops()
+    {
+        // The override only bypasses WIP cap; clarification is unaffected.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            PublishedIssues =
+            [
+                BuildIssue(700, "G300 in flight", "https://github.com/J-Tech-Japan/intent-system/issues/700",
+                    labels: ["intent-target", "intent-issue-in-progress"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G301", "--clarification-required", "--allow-wip-cap-override", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("clarification-required", result.Classification);
+    }
+
     [Fact]
     public void Execute_ClarificationRequiredFlag_ClassifiesClarificationRequired()
     {

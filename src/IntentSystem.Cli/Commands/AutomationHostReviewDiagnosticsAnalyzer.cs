@@ -26,7 +26,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         string? candidateExecutionUnit,
         bool staleClarificationMetadata = false,
         IReadOnlyList<string>? reconcileUnsafeStopKinds = null,
-        int reconcileHighConfidenceRepairsAvailable = 0)
+        int reconcileHighConfidenceRepairsAvailable = 0,
+        bool allowWipCapOverride = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(openPrs);
@@ -234,6 +235,43 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
 
         if (inFlightPrs.Length > 0 || inFlightIssues.Length > 0)
         {
+            // G288: when the operator explicitly opts in (--allow-wip-cap-override)
+            // AND a complete candidate is present, route to issue-publish-ready
+            // and surface a `wip-cap-overridden` warning (plus a detail listing
+            // the in-flight items that were bypassed) so the override is
+            // auditable. Without the flag the default WIP cap is unchanged.
+            if (allowWipCapOverride && !string.IsNullOrWhiteSpace(candidateExecutionUnit))
+            {
+                warnings.Add("wip-cap-overridden");
+                details.Add(new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = AutomationHostReviewDiagnosticsClassifications.WipCapBlocked,
+                    TargetKind = null,
+                    TargetNumber = null,
+                    TargetUrl = null,
+                    Description = $"WIP cap bypassed by --allow-wip-cap-override; in-flight intent-target items at override time: PRs={string.Join(",", inFlightPrs)} issues={string.Join(",", inFlightIssues)}",
+                });
+                details.Add(new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = AutomationHostReviewDiagnosticsClassifications.IssuePublishReady,
+                    TargetKind = null,
+                    TargetNumber = null,
+                    TargetUrl = null,
+                    Description = $"next-slice candidate provided: {candidateExecutionUnit}",
+                });
+                return Build(
+                    repo,
+                    AutomationHostReviewDiagnosticsClassifications.IssuePublishReady,
+                    $"WIP cap bypassed by operator override; next-slice candidate {candidateExecutionUnit} is ready to publish exactly one prepared issue.",
+                    recommendedNextCommand:
+                        $"intent-cli packet draft --execution-unit {candidateExecutionUnit} --target-repo {repo} --format json"
+                        + $" && intent-cli issue publish-flow {candidateExecutionUnit} --repo {repo} --write --format json"
+                        + $" && intent-cli automation issue-publish --repo {repo} --issue <new-issue-number> --write --format json",
+                    clarification: null,
+                    details,
+                    warnings);
+            }
+
             details.Add(new AutomationHostReviewDiagnosticsDetail
             {
                 Kind = AutomationHostReviewDiagnosticsClassifications.WipCapBlocked,

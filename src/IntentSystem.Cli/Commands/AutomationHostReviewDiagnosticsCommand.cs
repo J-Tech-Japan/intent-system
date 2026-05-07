@@ -50,6 +50,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 out var staleClarificationMetadata,
                 out var reconcileUnsafeStopKinds,
                 out var reconcileRepairsAvailable,
+                out var allowWipCapOverride,
                 out var format,
                 out var error))
         {
@@ -140,7 +141,8 @@ internal static class AutomationHostReviewDiagnosticsCommand
             candidate,
             staleClarificationMetadata,
             reconcileUnsafeStopKinds,
-            reconcileRepairsAvailable);
+            reconcileRepairsAvailable,
+            allowWipCapOverride);
 
         Emit(writer, result, format);
         return 0;
@@ -155,6 +157,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         out bool staleClarificationMetadata,
         out IReadOnlyList<string> reconcileUnsafeStopKinds,
         out int reconcileRepairsAvailable,
+        out bool allowWipCapOverride,
         out string format,
         out string error)
     {
@@ -166,6 +169,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         var unsafeStops = new List<string>();
         reconcileUnsafeStopKinds = unsafeStops;
         reconcileRepairsAvailable = 0;
+        allowWipCapOverride = false;
         format = FormatText;
         error = string.Empty;
 
@@ -227,6 +231,9 @@ internal static class AutomationHostReviewDiagnosticsCommand
                     reconcileRepairsAvailable = repairCount;
                     index++;
                     break;
+                case "--allow-wip-cap-override":
+                    allowWipCapOverride = true;
+                    break;
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -244,7 +251,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                     index++;
                     break;
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--format text|json].";
                     return false;
             }
         }
@@ -313,7 +320,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation host-review-diagnostics");
-        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--format text|json]");
-        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. Never mutates GitHub or local state.");
+        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--format text|json]");
+        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. Never mutates GitHub or local state.");
     }
 }
