@@ -47,6 +47,9 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 out var workdir,
                 out var candidate,
                 out var clarificationRequired,
+                out var staleClarificationMetadata,
+                out var reconcileUnsafeStopKinds,
+                out var reconcileRepairsAvailable,
                 out var format,
                 out var error))
         {
@@ -90,7 +93,9 @@ internal static class AutomationHostReviewDiagnosticsCommand
                         Description = $"installed_cli_path: {surfaceReport.InstalledCliPath}; missing_surfaces: {string.Join(", ", missingSurfaces)}",
                     }
                 ],
-                Warnings = Array.Empty<string>(),
+                Warnings = staleClarificationMetadata
+                    ? new[] { "stale-clarification-metadata" }
+                    : Array.Empty<string>(),
             };
             Emit(writer, stale, format);
             return 1;
@@ -132,7 +137,10 @@ internal static class AutomationHostReviewDiagnosticsCommand
             openPrs,
             publishedIssues,
             clarificationRequired,
-            candidate);
+            candidate,
+            staleClarificationMetadata,
+            reconcileUnsafeStopKinds,
+            reconcileRepairsAvailable);
 
         Emit(writer, result, format);
         return 0;
@@ -144,6 +152,9 @@ internal static class AutomationHostReviewDiagnosticsCommand
         out string? workdir,
         out string? candidate,
         out bool clarificationRequired,
+        out bool staleClarificationMetadata,
+        out IReadOnlyList<string> reconcileUnsafeStopKinds,
+        out int reconcileRepairsAvailable,
         out string format,
         out string error)
     {
@@ -151,6 +162,10 @@ internal static class AutomationHostReviewDiagnosticsCommand
         workdir = null;
         candidate = null;
         clarificationRequired = false;
+        staleClarificationMetadata = false;
+        var unsafeStops = new List<string>();
+        reconcileUnsafeStopKinds = unsafeStops;
+        reconcileRepairsAvailable = 0;
         format = FormatText;
         error = string.Empty;
 
@@ -189,6 +204,29 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 case "--clarification-required":
                     clarificationRequired = true;
                     break;
+                case "--stale-clarification-metadata":
+                    staleClarificationMetadata = true;
+                    break;
+                case "--reconcile-unsafe-stop":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--reconcile-unsafe-stop requires a value (one stop kind per flag; repeat for multiple).";
+                        return false;
+                    }
+                    unsafeStops.Add(args[index + 1].Trim());
+                    index++;
+                    break;
+                case "--reconcile-repairs-available":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var repairCount)
+                        || repairCount < 0)
+                    {
+                        error = "--reconcile-repairs-available requires a non-negative integer value.";
+                        return false;
+                    }
+                    reconcileRepairsAvailable = repairCount;
+                    index++;
+                    break;
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -206,7 +244,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                     index++;
                     break;
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--format text|json].";
                     return false;
             }
         }
@@ -275,7 +313,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation host-review-diagnostics");
-        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--format text|json]");
-        writer.WriteLine("Read-only diagnostic for the host review/next-slice loop. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, candidate-ready, and true-idle. Never mutates GitHub or local state.");
+        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--format text|json]");
+        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. Never mutates GitHub or local state.");
     }
 }

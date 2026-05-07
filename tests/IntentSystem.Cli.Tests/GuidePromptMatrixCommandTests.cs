@@ -682,6 +682,25 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_MentionsConvergenceClassifications_G286()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("issue-publish-ready", prompt, StringComparison.Ordinal);
+        Assert.Contains("unsafe-metadata", prompt, StringComparison.Ordinal);
+        Assert.Contains("repaired-and-retry", prompt, StringComparison.Ordinal);
+        Assert.Contains("--stale-clarification-metadata", prompt, StringComparison.Ordinal);
+        Assert.Contains("--reconcile-unsafe-stop", prompt, StringComparison.Ordinal);
+        Assert.Contains("--reconcile-repairs-available", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostLoopPrompt_MentionsStaleClarificationMetadataAsNonStop_G285()
     {
         using var writer = new StringWriter();

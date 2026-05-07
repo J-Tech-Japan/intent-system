@@ -277,9 +277,15 @@ Loop body (single wake):
    - High-confidence repairs are mechanically provable label drift only; advisory entries point at the existing closeout/packet/next-slice surface and must not be applied through this lane.
    - With operator acceptance: re-run with `--write` to apply only high-confidence repairs through the host-owned reconcile mutator.
    - If `unsafe_stops` is non-empty, stop with structured clarification rather than guessing.
-5. Stage 4 — recovery diagnostics before idle (read-only):
-   - Before reporting a no-actionable / idle wake, run `intent-cli automation host-review-diagnostics --repo {targetRepoPlaceholder} --format json` and report the returned `classification` and `summary` instead of saying no-actionable.
-   - Classifications: `true-idle`, `stuck-reviewing`, `missing-target-on-pr`, `request-update-rereview-conflict`, `wip-cap-blocked`, `clarification-required`, `stale-host-cli`, `review-pr-actionable`, `candidate-ready`. Anything other than `true-idle` is a signal that the loop did not stop because the system is genuinely idle.
+5. Stage 4 — convergence diagnostics before idle (read-only, G286):
+   - Before reporting a no-actionable / idle wake, run `intent-cli automation host-review-diagnostics --repo {targetRepoPlaceholder} --candidate <id?> --format json` and pass the next-slice flags so the diagnostic can converge on a single terminal class:
+     - `--clarification-required` only when `intent next-slice --dry-run` returned `recommended_outcome: clarification-required` with substantive blocker / question text.
+     - `--stale-clarification-metadata` when the next-slice result carried `warnings: [""stale-clarification-metadata""]`. This surfaces in `warnings` without flipping the terminal class (G285 + G286).
+     - `--reconcile-unsafe-stop <kind>` (repeatable) when reconcile reported `unsafe_stops` (e.g. `ambiguous-queue-linkage`).
+     - `--reconcile-repairs-available <N>` when reconcile dry-run produced N high-confidence repairs not yet applied.
+   - Terminal classifications (G286): `true-idle`, `stuck-reviewing`, `missing-target-on-pr`, `request-update-rereview-conflict`, `wip-cap-blocked`, `clarification-required`, `stale-host-cli`, `review-pr-actionable`, `issue-publish-ready`, `unsafe-metadata`, `repaired-and-retry`, `candidate-ready` (legacy alias). Anything other than `true-idle` is a signal that the loop did not stop because the system is genuinely idle.
+   - When `classification: issue-publish-ready`, the `recommended_next_command` is the deterministic publish chain (`packet draft` → `issue publish-flow --write` → `automation issue-publish --write`); proceed without a fresh acceptance prompt.
+   - When `classification: repaired-and-retry`, run `automation reconcile --lane host-review --write` and re-enter the wake. When `classification: unsafe-metadata`, stop with structured clarification — never guess past ambiguous parent state.
    - When the diagnostic surfaces a `recommended_next_command`, surface it to the operator; when it surfaces `structured_clarification`, present background/question/options instead of guessing.
 
 Hard rules:
@@ -402,9 +408,10 @@ Loop body (single wake only — do not repeat):
    - High-confidence repairs are mechanically provable label drift only; advisory entries point at the existing closeout/packet/next-slice surface and must not be applied through this lane.
    - With operator acceptance: re-run with `--write` to apply only high-confidence repairs through the host-owned reconcile mutator.
    - If `unsafe_stops` is non-empty, stop with structured clarification rather than guessing.
-5. Stage 4 — recovery diagnostics before idle (read-only):
-   - Before reporting a no-actionable / idle wake, run `intent-cli automation host-review-diagnostics --repo {targetRepoPlaceholder} --format json` and report the returned `classification` and `summary` instead of saying no-actionable.
-   - Anything other than `true-idle` (stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, candidate-ready) is a signal the system is not genuinely idle; surface the `recommended_next_command` or `structured_clarification` to the operator.
+5. Stage 4 — convergence diagnostics before idle (read-only, G286):
+   - Before reporting a no-actionable / idle wake, run `intent-cli automation host-review-diagnostics --repo {targetRepoPlaceholder} --candidate <id?> --format json` and pass `--clarification-required`, `--stale-clarification-metadata`, `--reconcile-unsafe-stop <kind>` (repeatable), and `--reconcile-repairs-available <N>` flags so the diagnostic converges on a single terminal class.
+   - Terminal classifications (G286): `true-idle`, `stuck-reviewing`, `missing-target-on-pr`, `request-update-rereview-conflict`, `wip-cap-blocked`, `clarification-required`, `stale-host-cli`, `review-pr-actionable`, `issue-publish-ready`, `unsafe-metadata`, `repaired-and-retry`, `candidate-ready` (legacy alias). Anything other than `true-idle` is a signal the system is not genuinely idle; surface the `recommended_next_command` or `structured_clarification` to the operator.
+   - When `classification: unsafe-metadata`, stop with structured clarification. When `classification: repaired-and-retry`, apply the safe reconcile and retry the wake.
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files for routine review/closeout. Use `intent-cli guide ...` and `intent-cli automation ...` instead.

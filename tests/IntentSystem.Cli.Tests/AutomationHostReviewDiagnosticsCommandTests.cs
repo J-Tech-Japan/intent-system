@@ -207,8 +207,13 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_CandidateProvidedWithoutWipOrPr_ClassifiesCandidateReady()
+    public void Execute_CandidateProvidedWithoutWipOrPr_ClassifiesIssuePublishReady_G286()
     {
+        // G286: candidate-ready was renamed to issue-publish-ready, and the
+        // recommended_next_command is now the deterministic publish chain
+        // (`packet draft` → `issue publish-flow --write` → `automation
+        // issue-publish --write`) so the host loop can converge without an
+        // extra acceptance prompt.
         using var workspace = new HostReviewDiagnosticsWorkspace();
         AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
 
@@ -220,8 +225,95 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
-        Assert.Equal("candidate-ready", result.Classification);
+        Assert.Equal("issue-publish-ready", result.Classification);
         Assert.Contains("G99", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Contains("packet draft", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Contains("issue publish-flow", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Contains("automation issue-publish", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_StaleClarificationMetadata_SurfacesAsWarningWithoutFlippingClass_G286()
+    {
+        // G286: stale clarification metadata surfaces in `warnings` without
+        // flipping the terminal class. issue-publish-ready remains.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G99", "--stale-clarification-metadata", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("issue-publish-ready", result.Classification);
+        Assert.Contains("stale-clarification-metadata", result.Warnings);
+    }
+
+    [Fact]
+    public void Execute_ReconcileUnsafeStop_ClassifiesUnsafeMetadata_G286()
+    {
+        // G286: an unsafe stop kind (e.g. ambiguous-queue-linkage) trumps every
+        // candidate / WIP / true-idle classification — the host loop must stop
+        // with structured clarification.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G99", "--reconcile-unsafe-stop", "ambiguous-queue-linkage", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("unsafe-metadata", result.Classification);
+        Assert.Contains("ambiguous-queue-linkage", result.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ReconcileHighConfidenceRepairsAvailable_NoCandidate_ClassifiesRepairedAndRetry_G286()
+    {
+        // G286: when reconcile has unapplied high-confidence repairs and no
+        // other terminal class fits, surface `repaired-and-retry` so the host
+        // loop knows to apply the safe repair and retry the wake rather than
+        // reporting a misleading `true-idle`.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--reconcile-repairs-available", "2", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("repaired-and-retry", result.Classification);
+        Assert.Contains("reconcile", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Contains("--write", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ReconcileRepairsAvailableButCandidatePresent_PrefersIssuePublishReady_G286()
+    {
+        // G286: when both a publish-ready candidate AND unapplied repairs are
+        // present, the candidate-publish path wins — repairs surface as
+        // advisory follow-up. The host loop should publish first.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G99", "--reconcile-repairs-available", "1", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("issue-publish-ready", result.Classification);
     }
 
     [Fact]
