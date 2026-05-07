@@ -571,6 +571,134 @@ public sealed class AutomationReconcileCommandTests : IDisposable
             string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal));
     }
 
+    // ── G291: conflicting linked_pr ────────────────────────────────────
+
+    [Fact]
+    public void Execute_G291_QueueItemHasDifferentLinkedPr_EmitsConflictingLinkedPrUnsafeStop()
+    {
+        // Queue item already points at a DIFFERENT PR than the one closing the
+        // source issue. Two PRs claiming the same queue row is unsafe to
+        // overwrite — operator must clarify.
+        using var workspace = new ReconcileWorkspace();
+        workspace.SeedQueueState(
+            ("G289", "G289 source unit", "J-Tech-Japan/intent-system", 681,
+                "https://github.com/J-Tech-Japan/intent-system/pull/600"));
+
+        AutomationReconcileCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(682, "selected for review", "https://github.com/J-Tech-Japan/intent-system/pull/682",
+                    body: "Closes #681", labels: ["intent-target"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(681, "G289 src", "https://github.com/J-Tech-Japan/intent-system/issues/681",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+
+        var conflict = Assert.Single(result.UnsafeStops, s =>
+            string.Equals(s.Kind, AutomationReconcileUnsafeStopKinds.ConflictingLinkedPr, StringComparison.Ordinal));
+        Assert.Equal("queue-state", conflict.TargetKind);
+        Assert.Equal(681, conflict.TargetNumber);
+        Assert.Contains("/pull/600", conflict.Reason, StringComparison.Ordinal);
+        // No high-confidence linked_pr write must be emitted alongside the conflict.
+        Assert.DoesNotContain(result.SafeRepairs, r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G291_PR682Shaped_EmptyLinkedPrAndUniqueQueueItem_EmitsHighConfidenceRepair()
+    {
+        // Replays the PR #682 / issue #681 / G289 queue item scenario: PR
+        // closes a single published intent-target issue uniquely linked to
+        // exactly one queue item with empty linked_pr → high-confidence
+        // queue-state write, no conflicting-linked-pr unsafe stop.
+        using var workspace = new ReconcileWorkspace();
+        workspace.SeedQueueState(
+            ("G289", "G289 source unit", "J-Tech-Japan/intent-system", 681, null));
+
+        AutomationReconcileCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(682, "G289 PR", "https://github.com/J-Tech-Japan/intent-system/pull/682",
+                    body: "Closes #681", labels: ["intent-target"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(681, "G289 src", "https://github.com/J-Tech-Japan/intent-system/issues/681",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+
+        var repair = Assert.Single(result.SafeRepairs, r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal));
+        Assert.Equal(AutomationReconcileConfidence.High, repair.Confidence);
+        Assert.Equal("G289", repair.QueueStateExecutionUnit);
+        Assert.Equal(682, repair.PrNumberToLink);
+        Assert.Contains("no current linked_pr (empty)", string.Join(" | ", repair.Evidence), StringComparison.Ordinal);
+        Assert.DoesNotContain(result.UnsafeStops, s =>
+            string.Equals(s.Kind, AutomationReconcileUnsafeStopKinds.ConflictingLinkedPr, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G291_LinkedPrAlreadyMatchesPr_NoRepairOrUnsafeStop()
+    {
+        // Idempotent regression guard: when the queue item's linked_pr already
+        // matches the closing PR, no repair AND no conflict are emitted.
+        using var workspace = new ReconcileWorkspace();
+        workspace.SeedQueueState(
+            ("G289", "already linked", "J-Tech-Japan/intent-system", 681,
+                "https://github.com/J-Tech-Japan/intent-system/pull/682"));
+
+        AutomationReconcileCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(682, "G289 PR", "https://github.com/J-Tech-Japan/intent-system/pull/682",
+                    body: "Closes #681", labels: ["intent-target"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(681, "G289 src", "https://github.com/J-Tech-Japan/intent-system/issues/681",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+        Assert.DoesNotContain(result.SafeRepairs, r =>
+            string.Equals(r.Type, AutomationReconcileRepairTypes.MissingLinkedPrMetadata, StringComparison.Ordinal));
+        Assert.DoesNotContain(result.UnsafeStops, s =>
+            string.Equals(s.Kind, AutomationReconcileUnsafeStopKinds.ConflictingLinkedPr, StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Execute_WithoutQueueState_KeepsLinkedPrRepairAdvisory()
     {
