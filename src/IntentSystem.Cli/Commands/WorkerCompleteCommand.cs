@@ -1,4 +1,6 @@
 using System.Text.Json;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -57,11 +59,24 @@ internal static class WorkerCompleteCommand
                 out var kind,
                 out var number,
                 out var outcome,
+                out var prNumber,
                 out var mode,
                 out var format,
                 out var error))
         {
             writer.WriteLine(error);
+            return 1;
+        }
+
+        // G283: issue-to-pr success requires the created PR number so the
+        // command can publish it to host review (PR-side intent-target) and
+        // sync parent linked_pr metadata. Refuse rather than silently
+        // succeed without publishing the PR.
+        var isPrCreatedOutcome = string.Equals(kind, GhCliGitHubLabelMutator.Kinds.Issue, StringComparison.Ordinal)
+            && string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.PrCreated, StringComparison.Ordinal);
+        if (isPrCreatedOutcome && prNumber is null)
+        {
+            writer.WriteLine("--pr is required when --kind issue --outcome pr-created (created PR number publishes intent-target to host review).");
             return 1;
         }
 
@@ -94,25 +109,101 @@ internal static class WorkerCompleteCommand
 
         var currentNames = LabelNames(currentLabels);
         var decision = WorkerCompleteAnalyzer.Analyze(kind!, outcome!, currentNames);
+        var isAlreadyPrCreatedIssue = isPrCreatedOutcome
+            && currentNames.Contains(WorkerResultSummaryConstants.Labels.IntentPrCreated, StringComparer.Ordinal);
 
         var applied = false;
-        if (decision.Proceed
+        bool? prTargetApplied = null;
+        bool? linkedPrSynced = null;
+        var publishWarnings = new List<string>();
+        var publishErrors = new List<string>();
+        var shouldPublishPr = isPrCreatedOutcome && prNumber is { } && (decision.Proceed || isAlreadyPrCreatedIssue);
+        if ((decision.Proceed || isAlreadyPrCreatedIssue)
             && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
         {
-            try
+            if (decision.Proceed)
             {
-                mutator.ApplyLabelTransitions(
-                    repo!, kind!, number, decision.AddLabels, decision.RemoveLabels);
-                applied = true;
+                try
+                {
+                    mutator.ApplyLabelTransitions(
+                        repo!, kind!, number, decision.AddLabels, decision.RemoveLabels);
+                    applied = true;
+                }
+                catch (Exception exception) when (
+                    exception is InvalidOperationException
+                    or IOException)
+                {
+                    writer.WriteLine(
+                        $"failed to apply complete transition on {kind} #{number} in {repo}: {exception.Message}");
+                    return 1;
+                }
             }
-            catch (Exception exception) when (
-                exception is InvalidOperationException
-                or IOException)
+            else if (isAlreadyPrCreatedIssue)
             {
-                writer.WriteLine(
-                    $"failed to apply complete transition on {kind} #{number} in {repo}: {exception.Message}");
-                return 1;
+                publishWarnings.Add(
+                    $"source issue #{number.ToString(System.Globalization.CultureInfo.InvariantCulture)} already carries '{WorkerResultSummaryConstants.Labels.IntentPrCreated}'; issue-side completion was skipped while repairing PR publication metadata.");
             }
+
+            // G283: pr-created on an issue must also publish PR-side intent-target
+            // and sync parent queue-state linked_pr so host review automation can
+            // pick up the PR. The created-PR write happens only after the
+            // issue-side mutation succeeded; if the PR write fails, surface
+            // an error and refuse to claim full completion.
+            if (shouldPublishPr && prNumber is { } prNumberValue)
+            {
+                try
+                {
+                    mutator.ApplyLabelTransitions(
+                        repo!,
+                        GhCliGitHubLabelMutator.Kinds.Pr,
+                        prNumberValue,
+                        new[] { WorkerNextActionConstants.Labels.IntentTarget },
+                        Array.Empty<string>());
+                    prTargetApplied = true;
+                    applied = true;
+                }
+                catch (Exception exception) when (
+                    exception is InvalidOperationException
+                    or IOException)
+                {
+                    prTargetApplied = false;
+                    publishErrors.Add(
+                        $"failed to apply '{WorkerNextActionConstants.Labels.IntentTarget}' to PR #{prNumberValue} in {repo}: {exception.Message}. Source issue completion was applied but PR review publication is incomplete; reconcile via 'intent-cli automation reconcile' before re-running.");
+                }
+
+                if (prTargetApplied == true)
+                {
+                    var (synced, warning) = TryPatchQueueStateLinkedPr(context, number, repo!, prNumberValue);
+                    linkedPrSynced = synced;
+                    if (!string.IsNullOrWhiteSpace(warning))
+                    {
+                        publishWarnings.Add(warning);
+                    }
+                }
+            }
+        }
+
+        var summary = decision.Summary;
+        var proceed = decision.Proceed;
+        var baseErrors = isAlreadyPrCreatedIssue
+            && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
+            && publishErrors.Count == 0
+            ? Array.Empty<string>()
+            : decision.Errors;
+        var aggregatedErrors = baseErrors.Concat(publishErrors).ToArray();
+        var aggregatedWarnings = decision.Warnings.Concat(publishWarnings).ToArray();
+        if (publishErrors.Count > 0)
+        {
+            proceed = false;
+            applied = false;
+            summary = $"Issue-to-PR completion partially applied: source issue updated, but PR review publication failed for PR #{prNumber}.";
+        }
+        else if (isAlreadyPrCreatedIssue
+            && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
+            && prTargetApplied == true)
+        {
+            proceed = true;
+            summary = $"Issue-to-PR completion was already recorded on source issue; ensured PR review publication metadata for PR #{prNumber}.";
         }
 
         var result = new WorkerCompleteResult
@@ -122,14 +213,17 @@ internal static class WorkerCompleteCommand
             Number = number,
             Outcome = outcome!,
             Mode = mode,
-            Proceed = decision.Proceed,
+            Proceed = proceed,
             Applied = applied,
             AddLabels = decision.AddLabels,
             RemoveLabels = decision.RemoveLabels,
             CurrentLabels = currentNames,
-            Errors = decision.Errors,
-            Warnings = decision.Warnings,
-            Summary = decision.Summary,
+            Errors = aggregatedErrors,
+            Warnings = aggregatedWarnings,
+            Summary = summary,
+            PrNumber = prNumber,
+            PrTargetApplied = prTargetApplied,
+            LinkedPrSynced = linkedPrSynced,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -141,7 +235,92 @@ internal static class WorkerCompleteCommand
             WriteText(writer, result);
         }
 
-        return decision.Proceed ? 0 : 2;
+        return proceed ? 0 : 2;
+    }
+
+    /// <summary>
+    /// G283: sync the matching execution-unit's <c>linked_pr</c> in
+    /// <c>.intent-cli/queue-state.json</c> when an issue→PR completion
+    /// can be deterministically resolved (queue item's
+    /// <c>linked_issue.number</c> matches the source issue number).
+    /// Returns <c>(synced, warning)</c>; <c>warning</c> is non-empty when
+    /// the file is missing or no item matches, so the operator can tell
+    /// PR-side label success apart from queue-state drift.
+    /// </summary>
+    private static (bool synced, string? warning) TryPatchQueueStateLinkedPr(
+        CliContext context,
+        int sourceIssueNumber,
+        string repo,
+        int prNumber)
+    {
+        var queueStatePath = ResolveQueueStatePath(context);
+        if (!File.Exists(queueStatePath))
+        {
+            return (false, $"queue-state.json not found at {queueStatePath}; PR-side intent-target was applied but linked_pr could not be synced. Reconcile via 'intent-cli automation reconcile' if this host owns the parent durable state.");
+        }
+
+        try
+        {
+            var raw = File.ReadAllText(queueStatePath);
+            var queueState = QueueStateSerializer.Deserialize(raw);
+            var matchedIndex = -1;
+            for (var index = 0; index < queueState.Items.Count; index++)
+            {
+                var linkedIssue = queueState.Items[index].LinkedIssue;
+                if (linkedIssue is { Number: { } linkedNumber } && linkedNumber == sourceIssueNumber)
+                {
+                    matchedIndex = index;
+                    break;
+                }
+            }
+
+            if (matchedIndex < 0)
+            {
+                return (false, $"queue-state.json has no item with linked_issue.number={sourceIssueNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)}; PR-side intent-target was applied but linked_pr could not be synced.");
+            }
+
+            var existingItem = queueState.Items[matchedIndex];
+            var prUrl = $"https://github.com/{repo}/pull/{prNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+            if (string.Equals(existingItem.LinkedPr, prUrl, StringComparison.Ordinal))
+            {
+                return (true, null);
+            }
+
+            var updatedItem = existingItem with { LinkedPr = prUrl };
+            var newItems = queueState.Items.ToArray();
+            newItems[matchedIndex] = updatedItem;
+            var updatedState = queueState with
+            {
+                Items = newItems,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
+            return (true, null);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or System.Text.Json.JsonException)
+        {
+            return (false, $"failed to sync linked_pr for issue #{sourceIssueNumber} in queue-state.json: {exception.Message}");
+        }
+    }
+
+    private static string ResolveQueueStatePath(CliContext context)
+    {
+        var localQueueStatePath = context.GetQueueStatePath();
+        if (File.Exists(localQueueStatePath))
+        {
+            return localQueueStatePath;
+        }
+
+        var parentRoot = context.ResolveParentIntentRepoRootPath();
+        if (string.IsNullOrWhiteSpace(parentRoot))
+        {
+            return localQueueStatePath;
+        }
+
+        var parentQueueStatePath = CliRuntimeContracts.GetQueueStatePath(parentRoot);
+        return File.Exists(parentQueueStatePath)
+            ? parentQueueStatePath
+            : localQueueStatePath;
     }
 
     private static IReadOnlyList<string> LabelNames(IReadOnlyList<GitHubAutomationLabel>? labels)
@@ -209,6 +388,7 @@ internal static class WorkerCompleteCommand
         out string? kind,
         out int number,
         out string? outcome,
+        out int? prNumber,
         out string mode,
         out string format,
         out string error)
@@ -217,6 +397,7 @@ internal static class WorkerCompleteCommand
         kind = null;
         number = 0;
         outcome = null;
+        prNumber = null;
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
         format = FormatText;
         error = string.Empty;
@@ -226,6 +407,19 @@ internal static class WorkerCompleteCommand
             var argument = args[index];
             switch (argument)
             {
+                case "--pr":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer,
+                            System.Globalization.CultureInfo.InvariantCulture, out var parsedPr)
+                        || parsedPr <= 0)
+                    {
+                        error = "--pr requires a positive integer.";
+                        return false;
+                    }
+                    prNumber = parsedPr;
+                    index++;
+                    break;
+
                 case "--repo":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -295,7 +489,7 @@ internal static class WorkerCompleteCommand
 
                 default:
                     error =
-                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --kind <issue|pr> --number <N> --outcome <outcome> [--write] [--dry-run] [--format text|json].";
+                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --kind <issue|pr> --number <N> --outcome <outcome> [--pr <N>] [--write] [--dry-run] [--format text|json].";
                     return false;
             }
         }

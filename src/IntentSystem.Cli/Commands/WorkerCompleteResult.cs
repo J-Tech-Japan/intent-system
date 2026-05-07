@@ -67,4 +67,25 @@ internal sealed record WorkerCompleteResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    /// <summary>G283: PR number paired with this issue completion when outcome is pr-created.</summary>
+    [JsonPropertyName("pr_number")]
+    public int? PrNumber { get; init; }
+
+    [JsonPropertyName("prNumber")]
+    public int? PrNumberCamel => PrNumber;
+
+    /// <summary>G283: whether PR-side intent-target was applied as part of issue-to-pr completion.</summary>
+    [JsonPropertyName("pr_target_applied")]
+    public bool? PrTargetApplied { get; init; }
+
+    [JsonPropertyName("prTargetApplied")]
+    public bool? PrTargetAppliedCamel => PrTargetApplied;
+
+    /// <summary>G283: whether queue-state's linked_pr was synced for the matching execution unit.</summary>
+    [JsonPropertyName("linked_pr_synced")]
+    public bool? LinkedPrSynced { get; init; }
+
+    [JsonPropertyName("linkedPrSynced")]
+    public bool? LinkedPrSyncedCamel => LinkedPrSynced;
 }

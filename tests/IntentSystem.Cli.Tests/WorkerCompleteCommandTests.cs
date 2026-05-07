@@ -3,6 +3,8 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -46,6 +48,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 "--kind", "issue",
                 "--number", "525",
                 "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
                 "--format", "json",
             },
             writer);
@@ -64,7 +67,55 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_IssuePrCreatedOutcome_WriteModeAppliesSwap()
+    public void Execute_IssuePrCreatedOutcome_WriteModeAppliesSwapAndPublishesPrIntentTarget()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Applied);
+        Assert.Equal(999, result.PrNumber);
+        Assert.True(result.PrTargetApplied);
+
+        // G283: two writer calls — one for the source issue swap, one for the PR intent-target publish.
+        Assert.Equal(2, mutator.AppliedTransitions.Count);
+        var issueWrite = mutator.AppliedTransitions[0];
+        Assert.Equal("issue", issueWrite.Kind);
+        Assert.Equal(525, issueWrite.Number);
+        Assert.Contains("intent-pr-created", issueWrite.AddLabels);
+        Assert.Contains("intent-issue-in-progress", issueWrite.RemoveLabels);
+
+        var prWrite = mutator.AppliedTransitions[1];
+        Assert.Equal("pr", prWrite.Kind);
+        Assert.Equal(999, prWrite.Number);
+        Assert.Contains("intent-target", prWrite.AddLabels);
+        Assert.DoesNotContain("intent-pr-created", prWrite.AddLabels);
+    }
+
+    // ── G283: PR review publication during issue-to-pr completion ─────
+
+    [Fact]
+    public void Execute_IssuePrCreatedOutcomeWithoutPr_ReturnsUsageError()
     {
         using var workspace = new WorkerCompleteWorkspace();
         var mutator = new FakeMutator
@@ -87,13 +138,263 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             },
             writer);
 
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--pr is required", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_IssuePrCreatedOutcomeWithPr_AppliesIntentTargetToPrAndSyncsLinkedPr()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.SeedQueueStateWithLinkedIssue(
+            executionUnit: "G283",
+            title: "G283 source unit",
+            sourceIssueNumber: 525);
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
         Assert.True(result.Applied);
-        Assert.Single(mutator.AppliedTransitions);
-        var applied = mutator.AppliedTransitions[0];
-        Assert.Contains("intent-pr-created", applied.AddLabels);
-        Assert.Contains("intent-issue-in-progress", applied.RemoveLabels);
+        Assert.Equal(999, result.PrNumber);
+        Assert.True(result.PrTargetApplied);
+        Assert.True(result.LinkedPrSynced);
+
+        // Mutator received: (1) issue-side swap, (2) PR-side intent-target add.
+        Assert.Equal(2, mutator.AppliedTransitions.Count);
+        Assert.Contains(mutator.AppliedTransitions, t =>
+            t.Kind == "pr" && t.Number == 999
+            && t.AddLabels.Contains("intent-target")
+            && !t.AddLabels.Contains("intent-pr-created"));
+
+        // Queue-state linked_pr is synced for the matching unit.
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var item = Assert.Single(queueState.Items);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/999", item.LinkedPr);
+    }
+
+    [Fact]
+    public void Execute_IssuePrCreatedOutcomeWithParentIntentRoot_SyncsParentQueueStateLinkedPr()
+    {
+        using var parentWorkspace = new WorkerCompleteWorkspace();
+        parentWorkspace.SeedQueueStateWithLinkedIssue(
+            executionUnit: "G283",
+            title: "G283 source unit",
+            sourceIssueNumber: 525);
+        using var childWorkspace = new WorkerCompleteWorkspace(parentIntentRepoRoot: parentWorkspace.RootPath);
+        Assert.False(File.Exists(childWorkspace.QueueStatePath));
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            childWorkspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.LinkedPrSynced);
+        Assert.False(File.Exists(childWorkspace.QueueStatePath));
+
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(parentWorkspace.QueueStatePath));
+        var item = Assert.Single(queueState.Items);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/999", item.LinkedPr);
+    }
+
+    [Fact]
+    public void Execute_PrTargetApplicationFailure_ReportsIncompleteWithReconcileGuidance()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FailingPrMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(2, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.False(result.Proceed);
+        Assert.False(result.Applied);
+        Assert.False(result.PrTargetApplied);
+        Assert.Contains(result.Errors, e =>
+            e.Contains("intent-target", StringComparison.Ordinal)
+            && e.Contains("PR #999", StringComparison.Ordinal)
+            && e.Contains("automation reconcile", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_IssuePrCreatedOutcome_LinkedPrSyncWarnsWhenQueueStateAbsent()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        // intentionally do NOT seed queue-state.json
+        Assert.False(File.Exists(workspace.QueueStatePath));
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.True(result.PrTargetApplied);
+        Assert.False(result.LinkedPrSynced);
+        Assert.Contains(result.Warnings, w => w.Contains("queue-state.json not found", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_IssuePrCreatedRerunIdempotent_DoesNotDoubleSyncLinkedPr()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.SeedQueueStateWithLinkedIssue(
+            executionUnit: "G283",
+            title: "G283 unit",
+            sourceIssueNumber: 525,
+            existingLinkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/999");
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        var beforeBytes = File.ReadAllBytes(workspace.QueueStatePath);
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.LinkedPrSynced);
+        // queue-state.json is unchanged when linked_pr already matches.
+        var afterBytes = File.ReadAllBytes(workspace.QueueStatePath);
+        Assert.Equal(beforeBytes, afterBytes);
+    }
+
+    [Fact]
+    public void Execute_IssuePrCreatedAlreadyRecordedWithMissingLinkedPr_RepairsPrPublicationMetadata()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        workspace.SeedQueueStateWithLinkedIssue(
+            executionUnit: "G283",
+            title: "G283 unit",
+            sourceIssueNumber: 525);
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-created" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.True(result.Applied);
+        Assert.True(result.PrTargetApplied);
+        Assert.True(result.LinkedPrSynced);
+        Assert.Empty(result.Errors);
+
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Equal("pr", transition.Kind);
+        Assert.Equal(999, transition.Number);
+        Assert.Contains("intent-target", transition.AddLabels);
+
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var item = Assert.Single(queueState.Items);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/999", item.LinkedPr);
     }
 
     [Fact]
@@ -115,6 +416,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 "--kind", "issue",
                 "--number", "525",
                 "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
                 "--write",
                 "--format", "json",
             },
@@ -147,6 +449,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 "--kind", "issue",
                 "--number", "525",
                 "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
                 "--format", "json",
             },
             writer);
@@ -488,6 +791,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 "--kind", "issue",
                 "--number", "525",
                 "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
                 "--format", "json",
             },
             writer);
@@ -526,6 +830,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 "--kind", "issue",
                 "--number", "525",
                 "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
                 "--write",
                 "--format", "json",
             },
@@ -555,6 +860,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                     "--kind", "issue",
                     "--number", "525",
                     "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                    "--pr", "999",
                     "--format", "json",
                 },
                 writer));
@@ -660,6 +966,46 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             throw new NotSupportedException("reconcile path not exercised by these tests");
     }
 
+    /// <summary>G283: variant that throws on PR-side intent-target writes so tests can
+    /// assert the partial-failure path (issue swap applied, PR publish failed).</summary>
+    internal sealed class FailingPrMutator : IGitHubLabelMutator
+    {
+        public IReadOnlyList<string> Labels { get; init; } = Array.Empty<string>();
+        public List<AppliedTransition> AppliedTransitions { get; } = new();
+
+        public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number) =>
+            Labels.Select(n => new GitHubAutomationLabel { Name = n }).ToArray();
+
+        public void ApplyLabelTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels)
+        {
+            if (string.Equals(kind, "pr", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("simulated PR-side mutator failure");
+            }
+            AppliedTransitions.Add(new AppliedTransition
+            {
+                Repo = repo,
+                Kind = kind,
+                Number = number,
+                AddLabels = addLabels.ToArray(),
+                RemoveLabels = removeLabels.ToArray(),
+            });
+        }
+
+        public void ApplyReconcileTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels) =>
+            throw new NotSupportedException("reconcile path not exercised by these tests");
+    }
+
     internal sealed record AppliedTransition
     {
         public required string Repo { get; init; }
@@ -671,7 +1017,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
 
     private sealed class WorkerCompleteWorkspace : IDisposable
     {
-        public WorkerCompleteWorkspace()
+        public WorkerCompleteWorkspace(string parentIntentRepoRoot = "")
         {
             RootPath = Directory.CreateTempSubdirectory("worker-complete-tests-").FullName;
             Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
@@ -683,7 +1029,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                     Project = new ProjectConfig
                     {
                         Domain = "intent-cli",
-                        ArtifactRoot = ".intent-cli"
+                        ArtifactRoot = ".intent-cli",
+                        ParentIntentRepoRoot = parentIntentRepoRoot
                     }
                 }
             };
@@ -691,6 +1038,53 @@ public sealed class WorkerCompleteCommandTests : IDisposable
 
         public string RootPath { get; }
         public CliContext Context { get; }
+
+        public string QueueStatePath => Path.Combine(RootPath, ".intent-cli", "queue-state.json");
+
+        /// <summary>G283: seed queue-state.json with a single execution-unit row whose
+        /// linked_issue.number matches the source issue, optionally pre-filling linked_pr
+        /// (for the idempotent rerun test).</summary>
+        public void SeedQueueStateWithLinkedIssue(
+            string executionUnit,
+            string title,
+            int sourceIssueNumber,
+            string? existingLinkedPr = null)
+        {
+            var state = new QueueState
+            {
+                SchemaVersion = "1",
+                UpdatedAt = new DateTimeOffset(2026, 5, 7, 0, 0, 0, TimeSpan.Zero),
+                Items =
+                [
+                    new QueueItem
+                    {
+                        ExecutionUnit = executionUnit,
+                        Title = title,
+                        State = QueueItemState.Queued,
+                        Dependencies = Array.Empty<string>(),
+                        BlockedBy = Array.Empty<string>(),
+                        ClarificationReturnPath = string.Empty,
+                        PacketPaths = new PacketPaths
+                        {
+                            Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
+                            ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
+                            Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                        },
+                        LinkedIssue = new LinkedIssue
+                        {
+                            Repo = "J-Tech-Japan/intent-system",
+                            Number = sourceIssueNumber,
+                            Url = $"https://github.com/J-Tech-Japan/intent-system/issues/{sourceIssueNumber}",
+                        },
+                        LinkedPr = existingLinkedPr,
+                        WorkerRole = "child-impl",
+                        ReviewRole = "host-review",
+                        Priority = "normal",
+                    }
+                ]
+            };
+            File.WriteAllText(QueueStatePath, QueueStateSerializer.Serialize(state));
+        }
 
         public IReadOnlyDictionary<string, string> SnapshotWorkspace()
         {
