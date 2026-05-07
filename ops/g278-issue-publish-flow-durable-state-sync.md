@@ -1,0 +1,76 @@
+# G278 Fix issue publish-flow durable state synchronization
+
+## Why this slice
+
+Publishing G277 created GitHub issue #657 but left
+`.intent-cli/queue-state.json` `linked_issue` and
+`.intent-cli/issues/G277/publish.yaml` null/drafted, so host-side manual
+repair was needed. `intent-cli issue publish-flow --write` must atomically
+reflect GitHub issue creation in parent durable artifacts before reporting
+success, so queue-state, publish.yaml, and runs.jsonl cannot drift from the
+created issue.
+
+## What changed
+
+- `intent-cli issue publish-flow --write` now updates three durable
+  artifacts in the same wake after the GitHub issue is created:
+  - `queue-state.json` — the matching execution-unit's
+    `linked_issue` is filled with `{ repo, number, url }` and
+    `updated_at` advances.
+  - `.intent-cli/issues/<execution-unit>/publish.yaml` — `publish_status`
+    advances to `issue-created` with the GitHub issue number/URL.
+  - `.intent-cli/runs.jsonl` — an `issue-created` event is appended
+    (one per successful create).
+- Re-running `--write` after a successful create is **idempotent**.
+  Two independent artifacts can short-circuit the rerun before any
+  `gh issue create` call:
+  - `publish.yaml` with `publish_status: issue-created` and a non-empty
+    `created_issue_url`, OR
+  - `queue-state.json` whose matching execution-unit already has
+    `linked_issue` populated.
+  Either match returns `created: false`, `idempotent: true`,
+  `durable_state_synced: true` and performs no GitHub call and no
+  durable-state writes, so a stale or missing `publish.yaml` cannot
+  cause a duplicate child issue when queue-state already records the
+  link.
+- If `gh issue create` fails, no durable artifact is mutated.
+- If a durable write fails after the GitHub issue is created, the result
+  reports `created: false`, `durable_state_synced: false`, returns exit
+  code `1`, and points the operator at
+  `intent-cli automation reconcile` for repair. The command never claims
+  `created: true` while local artifacts remain unmodified.
+- The success path now requires all three artifacts to be patched.
+  If `queue-state.json` is missing entirely or has no item with the
+  given `execution_unit`, the command returns exit code `1` with
+  `created: false`, `durable_state_synced: false`,
+  `queue_state_patched: false`, and an actionable
+  `error` message naming the missing artifact and pointing at
+  `intent-cli automation reconcile` (or operator-driven seeding) before
+  re-running. Same treatment applies if `publish.yaml` or `runs.jsonl`
+  silently fails to patch.
+- Dry-run mode (no `--write`) remains read-only.
+
+## Boundaries
+
+- The command never applies `intent-target`. Use
+  `intent-cli automation issue-publish --write` at the explicit publish
+  boundary.
+- The command does not mutate the GitHub issue body, labels, or any
+  field other than the local durable artifacts described above.
+- Workflow label transitions remain CLI-owned; no raw `gh` label
+  fallback is introduced by this slice.
+
+## Verification
+
+```bash
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
+  --filter "FullyQualifiedName~IssuePublishFlowCommandTests"
+
+git diff --check
+```
+
+Focused tests cover: create-success patches all three artifacts and
+appends exactly one `issue-created` event; idempotent rerun does not
+call `gh` and does not append a duplicate event; create-failure leaves
+queue-state/publish.yaml/runs unchanged; dry-run never writes; the
+output never claims `created: true` without a synced durable state.
