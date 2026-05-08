@@ -50,7 +50,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationPrimary,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Read-only domain status / search / explain / next-slice planning, plus draft-from-interview (write requires --write)."
+            Purpose = "Host-domain init (`intent init --domain <name> [--target-repo <owner/repo>] [--write]`) plus read-only status / search / explain / next-slice planning and draft-from-interview (write requires --write)."
         },
         new CommandGroupEntry
         {
