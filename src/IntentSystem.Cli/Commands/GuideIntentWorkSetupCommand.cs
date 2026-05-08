@@ -467,6 +467,11 @@ Hard rules:
         writer.WriteLine(result.WorktreeFriendly);
         writer.WriteLine();
 
+        writer.WriteLine("## Final-report audit (G295)");
+        writer.WriteLine();
+        writer.WriteLine(result.FinalReportAudit);
+        writer.WriteLine();
+
         writer.WriteLine("## Prompt");
         writer.WriteLine();
         writer.WriteLine("```text");
@@ -610,4 +615,13 @@ internal sealed record GuideIntentWorkSetupResult
 
     [JsonPropertyName("worktree_friendly")]
     public required string WorktreeFriendly { get; init; }
+
+    /// <summary>
+    /// G295: every intent-work setup result reminds the agent to emit the
+    /// canonical audit trace at the end of the session. The actual template
+    /// lives in <c>intent-cli guide intent-work audit</c>.
+    /// </summary>
+    [JsonPropertyName("final_report_audit")]
+    public string FinalReportAudit { get; init; } =
+        "Final operator summary must include the audit trace from `intent-cli guide intent-work audit --domain <name> --target-repo <owner/repo>`. The audit template distinguishes read-only guidance/status/search calls from mutation calls and lists the forbidden sources that were not consulted (intents/rules/**, local skill files, copied prompt files), so the operator can verify the session ran through intent-cli surfaces.";
 }
