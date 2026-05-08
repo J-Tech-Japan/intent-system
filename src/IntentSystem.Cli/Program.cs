@@ -29,9 +29,16 @@ internal static class Program
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
             }
 
-            var repoRoot = RepoRootResolver.Resolve(currentDirectory)
-                ?? throw new InvalidOperationException(
-                    $"Could not find {CliRuntimeContracts.IntentCliDirectoryName} directory from '{currentDirectory}'.");
+            var repoRoot = RepoRootResolver.Resolve(currentDirectory);
+            if (repoRoot is null)
+            {
+                // G299: fail-closed structured guidance instead of the bare
+                // "Could not find .intent-cli directory" error. The bare
+                // error encouraged agents to fall back to ordinary GitHub
+                // review or raw PR comments when invoked from a child
+                // implementation checkout that has no `.intent-cli/`.
+                return MissingHostStateGuidance.Emit(Console.Out, args, currentDirectory);
+            }
 
             var context = new CliContext
             {
