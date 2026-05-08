@@ -594,6 +594,151 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         Assert.Contains("issue publish-flow", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // ── G298 execution-unit prefix in published title ────────────────────
+
+    [Fact]
+    public void Execute_G298_PacketYamlTitleWithoutPrefix_PrependsExecutionUnitInIssueTitle()
+    {
+        // packet.yaml carries a meaningful title that does NOT begin with the
+        // execution unit (the canonical G294 case). The publish-flow result
+        // must show the execution unit as a prefix in the GitHub issue title.
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WritePacketYaml("G294", "Add host branch policy for main versus main-ai operation");
+        workspace.WriteGithubBody("G294", BuildContractBodyWithoutH1());
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G294", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal(
+            "G294 Add host branch policy for main versus main-ai operation",
+            root.GetProperty("title").GetString());
+        Assert.Equal(
+            "G294 Add host branch policy for main versus main-ai operation",
+            root.GetProperty("issue_title").GetString());
+        Assert.Equal("packet-yaml", root.GetProperty("title_source").GetString());
+    }
+
+    [Fact]
+    public void Execute_G298_PacketYamlTitleAlreadyPrefixed_DoesNotDuplicate()
+    {
+        // Already-prefixed packet titles must not get the prefix added a second
+        // time (SKS-G190 case continues to publish verbatim).
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WritePacketYaml("SKS-G190",
+            "SKS-G190 Approval-Gated Production Credential Issuance And Rotation Lifecycle Baseline");
+        workspace.WriteGithubBody("SKS-G190", BuildContractBodyWithoutH1());
+
+        using var writer = new StringWriter();
+        IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["SKS-G190", "--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal(
+            "SKS-G190 Approval-Gated Production Credential Issuance And Rotation Lifecycle Baseline",
+            root.GetProperty("title").GetString());
+        Assert.Equal(
+            "SKS-G190 Approval-Gated Production Credential Issuance And Rotation Lifecycle Baseline",
+            root.GetProperty("issue_title").GetString());
+    }
+
+    [Fact]
+    public void Execute_G298_BodyH1AlreadyPrefixed_DoesNotDuplicate()
+    {
+        // Older packets (no packet.yaml) fall back to body H1; the H1 already
+        // contains the prefix and must not be duplicated.
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WriteGithubBody("G245",
+            BuildCompleteContractBody("G245 Add intent-cli issue publish-flow command"));
+
+        using var writer = new StringWriter();
+        IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G245", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("G245 Add intent-cli issue publish-flow command", root.GetProperty("title").GetString());
+        Assert.Equal("G245 Add intent-cli issue publish-flow command", root.GetProperty("issue_title").GetString());
+        Assert.Equal("github-body-h1", root.GetProperty("title_source").GetString());
+    }
+
+    [Fact]
+    public void Execute_G298_BodyH1WithoutPrefix_PrependsExecutionUnit()
+    {
+        // Synthetic case: body H1 without execution-unit prefix should still
+        // get prefixed at publish time so the GitHub issue list correlates.
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WriteGithubBody("G298",
+            BuildCompleteContractBody("Implement issue title prefix formatter"));
+
+        using var writer = new StringWriter();
+        IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G298", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("G298 Implement issue title prefix formatter", root.GetProperty("title").GetString());
+        Assert.Equal("github-body-h1", root.GetProperty("title_source").GetString());
+    }
+
+    [Fact]
+    public void Execute_G298_FallbackUntitled_RemainsVerbatim()
+    {
+        // The deterministic <id> (untitled) fallback already starts with the
+        // execution unit; the formatter must not double-prefix it.
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WriteGithubBody("G900", BuildContractBodyWithoutH1());
+
+        using var writer = new StringWriter();
+        IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G900", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("G900 (untitled)", root.GetProperty("title").GetString());
+        Assert.Equal("G900 (untitled)", root.GetProperty("issue_title").GetString());
+    }
+
+    [Fact]
+    public void FormatIssueTitle_PrependsWhenMissing_KeepsWhenPresent()
+    {
+        Assert.Equal(
+            "G294 Add host branch policy",
+            IssuePublishFlowCommand.FormatIssueTitle("G294", "Add host branch policy"));
+
+        Assert.Equal(
+            "G294 Add host branch policy",
+            IssuePublishFlowCommand.FormatIssueTitle("G294", "G294 Add host branch policy"));
+
+        // Token must match exactly — `G2940 ...` should NOT be treated as already
+        // prefixed for execution unit `G294`.
+        Assert.Equal(
+            "G294 G2940 Other unit",
+            IssuePublishFlowCommand.FormatIssueTitle("G294", "G2940 Other unit"));
+
+        Assert.Equal(
+            "G294 (untitled)",
+            IssuePublishFlowCommand.FormatIssueTitle("G294", null));
+
+        Assert.Equal(
+            "G294 (untitled)",
+            IssuePublishFlowCommand.FormatIssueTitle("G294", "   "));
+    }
+
     private static string BuildCompleteContractBody(string title)
     {
         return $"""

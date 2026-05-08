@@ -122,11 +122,17 @@ internal static class IssuePublishFlowCommand
         // Body H1 remains a fallback for older packets / Sekiban-style
         // bodies that start at `## Goal`. Title source is reported on the
         // result so the operator can audit which path resolved the title.
+        // G298: format the resolved title as `<execution-unit> <title>` when
+        // the title doesn't already begin with the execution-unit token, so
+        // `gh issue create` always carries a scan-friendly identifier in the
+        // GitHub issue list. Already-prefixed titles (and the deterministic
+        // `<id> (untitled)` fallback) stay verbatim.
         string? title = null;
         string? titleSource = null;
         if (githubBodyPresent)
         {
             (title, titleSource) = ResolveTitleWithSource(executionUnit!, packetDirectory, githubBodyPath);
+            title = FormatIssueTitle(executionUnit!, title);
         }
 
         if (!githubBodyPresent || missing.Count > 0)
@@ -838,6 +844,36 @@ internal static class IssuePublishFlowCommand
     }
 
     /// <summary>
+    /// G298: prepend the execution-unit token to the resolved title when the
+    /// title does not already start with it. The operator scans the GitHub
+    /// issue list by execution unit (G294, SKS-G190, etc.), so a title like
+    /// <c>Add host branch policy ...</c> stored without the token would hide
+    /// the issue's correlation key. Already-prefixed titles and the
+    /// deterministic <c>&lt;id&gt; (untitled)</c> fallback are returned
+    /// verbatim — we only insert the prefix when missing. The check is
+    /// case-sensitive because execution units are uppercase identifiers.
+    /// </summary>
+    internal static string FormatIssueTitle(string executionUnit, string? resolvedTitle)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+
+        if (string.IsNullOrWhiteSpace(resolvedTitle))
+        {
+            return $"{executionUnit} (untitled)";
+        }
+
+        var trimmed = resolvedTitle.Trim();
+        if (trimmed.StartsWith(executionUnit + " ", StringComparison.Ordinal)
+            || string.Equals(trimmed, executionUnit, StringComparison.Ordinal)
+            || trimmed.StartsWith(executionUnit + ":", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
+        return $"{executionUnit} {trimmed}";
+    }
+
+    /// <summary>
     /// G290: reads the top-level <c>title:</c> scalar from packet.yaml. The
     /// packet schema places the field at the root (older packets) or under
     /// `implementation_issue_packet:` (Sekiban-style); we accept either by
@@ -1082,6 +1118,16 @@ internal sealed record IssuePublishFlowResult
 
     [JsonPropertyName("title")]
     public string? Title { get; init; }
+
+    /// <summary>
+    /// G298: explicit alias for <see cref="Title"/> emphasizing that this
+    /// is the final title sent to <c>gh issue create</c>. Same value; the
+    /// distinct field name lets operators and downstream tooling read
+    /// "issue_title" without re-inferring it from <c>title</c> when audit
+    /// trails care about the exact GitHub-side string.
+    /// </summary>
+    [JsonPropertyName("issue_title")]
+    public string? IssueTitle => Title;
 
     /// <summary>
     /// G290: which path resolved <see cref="Title"/>. One of
