@@ -1042,6 +1042,43 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("Do NOT pass `--draft`", prompt, StringComparison.Ordinal);
     }
 
+    // ── G297 draft-aware host approval ──────────────────────────────────
+
+    [Fact]
+    public void Execute_HostLoop_TellsAgentToCheckDraftBeforeApproval_AndPassMergedToCloseout()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Draft-aware approval (G297)", prompt, StringComparison.Ordinal);
+        Assert.Contains("isDraft", prompt, StringComparison.Ordinal);
+        Assert.Contains("draft-merge-blocked", prompt, StringComparison.Ordinal);
+        Assert.Contains("review-release", prompt, StringComparison.Ordinal);
+        Assert.Contains("--pr-merged $IS_MERGED", prompt, StringComparison.Ordinal);
+        Assert.Contains("Stage 2 (next-slice publish) is gated on `closeout pr --write` succeeding", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostOneshot_TellsAgentToCheckDraftBeforeApproval()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Draft-aware approval (G297)", prompt, StringComparison.Ordinal);
+        Assert.Contains("isDraft", prompt, StringComparison.Ordinal);
+        Assert.Contains("--pr-merged $IS_MERGED", prompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

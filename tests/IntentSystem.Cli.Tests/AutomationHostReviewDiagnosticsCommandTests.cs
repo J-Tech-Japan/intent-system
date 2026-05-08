@@ -607,6 +607,86 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Contains("Stage 4", output, StringComparison.Ordinal);
     }
 
+    // ── G297 draft-merge-blocked ────────────────────────────────────────
+
+    [Fact]
+    public void Execute_PrDraftTrue_OnIntentTargetPr_ClassifiesDraftMergeBlocked_AndRecommendsReviewRelease()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(523, "draft pr", "https://github.com/owner/repo/pull/523",
+                    "Closes #515", new[] { "intent-target" })
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(515, "issue", "https://github.com/owner/repo/issues/515",
+                    new[] { "intent-target" })
+            ]
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "owner/repo", "--pr-draft", "true", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("draft-merge-blocked", result.Classification);
+        Assert.Contains("523", result.Summary, StringComparison.Ordinal);
+        Assert.NotNull(result.RecommendedNextCommand);
+        Assert.Contains("review-release", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Contains("--pr 523", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PrDraftFalse_DoesNotClassifyDraftMergeBlocked()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(523, "ready pr", "https://github.com/owner/repo/pull/523",
+                    "Closes #515", new[] { "intent-target" })
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(515, "issue", "https://github.com/owner/repo/issues/515",
+                    new[] { "intent-target" })
+            ]
+        };
+
+        using var writer = new StringWriter();
+        AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "owner/repo", "--pr-draft", "false", "--format", "json"],
+            writer);
+
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.NotEqual("draft-merge-blocked", result.Classification);
+        Assert.Equal("review-pr-actionable", result.Classification);
+    }
+
+    [Fact]
+    public void Execute_RejectsInvalidPrDraftValue()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "owner/repo", "--pr-draft", "yes"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--pr-draft must be 'true' or 'false'", writer.ToString(), StringComparison.Ordinal);
+    }
+
     private static GitHubAutomationPrCandidate BuildPr(
         int number,
         string title,

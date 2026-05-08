@@ -123,4 +123,15 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     /// <c>--write</c> and retry the wake.
     /// </summary>
     public const string RepairedAndRetry = "repaired-and-retry";
+
+    /// <summary>
+    /// G297: terminal class returned when a selected review PR is still
+    /// draft. Host approval / closeout / next-slice publish must be
+    /// blocked because GitHub will reject the merge with "Pull Request is
+    /// still a draft". The host loop should skip approval, run
+    /// <c>pr-transition --transition review-release</c> to drop the
+    /// review lease cleanly, and surface the gap to the operator or
+    /// implementer rather than mutate parent durable state.
+    /// </summary>
+    public const string DraftMergeBlocked = "draft-merge-blocked";
 }
