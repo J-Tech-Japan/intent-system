@@ -43,8 +43,13 @@ public sealed class ProgramTests
     }
 
     [Fact]
-    public void Main_GivenDirectoryWithoutIntentCliRoot_ReturnsExitCodeOne()
+    public void Main_GivenDirectoryWithoutIntentCliRoot_ReturnsExitCodeOne_AndEmitsStructuredFailClosed()
     {
+        // G299: a non-bootstrap command (e.g. `project status`) invoked from a
+        // directory that has no `.intent-cli/` no longer prints the bare
+        // "Could not find .intent-cli directory" error to stderr. Instead it
+        // writes a structured fail-closed guidance to stdout naming the host
+        // vs child distinction and the canonical re-run path, then exits 1.
         lock (ProcessStateLock)
         {
             using var tempDirectory = new TemporaryDirectory();
@@ -55,8 +60,11 @@ public sealed class ProgramTests
             var exitCode = Program.Main(["project", "status"]);
 
             Assert.Equal(1, exitCode);
-            Assert.Contains("Could not find .intent-cli directory", consoleScope.Error.ToString(), StringComparison.Ordinal);
-            Assert.Equal(string.Empty, consoleScope.Out.ToString());
+            var stdout = consoleScope.Out.ToString();
+            Assert.Contains("missing host state (G299)", stdout, StringComparison.Ordinal);
+            Assert.Contains("Host repo cwd: _unresolved_", stdout, StringComparison.Ordinal);
+            Assert.Contains("Child implementation repo cwd:", stdout, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, consoleScope.Error.ToString());
         }
     }
 
