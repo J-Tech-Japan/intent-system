@@ -714,6 +714,22 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_RecommendsReviewReleaseOnHostMetadataBlocker_G292()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("review-release", prompt, StringComparison.Ordinal);
+        Assert.Contains("Release the review lease on host-metadata blockers (G292)", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-pr-reviewing", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostLoopPrompt_GatesPrCommentsOnHostMetadataClassification_G287()
     {
         using var writer = new StringWriter();

@@ -15,6 +15,15 @@ internal static class AutomationPrTransitionCommand
     private const string TransitionRequestUpdate = "request-update";
     private const string TransitionApproved = "approved";
 
+    /// <summary>
+    /// G292: release the <c>intent-pr-reviewing</c> lease without adding
+    /// <c>intent-pr-request-update</c>. Used when host-owned metadata
+    /// (e.g. missing parent <c>linked_pr</c>) blocks closeout-plan after
+    /// review-start was applied; the next wake should be free to reselect
+    /// the PR once the metadata is repaired by reconcile.
+    /// </summary>
+    private const string TransitionReviewRelease = "review-release";
+
     public static Func<IGitHubLabelMutator>? MutatorFactory { get; set; }
 
     public static Func<bool>? NestedProviderLauncher { get; set; }
@@ -173,6 +182,17 @@ internal static class AutomationPrTransitionCommand
                 [
                     WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing,
                 ]),
+            // G292: release the reviewer lease without claiming an
+            // implementation-side repair is needed. Removes
+            // intent-pr-reviewing (and any stale intent-pr-update-in-progress
+            // / intent-pr-request-update leftovers) without adding any new
+            // review-side label, so the next host wake reselects the PR.
+            TransitionReviewRelease => new TransitionPlan(
+                AddLabels: Array.Empty<string>(),
+                RemoveLabels:
+                [
+                    WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing,
+                ]),
             _ => throw new ArgumentOutOfRangeException(nameof(transition), transition, "Unsupported PR transition."),
         };
 
@@ -182,16 +202,20 @@ internal static class AutomationPrTransitionCommand
         IReadOnlyList<string> plannedRemoveLabels,
         IReadOnlyList<string> currentLabels)
     {
-        if (!string.Equals(transition, TransitionReviewStart, StringComparison.Ordinal)
-            || !string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
+        // G292: review-release is also defensive about stale labels — only
+        // remove labels that are actually present, so the dry-run plan
+        // matches what gh will actually mutate.
+        if (string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
+            && (string.Equals(transition, TransitionReviewStart, StringComparison.Ordinal)
+                || string.Equals(transition, TransitionReviewRelease, StringComparison.Ordinal)))
         {
-            return plannedRemoveLabels;
+            var currentLabelSet = new HashSet<string>(currentLabels, StringComparer.Ordinal);
+            return plannedRemoveLabels
+                .Where(label => currentLabelSet.Contains(label))
+                .ToArray();
         }
 
-        var currentLabelSet = new HashSet<string>(currentLabels, StringComparer.Ordinal);
-        return plannedRemoveLabels
-            .Where(label => currentLabelSet.Contains(label))
-            .ToArray();
+        return plannedRemoveLabels;
     }
 
     private static bool TryParseArguments(
@@ -249,15 +273,16 @@ internal static class AutomationPrTransitionCommand
                 case "--transition":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
-                        error = "--transition requires a value (review-start, request-update, or approved).";
+                        error = "--transition requires a value (review-start, request-update, approved, or review-release).";
                         return false;
                     }
                     transition = args[index + 1].Trim();
                     if (!string.Equals(transition, TransitionReviewStart, StringComparison.Ordinal)
                         && !string.Equals(transition, TransitionRequestUpdate, StringComparison.Ordinal)
-                        && !string.Equals(transition, TransitionApproved, StringComparison.Ordinal))
+                        && !string.Equals(transition, TransitionApproved, StringComparison.Ordinal)
+                        && !string.Equals(transition, TransitionReviewRelease, StringComparison.Ordinal))
                     {
-                        error = $"--transition must be '{TransitionReviewStart}', '{TransitionRequestUpdate}', or '{TransitionApproved}' (got '{transition}').";
+                        error = $"--transition must be '{TransitionReviewStart}', '{TransitionRequestUpdate}', '{TransitionApproved}', or '{TransitionReviewRelease}' (got '{transition}').";
                         return false;
                     }
                     index++;
@@ -289,7 +314,7 @@ internal static class AutomationPrTransitionCommand
                     break;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] --pr <n> --transition <review-start|request-update|approved> [--write] [--dry-run] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] --pr <n> --transition <review-start|request-update|approved|review-release> [--write] [--dry-run] [--format text|json].";
                     return false;
             }
         }
@@ -302,7 +327,7 @@ internal static class AutomationPrTransitionCommand
 
         if (string.IsNullOrWhiteSpace(transition))
         {
-            error = "--transition is required (review-start, request-update, or approved).";
+            error = "--transition is required (review-start, request-update, approved, or review-release).";
             return false;
         }
 
@@ -363,11 +388,12 @@ internal static class AutomationPrTransitionCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation pr-transition");
-        writer.WriteLine("Usage: intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition <review-start|request-update|approved> [--write] [--dry-run] [--format text|json]");
+        writer.WriteLine("Usage: intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition <review-start|request-update|approved|review-release> [--write] [--dry-run] [--format text|json]");
         writer.WriteLine("Supported transitions:");
         writer.WriteLine("- review-start");
         writer.WriteLine("- request-update");
         writer.WriteLine("- approved");
+        writer.WriteLine("- review-release (G292: drop intent-pr-reviewing without adding intent-pr-request-update; use when host-owned metadata blocks closeout)");
     }
 
     private sealed record TransitionPlan(

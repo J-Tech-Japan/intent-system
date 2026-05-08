@@ -299,6 +299,113 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         Assert.DoesNotContain("intent-pr-created", transition.RemoveLabels);
     }
 
+    // ─── G292 tests ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G292_ReviewRelease_RemovesReviewingWithoutAddingRequestUpdate()
+    {
+        // PR #682-shape: review-start was applied, then host metadata blocked
+        // closeout. review-release must drop intent-pr-reviewing cleanly
+        // without adding intent-pr-request-update so the implementer is not
+        // told to repair host metadata.
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-reviewing" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "682",
+                "--transition", "review-release",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.Equal("review-release", result.Transition);
+        Assert.True(result.Applied);
+
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Empty(transition.AddLabels);
+        Assert.Contains("intent-pr-reviewing", transition.RemoveLabels);
+        // Critically: review-release MUST NOT add request-update or any other
+        // review-side label.
+        Assert.DoesNotContain("intent-pr-request-update", transition.AddLabels);
+        Assert.DoesNotContain("intent-pr-approved", transition.AddLabels);
+        Assert.DoesNotContain("intent-pr-rereview-ready", transition.AddLabels);
+    }
+
+    [Fact]
+    public void Execute_G292_ReviewRelease_DryRunReportsExactPlan()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        AutomationPrTransitionCommand.MutatorFactory = () => new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-reviewing" },
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "682",
+                "--transition", "review-release",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.Equal("dry-run", result.Mode);
+        Assert.False(result.Applied);
+        Assert.Empty(result.AddLabels);
+        Assert.Contains("intent-pr-reviewing", result.RemoveLabels);
+    }
+
+    [Fact]
+    public void Execute_G292_ReviewRelease_WriteIsIdempotentWhenReviewingAlreadyAbsent()
+    {
+        // Defensive: if a previous run already removed intent-pr-reviewing, a
+        // re-run of review-release should not error and should not try to
+        // remove a label that isn't there. Mirrors the review-start dry-run
+        // hardening.
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "682",
+                "--transition", "review-release",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Empty(transition.AddLabels);
+        // The label wasn't present, so the write plan should not list it.
+        Assert.DoesNotContain("intent-pr-reviewing", transition.RemoveLabels);
+    }
+
     [Fact]
     public void CommandRouter_RegistersAutomationPrTransition()
     {
