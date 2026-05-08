@@ -449,6 +449,105 @@ public sealed class CloseoutPrCommandTests : IDisposable
         Assert.Equal("G246", document.RootElement.GetProperty("execution_unit").GetString());
     }
 
+    // ── G297 draft / merge-atomic ───────────────────────────────────────
+
+    [Fact]
+    public void Execute_PrMergedFalse_RefusesAndDoesNotMutate()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "523"));
+        using var writer = new StringWriter();
+
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--pr", "523",
+                "--repo", "owner/repo",
+                "--pr-merged", "false",
+                "--write",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var json = writer.ToString();
+        Assert.Contains("not merged", json, StringComparison.Ordinal);
+        Assert.Contains("G297", json, StringComparison.Ordinal);
+
+        // Mutation invariant: queue-state must not have been modified.
+        Assert.Equal(BuildQueueState("G297", "review", linkedPr: "523"),
+            File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        Assert.False(File.Exists(workspace.Context.GetRunLogPath()));
+    }
+
+    [Fact]
+    public void Execute_PrMergedTrue_AllowsCloseout()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "523"));
+        using var writer = new StringWriter();
+
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--pr", "523",
+                "--repo", "owner/repo",
+                "--pr-merged", "true",
+                "--write",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("completed", document.RootElement.GetProperty("queue_state_after").GetString());
+    }
+
+    [Fact]
+    public void Execute_PrMergedOmitted_BackwardsCompatible_AllowsCloseout()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "523"));
+        using var writer = new StringWriter();
+
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--pr", "523",
+                "--repo", "owner/repo",
+                "--write",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Execute_RejectsInvalidPrMergedValue()
+    {
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G297", "review", linkedPr: "523"));
+        using var writer = new StringWriter();
+
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--pr", "523",
+                "--repo", "owner/repo",
+                "--pr-merged", "yes",
+                "--write"
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--pr-merged must be 'true' or 'false'", writer.ToString(), StringComparison.Ordinal);
+    }
+
     private static string BuildQueueStateWithLinkedIssue(string executionUnit, string state, int linkedIssueNumber)
     {
         return $$"""

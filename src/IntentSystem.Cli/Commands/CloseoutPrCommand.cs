@@ -28,7 +28,7 @@ internal static class CloseoutPrCommand
     private const string ContinuationClarificationRequired = "clarification-required";
 
     private const string UsageLine =
-        "Usage: intent-cli closeout pr --pr <n> --repo <owner/repo> [--issue <n>] [--domain <name>] [--dry-run|--write] [--format json|markdown]";
+        "Usage: intent-cli closeout pr --pr <n> --repo <owner/repo> [--issue <n>] [--domain <name>] [--pr-merged true|false] [--dry-run|--write] [--format json|markdown]";
 
     /// <summary>
     /// Test seam — replaces the default UTC timestamp source for runs events.
@@ -47,7 +47,7 @@ internal static class CloseoutPrCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var pr, out var repo, out var domainOverride, out var linkedIssueNumber, out var write, out var format, out var error))
+        if (!TryParseArguments(args, out var pr, out var repo, out var domainOverride, out var linkedIssueNumber, out var prMerged, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -60,6 +60,17 @@ internal static class CloseoutPrCommand
 
         var queueStatePath = context.GetQueueStatePath();
         var runsLogPath = context.GetRunLogPath();
+
+        // G297: when the host loop explicitly tells us the PR has not merged
+        // (`--pr-merged false`, e.g. captured via `gh pr view <n> --json
+        // merged --jq .merged`), refuse closeout — recording closeout for a
+        // non-merged PR would diverge parent durable state from GitHub.
+        if (prMerged == false)
+        {
+            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr!.Value, queueStatePath, runsLogPath, write,
+                $"PR #{pr} is not merged; closeout pr requires merge success (G297). Re-run after the PR is merged. If the PR is still draft, ready it for review and re-run host review/merge first."));
+            return 1;
+        }
 
         if (!File.Exists(queueStatePath))
         {
@@ -385,6 +396,7 @@ internal static class CloseoutPrCommand
         out string? repo,
         out string? domainOverride,
         out int? linkedIssueNumber,
+        out bool? prMerged,
         out bool write,
         out string format,
         out string error)
@@ -393,6 +405,7 @@ internal static class CloseoutPrCommand
         repo = null;
         domainOverride = null;
         linkedIssueNumber = null;
+        prMerged = null;
         write = false;
         var dryRun = false;
         format = FormatMarkdown;
@@ -498,6 +511,29 @@ internal static class CloseoutPrCommand
                     index++;
                     break;
 
+                case "--pr-merged":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--pr-merged requires a value (true or false).";
+                        return false;
+                    }
+                    var rawMerged = args[index + 1].Trim().ToLowerInvariant();
+                    if (string.Equals(rawMerged, "true", StringComparison.Ordinal))
+                    {
+                        prMerged = true;
+                    }
+                    else if (string.Equals(rawMerged, "false", StringComparison.Ordinal))
+                    {
+                        prMerged = false;
+                    }
+                    else
+                    {
+                        error = $"--pr-merged must be 'true' or 'false' (got '{args[index + 1]}').";
+                        return false;
+                    }
+                    index++;
+                    break;
+
                 default:
                     error = $"Unknown argument '{argument}'.";
                     return false;
@@ -525,7 +561,8 @@ internal static class CloseoutPrCommand
         writer.WriteLine(UsageLine);
         writer.WriteLine("Records the queue/runs closeout for an accepted child PR. --dry-run plans only; --write applies queue + runs updates. Submodule sync remains a manual next step.");
         writer.WriteLine("  Supported states: queued, active, review, fixing → completed.");
-        writer.WriteLine("  --issue <n>  Optional: fallback linked-issue number for queue items where linked_pr is absent.");
+        writer.WriteLine("  --issue <n>      Optional: fallback linked-issue number for queue items where linked_pr is absent.");
+        writer.WriteLine("  --pr-merged true|false  Optional (G297): explicit GitHub merge state. When 'false', closeout refuses the operation so a draft / unmerged PR cannot record closeout; capture the value via 'gh pr view <n> --json merged --jq .merged'.");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()

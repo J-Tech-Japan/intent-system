@@ -27,7 +27,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         bool staleClarificationMetadata = false,
         IReadOnlyList<string>? reconcileUnsafeStopKinds = null,
         int reconcileHighConfidenceRepairsAvailable = 0,
-        bool allowWipCapOverride = false)
+        bool allowWipCapOverride = false,
+        bool? prDraft = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(openPrs);
@@ -120,6 +121,48 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                     Description = $"PR #{pr.Number} carries 'intent-target' with no blocking review-side label; host review preflight should pick it up.",
                 };
             }
+        }
+
+        // G297: draft-merge-blocked. When the host loop tells us the
+        // selected (or actionable) review PR is draft, GitHub will reject
+        // the merge with "Pull Request is still a draft". We must surface
+        // this as a deterministic terminal class so the host loop drops the
+        // review lease and stops short of approval/closeout/next-slice
+        // publish. This precedes the other PR-state classifications because
+        // a draft PR cannot be approved regardless of its review-side
+        // labels.
+        if (prDraft == true)
+        {
+            // Prefer the actionable-review PR; fall back to any
+            // intent-pr-reviewing PR; finally any open PR (so the
+            // diagnostic can still classify when no PR carries
+            // intent-target labels yet — e.g. before review-start).
+            var draftPr = actionableReviewPr
+                ?? stuckReviewingPr
+                ?? FindFirstDraftCandidate(openPrs);
+
+            details.Add(new AutomationHostReviewDiagnosticsDetail
+            {
+                Kind = AutomationHostReviewDiagnosticsClassifications.DraftMergeBlocked,
+                TargetKind = draftPr?.TargetKind ?? GhCliGitHubLabelMutator.Kinds.Pr,
+                TargetNumber = draftPr?.TargetNumber,
+                TargetUrl = draftPr?.TargetUrl,
+                Description = draftPr is null
+                    ? $"--pr-draft true was passed; no open PR could be matched to a target. Stop the host loop until the operator names the draft PR."
+                    : $"PR #{draftPr.TargetNumber} is still draft; host approval/merge/closeout must NOT proceed (G297). Drop the review lease via pr-transition --transition review-release and surface the gap.",
+            });
+            return Build(
+                repo,
+                AutomationHostReviewDiagnosticsClassifications.DraftMergeBlocked,
+                draftPr is null
+                    ? "Selected review PR is reported as draft (G297). Host approval/merge/closeout cannot proceed; release the review lease and surface the gap to the implementer/operator."
+                    : $"PR #{draftPr.TargetNumber} is still draft (G297). Host approval/merge/closeout cannot proceed; release the review lease and surface the gap to the implementer/operator.",
+                recommendedNextCommand: draftPr?.TargetNumber is { } number
+                    ? $"intent-cli automation pr-transition --transition review-release --repo {repo} --pr {number} --write --format json"
+                    : null,
+                clarification: null,
+                details,
+                warnings);
         }
 
         // Precedence: stale-host-cli is handled by the command layer because it
@@ -432,6 +475,34 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
     /// or merged states (case-insensitive) explicitly drop the candidate
     /// from WIP detection.
     /// </summary>
+    private static AutomationHostReviewDiagnosticsDetail? FindFirstDraftCandidate(
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs)
+    {
+        // G297: pick the first open PR that carries intent-target or
+        // intent-pr-reviewing as the draft target so the diagnostic has a
+        // concrete `target_number` for the recommended `review-release`
+        // command. Ordering matches the analyzer's actionable-review pass
+        // above (intent-target first, then intent-pr-reviewing).
+        foreach (var pr in openPrs)
+        {
+            var labels = LabelNames(pr.Labels);
+            if (labels.Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal)
+                || labels.Contains(WorkerNextActionConstants.Labels.IntentPrReviewing, StringComparer.Ordinal))
+            {
+                return new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = AutomationHostReviewDiagnosticsClassifications.DraftMergeBlocked,
+                    TargetKind = GhCliGitHubLabelMutator.Kinds.Pr,
+                    TargetNumber = pr.Number,
+                    TargetUrl = pr.Url,
+                    Description = $"PR #{pr.Number} is still draft.",
+                };
+            }
+        }
+
+        return null;
+    }
+
     private static bool IsOpenState(string? state)
     {
         if (string.IsNullOrWhiteSpace(state))

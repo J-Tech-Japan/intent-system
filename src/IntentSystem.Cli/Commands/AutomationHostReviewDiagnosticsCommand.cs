@@ -51,6 +51,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 out var reconcileUnsafeStopKinds,
                 out var reconcileRepairsAvailable,
                 out var allowWipCapOverride,
+                out var prDraft,
                 out var format,
                 out var error))
         {
@@ -142,7 +143,8 @@ internal static class AutomationHostReviewDiagnosticsCommand
             staleClarificationMetadata,
             reconcileUnsafeStopKinds,
             reconcileRepairsAvailable,
-            allowWipCapOverride);
+            allowWipCapOverride,
+            prDraft);
 
         Emit(writer, result, format);
         return 0;
@@ -158,6 +160,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         out IReadOnlyList<string> reconcileUnsafeStopKinds,
         out int reconcileRepairsAvailable,
         out bool allowWipCapOverride,
+        out bool? prDraft,
         out string format,
         out string error)
     {
@@ -170,6 +173,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         reconcileUnsafeStopKinds = unsafeStops;
         reconcileRepairsAvailable = 0;
         allowWipCapOverride = false;
+        prDraft = null;
         format = FormatText;
         error = string.Empty;
 
@@ -234,6 +238,28 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 case "--allow-wip-cap-override":
                     allowWipCapOverride = true;
                     break;
+                case "--pr-draft":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--pr-draft requires a value (true or false).";
+                        return false;
+                    }
+                    var rawDraft = args[index + 1].Trim().ToLowerInvariant();
+                    if (string.Equals(rawDraft, "true", StringComparison.Ordinal))
+                    {
+                        prDraft = true;
+                    }
+                    else if (string.Equals(rawDraft, "false", StringComparison.Ordinal))
+                    {
+                        prDraft = false;
+                    }
+                    else
+                    {
+                        error = $"--pr-draft must be 'true' or 'false' (got '{args[index + 1]}').";
+                        return false;
+                    }
+                    index++;
+                    break;
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -251,7 +277,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                     index++;
                     break;
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--pr-draft true|false] [--format text|json].";
                     return false;
             }
         }
@@ -320,7 +346,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation host-review-diagnostics");
-        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--format text|json]");
-        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. Never mutates GitHub or local state.");
+        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--pr-draft true|false] [--format text|json]");
+        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, draft-merge-blocked (G297), and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. With `--pr-draft true` and a selected review PR (G297), the diagnostic returns `draft-merge-blocked` so the host loop can release the review lease and surface the gap. Never mutates GitHub or local state.");
     }
 }
