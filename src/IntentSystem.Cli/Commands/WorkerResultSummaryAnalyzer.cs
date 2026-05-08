@@ -21,7 +21,8 @@ internal static class WorkerResultSummaryAnalyzer
         string outcome,
         string repo,
         int? issue,
-        int? pr)
+        int? pr,
+        bool? prDraft = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
         ArgumentException.ThrowIfNullOrWhiteSpace(outcome);
@@ -50,8 +51,8 @@ internal static class WorkerResultSummaryAnalyzer
 
         var status = DeriveStatus(outcome);
         var labelActions = DeriveLabelActions(kind, outcome);
-        var warnings = DeriveWarnings(kind, outcome, issue, pr);
-        var summary = DeriveSummaryText(kind, outcome, repo, issue, pr);
+        var warnings = DeriveWarnings(kind, outcome, issue, pr, prDraft);
+        var summary = DeriveSummaryText(kind, outcome, repo, issue, pr, prDraft);
 
         return new WorkerResultSummaryResult
         {
@@ -64,6 +65,7 @@ internal static class WorkerResultSummaryAnalyzer
             RecommendedLabelActions = labelActions,
             Warnings = warnings,
             Summary = summary,
+            PrDraft = prDraft,
         };
     }
 
@@ -196,7 +198,8 @@ internal static class WorkerResultSummaryAnalyzer
         string kind,
         string outcome,
         int? issue,
-        int? pr)
+        int? pr,
+        bool? prDraft)
     {
         var warnings = new List<string>();
 
@@ -213,6 +216,20 @@ internal static class WorkerResultSummaryAnalyzer
         {
             warnings.Add(
                 "label-cleanup-required: an in-progress label or a stale review-state label was left behind; operator inspection required.");
+        }
+
+        // G296: a draft PR completing the issue-to-pr outcome breaks host
+        // review/merge — host review can approve, but GitHub will reject the
+        // merge with `Pull Request is still a draft`. Always surface this
+        // explicitly so the host loop can ready-for-review or stop the
+        // closeout. Repaired-via-pr-comment-fix on a still-draft PR is also
+        // host-merge-blocked; surface the same warning for that path.
+        if (prDraft == true
+            && (outcome == WorkerResultSummaryConstants.Outcomes.PrCreated
+                || outcome == WorkerResultSummaryConstants.Outcomes.RepairPushed))
+        {
+            warnings.Add(
+                "draft PR: automation-created PRs default to ready-for-review (G296). A draft PR will block host merge — ready it for review or document why draft is intentional.");
         }
 
         // Coherence warnings: an issue-to-pr outcome should usually have an
@@ -235,17 +252,25 @@ internal static class WorkerResultSummaryAnalyzer
         string outcome,
         string repo,
         int? issue,
-        int? pr)
+        int? pr,
+        bool? prDraft)
     {
+        var draftSuffix = prDraft switch
+        {
+            true => " (draft)",
+            false => " (ready for review)",
+            _ => string.Empty
+        };
+
         return outcome switch
         {
             WorkerResultSummaryConstants.Outcomes.PrCreated =>
                 pr is { } prNum
-                    ? $"PR #{prNum} created for {Identifier(repo, issue, "#")}."
-                    : $"PR created for {Identifier(repo, issue, "#")}.",
+                    ? $"PR #{prNum} created for {Identifier(repo, issue, "#")}{draftSuffix}."
+                    : $"PR created for {Identifier(repo, issue, "#")}{draftSuffix}.",
 
             WorkerResultSummaryConstants.Outcomes.RepairPushed =>
-                $"Repair commit pushed to {Identifier(repo, pr, "#")}.",
+                $"Repair commit pushed to {Identifier(repo, pr, "#")}{draftSuffix}.",
 
             WorkerResultSummaryConstants.Outcomes.DeclinedContractIncomplete =>
                 $"Declined before implementation — issue body was not a sufficient standalone contract ({Identifier(repo, issue, "#")}).",

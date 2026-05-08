@@ -233,6 +233,7 @@ Hard rules:
 - All label transitions go through installed `intent-cli automation` / `intent-cli worker` commands. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
 - Never apply `intent-target` from the child loop; it is host-owned.
 - Never apply `intent-pr-created` to a PR; it is an issue-side completion marker.
+- **PR draft state (G296)**: create child implementation/update PRs as **ready-for-review** (non-draft) by default. Do NOT pass `--draft` to `gh pr create` unless the operator explicitly asks for a draft. After opening the PR, pass the actual draft state into `worker result-summary --pr-draft true|false` so the host review loop can detect a draft PR before approval. If you must keep the PR draft (incomplete work, operator hold), do not transition the issue to ready-for-review states; mark the outcome accordingly and document the reason.
 - Process at most one action per wake.";
 
         return new GuidePromptMatrixEntry
@@ -382,6 +383,7 @@ Hard rules:
 - All label transitions go through installed `intent-cli automation` / `intent-cli worker` commands. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
 - Never apply `intent-target` from the child loop; it is host-owned.
 - Never apply `intent-pr-created` to a PR; it is an issue-side completion marker.
+- **PR draft state (G296)**: create child implementation/update PRs as **ready-for-review** (non-draft) by default. Do NOT pass `--draft` to `gh pr create` unless the operator explicitly asks for a draft. After opening the PR, pass the actual draft state into `worker result-summary --pr-draft true|false` so the host review loop can detect a draft PR before approval. If you must keep the PR draft (incomplete work, operator hold), do not transition the issue to ready-for-review states; mark the outcome accordingly and document the reason.
 - Process at most one action per wake.
 - Do not create a cron, monitor, scheduler, reminder, or new thread after completing this wake.";
 

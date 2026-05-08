@@ -588,6 +588,166 @@ public sealed class WorkerResultSummaryCommandTests : IDisposable
             $"Could not locate source file {fileName} from {directory}");
     }
 
+    // ── G296 PR draft state ─────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_GivenPrCreatedWithoutPrDraftFlag_OmitsPrDraftField()
+    {
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", "issue-to-pr",
+                "--repo", "owner/repo",
+                "--issue", "515",
+                "--pr", "999",
+                "--outcome", "pr-created",
+                "--format", "json"
+            },
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.True(document.RootElement.TryGetProperty("pr_draft", out var draft));
+        Assert.Equal(JsonValueKind.Null, draft.ValueKind);
+        var summary = document.RootElement.GetProperty("summary").GetString()!;
+        Assert.DoesNotContain("(draft)", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("(ready for review)", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenPrCreatedWithReadyForReview_EmitsFalsePrDraft_AndReadyForReviewSummary()
+    {
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", "issue-to-pr",
+                "--repo", "owner/repo",
+                "--issue", "515",
+                "--pr", "999",
+                "--outcome", "pr-created",
+                "--pr-draft", "false",
+                "--format", "json"
+            },
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.False(document.RootElement.GetProperty("pr_draft").GetBoolean());
+        Assert.False(document.RootElement.GetProperty("prDraft").GetBoolean());
+        var warnings = document.RootElement.GetProperty("warnings")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.DoesNotContain(warnings, w => w!.Contains("draft PR", StringComparison.Ordinal));
+        Assert.Contains("(ready for review)", document.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenPrCreatedAsDraft_EmitsTruePrDraft_DraftWarning_AndDraftSummary()
+    {
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", "issue-to-pr",
+                "--repo", "owner/repo",
+                "--issue", "515",
+                "--pr", "999",
+                "--outcome", "pr-created",
+                "--pr-draft", "true",
+                "--format", "json"
+            },
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.True(document.RootElement.GetProperty("pr_draft").GetBoolean());
+        var warnings = document.RootElement.GetProperty("warnings")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(warnings, w => w!.Contains("draft PR", StringComparison.Ordinal));
+        Assert.Contains(warnings, w => w!.Contains("ready-for-review", StringComparison.Ordinal));
+        Assert.Contains("(draft)", document.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenRepairPushedAsDraft_EmitsDraftWarning()
+    {
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", "pr-comment-fix",
+                "--repo", "owner/repo",
+                "--pr", "523",
+                "--outcome", "repair-pushed",
+                "--pr-draft", "true",
+                "--format", "json"
+            },
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.True(document.RootElement.GetProperty("pr_draft").GetBoolean());
+        var warnings = document.RootElement.GetProperty("warnings")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(warnings, w => w!.Contains("draft PR", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_RejectsInvalidPrDraftValue()
+    {
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", "issue-to-pr",
+                "--repo", "owner/repo",
+                "--issue", "515",
+                "--pr", "999",
+                "--outcome", "pr-created",
+                "--pr-draft", "yes"
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--pr-draft must be 'true' or 'false'", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_TextFormatWithDraft_RendersPrDraftLine()
+    {
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", "issue-to-pr",
+                "--repo", "owner/repo",
+                "--issue", "515",
+                "--pr", "999",
+                "--outcome", "pr-created",
+                "--pr-draft", "true"
+            },
+            writer);
+
+        var output = writer.ToString();
+        Assert.Contains("- pr_draft: true", output, StringComparison.Ordinal);
+        Assert.Contains("host merge will be blocked", output, StringComparison.Ordinal);
+    }
+
     private sealed class WorkerResultSummaryWorkspace : IDisposable
     {
         public WorkerResultSummaryWorkspace()
