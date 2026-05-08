@@ -69,7 +69,8 @@ internal static class Program
     {
         return args.Length >= 2
             && string.Equals(args[0], "automation", StringComparison.Ordinal)
-            && (string.Equals(args[1], "check", StringComparison.Ordinal)
+            && (string.Equals(args[1], "base-branch-check", StringComparison.Ordinal)
+                || string.Equals(args[1], "check", StringComparison.Ordinal)
                 || string.Equals(args[1], "clarification-stop", StringComparison.Ordinal)
                 || string.Equals(args[1], "complete", StringComparison.Ordinal)
                 || string.Equals(args[1], "doctor", StringComparison.Ordinal)

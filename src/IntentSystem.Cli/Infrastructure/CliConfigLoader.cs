@@ -56,6 +56,7 @@ internal static class CliConfigLoader
             ?? string.Empty;
         var parentIntentRepoRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
+        var baseBranchPolicy = ReadBaseBranchPolicy(rootTable, "CLI config root");
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
         var run = ReadRun(rootTable);
@@ -67,6 +68,7 @@ internal static class CliConfigLoader
             worktreeRoot,
             workRepoPath,
             parentIntentRepoRoot,
+            baseBranchPolicy,
             roles,
             supervision,
             run,
@@ -100,6 +102,7 @@ internal static class CliConfigLoader
             ?? string.Empty;
         var parentIntentRepoRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
+        var baseBranchPolicy = ReadBaseBranchPolicy(projectTable, "CLI config [project] section");
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
         var run = ReadRun(rootTable);
@@ -111,6 +114,7 @@ internal static class CliConfigLoader
             worktreeRoot,
             workRepoPath,
             parentIntentRepoRoot,
+            baseBranchPolicy,
             roles,
             supervision,
             run,
@@ -124,6 +128,7 @@ internal static class CliConfigLoader
         string worktreeRoot,
         string workRepoPath,
         string parentIntentRepoRoot,
+        string baseBranchPolicy,
         RoleMappings roles,
         SupervisionConfig supervision,
         RunConfig run,
@@ -137,13 +142,35 @@ internal static class CliConfigLoader
                 ArtifactRoot = artifactRoot,
                 WorktreeRoot = worktreeRoot,
                 WorkRepoPath = workRepoPath,
-                ParentIntentRepoRoot = parentIntentRepoRoot
+                ParentIntentRepoRoot = parentIntentRepoRoot,
+                BaseBranchPolicy = baseBranchPolicy
             },
             Roles = roles,
             Supervision = supervision,
             Run = run,
             DirectRun = directRun
         };
+    }
+
+    private static string ReadBaseBranchPolicy(TomlTable table, string contractName)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contractName);
+
+        var value = TryGetOptionalString(table, CliRuntimeContracts.BaseBranchPolicyKey);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return CliRuntimeContracts.DefaultBaseBranchPolicy;
+        }
+
+        if (!string.Equals(value, CliRuntimeContracts.DirectMainBaseBranchPolicy, StringComparison.Ordinal)
+            && !string.Equals(value, CliRuntimeContracts.MainAiBaseBranchPolicy, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{contractName} '{CliRuntimeContracts.BaseBranchPolicyKey}' must be '{CliRuntimeContracts.DirectMainBaseBranchPolicy}' or '{CliRuntimeContracts.MainAiBaseBranchPolicy}' (got '{value}').");
+        }
+
+        return value;
     }
 
     private static void RejectObsoleteWorkflowEngineKey(TomlTable table, string contractName)

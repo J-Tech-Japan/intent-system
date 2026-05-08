@@ -30,6 +30,12 @@ internal static class CliRuntimeContracts
     public const string RetryDelayMinutesKey = "retry_delay_minutes";
     public const string RetryBudgetKey = "retry_budget";
     public const string PostFixWorktreeProgressPolicyKey = "post_fix_worktree_progress_policy";
+    public const string BaseBranchPolicyKey = "base_branch_policy";
+    public const string DirectMainBaseBranchPolicy = "direct-main";
+    public const string MainAiBaseBranchPolicy = "main-ai";
+    public const string DefaultBaseBranchPolicy = DirectMainBaseBranchPolicy;
+    public const string DirectMainBaseBranch = "main";
+    public const string MainAiIntegrationBaseBranch = "main-ai";
     public const string DefaultWorktreeRoot = ".intent-cli/worktrees";
     public const string DefaultSupervisionArtifactRoot = ".intent-cli/supervision";
     public const string DefaultDirectRunArtifactRoot = ".intent-cli/runs";

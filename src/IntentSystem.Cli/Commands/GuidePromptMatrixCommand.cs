@@ -51,7 +51,7 @@ internal static class GuidePromptMatrixCommand
         RegexOptions.Compiled);
 
     private const string UsageLine =
-        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic] [--frequency <NNm|NNh>] [--format markdown|json]";
+        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--format markdown|json]";
 
     private static readonly string[] ForbiddenSources =
     [
@@ -72,14 +72,14 @@ internal static class GuidePromptMatrixCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var targetRepo, out var agent, out var frequency, out var error))
+        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var targetRepo, out var agent, out var frequency, out var baseBranchPolicy, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var entries = BuildEntries(mode, domain, targetRepo, agent, frequency);
+        var entries = BuildEntries(mode, domain, targetRepo, agent, frequency, baseBranchPolicy);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -107,17 +107,21 @@ internal static class GuidePromptMatrixCommand
         string? domain,
         string? targetRepo,
         string? agent,
-        string? frequency)
+        string? frequency,
+        string? baseBranchPolicy)
     {
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
         var targetRepoPlaceholder = string.IsNullOrWhiteSpace(targetRepo) ? "<TARGET-REPO>" : targetRepo;
+        var resolvedPolicy = string.IsNullOrWhiteSpace(baseBranchPolicy)
+            ? CliRuntimeContracts.DefaultBaseBranchPolicy
+            : baseBranchPolicy;
 
         var all = new[]
         {
-            BuildChildLoop(domainPlaceholder, agent, frequency),
-            BuildHostLoop(domainPlaceholder, targetRepoPlaceholder, agent, frequency),
-            BuildChildOneshot(domainPlaceholder),
-            BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder)
+            BuildChildLoop(domainPlaceholder, agent, frequency, resolvedPolicy),
+            BuildHostLoop(domainPlaceholder, targetRepoPlaceholder, agent, frequency, resolvedPolicy),
+            BuildChildOneshot(domainPlaceholder, resolvedPolicy),
+            BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
         };
 
         if (mode is null)
@@ -182,14 +186,27 @@ $@"Frequency: {frequency} (operator-resolved). {schedulingHint}
             ? FrequencyGuidanceRecurring
             : $"{frequency} (operator-resolved)";
 
-    private static GuidePromptMatrixEntry BuildChildLoop(string domainPlaceholder, string? agent, string? frequency)
+    private static string RenderBaseBranchPolicyBlock(string baseBranchPolicy, string targetRoleVerb)
+    {
+        var expected = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy);
+        var description = BaseBranchPolicyContract.DescribePolicy(baseBranchPolicy);
+        return
+$@"Base branch policy: `{baseBranchPolicy}` (expected base branch: `{expected}`).
+- {description}
+- {targetRoleVerb} this policy mechanically: derive the PR base branch from `intent-cli` config (`base_branch_policy`), never from prompt memory. Use `intent-cli automation base-branch-check --repo <r> --pr <n> --policy {baseBranchPolicy} --actual-base $(gh pr view <n> --repo <r> --json baseRefName --jq .baseRefName) --format json` to flag mismatches.";
+    }
+
+    private static GuidePromptMatrixEntry BuildChildLoop(string domainPlaceholder, string? agent, string? frequency, string baseBranchPolicy)
     {
         var resolvedAgent = NormalizeAgent(agent);
         var frequencyBlock = RenderFrequencyBlock(agent, frequency);
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
         var prompt =
 $@"Set up the child implementation loop for the repo in the current worktree. Run the loop body exactly once per wake; the operator or scheduler drives subsequent wakes.
 
 {frequencyBlock}
+
+{basePolicyBlock}
 
 If the installed CLI surface is stale or any required automation command is missing, abort the wake before any mutation: `intent-cli automation doctor --format json` (or `automation host-review-preflight` reporting `stale-host-cli`) is the canonical signal — refresh the installed CLI; never fall back to raw `gh` label mutation. The installed CLI may come from a global dotnet tool install on `PATH` (e.g. `$HOME/.dotnet/tools/intent-cli`); that is the default local-testing route and the doctor reports `binary_source: path-global-tool` in that case. A cwd-local `.intent-cli/bin/intent-cli` shim still wins when present (`binary_source: cwd-local-shim`) and `INTENT_CLI_INSTALLED_PATH` pins a specific binary for version-specific tests (`binary_source: explicit-override`).
 
@@ -235,17 +252,22 @@ Hard rules:
             Prompt = prompt,
             Agent = resolvedAgent,
             Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency,
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
         };
     }
 
-    private static GuidePromptMatrixEntry BuildHostLoop(string domainPlaceholder, string targetRepoPlaceholder, string? agent, string? frequency)
+    private static GuidePromptMatrixEntry BuildHostLoop(string domainPlaceholder, string targetRepoPlaceholder, string? agent, string? frequency, string baseBranchPolicy)
     {
         var resolvedAgent = NormalizeAgent(agent);
         var frequencyBlock = RenderFrequencyBlock(agent, frequency);
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Closeout / merge expectation honors");
         var prompt =
 $@"Set up the host review and next-slice loop for domain `{domainPlaceholder}` against `{targetRepoPlaceholder}`. Run the loop body exactly once per wake; the operator or scheduler drives subsequent wakes.
 
 {frequencyBlock}
+
+{basePolicyBlock}
 
 If the installed CLI surface is stale or any required automation command is missing, abort the wake before any mutation: `intent-cli automation doctor --format json` (or `automation host-review-preflight` reporting `stale-host-cli`) is the canonical signal — refresh the installed CLI; never fall back to raw `gh` label mutation. The installed CLI may come from a global dotnet tool install on `PATH` (e.g. `$HOME/.dotnet/tools/intent-cli`); that is the default local-testing route and the doctor reports `binary_source: path-global-tool` in that case. A cwd-local `.intent-cli/bin/intent-cli` shim still wins when present (`binary_source: cwd-local-shim`) and `INTENT_CLI_INSTALLED_PATH` pins a specific binary for version-specific tests (`binary_source: explicit-override`).
 
@@ -321,16 +343,21 @@ Hard rules:
             ],
             Prompt = prompt,
             Agent = resolvedAgent,
-            Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency
+            Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency,
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
         };
     }
 
-    private static GuidePromptMatrixEntry BuildChildOneshot(string domainPlaceholder)
+    private static GuidePromptMatrixEntry BuildChildOneshot(string domainPlaceholder, string baseBranchPolicy)
     {
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
         var prompt =
 $@"Run one child implementation/update wake exactly once.
 
 Do not create or update any automation, loop, cron, monitor, reminder, or recurring wakeup. This is a one-shot execution. Frequency is forbidden.
+
+{basePolicyBlock}
 
 First-call sequence (read-only; required before any mutation):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
@@ -372,16 +399,21 @@ Hard rules:
                 "intent-cli guide commands list --format json",
                 $"intent-cli automation summary --domain {domainPlaceholder} --format json"
             ],
-            Prompt = prompt
+            Prompt = prompt,
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
         };
     }
 
-    private static GuidePromptMatrixEntry BuildHostOneshot(string domainPlaceholder, string targetRepoPlaceholder)
+    private static GuidePromptMatrixEntry BuildHostOneshot(string domainPlaceholder, string targetRepoPlaceholder, string baseBranchPolicy)
     {
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Closeout / merge expectation honors");
         var prompt =
 $@"Run the host review and next-slice for domain `{domainPlaceholder}` against `{targetRepoPlaceholder}` exactly once.
 
 Do not create or update any automation, loop, cron, monitor, reminder, or recurring wakeup. This is a one-shot execution. Frequency is forbidden.
+
+{basePolicyBlock}
 
 First-call sequence (read-only; required before any mutation):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
@@ -447,7 +479,9 @@ Hard rules:
                 $"intent-cli intent status --domain {domainPlaceholder} --format json",
                 $"intent-cli intent next-slice --dry-run --domain {domainPlaceholder} --target-repo {targetRepoPlaceholder} --format json"
             ],
-            Prompt = prompt
+            Prompt = prompt,
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
         };
     }
 
@@ -498,6 +532,7 @@ Hard rules:
         out string? targetRepo,
         out string? agent,
         out string? frequency,
+        out string? baseBranchPolicy,
         out string error)
     {
         mode = null;
@@ -506,6 +541,7 @@ Hard rules:
         targetRepo = null;
         agent = null;
         frequency = null;
+        baseBranchPolicy = null;
         error = string.Empty;
 
         for (var index = 0; index < args.Length; index++)
@@ -609,6 +645,22 @@ Hard rules:
                     index++;
                     break;
 
+                case "--base-branch-policy":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = $"--base-branch-policy requires a value ('{CliRuntimeContracts.DirectMainBaseBranchPolicy}' or '{CliRuntimeContracts.MainAiBaseBranchPolicy}').";
+                        return false;
+                    }
+                    var requestedPolicy = args[index + 1].Trim();
+                    if (!BaseBranchPolicyContract.IsKnownPolicy(requestedPolicy))
+                    {
+                        error = $"--base-branch-policy must be '{CliRuntimeContracts.DirectMainBaseBranchPolicy}' or '{CliRuntimeContracts.MainAiBaseBranchPolicy}' (got '{requestedPolicy}').";
+                        return false;
+                    }
+                    baseBranchPolicy = requestedPolicy;
+                    index++;
+                    break;
+
                 default:
                     error = $"Unknown argument '{argument}'.";
                     return false;
@@ -634,6 +686,7 @@ Hard rules:
         writer.WriteLine("--domain, --target-repo, --agent, and --frequency are optional; provide them to render a concrete paste-ready prompt instead of one with placeholders.");
         writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic.");
         writer.WriteLine("--frequency examples: 5m, 20m, 1h. Omit to keep the rendered prompt's ask-the-operator instruction.");
+        writer.WriteLine($"--base-branch-policy values: {CliRuntimeContracts.DirectMainBaseBranchPolicy} (default; child PRs target `{CliRuntimeContracts.DirectMainBaseBranch}`), {CliRuntimeContracts.MainAiBaseBranchPolicy} (child PRs target `{CliRuntimeContracts.MainAiIntegrationBaseBranch}`).");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -672,4 +725,10 @@ internal sealed record GuidePromptMatrixEntry
 
     [JsonPropertyName("frequency")]
     public string? Frequency { get; init; }
+
+    [JsonPropertyName("base_branch_policy")]
+    public string? BaseBranchPolicy { get; init; }
+
+    [JsonPropertyName("expected_base_branch")]
+    public string? ExpectedBaseBranch { get; init; }
 }
