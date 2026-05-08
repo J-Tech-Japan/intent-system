@@ -48,6 +48,7 @@ internal static class WorkerResultSummaryCommand
                 out var issue,
                 out var pr,
                 out var outcome,
+                out var prDraft,
                 out var format,
                 out var error))
         {
@@ -63,7 +64,8 @@ internal static class WorkerResultSummaryCommand
                 outcome!,
                 repo!,
                 issue,
-                pr);
+                pr,
+                prDraft);
         }
         catch (ArgumentException exception)
         {
@@ -99,6 +101,10 @@ internal static class WorkerResultSummaryCommand
         }
         writer.WriteLine($"- outcome: {result.Outcome}");
         writer.WriteLine($"- status: {result.Status}");
+        if (result.PrDraft is { } draft)
+        {
+            writer.WriteLine($"- pr_draft: {(draft ? "true (draft — host merge will be blocked)" : "false (ready for review)")}");
+        }
         writer.WriteLine();
 
         writer.WriteLine("## Recommended label actions (advisory only)");
@@ -139,6 +145,7 @@ internal static class WorkerResultSummaryCommand
         out int? issue,
         out int? pr,
         out string? outcome,
+        out bool? prDraft,
         out string format,
         out string error)
     {
@@ -147,6 +154,7 @@ internal static class WorkerResultSummaryCommand
         issue = null;
         pr = null;
         outcome = null;
+        prDraft = null;
         format = FormatText;
         error = string.Empty;
 
@@ -240,8 +248,31 @@ internal static class WorkerResultSummaryCommand
                     index++;
                     break;
 
+                case "--pr-draft":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--pr-draft requires a value (true or false).";
+                        return false;
+                    }
+                    var requestedDraft = args[index + 1].Trim().ToLowerInvariant();
+                    if (string.Equals(requestedDraft, "true", StringComparison.Ordinal))
+                    {
+                        prDraft = true;
+                    }
+                    else if (string.Equals(requestedDraft, "false", StringComparison.Ordinal))
+                    {
+                        prDraft = false;
+                    }
+                    else
+                    {
+                        error = $"--pr-draft must be 'true' or 'false' (got '{args[index + 1]}').";
+                        return false;
+                    }
+                    index++;
+                    break;
+
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: --kind <kind> --repo <owner/repo> --outcome <outcome> [--issue <n>] [--pr <n>] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: --kind <kind> --repo <owner/repo> --outcome <outcome> [--issue <n>] [--pr <n>] [--pr-draft true|false] [--format text|json].";
                     return false;
             }
         }

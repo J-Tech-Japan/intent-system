@@ -55,6 +55,23 @@ internal sealed record WorkerResultSummaryResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    /// <summary>
+    /// G296: explicit draft-state surface for issue-to-pr / pr-comment-fix
+    /// completion. <c>false</c> = ready-for-review (the policy default for
+    /// automation-created PRs); <c>true</c> = draft (worker explicitly chose
+    /// draft, e.g. for a partial implementation). <c>null</c> = unknown /
+    /// not applicable. Surfaced so the host review loop can detect a draft
+    /// PR before it tries to approve a non-mergeable merge.
+    /// </summary>
+    [JsonPropertyName("pr_draft")]
+    public bool? PrDraft { get; init; }
+
+    /// <summary>
+    /// G296 alias for downstream JSON ingestion that prefers camelCase.
+    /// </summary>
+    [JsonPropertyName("prDraft")]
+    public bool? PrDraftCamelCase => PrDraft;
 }
 
 /// <summary>

@@ -1007,6 +1007,41 @@ public sealed class GuidePromptMatrixCommandTests
         }
     }
 
+    // ── G296 PR draft state ─────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_ChildLoop_TellsAgentToCreateNonDraftPrsByDefault()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("**PR draft state (G296)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("ready-for-review", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT pass `--draft`", prompt, StringComparison.Ordinal);
+        Assert.Contains("worker result-summary --pr-draft", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildOneshot_TellsAgentToCreateNonDraftPrsByDefault()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("**PR draft state (G296)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("ready-for-review", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT pass `--draft`", prompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
