@@ -21,7 +21,10 @@ internal static class Program
             }
 
             var currentDirectory = Directory.GetCurrentDirectory();
-            if (IsIntakeInitCommand(args) || IsAutomationWorktreeCommand(args) || IsGuideOneshotCommand(args))
+            if (IsIntakeInitCommand(args)
+                || IsIntentInitCommand(args)
+                || IsAutomationWorktreeCommand(args)
+                || IsGuideOneshotCommand(args))
             {
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
             }
@@ -52,6 +55,13 @@ internal static class Program
     {
         return args.Length >= 2
             && string.Equals(args[0], "intake", StringComparison.Ordinal)
+            && string.Equals(args[1], "init", StringComparison.Ordinal);
+    }
+
+    private static bool IsIntentInitCommand(string[] args)
+    {
+        return args.Length >= 2
+            && string.Equals(args[0], "intent", StringComparison.Ordinal)
             && string.Equals(args[1], "init", StringComparison.Ordinal);
     }
 
