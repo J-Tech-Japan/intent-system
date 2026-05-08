@@ -10,7 +10,7 @@ namespace IntentSystem.Cli.Commands;
 internal static class GuideIntentWorkCommand
 {
     private const string UsageLine =
-        "Usage: intent-cli guide intent-work <setup|next-slice-execution> [options]";
+        "Usage: intent-cli guide intent-work <setup|next-slice-execution|audit> [options]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -28,6 +28,11 @@ internal static class GuideIntentWorkCommand
             return GuideIntentWorkNextSliceExecutionCommand.Execute(context, args[1..], writer);
         }
 
+        if (args.Length >= 1 && string.Equals(args[0], "audit", StringComparison.Ordinal))
+        {
+            return GuideIntentWorkAuditCommand.Execute(context, args[1..], writer);
+        }
+
         if (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal))
         {
             WriteHelp(writer);
@@ -43,6 +48,6 @@ internal static class GuideIntentWorkCommand
     {
         writer.WriteLine("guide intent-work");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Subcommands: setup, next-slice-execution");
+        writer.WriteLine("Subcommands: setup, next-slice-execution, audit");
     }
 }
