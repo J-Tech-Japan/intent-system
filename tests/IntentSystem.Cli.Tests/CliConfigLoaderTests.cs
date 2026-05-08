@@ -251,6 +251,62 @@ public sealed class CliConfigLoaderTests
         Assert.Contains("post_fix_worktree_progress_policy", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Load_BaseBranchPolicy_DefaultsToDirectMain_WhenAbsent()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal("direct-main", config.Project.BaseBranchPolicy);
+    }
+
+    [Fact]
+    public void Load_BaseBranchPolicy_AcceptsMainAi_AtRoot()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        base_branch_policy = "main-ai"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal("main-ai", config.Project.BaseBranchPolicy);
+    }
+
+    [Fact]
+    public void Load_BaseBranchPolicy_AcceptsMainAi_InProjectSection()
+    {
+        var toml = """
+        [project]
+        domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        base_branch_policy = "main-ai"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal("main-ai", config.Project.BaseBranchPolicy);
+    }
+
+    [Fact]
+    public void Load_BaseBranchPolicy_RejectsUnknownValue()
+    {
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        base_branch_policy = "trunk"
+        """;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => CliConfigLoader.Load(toml));
+        Assert.Contains("base_branch_policy", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("trunk", exception.Message, StringComparison.Ordinal);
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         private readonly string rootPath = Directory.CreateTempSubdirectory("intent-cli-tests-").FullName;

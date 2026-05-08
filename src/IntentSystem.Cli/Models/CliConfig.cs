@@ -24,6 +24,8 @@ internal sealed record ProjectConfig
     public string WorkRepoPath { get; init; } = string.Empty;
 
     public string ParentIntentRepoRoot { get; init; } = string.Empty;
+
+    public string BaseBranchPolicy { get; init; } = CliRuntimeContracts.DefaultBaseBranchPolicy;
 }
 
 internal sealed record RoleMappings

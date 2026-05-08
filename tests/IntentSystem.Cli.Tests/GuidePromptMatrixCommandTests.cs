@@ -917,6 +917,96 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("local same-thread/current-thread automation", prompt, StringComparison.Ordinal);
     }
 
+    // ── G294 base branch policy ─────────────────────────────────────────
+
+    [Fact]
+    public void Execute_DefaultBaseBranchPolicy_IsDirectMain()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("direct-main", root.GetProperty("base_branch_policy").GetString());
+        Assert.Equal("main", root.GetProperty("expected_base_branch").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.Contains("Base branch policy: `direct-main`", prompt, StringComparison.Ordinal);
+        Assert.Contains("expected base branch: `main`", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopWithMainAiPolicy_RendersMainAiBaseBranch()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--base-branch-policy", "main-ai", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("main-ai", root.GetProperty("base_branch_policy").GetString());
+        Assert.Equal("main-ai", root.GetProperty("expected_base_branch").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.Contains("Base branch policy: `main-ai`", prompt, StringComparison.Ordinal);
+        Assert.Contains("Child PRs target `main-ai`", prompt, StringComparison.Ordinal);
+        Assert.Contains("automation base-branch-check", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopWithMainAiPolicy_SurfacesPolicyInPrompt()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--base-branch-policy", "main-ai", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("main-ai", root.GetProperty("base_branch_policy").GetString());
+        Assert.Equal("main-ai", root.GetProperty("expected_base_branch").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.Contains("Closeout / merge expectation honors", prompt, StringComparison.Ordinal);
+        Assert.Contains("`main-ai → main` batch PR", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RejectsUnknownBaseBranchPolicy()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--base-branch-policy", "trunk"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--base-branch-policy must be 'direct-main' or 'main-ai'", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_AllFourModes_CarryBaseBranchPolicy_WhenSet()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--base-branch-policy", "main-ai", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+        foreach (var entry in document.RootElement.EnumerateArray())
+        {
+            Assert.Equal("main-ai", entry.GetProperty("base_branch_policy").GetString());
+            Assert.Equal("main-ai", entry.GetProperty("expected_base_branch").GetString());
+        }
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

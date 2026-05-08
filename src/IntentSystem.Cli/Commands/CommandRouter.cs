@@ -33,6 +33,7 @@ internal static class CommandRouter
 
     private static readonly IReadOnlyList<string> AutomationCommandHelp =
     [
+        "automation base-branch-check --repo <r> --pr <n> --actual-base <branch> [--policy direct-main|main-ai]",
         "automation check",
         "automation clarification-stop",
         "automation complete",
@@ -145,6 +146,7 @@ internal static class CommandRouter
             },
             ["automation"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
+                ["base-branch-check"] = AutomationBaseBranchCheckCommand.Execute,
                 ["check"] = AutomationCheckCommand.Execute,
                 ["clarification-stop"] = AutomationClarificationStopCommand.Execute,
                 ["complete"] = AutomationCompleteCommand.Execute,
