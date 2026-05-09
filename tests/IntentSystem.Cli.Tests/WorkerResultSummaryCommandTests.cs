@@ -539,6 +539,112 @@ public sealed class WorkerResultSummaryCommandTests : IDisposable
         Assert.DoesNotContain("resolveReviewThread", combined, StringComparison.Ordinal);
     }
 
+    // ----- G311: closing-reference annotation when caller pre-fetches PR body -----
+
+    [Fact]
+    public void Execute_G311_PrBodyMissingClosingReference_AddsWarning()
+    {
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", WorkerResultSummaryConstants.Kinds.IssueToPr,
+                "--repo", "J-Tech-Japan/intent-system",
+                "--issue", "725",
+                "--pr", "724",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr-draft", "false",
+                "--pr-body", "## Summary\n- Implement G311 (no closing reference yet).",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerResultSummaryResult>(writer.ToString())!;
+        Assert.Contains(result.Warnings, w => w.Contains("closing-reference (G311)", StringComparison.Ordinal));
+        Assert.Contains(result.Warnings, w => w.Contains("Closes #725", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G311_PrBodyHasValidClosingReference_NoG311Warning()
+    {
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", WorkerResultSummaryConstants.Kinds.IssueToPr,
+                "--repo", "J-Tech-Japan/intent-system",
+                "--issue", "725",
+                "--pr", "724",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr-draft", "false",
+                "--pr-body", "## Summary\n- Implement G311.\n\nCloses #725",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerResultSummaryResult>(writer.ToString())!;
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("closing-reference (G311)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G311_PrBodyHasMultipleDistinctRefs_AddsAmbiguityWarning()
+    {
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", WorkerResultSummaryConstants.Kinds.IssueToPr,
+                "--repo", "J-Tech-Japan/intent-system",
+                "--issue", "725",
+                "--pr", "724",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr-body", "Closes #725 and Fixes #800.",
+                "--format", "json",
+            },
+            writer);
+
+        var result = JsonSerializer.Deserialize<WorkerResultSummaryResult>(writer.ToString())!;
+        Assert.Contains(result.Warnings, w =>
+            w.Contains("closing-reference (G311)", StringComparison.Ordinal)
+            && w.Contains("multiple", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Execute_G311_PrBodyOmitted_SkipsAnnotation()
+    {
+        // When the operator does not supply --pr-body, the analyzer must
+        // not run — result-summary stays purely declarative.
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", WorkerResultSummaryConstants.Kinds.IssueToPr,
+                "--repo", "J-Tech-Japan/intent-system",
+                "--issue", "725",
+                "--pr", "724",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--format", "json",
+            },
+            writer);
+
+        var result = JsonSerializer.Deserialize<WorkerResultSummaryResult>(writer.ToString())!;
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("closing-reference (G311)", StringComparison.Ordinal));
+    }
+
     private static void ExecuteAndAssertExit(
         WorkerResultSummaryWorkspace workspace,
         StringWriter writer,

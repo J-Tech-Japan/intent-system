@@ -36,6 +36,14 @@ internal static class WorkerCompleteCommand
     public static Func<IGitHubLabelMutator>? MutatorFactory { get; set; }
 
     /// <summary>
+    /// G311 test seam: tests inject a fake <see cref="IGitHubPrLookup"/>
+    /// here so the closing-reference gate on <c>--kind issue --outcome
+    /// pr-created</c> can be exercised without GitHub network access.
+    /// When null, the command shells out via <see cref="GhCliGitHubPrLookup"/>.
+    /// </summary>
+    public static Func<IGitHubPrLookup>? PrLookupFactory { get; set; }
+
+    /// <summary>
     /// Test sentinel: must NEVER be invoked. Tests assert it remains
     /// uninvoked across all command paths.
     /// </summary>
@@ -78,6 +86,82 @@ internal static class WorkerCompleteCommand
         {
             writer.WriteLine("--pr is required when --kind issue --outcome pr-created (created PR number publishes intent-target to host review).");
             return 1;
+        }
+
+        // G311: gate `--kind issue --outcome pr-created` on a deterministic
+        // GitHub closing reference (`Closes/Fixes/Resolves #<source-issue>`)
+        // in the PR body. Refuse to mark complete when the reference is
+        // missing, points at a different issue, or is ambiguous (multiple
+        // distinct closing refs). The check runs on both --dry-run and
+        // --write so dry-run guidance is consistent with the write block.
+        PrClosingReferenceResult? closingRefResult = null;
+        if (isPrCreatedOutcome && prNumber is { } prNumberForCheck)
+        {
+            IGitHubPrLookup prLookup;
+            try
+            {
+                prLookup = PrLookupFactory?.Invoke() ?? new GhCliGitHubPrLookup();
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException
+                or IOException)
+            {
+                writer.WriteLine($"failed to initialize GitHub PR lookup: {exception.Message}");
+                return 1;
+            }
+
+            GitHubPrLookupResult prLookupResult;
+            try
+            {
+                prLookupResult = prLookup.Lookup(repo!, prNumberForCheck);
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException
+                or IOException)
+            {
+                writer.WriteLine(
+                    $"failed to fetch PR #{prNumberForCheck} body for closing-reference check (G311): {exception.Message}");
+                return 1;
+            }
+
+            // GitHub's own `closingIssuesReferences` is the authoritative
+            // signal — when GitHub already resolved the closing reference
+            // for the source issue, accept that even if the body wording
+            // differs. Otherwise fall back to text parsing.
+            var resolvedByGitHub = prLookupResult.ClosingIssuesReferences.Any(reference =>
+                reference.Number == number
+                && IsSameRepo(reference.Repository, repo!));
+            if (resolvedByGitHub)
+            {
+                closingRefResult = new PrClosingReferenceResult
+                {
+                    Classification = PrClosingReferenceAnalyzer.ClassificationValid,
+                    Ok = true,
+                    References = Array.Empty<PrClosingReference>(),
+                    SourceIssueNumber = number,
+                    Repo = repo!,
+                    Remediation = Array.Empty<string>(),
+                    Summary = $"GitHub recorded a closing reference from PR #{prNumberForCheck} to source issue #{number} (G311).",
+                };
+            }
+            else
+            {
+                closingRefResult = PrClosingReferenceAnalyzer.Analyze(
+                    prLookupResult.Body,
+                    sourceIssueNumber: number,
+                    repo: repo!);
+            }
+
+            if (!closingRefResult.Ok)
+            {
+                writer.WriteLine(
+                    $"refused to complete issue #{number} as `pr-created`: {closingRefResult.Summary}");
+                foreach (var step in closingRefResult.Remediation)
+                {
+                    writer.WriteLine($"- {step}");
+                }
+                return 1;
+            }
         }
 
         IGitHubLabelMutator mutator;
@@ -321,6 +405,29 @@ internal static class WorkerCompleteCommand
         return File.Exists(parentQueueStatePath)
             ? parentQueueStatePath
             : localQueueStatePath;
+    }
+
+    /// <summary>
+    /// G311: returns true when the GitHub-reported closing-issue
+    /// repository matches <paramref name="repo"/>. <paramref name="repo"/>
+    /// is in <c>owner/name</c> form. A null repository (same-repo
+    /// closing reference) is also treated as matching.
+    /// </summary>
+    private static bool IsSameRepo(GitHubPrClosingIssueRepository? repository, string repo)
+    {
+        if (repository is null)
+        {
+            return true;
+        }
+        var ownerLogin = repository.Owner?.Login ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(ownerLogin) || string.IsNullOrWhiteSpace(repository.Name))
+        {
+            return false;
+        }
+        return string.Equals(
+            $"{ownerLogin}/{repository.Name}",
+            repo,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<string> LabelNames(IReadOnlyList<GitHubAutomationLabel>? labels)

@@ -49,6 +49,7 @@ internal static class WorkerResultSummaryCommand
                 out var pr,
                 out var outcome,
                 out var prDraft,
+                out var prBody,
                 out var format,
                 out var error))
         {
@@ -71,6 +72,33 @@ internal static class WorkerResultSummaryCommand
         {
             writer.WriteLine(exception.Message);
             return 1;
+        }
+
+        // G311: when the caller supplied the PR body, run the closing-
+        // reference analyzer and surface a hard warning when the source
+        // issue is not deterministically closed by the PR. result-summary
+        // remains pure (no GitHub fetch); it only annotates the verdict
+        // when the caller pre-fetched the body. The block at `worker
+        // complete` is the actual write gate.
+        if (prBody is not null
+            && string.Equals(kind, WorkerResultSummaryConstants.Kinds.IssueToPr, StringComparison.Ordinal)
+            && string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.PrCreated, StringComparison.Ordinal)
+            && issue is { } sourceIssueNumber)
+        {
+            var closingRef = PrClosingReferenceAnalyzer.Analyze(
+                prBody,
+                sourceIssueNumber: sourceIssueNumber,
+                repo: repo!);
+            if (!closingRef.Ok)
+            {
+                var augmentedWarnings = result.Warnings.ToList();
+                augmentedWarnings.Add($"closing-reference (G311): {closingRef.Summary}");
+                foreach (var step in closingRef.Remediation)
+                {
+                    augmentedWarnings.Add($"closing-reference (G311) remediation: {step}");
+                }
+                result = result with { Warnings = augmentedWarnings };
+            }
         }
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -146,6 +174,7 @@ internal static class WorkerResultSummaryCommand
         out int? pr,
         out string? outcome,
         out bool? prDraft,
+        out string? prBody,
         out string format,
         out string error)
     {
@@ -155,6 +184,7 @@ internal static class WorkerResultSummaryCommand
         pr = null;
         outcome = null;
         prDraft = null;
+        prBody = null;
         format = FormatText;
         error = string.Empty;
 
@@ -248,6 +278,39 @@ internal static class WorkerResultSummaryCommand
                     index++;
                     break;
 
+                case "--pr-body":
+                    if (index + 1 >= args.Length)
+                    {
+                        error = "--pr-body requires a value (PR body text — empty string permitted to assert 'no body').";
+                        return false;
+                    }
+                    prBody = args[index + 1];
+                    index++;
+                    break;
+
+                case "--pr-body-file":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--pr-body-file requires a value (path to a file containing the PR body).";
+                        return false;
+                    }
+                    var bodyFilePath = args[index + 1];
+                    try
+                    {
+                        prBody = File.ReadAllText(bodyFilePath);
+                    }
+                    catch (Exception exception) when (
+                        exception is IOException
+                        or UnauthorizedAccessException
+                        or FileNotFoundException
+                        or DirectoryNotFoundException)
+                    {
+                        error = $"--pr-body-file '{bodyFilePath}' could not be read: {exception.Message}";
+                        return false;
+                    }
+                    index++;
+                    break;
+
                 case "--pr-draft":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -272,7 +335,7 @@ internal static class WorkerResultSummaryCommand
                     break;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: --kind <kind> --repo <owner/repo> --outcome <outcome> [--issue <n>] [--pr <n>] [--pr-draft true|false] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: --kind <kind> --repo <owner/repo> --outcome <outcome> [--issue <n>] [--pr <n>] [--pr-draft true|false] [--pr-body <text>|--pr-body-file <path>] [--format text|json].";
                     return false;
             }
         }
