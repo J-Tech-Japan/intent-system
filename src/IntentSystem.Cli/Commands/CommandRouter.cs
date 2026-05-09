@@ -45,6 +45,7 @@ internal static class CommandRouter
         "automation pr-transition --transition review-start --write",
         "automation pr-transition --transition request-update --write",
         "automation pr-transition --transition approved --write",
+        "automation publish-recovery --repo <r> [--write]",
         "automation reconcile [--lane host-review|next-slice|all] [--write]",
         "automation summary"
     ];
@@ -162,6 +163,7 @@ internal static class CommandRouter
                 ["host-review-diagnostics"] = AutomationHostReviewDiagnosticsCommand.Execute,
                 ["issue-publish"] = AutomationIssuePublishCommand.Execute,
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,
+                ["publish-recovery"] = AutomationPublishRecoveryCommand.Execute,
                 ["reconcile"] = AutomationReconcileCommand.Execute,
                 ["summary"] = AutomationSummaryCommand.Execute
             },
