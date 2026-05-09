@@ -24,7 +24,7 @@ internal static class IntentInitCommand
     private const string FormatMarkdown = "markdown";
 
     private const string UsageLine =
-        "Usage: intent-cli intent init --domain <name> [--target-repo <owner/repo>] [--write] [--format markdown|json]";
+        "Usage: intent-cli intent init --domain <name> [--target-repo <owner/repo>] [--host-repo <owner/repo>] [--write] [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -65,9 +65,16 @@ internal static class IntentInitCommand
 
         EnsureNotChildWorktree(hostRepoRoot);
 
+        // G301: extend the new-host bootstrap to also write the canonical
+        // host policy files (`AGENTS.md`, `CLAUDE.md`) and the host-binding
+        // record so wrong-host operation can be detected later. The
+        // existing four files (G293) are preserved verbatim.
         var planned = new List<string>
         {
             $"{CliRuntimeContracts.IntentCliDirectoryName}/{CliRuntimeContracts.ConfigFileName}",
+            $"{CliRuntimeContracts.IntentCliDirectoryName}/host-binding.toml",
+            "AGENTS.md",
+            "CLAUDE.md",
             $"intents/{request.Domain}/README.md",
             $"intents/{request.Domain}/clarifications/open.md",
             $"intents/{request.Domain}/intent-tree/00-map.md"
@@ -174,6 +181,10 @@ internal static class IntentInitCommand
         {
             var path when path.EndsWith($"/{CliRuntimeContracts.ConfigFileName}", StringComparison.Ordinal)
                 => RenderConfigToml(request),
+            var path when path.EndsWith("/host-binding.toml", StringComparison.Ordinal)
+                => RenderHostBindingToml(request),
+            "AGENTS.md" => RenderAgentsMarkdown(request),
+            "CLAUDE.md" => RenderClaudeMarkdown(request),
             var path when path.EndsWith("/README.md", StringComparison.Ordinal)
                 => RenderDomainReadme(request),
             var path when path.EndsWith("/clarifications/open.md", StringComparison.Ordinal)
@@ -183,6 +194,127 @@ internal static class IntentInitCommand
             _ => throw new InvalidOperationException(
                 $"Intent init has no template for '{relativePath}'.")
         };
+    }
+
+    /// <summary>
+    /// G301: host-binding record so other commands can detect wrong-host
+    /// usage. Captures the canonical owner/repo of the host (the repo that
+    /// owns this `.intent-cli/` package) plus the target child repo and
+    /// the domain. <see cref="WrongHostGuard"/> reads this file and
+    /// compares against the observed git remote.
+    /// </summary>
+    private static string RenderHostBindingToml(IntentInitRequest request)
+    {
+        var hostRepoLine = string.IsNullOrWhiteSpace(request.HostRepo)
+            ? "host_repo = \"\""
+            : $"host_repo = \"{EscapeTomlString(request.HostRepo!)}\"";
+        var targetRepoLine = string.IsNullOrWhiteSpace(request.TargetRepo)
+            ? "target_repo = \"\""
+            : $"target_repo = \"{EscapeTomlString(request.TargetRepo!)}\"";
+
+        return $$"""
+        # G301 host binding record. Other intent-cli commands consult this to
+        # detect wrong-host operation (e.g. publishing a domain from a host
+        # repo whose remote does not match `host_repo`). Empty values are
+        # treated as "not yet bound" and skip the wrong-host check.
+        [host]
+        domain = "{{EscapeTomlString(request.Domain)}}"
+        {{hostRepoLine}}
+        {{targetRepoLine}}
+        """;
+    }
+
+    /// <summary>
+    /// G301: canonical host-side AGENTS.md so a fresh AI agent reading the
+    /// repo immediately sees the host working policy without needing to
+    /// rely on prompt memory. Keep this short and durable; it is not a
+    /// substitute for `intent-cli guide ...`.
+    /// </summary>
+    private static string RenderAgentsMarkdown(IntentInitRequest request)
+    {
+        var targetLine = string.IsNullOrWhiteSpace(request.TargetRepo)
+            ? string.Empty
+            : $"- Target repo (child implementation): `{request.TargetRepo}`" + Environment.NewLine;
+        var hostLine = string.IsNullOrWhiteSpace(request.HostRepo)
+            ? string.Empty
+            : $"- Host repo (this repo): `{request.HostRepo}`" + Environment.NewLine;
+
+        return $$"""
+        # AGENTS.md — host repo working policy
+
+        This is an **intent host repository**. It owns durable parent state for the
+        `{{request.Domain}}` domain under `.intent-cli/` and `intents/{{request.Domain}}/`.
+        Child implementation repos do NOT own this state.
+
+        {{hostLine}}{{targetLine}}- Domain: `{{request.Domain}}`
+        - Bootstrapped by `intent-cli intent init` (G293 / G301).
+
+        ## Host repo working policy
+
+        - Work directly on `main`. Do NOT open a PR for routine host-state updates
+          (queue-state, runs.jsonl, packets, intents/) unless the operator explicitly
+          asks for one.
+        - `git pull --ff-only` before edits. Commit and push to `main` after each
+          coherent change.
+        - All workflow label transitions go through installed `intent-cli automation`
+          / `intent-cli worker` commands. Never edit GitHub labels by hand.
+        - Routine collaboration uses `intent-cli guide ...`. Do NOT read
+          `intents/rules/**`, copied prompt files, or local skill files for routine
+          operation.
+        - Do NOT call `intent-cli run` (advanced runtime) or `dotnet run` as a
+          fallback. Do NOT ask `intent-cli` to launch Claude/Codex.
+
+        ## Wrong-host detection (G301)
+
+        `.intent-cli/host-binding.toml` records the canonical host repo for this
+        domain. If you operate this domain from a different host repo, expect
+        `intent-cli` to surface a structured wrong-host warning with remediation
+        steps; do not silently proceed with parent-state mutation.
+        """;
+    }
+
+    /// <summary>
+    /// G301: companion Claude-readable host policy. Mirrors AGENTS.md so a
+    /// Claude agent reading either file gets the same canonical
+    /// instructions regardless of which the host conventions name.
+    /// </summary>
+    private static string RenderClaudeMarkdown(IntentInitRequest request)
+    {
+        var targetLine = string.IsNullOrWhiteSpace(request.TargetRepo)
+            ? string.Empty
+            : $"- Target repo: `{request.TargetRepo}`" + Environment.NewLine;
+        var hostLine = string.IsNullOrWhiteSpace(request.HostRepo)
+            ? string.Empty
+            : $"- Host repo (this repo): `{request.HostRepo}`" + Environment.NewLine;
+
+        return $$"""
+        # CLAUDE.md — host repo guide for Claude / chat-first agents
+
+        This is an **intent host repository** for the `{{request.Domain}}` domain.
+        See `AGENTS.md` for the canonical host working policy. This file mirrors
+        that policy for Claude-specific tool conventions.
+
+        {{hostLine}}{{targetLine}}
+        ## Reading order
+
+        1. The current GitHub Issue body (when running an automation loop).
+        2. `AGENTS.md` (host policy baseline).
+        3. `intent-cli guide ...` (chat-first canonical guidance — never read
+           `intents/rules/**` or local skills for routine operation).
+
+        ## Hard rules (host repo)
+
+        - Work directly on `main` for host-state updates; pull before edit, commit
+          and push after each coherent change. Open a PR only if the operator
+          explicitly asks.
+        - Workflow label transitions go through `intent-cli automation` /
+          `intent-cli worker`. Never raw `gh ... edit --add-label`.
+        - Do NOT call `intent-cli run`, `dotnet run`, or ask intent-cli to launch
+          an AI provider.
+        - On any `Could not find .intent-cli` failure, follow the structured
+          fail-closed guidance (G299) — do not fall back to ordinary GitHub
+          review or raw PR comments.
+        """;
     }
 
     private static string RenderConfigToml(IntentInitRequest request)
@@ -256,6 +388,7 @@ internal static class IntentInitCommand
 
         string? domain = null;
         string? targetRepo = null;
+        string? hostRepo = null;
         var write = false;
         var format = FormatMarkdown;
 
@@ -278,6 +411,14 @@ internal static class IntentInitCommand
                         return false;
                     }
                     targetRepo = args[++index].Trim();
+                    break;
+                case "--host-repo":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "Missing value for '--host-repo'.";
+                        return false;
+                    }
+                    hostRepo = args[++index].Trim();
                     break;
                 case "--write":
                     write = true;
@@ -319,6 +460,7 @@ internal static class IntentInitCommand
         {
             Domain = domain!,
             TargetRepo = targetRepo,
+            HostRepo = hostRepo,
             Write = write,
             Format = format
         };
@@ -370,6 +512,8 @@ internal static class IntentInitCommand
         public required string Domain { get; init; }
 
         public string? TargetRepo { get; init; }
+
+        public string? HostRepo { get; init; }
 
         public required bool Write { get; init; }
 
