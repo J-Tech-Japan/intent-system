@@ -70,7 +70,8 @@ internal static class Program
     {
         return args.Length >= 2
             && string.Equals(args[0], "intent", StringComparison.Ordinal)
-            && string.Equals(args[1], "init", StringComparison.Ordinal);
+            && (string.Equals(args[1], "init", StringComparison.Ordinal)
+                || string.Equals(args[1], "host-check", StringComparison.Ordinal));
     }
 
     private static bool IsAutomationWorktreeCommand(string[] args)
