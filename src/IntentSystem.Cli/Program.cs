@@ -82,6 +82,7 @@ internal static class Program
                 || string.Equals(args[1], "clarification-stop", StringComparison.Ordinal)
                 || string.Equals(args[1], "complete", StringComparison.Ordinal)
                 || string.Equals(args[1], "doctor", StringComparison.Ordinal)
+                || string.Equals(args[1], "host-loop-next-action", StringComparison.Ordinal)
                 || string.Equals(args[1], "host-review-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "host-review-diagnostics", StringComparison.Ordinal)
                 || string.Equals(args[1], "host-sync-preflight", StringComparison.Ordinal)
