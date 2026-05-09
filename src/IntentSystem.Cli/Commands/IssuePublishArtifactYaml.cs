@@ -15,6 +15,51 @@ internal sealed record IssuePublishArtifact
     public required string? CreatedIssueUrl { get; init; }
 
     public required string? PublishedLabelName { get; init; }
+
+    /// <summary>
+    /// G307 canonical lifecycle state: one of
+    /// <see cref="IssuePublishLifecycle.IssueCreated"/>,
+    /// <see cref="IssuePublishLifecycle.Published"/>,
+    /// <see cref="IssuePublishLifecycle.PrCreated"/>,
+    /// <see cref="IssuePublishLifecycle.ClosedOut"/>. Optional for
+    /// backward compatibility — artifacts produced before G307 are
+    /// deserialized with <c>LifecycleState = null</c>; the lifecycle
+    /// analyzer treats null as the implicit pre-G307 baseline equivalent
+    /// to <c>issue-created</c>.
+    /// </summary>
+    public string? LifecycleState { get; init; }
+
+    /// <summary>G307: PR number recorded when lifecycle reaches <c>pr-created</c>.</summary>
+    public int? LinkedPrNumber { get; init; }
+
+    /// <summary>G307: PR URL recorded when lifecycle reaches <c>pr-created</c>.</summary>
+    public string? LinkedPrUrl { get; init; }
+
+    /// <summary>G307: ISO-8601 UTC timestamp recorded when lifecycle reaches <c>closed-out</c>.</summary>
+    public string? ClosedOutAt { get; init; }
+}
+
+/// <summary>G307: canonical lifecycle states for <see cref="IssuePublishArtifact.LifecycleState"/>.</summary>
+internal static class IssuePublishLifecycle
+{
+    public const string IssueCreated = "issue-created";
+    public const string Published = "published";
+    public const string PrCreated = "pr-created";
+    public const string ClosedOut = "closed-out";
+
+    public static readonly IReadOnlyList<string> All = new[] { IssueCreated, Published, PrCreated, ClosedOut };
+
+    public static bool IsKnown(string? state) =>
+        !string.IsNullOrWhiteSpace(state) && All.Contains(state, StringComparer.Ordinal);
+
+    public static int Rank(string? state) => state switch
+    {
+        IssueCreated => 0,
+        Published => 1,
+        PrCreated => 2,
+        ClosedOut => 3,
+        _ => 0  // null / unknown ⇒ implicit issue-created baseline
+    };
 }
 
 internal static class IssuePublishArtifactYaml
@@ -34,18 +79,38 @@ internal static class IssuePublishArtifactYaml
     {
         ArgumentNullException.ThrowIfNull(artifact);
 
-        return string.Join(
-                   Environment.NewLine,
-                   [
-                       $"execution_unit: {artifact.ExecutionUnit}",
-                       $"publish_status: {artifact.PublishStatus}",
-                       $"packet_path: {Quote(artifact.PacketPath)}",
-                       $"issue_body_path: {Quote(artifact.IssueBodyPath)}",
-                       $"created_issue_number: {FormatNullableInteger(artifact.CreatedIssueNumber)}",
-                       $"created_issue_url: {FormatNullableScalar(artifact.CreatedIssueUrl)}",
-                       $"published_label_name: {FormatNullableScalar(artifact.PublishedLabelName)}"
-                   ])
-               + Environment.NewLine;
+        var lines = new List<string>
+        {
+            $"execution_unit: {artifact.ExecutionUnit}",
+            $"publish_status: {artifact.PublishStatus}",
+            $"packet_path: {Quote(artifact.PacketPath)}",
+            $"issue_body_path: {Quote(artifact.IssueBodyPath)}",
+            $"created_issue_number: {FormatNullableInteger(artifact.CreatedIssueNumber)}",
+            $"created_issue_url: {FormatNullableScalar(artifact.CreatedIssueUrl)}",
+            $"published_label_name: {FormatNullableScalar(artifact.PublishedLabelName)}"
+        };
+
+        // G307: emit the new lifecycle fields only when populated so artifacts
+        // written by code paths that do not yet know about lifecycle remain
+        // byte-stable until they upgrade.
+        if (!string.IsNullOrEmpty(artifact.LifecycleState))
+        {
+            lines.Add($"lifecycle_state: {Quote(artifact.LifecycleState!)}");
+        }
+        if (artifact.LinkedPrNumber.HasValue)
+        {
+            lines.Add($"linked_pr_number: {FormatNullableInteger(artifact.LinkedPrNumber)}");
+        }
+        if (!string.IsNullOrEmpty(artifact.LinkedPrUrl))
+        {
+            lines.Add($"linked_pr_url: {FormatNullableScalar(artifact.LinkedPrUrl)}");
+        }
+        if (!string.IsNullOrEmpty(artifact.ClosedOutAt))
+        {
+            lines.Add($"closed_out_at: {Quote(artifact.ClosedOutAt!)}");
+        }
+
+        return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
 
     public static IssuePublishArtifact Deserialize(string yaml)
@@ -63,7 +128,41 @@ internal static class IssuePublishArtifactYaml
             IssueBodyPath = GetRequiredScalar(values, "issue_body_path"),
             CreatedIssueNumber = GetNullableInteger(values, "created_issue_number"),
             CreatedIssueUrl = GetNullableScalar(values, "created_issue_url"),
-            PublishedLabelName = GetNullableScalar(values, "published_label_name")
+            PublishedLabelName = GetNullableScalar(values, "published_label_name"),
+            // G307 optional lifecycle fields — backward compatible with
+            // artifacts written before this PR.
+            LifecycleState = GetOptionalScalar(values, "lifecycle_state"),
+            LinkedPrNumber = GetOptionalInteger(values, "linked_pr_number"),
+            LinkedPrUrl = GetOptionalScalar(values, "linked_pr_url"),
+            ClosedOutAt = GetOptionalScalar(values, "closed_out_at")
+        };
+    }
+
+    private static string? GetOptionalScalar(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            return null;
+        }
+        return value switch
+        {
+            null => null,
+            string text => string.IsNullOrEmpty(text) ? null : text,
+            _ => null
+        };
+    }
+
+    private static int? GetOptionalInteger(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        if (!values.TryGetValue(key, out var value))
+        {
+            return null;
+        }
+        return value switch
+        {
+            null => null,
+            int n => n,
+            _ => null
         };
     }
 
