@@ -114,6 +114,30 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
     }
 
     [Fact]
+    public void Begin_Write_Refuses_WhenCreatedStashRefCannotBeIdentified()
+    {
+        using var workspace = new GuardWorkspace();
+        var fake = new FakeGitRunner(porcelain: " m submodules/other\n");
+        fake.QueueResponse("stash list --format=%gd %s",
+            stdout: "stash@{0} On main: unrelated operator stash\n");
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+        AutomationWorkspaceGuardCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 9, 0, 0, 0, TimeSpan.Zero);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "begin", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("stash_ref").ValueKind);
+        Assert.Contains("could not identify a stash entry", doc.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json")));
+    }
+
+    [Fact]
     public void Begin_Refuses_WhenDurableStateIsDirty_EvenWithWriteFlag()
     {
         using var workspace = new GuardWorkspace();

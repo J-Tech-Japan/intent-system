@@ -194,6 +194,25 @@ internal static class AutomationWorkspaceGuardCommand
         // Stash list lookup: find the most recent stash matching our message.
         var listResult = runner.Run(new[] { "stash", "list", "--format=%gd %s" });
         var stashRef = ParseStashRef(listResult.StandardOutput, message);
+        if (listResult.ExitCode != 0 || stashRef is null)
+        {
+            var failure = new WorkspaceGuardResult
+            {
+                Mode = ModeBegin,
+                ProceedAllowed = false,
+                SafeStashPaths = safeStash,
+                DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
+                StashMessage = message,
+                StashRef = null,
+                ConflictPaths = Array.Empty<string>(),
+                StateFilePath = statePath,
+                Summary = listResult.ExitCode != 0
+                    ? $"workspace-guard begin failed after stash push: `git stash list` exited {listResult.ExitCode}: {listResult.StandardError.Trim()}. Inspect `git stash list` and restore the stash with message '{message}' before continuing."
+                    : $"workspace-guard begin failed after stash push: could not identify a stash entry with message '{message}'. Inspect `git stash list` and restore that stash before continuing."
+            };
+            EmitResult(writer, format, failure);
+            return 1;
+        }
 
         var state = new WorkspaceGuardState
         {
@@ -342,7 +361,7 @@ internal static class AutomationWorkspaceGuardCommand
     private static DateTimeOffset ResolveNow() =>
         (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
 
-    private static string ParseStashRef(string stashListOutput, string message)
+    private static string? ParseStashRef(string stashListOutput, string message)
     {
         // `stash list --format=%gd %s` produces: stash@{0} <message>
         foreach (var rawLine in stashListOutput.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -357,8 +376,7 @@ internal static class AutomationWorkspaceGuardCommand
                 return head;
             }
         }
-        // Fallback: assume newest stash is ours.
-        return "stash@{0}";
+        return null;
     }
 
     private static IReadOnlyList<string> ParseConflictPaths(string output)
