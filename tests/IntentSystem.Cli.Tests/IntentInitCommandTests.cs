@@ -70,6 +70,106 @@ public sealed class IntentInitCommandTests
         Assert.Contains("`intents/auth/README.md`", secondOutput, StringComparison.Ordinal);
     }
 
+    // ── G301 host bootstrap (AGENTS.md / CLAUDE.md / host-binding.toml) ──
+
+    [Fact]
+    public void Execute_WithWrite_AlsoBootstrapsAgentsClaudeAndHostBinding()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "trace-forge-poc", "--target-repo", "J-Tech-Japan/TraceForge", "--host-repo", "J-Tech-Japan/TraceForgeHost", "--write"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var agents = Path.Combine(hostRoot, "AGENTS.md");
+        var claude = Path.Combine(hostRoot, "CLAUDE.md");
+        var binding = Path.Combine(hostRoot, ".intent-cli", "host-binding.toml");
+        Assert.True(File.Exists(agents));
+        Assert.True(File.Exists(claude));
+        Assert.True(File.Exists(binding));
+
+        var agentsText = File.ReadAllText(agents);
+        Assert.Contains("intent host repository", agentsText, StringComparison.Ordinal);
+        Assert.Contains("Work directly on `main`", agentsText, StringComparison.Ordinal);
+        Assert.Contains("Wrong-host detection (G301)", agentsText, StringComparison.Ordinal);
+        Assert.Contains("J-Tech-Japan/TraceForgeHost", agentsText, StringComparison.Ordinal);
+        Assert.Contains("J-Tech-Japan/TraceForge", agentsText, StringComparison.Ordinal);
+        Assert.Contains("trace-forge-poc", agentsText, StringComparison.Ordinal);
+
+        var claudeText = File.ReadAllText(claude);
+        Assert.Contains("CLAUDE.md", claudeText, StringComparison.Ordinal);
+        Assert.Contains("trace-forge-poc", claudeText, StringComparison.Ordinal);
+        Assert.Contains("Hard rules (host repo)", claudeText, StringComparison.Ordinal);
+        Assert.Contains("G299", claudeText, StringComparison.Ordinal);
+
+        var bindingText = File.ReadAllText(binding);
+        Assert.Contains("[host]", bindingText, StringComparison.Ordinal);
+        Assert.Contains("domain = \"trace-forge-poc\"", bindingText, StringComparison.Ordinal);
+        Assert.Contains("host_repo = \"J-Tech-Japan/TraceForgeHost\"", bindingText, StringComparison.Ordinal);
+        Assert.Contains("target_repo = \"J-Tech-Japan/TraceForge\"", bindingText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_WithWrite_HostBindingHasEmptyValuesWhenFlagsOmitted()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--write"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var binding = File.ReadAllText(Path.Combine(hostRoot, ".intent-cli", "host-binding.toml"));
+        Assert.Contains("domain = \"auth\"", binding, StringComparison.Ordinal);
+        Assert.Contains("host_repo = \"\"", binding, StringComparison.Ordinal);
+        Assert.Contains("target_repo = \"\"", binding, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_DryRun_ReportsAgentsClaudeAndHostBindingAsPlanned()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--target-repo", "owner/repo", "--host-repo", "owner/host", "--format", "json"],
+            writer);
+
+        var json = writer.ToString();
+        Assert.Contains("\"AGENTS.md\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"CLAUDE.md\"", json, StringComparison.Ordinal);
+        Assert.Contains("\".intent-cli/host-binding.toml\"", json, StringComparison.Ordinal);
+        // No write applied → none of those files should exist on disk.
+        Assert.False(File.Exists(Path.Combine(hostRoot, "AGENTS.md")));
+        Assert.False(File.Exists(Path.Combine(hostRoot, "CLAUDE.md")));
+        Assert.False(File.Exists(Path.Combine(hostRoot, ".intent-cli", "host-binding.toml")));
+    }
+
+    [Fact]
+    public void Execute_RejectsMissingHostRepoValue()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--host-repo"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--host-repo", writer.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Execute_FromChildWorktree_ReturnsExitCodeOne_WithGuidance()
     {
