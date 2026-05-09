@@ -1152,6 +1152,90 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("automation host-sync-preflight", prompt, StringComparison.Ordinal);
     }
 
+    // ── G305 self-contained child one-shot guidance ─────────────────────
+
+    [Fact]
+    public void Execute_ChildOneshot_StatesAbsenceOfIntentCliInChildIsExpected()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Absence of `.intent-cli/` in the implementation repo is the expected steady state", prompt, StringComparison.Ordinal);
+        Assert.Contains("MUST NOT by itself abort the child workflow (G305)", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildOneshot_TellsAgentToTakeIssuePrNumberFromWorkerNextAction()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("**Worker selector is the source of truth (G305)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("NEVER from operator-supplied prompt text", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not invent issue/PR numbers from prompt memory", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildOneshot_ListsAbortConditionsForMissingCliAndAuth()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("**Abort conditions (G305)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("global `intent-cli` is missing from `PATH`", prompt, StringComparison.Ordinal);
+        Assert.Contains("`gh auth status` fails", prompt, StringComparison.Ordinal);
+        Assert.Contains("ambiguous repo / multiple matches", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-issue-in-progress", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildOneshot_IsSelfContained_ForbidsLocalRulesAndSkills()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Do not read `intents/rules/**`", prompt, StringComparison.Ordinal);
+        Assert.Contains("local skill files", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not run `dotnet run` as a fallback", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not ask `intent-cli` to launch Claude/Codex", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoop_AlsoCarriesG305Rules()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("MUST NOT by itself abort the child workflow (G305)", prompt, StringComparison.Ordinal);
+        Assert.Contains("**Worker selector is the source of truth (G305)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("**Abort conditions (G305)**", prompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
