@@ -89,7 +89,8 @@ internal static class Program
                 || string.Equals(args[1], "pr-transition", StringComparison.Ordinal)
                 || string.Equals(args[1], "publish-recovery", StringComparison.Ordinal)
                 || string.Equals(args[1], "reconcile", StringComparison.Ordinal)
-                || string.Equals(args[1], "summary", StringComparison.Ordinal));
+                || string.Equals(args[1], "summary", StringComparison.Ordinal)
+                || string.Equals(args[1], "workspace-guard", StringComparison.Ordinal));
     }
 
     private static bool IsGuideOneshotCommand(string[] args)

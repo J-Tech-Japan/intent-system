@@ -66,6 +66,16 @@ internal static class HostSyncPreflightAnalyzer
         var clean = behindOriginCommits == 0 && dirtyDurable.Count == 0 && dirtyOther.Count == 0;
         var classification = ClassifyTerminal(behindOriginCommits, dirtyDurable.Count, dirtyOther.Count);
 
+        // G306: when ONLY unrelated dirty paths are present (no dirty
+        // durable host-state, no `dirty-mixed`), the host loop can proceed
+        // through the safe-stash lane: stash the unrelated paths via
+        // `automation workspace-guard --mode begin --write`, run the wake,
+        // then restore via `--mode end --write`. Dirty durable host-state
+        // and `dirty-mixed` remain hard stops because automation cannot
+        // safely stash files it might also be about to mutate.
+        var safeStashAllowed = dirtyDurable.Count == 0 && dirtyOther.Count > 0;
+        var proceedAllowed = clean || safeStashAllowed;
+
         var nextSteps = BuildNextSteps(classification, behindOriginCommits, dirtyDurable, dirtyOther);
 
         return new HostSyncPreflightResult
@@ -73,7 +83,9 @@ internal static class HostSyncPreflightAnalyzer
             Branch = branch,
             BehindOriginCommits = behindOriginCommits,
             Classification = classification,
-            ProceedAllowed = clean,
+            ProceedAllowed = proceedAllowed,
+            SafeStashRequired = safeStashAllowed,
+            SafeStashPaths = dirtyOther,
             DirtyDurableStatePaths = dirtyDurable,
             DirtyUnrelatedPaths = dirtyOther,
             Summary = BuildSummary(classification, branch, behindOriginCommits, dirtyDurable.Count, dirtyOther.Count),
@@ -130,7 +142,7 @@ internal static class HostSyncPreflightAnalyzer
             ClassificationDirtyDurableState =>
                 $"Host repo on `{branch}` has {dirtyDurableCount} uncommitted change(s) to durable host-state files. Refusing to proceed (G304); commit/push or revert before the wake continues.",
             ClassificationDirtyUnrelatedSubmodule =>
-                $"Host repo on `{branch}` has {dirtyOtherCount} uncommitted change(s) outside durable host-state. Surface to the operator before the wake continues; do not silently stash or overwrite (G304).",
+                $"Host repo on `{branch}` has {dirtyOtherCount} uncommitted change(s) outside durable host-state. Use the G306 safe-stash lane (`automation workspace-guard --mode begin --write` before the wake, `--mode end --write` after) to preserve and restore the unrelated changes; durable host-state remains untouched.",
             ClassificationDirtyMixed =>
                 $"Host repo on `{branch}` has {dirtyDurableCount} dirty durable-state path(s) AND {dirtyOtherCount} unrelated dirty path(s). Refusing to proceed (G304); both buckets must be reconciled before the wake.",
             _ => throw new InvalidOperationException($"Unknown host-sync classification '{classification}'.")
@@ -154,9 +166,10 @@ internal static class HostSyncPreflightAnalyzer
             ClassificationDirtyDurableState => BuildDirtyDurableSteps(dirtyDurable),
             ClassificationDirtyUnrelatedSubmodule => new[]
             {
-                "Surface the dirty unrelated paths to the operator: " + string.Join(", ", dirtyOther.Select(e => "`" + e.Path + "`")),
-                "Do NOT silently stash or commit unrelated changes from this wake; let the operator reconcile them.",
-                "Once the working tree is clean, re-run the read-only preflight."
+                "Run `intent-cli automation workspace-guard --mode begin --write` to stash the unrelated paths into a recoverable safe-stash ref (G306). Stashed paths: " + string.Join(", ", dirtyOther.Select(e => "`" + e.Path + "`")),
+                "Run the host wake (review/closeout/next-slice). Durable host-state stays untouched throughout.",
+                "After durable host-state is committed/pushed, run `intent-cli automation workspace-guard --mode end --write` to restore the unrelated changes.",
+                "If `--mode end` reports a stash-pop conflict, do NOT claim the wake completed; surface the structured recovery instruction to the operator."
             },
             ClassificationDirtyMixed => BuildDirtyDurableSteps(dirtyDurable).Concat(new[]
             {
@@ -202,6 +215,23 @@ internal sealed record HostSyncPreflightResult
 
     [JsonPropertyName("proceed_allowed")]
     public required bool ProceedAllowed { get; init; }
+
+    /// <summary>
+    /// G306: true when the wake must run through the safe-stash lane
+    /// (`automation workspace-guard --mode begin --write` before the wake,
+    /// `--mode end --write` after) before reading durable host-state.
+    /// Implies <c>ProceedAllowed = true</c>.
+    /// </summary>
+    [JsonPropertyName("safe_stash_required")]
+    public bool SafeStashRequired { get; init; }
+
+    /// <summary>
+    /// G306: paths the safe-stash lane will record into the workspace
+    /// guard state file. Empty unless <see cref="SafeStashRequired"/> is
+    /// true.
+    /// </summary>
+    [JsonPropertyName("safe_stash_paths")]
+    public IReadOnlyList<HostSyncWorkingTreeEntry> SafeStashPaths { get; init; } = Array.Empty<HostSyncWorkingTreeEntry>();
 
     [JsonPropertyName("dirty_durable_state_paths")]
     public required IReadOnlyList<HostSyncWorkingTreeEntry> DirtyDurableStatePaths { get; init; }
