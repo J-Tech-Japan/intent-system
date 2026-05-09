@@ -1079,6 +1079,42 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("--pr-merged $IS_MERGED", prompt, StringComparison.Ordinal);
     }
 
+    // ── G300 child cwd is GitHub-contract-only ──────────────────────────
+
+    [Fact]
+    public void Execute_ChildLoop_StatesImplementationRepoMustNotContainIntentCli()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("**Child cwd is GitHub-contract-only (G300)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("MUST NOT", prompt, StringComparison.Ordinal);
+        Assert.Contains("queue-state", prompt, StringComparison.Ordinal);
+        // G300 must not couple the child loop to host-only `automation
+        // reconcile` — the child prompt only states that reconciliation is
+        // host-owned, never naming the command.
+        Assert.DoesNotContain("automation reconcile", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildOneshot_StatesImplementationRepoMustNotContainIntentCli()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("**Child cwd is GitHub-contract-only (G300)**", prompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

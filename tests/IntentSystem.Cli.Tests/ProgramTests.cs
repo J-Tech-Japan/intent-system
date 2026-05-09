@@ -1,4 +1,5 @@
 using IntentSystem.Cli;
+using IntentSystem.Cli.Commands;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -88,6 +89,46 @@ public sealed class ProgramTests
                 consoleScope.Error.ToString(),
                 StringComparison.Ordinal);
             Assert.Equal(string.Empty, consoleScope.Out.ToString());
+        }
+    }
+
+    // ── G300 child worker is host-state-free ─────────────────────────────
+
+    [Fact]
+    public void Main_GivenWorkerNextActionFromChildCwdWithoutIntentCli_RunsAgainstGitHubOnly()
+    {
+        // G300: a child implementation cwd has no `.intent-cli/` and must
+        // not be expected to. `worker next-action --repo <r>` should run
+        // through Program.Main using a bootstrap context (cwd = RepoRoot)
+        // and return a GitHub-derived no-action result, NOT the
+        // missing-host-state structured guidance from G299.
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var childCwd = tempDirectory.CreateDirectory("child-impl");
+            using var consoleScope = new ConsoleScope();
+            using var currentDirectoryScope = new CurrentDirectoryScope(childCwd);
+
+            var lister = new EmptyAutomationCandidateLister();
+            WorkerNextActionCommand.CandidateListerFactory = () => lister;
+            try
+            {
+                var exitCode = Program.Main(
+                    ["worker", "next-action", "--repo", "J-Tech-Japan/intent-system", "--workdir", childCwd, "--format", "json"]);
+
+                Assert.Equal(0, exitCode);
+                var stdout = consoleScope.Out.ToString();
+                // G299 missing-host-state guidance must NOT have fired.
+                Assert.DoesNotContain("missing host state (G299)", stdout, StringComparison.Ordinal);
+                Assert.DoesNotContain("\"status\": \"missing-host-state\"", stdout, StringComparison.Ordinal);
+                // Empty GitHub state → deterministic no-action result.
+                Assert.Contains("\"action\": \"none\"", stdout, StringComparison.Ordinal);
+                Assert.Equal(string.Empty, consoleScope.Error.ToString());
+            }
+            finally
+            {
+                WorkerNextActionCommand.CandidateListerFactory = null;
+            }
         }
     }
 
@@ -193,5 +234,24 @@ public sealed class ProgramTests
                 Directory.Delete(rootPath, recursive: true);
             }
         }
+    }
+
+    /// <summary>
+    /// G300: empty GitHub candidate lister for the child-cwd worker test.
+    /// Returns no PRs and no issues so `worker next-action` produces the
+    /// deterministic <c>action: none</c> result without touching the
+    /// network.
+    /// </summary>
+    private sealed class EmptyAutomationCandidateLister : IGitHubAutomationCandidateLister
+    {
+        public IReadOnlyList<GitHubAutomationPrCandidate> ListPullRequests(
+            string repo,
+            IReadOnlyCollection<string> requiredLabels) =>
+            Array.Empty<GitHubAutomationPrCandidate>();
+
+        public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
+            string repo,
+            IReadOnlyCollection<string> requiredLabels) =>
+            Array.Empty<GitHubAutomationIssueCandidate>();
     }
 }

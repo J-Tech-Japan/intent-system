@@ -234,6 +234,7 @@ Hard rules:
 - Never apply `intent-target` from the child loop; it is host-owned.
 - Never apply `intent-pr-created` to a PR; it is an issue-side completion marker.
 - **PR draft state (G296)**: create child implementation/update PRs as **ready-for-review** (non-draft) by default. Do NOT pass `--draft` to `gh pr create` unless the operator explicitly asks for a draft. After opening the PR, pass the actual draft state into `worker result-summary --pr-draft true|false` so the host review loop can detect a draft PR before approval. If you must keep the PR draft (incomplete work, operator hold), do not transition the issue to ready-for-review states; mark the outcome accordingly and document the reason.
+- **Child cwd is GitHub-contract-only (G300)**: the implementation repo must NOT contain its own `.intent-cli/` and the child loop MUST NOT read parent host queue-state, runs.jsonl, packets, or intent metadata. `worker next-action` / `claim` / `complete` / `result-summary` are runnable from a child cwd because they take `--repo <owner/repo>` and use `intent-cli` only for GitHub label transitions. If `worker complete --kind issue --outcome pr-created --pr <n> --write` reports `linked_pr_synced: false` with a queue-state warning (host queue not present in child cwd), that is expected — parent host metadata reconciliation is owned by the host loop, never by the child loop.
 - Process at most one action per wake.";
 
         return new GuidePromptMatrixEntry
@@ -385,6 +386,7 @@ Hard rules:
 - Never apply `intent-target` from the child loop; it is host-owned.
 - Never apply `intent-pr-created` to a PR; it is an issue-side completion marker.
 - **PR draft state (G296)**: create child implementation/update PRs as **ready-for-review** (non-draft) by default. Do NOT pass `--draft` to `gh pr create` unless the operator explicitly asks for a draft. After opening the PR, pass the actual draft state into `worker result-summary --pr-draft true|false` so the host review loop can detect a draft PR before approval. If you must keep the PR draft (incomplete work, operator hold), do not transition the issue to ready-for-review states; mark the outcome accordingly and document the reason.
+- **Child cwd is GitHub-contract-only (G300)**: the implementation repo must NOT contain its own `.intent-cli/` and the child loop MUST NOT read parent host queue-state, runs.jsonl, packets, or intent metadata. `worker next-action` / `claim` / `complete` / `result-summary` are runnable from a child cwd because they take `--repo <owner/repo>` and use `intent-cli` only for GitHub label transitions. If `worker complete --kind issue --outcome pr-created --pr <n> --write` reports `linked_pr_synced: false` with a queue-state warning (host queue not present in child cwd), that is expected — parent host metadata reconciliation is owned by the host loop, never by the child loop.
 - Process at most one action per wake.
 - Do not create a cron, monitor, scheduler, reminder, or new thread after completing this wake.";
 

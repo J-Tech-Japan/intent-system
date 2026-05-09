@@ -24,7 +24,8 @@ internal static class Program
             if (IsIntakeInitCommand(args)
                 || IsIntentInitCommand(args)
                 || IsAutomationWorktreeCommand(args)
-                || IsGuideOneshotCommand(args))
+                || IsGuideOneshotCommand(args)
+                || IsWorkerCommand(args))
             {
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
             }
@@ -101,6 +102,31 @@ internal static class Program
                 || string.Equals(args[1], "model", StringComparison.Ordinal)
                 || string.Equals(args[1], "commands", StringComparison.Ordinal)
                 || string.Equals(args[1], "onboarding", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// G300: child worker commands (next-action / claim / complete /
+    /// result-summary / *-preflight) are GitHub-contract-only and must be
+    /// runnable from a child implementation repo cwd that has no
+    /// `.intent-cli/` directory. The worker family takes <c>--repo
+    /// &lt;owner/repo&gt;</c> on the command line and uses installed
+    /// `intent-cli` only for GitHub label transitions; parent host queue
+    /// state, runs.jsonl, and intent metadata stay host-only. Bootstrapping
+    /// the context with cwd as RepoRoot lets these commands run; commands
+    /// that incidentally read queue-state already degrade to a warning
+    /// when the file is missing (G205 / G300).
+    /// </summary>
+    private static bool IsWorkerCommand(string[] args)
+    {
+        return args.Length >= 2
+            && string.Equals(args[0], "worker", StringComparison.Ordinal)
+            && (string.Equals(args[1], "next-action", StringComparison.Ordinal)
+                || string.Equals(args[1], "claim", StringComparison.Ordinal)
+                || string.Equals(args[1], "complete", StringComparison.Ordinal)
+                || string.Equals(args[1], "result-summary", StringComparison.Ordinal)
+                || string.Equals(args[1], "issue-preflight", StringComparison.Ordinal)
+                || string.Equals(args[1], "pr-review-preflight", StringComparison.Ordinal)
+                || string.Equals(args[1], "pr-comment-preflight", StringComparison.Ordinal));
     }
 
     private static CliContext CreateBootstrapContext(string currentDirectory, string[] args)
