@@ -80,6 +80,64 @@ public sealed class ClarificationCommandTests : IDisposable
     }
 
     [Fact]
+    public void Next_MarkdownFormat_ContainsAllProductOwnerSections_G310()
+    {
+        using var workspace = new ClarificationWorkspace();
+        workspace.WriteClarification("demo", "storage", BuildOpenTomlWithBackground(
+            id: "storage",
+            background: "We need to choose the durable storage backend before slicing TF-G3.",
+            question: "Which backend?"));
+        using var writer = new StringWriter();
+
+        var exitCode = ClarificationCommand.ExecuteNext(
+            workspace.Context,
+            ["--domain", "demo", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var markdown = writer.ToString();
+        // Header carries domain + id so the agent can quote it back to the operator.
+        Assert.Contains("# Clarification next — `demo`", markdown, StringComparison.Ordinal);
+        Assert.Contains("`storage`", markdown, StringComparison.Ordinal);
+        // All required product-owner sections appear, in the order the agent
+        // is expected to present them.
+        Assert.Contains("### Background", markdown, StringComparison.Ordinal);
+        Assert.Contains("We need to choose the durable storage backend before slicing TF-G3.", markdown, StringComparison.Ordinal);
+        Assert.Contains("### Question", markdown, StringComparison.Ordinal);
+        Assert.Contains("Which backend?", markdown, StringComparison.Ordinal);
+        Assert.Contains("### Options", markdown, StringComparison.Ordinal);
+        // Option ids are bolded and prefixed so a chat agent can read them aloud.
+        Assert.Contains("**`yes`**", markdown, StringComparison.Ordinal);
+        Assert.Contains("**`no`**", markdown, StringComparison.Ordinal);
+        // Pros/Cons appear as nested bullets so the operator can compare options.
+        Assert.Contains("Pros: Simple", markdown, StringComparison.Ordinal);
+        Assert.Contains("Cons: Blocks", markdown, StringComparison.Ordinal);
+        // Recommendation surfaces the engineer's preferred default.
+        Assert.Contains("### Recommendation: `yes`", markdown, StringComparison.Ordinal);
+        // Blocks line lists the gated TF ids so the agent can explain why this matters.
+        Assert.Contains("Blocks:", markdown, StringComparison.Ordinal);
+        Assert.Contains("`TF-G3`", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Next_MarkdownFormat_NoOpen_RendersEmptyMessage()
+    {
+        using var workspace = new ClarificationWorkspace();
+        workspace.WriteClarification("demo", "answered-q", BuildAnsweredToml("answered-q", "Q?", "yes"));
+        using var writer = new StringWriter();
+
+        var exitCode = ClarificationCommand.ExecuteNext(
+            workspace.Context,
+            ["--domain", "demo", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var markdown = writer.ToString();
+        Assert.Contains("# Clarification next — `demo`", markdown, StringComparison.Ordinal);
+        Assert.Contains("_No open structured clarifications._", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Next_NoOpenClarification_ReturnsHasOpenFalse()
     {
         using var workspace = new ClarificationWorkspace();
@@ -202,6 +260,28 @@ public sealed class ClarificationCommandTests : IDisposable
         $$"""
         id = "{{id}}"
         status = "open"
+        question = "{{question}}"
+        recommendation = "yes"
+        blocks = ["TF-G3"]
+
+        [[options]]
+        id = "yes"
+        label = "Yes"
+        pros = ["Simple"]
+        cons = []
+
+        [[options]]
+        id = "no"
+        label = "No"
+        pros = ["Defer"]
+        cons = ["Blocks"]
+        """;
+
+    private static string BuildOpenTomlWithBackground(string id, string background, string question) =>
+        $$"""
+        id = "{{id}}"
+        status = "open"
+        background = "{{background}}"
         question = "{{question}}"
         recommendation = "yes"
         blocks = ["TF-G3"]

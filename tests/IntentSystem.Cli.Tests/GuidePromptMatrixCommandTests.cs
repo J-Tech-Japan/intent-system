@@ -816,6 +816,49 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_MentionsStructuredClarificationWorkflow_G310()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        // The G310 rule names the structured clarification workflow.
+        Assert.Contains("Structured clarification workflow (G310)", prompt, StringComparison.Ordinal);
+        // It forbids free-form questions when clarification-required.
+        Assert.Contains("do NOT ask the operator a free-form question", prompt, StringComparison.Ordinal);
+        // It directs the agent at `clarification next --format markdown`.
+        Assert.Contains("clarification next", prompt, StringComparison.Ordinal);
+        Assert.Contains("--format markdown", prompt, StringComparison.Ordinal);
+        // It directs the agent at `clarification answer --write` for durable recording.
+        Assert.Contains("clarification answer", prompt, StringComparison.Ordinal);
+        Assert.Contains("--write", prompt, StringComparison.Ordinal);
+        // After the answer, the agent must re-run next-slice --dry-run to confirm progress.
+        Assert.Contains("re-run `intent next-slice --dry-run`", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostOneshotPrompt_MentionsStructuredClarificationWorkflow_G310()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Structured clarification workflow (G310)", prompt, StringComparison.Ordinal);
+        Assert.Contains("do NOT ask the operator a free-form question", prompt, StringComparison.Ordinal);
+        Assert.Contains("clarification next", prompt, StringComparison.Ordinal);
+        Assert.Contains("clarification answer", prompt, StringComparison.Ordinal);
+        Assert.Contains("re-run `intent next-slice --dry-run`", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_ChildLoopWithFrequencyAndAgentClaude_PromptNamesStaleCliAbort()
     {
         using var writer = new StringWriter();
