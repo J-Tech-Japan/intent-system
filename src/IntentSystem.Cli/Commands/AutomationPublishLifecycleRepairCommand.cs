@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Supervisor.Models;
@@ -30,6 +31,7 @@ internal static class AutomationPublishLifecycleRepairCommand
     private const string ModeWrite = "write";
 
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
+    public static Func<IGitHubAutomationIssueLookup>? IssueLookupFactory { get; set; }
 
     /// <summary>Test seam — replaces the default UTC timestamp source.</summary>
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
@@ -88,6 +90,7 @@ internal static class AutomationPublishLifecycleRepairCommand
         }
 
         var issueByNumber = issues.ToDictionary(i => i.Number);
+        var issueLookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubAutomationIssueLookup();
         var nowIso = ResolveNow().ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture);
 
         var candidates = new List<PublishLifecycleCandidate>();
@@ -120,13 +123,28 @@ internal static class AutomationPublishLifecycleRepairCommand
 
             string? issueState = null;
             IReadOnlyCollection<string> issueLabels = Array.Empty<string>();
-            if (artifact?.CreatedIssueNumber is { } issueNumber
-                && issueByNumber.TryGetValue(issueNumber, out var ghIssue))
+            if (artifact?.CreatedIssueNumber is { } issueNumber)
             {
-                issueState = ghIssue.State;
-                issueLabels = (ghIssue.Labels ?? Array.Empty<GitHubAutomationLabel>())
-                    .Select(label => label.Name)
-                    .ToArray();
+                if (!issueByNumber.TryGetValue(issueNumber, out var ghIssue))
+                {
+                    try
+                    {
+                        ghIssue = issueLookup.GetIssue(repo!, issueNumber);
+                        issueByNumber[issueNumber] = ghIssue;
+                    }
+                    catch (Exception exception) when (exception is IOException or InvalidOperationException)
+                    {
+                        ghIssue = null;
+                    }
+                }
+
+                if (ghIssue is not null)
+                {
+                    issueState = ghIssue.State;
+                    issueLabels = (ghIssue.Labels ?? Array.Empty<GitHubAutomationLabel>())
+                        .Select(label => label.Name)
+                        .ToArray();
+                }
             }
 
             candidates.Add(new PublishLifecycleCandidate
@@ -366,4 +384,54 @@ internal sealed record PublishLifecycleRepairResult
     [JsonPropertyName("entries")] public required IReadOnlyList<PublishLifecycleEntry> Entries { get; init; }
     [JsonPropertyName("warnings")] public required IReadOnlyList<string> Warnings { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
+internal interface IGitHubAutomationIssueLookup
+{
+    GitHubAutomationIssueCandidate GetIssue(string repo, int issueNumber);
+}
+
+internal sealed class GhCliGitHubAutomationIssueLookup : IGitHubAutomationIssueLookup
+{
+    public GitHubAutomationIssueCandidate GetIssue(string repo, int issueNumber)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        if (issueNumber <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(issueNumber), "issue number must be positive.");
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "gh",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var arg in new[]
+                 {
+                     "issue", "view", issueNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                     "--repo", repo,
+                     "--json", GhCliGitHubAutomationCandidateLister.ListJsonFields
+                 })
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"failed to start `gh` process to view issue #{issueNumber} in {repo}");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+        {
+            var errorBody = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+            throw new InvalidOperationException(
+                $"`gh` failed to view issue #{issueNumber} in {repo} with exit {process.ExitCode}: {errorBody.Trim()}");
+        }
+
+        return JsonSerializer.Deserialize<GitHubAutomationIssueCandidate>(stdout)
+            ?? throw new InvalidOperationException($"`gh issue view` for #{issueNumber} in {repo} returned empty JSON.");
+    }
 }
