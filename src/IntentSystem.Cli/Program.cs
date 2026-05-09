@@ -84,6 +84,7 @@ internal static class Program
                 || string.Equals(args[1], "doctor", StringComparison.Ordinal)
                 || string.Equals(args[1], "host-review-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "host-review-diagnostics", StringComparison.Ordinal)
+                || string.Equals(args[1], "host-sync-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "issue-publish", StringComparison.Ordinal)
                 || string.Equals(args[1], "pr-transition", StringComparison.Ordinal)
                 || string.Equals(args[1], "publish-recovery", StringComparison.Ordinal)
