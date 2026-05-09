@@ -16,6 +16,7 @@ internal static class CommandRouter
         "review",
         "interview",
         "clarify",
+        "clarification",
         "intake",
         "status",
         "context",
@@ -95,6 +96,12 @@ internal static class CommandRouter
                 ["answer"] = ClarifyAnswerCommand.Execute,
                 ["draft"] = ClarifyDraftCommand.Execute,
                 ["record"] = ClarifyRecordCommand.Execute
+            },
+            ["clarification"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["status"] = ClarificationCommand.ExecuteStatus,
+                ["next"] = ClarificationCommand.ExecuteNext,
+                ["answer"] = ClarificationCommand.ExecuteAnswer
             },
             ["queue"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
