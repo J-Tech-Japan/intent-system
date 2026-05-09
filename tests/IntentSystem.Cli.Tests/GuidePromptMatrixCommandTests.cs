@@ -881,6 +881,47 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_MentionsDurableStatePreflight_G312()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        // The G312 rule must point at the durable-state preflight command
+        // and name the verified-commit-ready / needs-operator-review /
+        // unsafe-durable-state classifications, plus require a re-run of
+        // host-sync-preflight after the auto-commit.
+        Assert.Contains("automation durable-state-preflight", prompt, StringComparison.Ordinal);
+        Assert.Contains("verified-commit-ready", prompt, StringComparison.Ordinal);
+        Assert.Contains("needs-operator-review", prompt, StringComparison.Ordinal);
+        Assert.Contains("unsafe-durable-state", prompt, StringComparison.Ordinal);
+        Assert.Contains("recommended_commit_message", prompt, StringComparison.Ordinal);
+        Assert.Contains("re-run `host-sync-preflight`", prompt, StringComparison.Ordinal);
+        // The dirty-mixed branch keeps the unrelated portion under explicit
+        // operator handling rather than mixing it into the auto-commit lane.
+        Assert.Contains("dirty-mixed", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostOneshotPrompt_MentionsDurableStatePreflight_G312()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("automation durable-state-preflight", prompt, StringComparison.Ordinal);
+        Assert.Contains("verified-commit-ready", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostOneshotPrompt_MentionsStructuredClarificationWorkflow_G310()
     {
         using var writer = new StringWriter();
