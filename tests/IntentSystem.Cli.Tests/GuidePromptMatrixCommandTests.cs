@@ -1115,6 +1115,43 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("**Child cwd is GitHub-contract-only (G300)**", prompt, StringComparison.Ordinal);
     }
 
+    // ── G304 pre-wake host sync boundary ────────────────────────────────
+
+    [Fact]
+    public void Execute_HostLoop_ContainsPreWakeHostSyncRule()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("**Pre-wake host sync (G304)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("automation host-sync-preflight", prompt, StringComparison.Ordinal);
+        Assert.Contains("classification: clean", prompt, StringComparison.Ordinal);
+        Assert.Contains("classification: behind-origin", prompt, StringComparison.Ordinal);
+        Assert.Contains("classification: dirty-host-durable-state", prompt, StringComparison.Ordinal);
+        Assert.Contains("classification: dirty-unrelated-submodule", prompt, StringComparison.Ordinal);
+        Assert.Contains("re-run host-sync-preflight before Stage 2", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostOneshot_ContainsPreWakeHostSyncRule()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("**Pre-wake host sync (G304)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("automation host-sync-preflight", prompt, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
