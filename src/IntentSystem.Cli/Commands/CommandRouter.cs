@@ -48,7 +48,8 @@ internal static class CommandRouter
         "automation pr-transition --transition approved --write",
         "automation publish-recovery --repo <r> [--write]",
         "automation reconcile [--lane host-review|next-slice|all] [--write]",
-        "automation summary"
+        "automation summary",
+        "automation workspace-guard --mode plan|begin|end [--write]"
     ];
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, CommandHandler>> ImplementedCommands =
@@ -167,7 +168,8 @@ internal static class CommandRouter
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,
                 ["publish-recovery"] = AutomationPublishRecoveryCommand.Execute,
                 ["reconcile"] = AutomationReconcileCommand.Execute,
-                ["summary"] = AutomationSummaryCommand.Execute
+                ["summary"] = AutomationSummaryCommand.Execute,
+                ["workspace-guard"] = AutomationWorkspaceGuardCommand.Execute
             },
             ["safety"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
