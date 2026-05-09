@@ -28,7 +28,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         IReadOnlyList<string>? reconcileUnsafeStopKinds = null,
         int reconcileHighConfidenceRepairsAvailable = 0,
         bool allowWipCapOverride = false,
-        bool? prDraft = null)
+        bool? prDraft = null,
+        int publishRecoveryHighConfidenceRepairsAvailable = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(openPrs);
@@ -362,6 +363,34 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                     $"intent-cli packet draft --execution-unit {candidateExecutionUnit} --target-repo {repo} --format json"
                     + $" && intent-cli issue publish-flow {candidateExecutionUnit} --repo {repo} --write --format json"
                     + $" && intent-cli automation issue-publish --repo {repo} --issue <new-issue-number> --write --format json",
+                clarification: null,
+                details,
+                warnings);
+        }
+
+        // G313: when publish-recovery reports an unapplied high-confidence
+        // repair, that lane is the first-class recovery for missing
+        // `linked_pr` host-metadata blockers — surface it BEFORE the
+        // generic `repaired-and-retry` branch so the host loop runs
+        // publish-recovery rather than generic reconcile when both
+        // signals are present (publish-recovery's evidence is stronger
+        // because it derives from `.intent-cli/issues/<unit>/publish.yaml`
+        // converging on a single execution unit / source issue).
+        if (publishRecoveryHighConfidenceRepairsAvailable > 0)
+        {
+            details.Add(new AutomationHostReviewDiagnosticsDetail
+            {
+                Kind = AutomationHostReviewDiagnosticsClassifications.PublishRecoveryReady,
+                TargetKind = null,
+                TargetNumber = null,
+                TargetUrl = null,
+                Description = $"publish-recovery reports {publishRecoveryHighConfidenceRepairsAvailable} unapplied high-confidence repair(s).",
+            });
+            return Build(
+                repo,
+                AutomationHostReviewDiagnosticsClassifications.PublishRecoveryReady,
+                $"Publish-recovery has {publishRecoveryHighConfidenceRepairsAvailable} unapplied high-confidence repair(s) backed by `.intent-cli/issues/<unit>/publish.yaml`; apply them with `automation publish-recovery --write` and retry the wake before falling back to generic reconcile.",
+                recommendedNextCommand: $"intent-cli automation publish-recovery --repo {repo} --write --format json",
                 clarification: null,
                 details,
                 warnings);

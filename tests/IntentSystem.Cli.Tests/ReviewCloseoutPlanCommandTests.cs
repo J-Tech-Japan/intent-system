@@ -144,6 +144,56 @@ public sealed class ReviewCloseoutPlanCommandTests
     }
 
     [Fact]
+    public void Execute_G313_NoMatchingLinkedPrAndPublishArtifactExists_RecommendsPublishRecoveryFirst()
+    {
+        // G313: when the missing-linked_pr blocker is on a host that has at
+        // least one `.intent-cli/issues/<unit>/publish.yaml`, the recovery
+        // command must point at `automation publish-recovery` rather than
+        // generic reconcile (publish-recovery's evidence is stronger).
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review", linkedPr: "999", linkedIssue: null));
+        // Publish artifact exists for some execution unit — content does not
+        // matter to closeout-plan; existence is the trigger.
+        workspace.WriteFile(".intent-cli/issues/G247/publish.yaml", "execution_unit: G247\n");
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "670", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("host-metadata-blocked", root.GetProperty("blocker_classification").GetString());
+        var recoveryCommand = root.GetProperty("recommended_recovery_command").GetString()!;
+        Assert.Contains("automation publish-recovery", recoveryCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("automation reconcile", recoveryCommand, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G313_NoMatchingLinkedPrAndNoPublishArtifact_RecommendsReconcile()
+    {
+        // G313: when no publish artifact exists, generic reconcile remains the
+        // primary recommendation — publish-recovery has no evidence to work
+        // with on a host without artifacts.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review", linkedPr: "999", linkedIssue: null));
+        // No publish.yaml on disk.
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "670", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var recoveryCommand = document.RootElement.GetProperty("recommended_recovery_command").GetString()!;
+        Assert.Contains("automation reconcile", recoveryCommand, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_G287_MissingContractSections_ClassifiesImplementationReviewFinding()
     {
         // Real implementation finding: contract sections missing on the

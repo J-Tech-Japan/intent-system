@@ -881,6 +881,51 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_OrdersPublishRecoveryBeforeReconcile_G313()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        // G313 must name itself, the publish-recovery command, and the
+        // ordering — publish-recovery FIRST, reconcile FALLBACK.
+        Assert.Contains("Selected-PR linkage recovery (G284, G313)", prompt, StringComparison.Ordinal);
+        Assert.Contains("automation publish-recovery", prompt, StringComparison.Ordinal);
+        Assert.Contains("publish-recovery", prompt, StringComparison.Ordinal);
+        Assert.Contains("publish.yaml", prompt, StringComparison.Ordinal);
+        // `publish-recovery` must appear before `automation reconcile` in
+        // the same recovery section so the agent runs publish-recovery first.
+        var publishIndex = prompt.IndexOf("automation publish-recovery", StringComparison.Ordinal);
+        var reconcileIndex = prompt.IndexOf("automation reconcile --lane host-review", StringComparison.Ordinal);
+        Assert.True(publishIndex >= 0 && reconcileIndex >= 0,
+            "expected both publish-recovery and reconcile to appear in the host-loop prompt");
+        Assert.True(publishIndex < reconcileIndex,
+            "G313: publish-recovery must be recommended BEFORE generic reconcile in the recovery ordering");
+    }
+
+    [Fact]
+    public void Execute_HostOneshotPrompt_OrdersPublishRecoveryBeforeReconcile_G313()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Selected-PR linkage recovery (G284, G313)", prompt, StringComparison.Ordinal);
+        var publishIndex = prompt.IndexOf("automation publish-recovery", StringComparison.Ordinal);
+        var reconcileIndex = prompt.IndexOf("automation reconcile --lane host-review", StringComparison.Ordinal);
+        Assert.True(publishIndex < reconcileIndex,
+            "G313: publish-recovery must be recommended BEFORE generic reconcile in the host-oneshot recovery ordering");
+    }
+
+    [Fact]
     public void Execute_HostLoopPrompt_MentionsDurableStatePreflight_G312()
     {
         using var writer = new StringWriter();

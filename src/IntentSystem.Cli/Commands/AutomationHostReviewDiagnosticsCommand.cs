@@ -50,6 +50,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 out var staleClarificationMetadata,
                 out var reconcileUnsafeStopKinds,
                 out var reconcileRepairsAvailable,
+                out var publishRecoveryRepairsAvailable,
                 out var allowWipCapOverride,
                 out var prDraft,
                 out var format,
@@ -144,7 +145,8 @@ internal static class AutomationHostReviewDiagnosticsCommand
             reconcileUnsafeStopKinds,
             reconcileRepairsAvailable,
             allowWipCapOverride,
-            prDraft);
+            prDraft,
+            publishRecoveryRepairsAvailable);
 
         Emit(writer, result, format);
         return 0;
@@ -159,6 +161,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         out bool staleClarificationMetadata,
         out IReadOnlyList<string> reconcileUnsafeStopKinds,
         out int reconcileRepairsAvailable,
+        out int publishRecoveryRepairsAvailable,
         out bool allowWipCapOverride,
         out bool? prDraft,
         out string format,
@@ -172,6 +175,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         var unsafeStops = new List<string>();
         reconcileUnsafeStopKinds = unsafeStops;
         reconcileRepairsAvailable = 0;
+        publishRecoveryRepairsAvailable = 0;
         allowWipCapOverride = false;
         prDraft = null;
         format = FormatText;
@@ -235,6 +239,17 @@ internal static class AutomationHostReviewDiagnosticsCommand
                     reconcileRepairsAvailable = repairCount;
                     index++;
                     break;
+                case "--publish-recovery-repairs-available":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var publishRecoveryRepairCount)
+                        || publishRecoveryRepairCount < 0)
+                    {
+                        error = "--publish-recovery-repairs-available requires a non-negative integer value.";
+                        return false;
+                    }
+                    publishRecoveryRepairsAvailable = publishRecoveryRepairCount;
+                    index++;
+                    break;
                 case "--allow-wip-cap-override":
                     allowWipCapOverride = true;
                     break;
@@ -277,7 +292,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                     index++;
                     break;
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--pr-draft true|false] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--publish-recovery-repairs-available <N>] [--allow-wip-cap-override] [--pr-draft true|false] [--format text|json].";
                     return false;
             }
         }
