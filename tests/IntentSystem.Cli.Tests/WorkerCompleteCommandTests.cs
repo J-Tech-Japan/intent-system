@@ -21,12 +21,21 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     {
         WorkerCompleteCommand.MutatorFactory = null;
         WorkerCompleteCommand.NestedProviderLauncher = null;
+        // G311: permissive default — pre-existing tests assume the
+        // closing-reference gate is satisfied. Returns a fake PR lookup
+        // whose `closingIssuesReferences` cover the issue numbers used
+        // throughout the suite (514, 525). The fake intentionally
+        // returns `Repository = null` so `IsSameRepo` accepts. New
+        // G311-focused tests override this factory to exercise the
+        // gate's failure paths.
+        WorkerCompleteCommand.PrLookupFactory = () => new PermissivePrLookup();
     }
 
     public void Dispose()
     {
         WorkerCompleteCommand.MutatorFactory = null;
         WorkerCompleteCommand.NestedProviderLauncher = null;
+        WorkerCompleteCommand.PrLookupFactory = null;
     }
 
     [Fact]
@@ -893,6 +902,196 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.DoesNotContain("resolveReviewThread", combined, StringComparison.Ordinal);
     }
 
+    // ----- G311: closing-reference gate on `--kind issue --outcome pr-created` -----
+
+    [Fact]
+    public void Execute_G311_RefusesPrCreatedWhenPrBodyHasNoClosingReference()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        // Override default permissive lookup with a body that lacks a closing reference.
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "## Summary\n- Implement something. (no closing reference at all)",
+            ClosingIssuesReferences = Array.Empty<GitHubPrClosingIssueReference>(),
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "725",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "724",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("refused to complete issue #725", output, StringComparison.Ordinal);
+        Assert.Contains("Closes #725", output, StringComparison.Ordinal);
+        // The mutator must NOT have been invoked — gate fires before any write.
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_G311_RefusesPrCreatedWhenPrBodyClosesWrongIssue()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Closes #999", // wrong issue
+            ClosingIssuesReferences = Array.Empty<GitHubPrClosingIssueReference>(),
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "725",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "724",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("#999", output, StringComparison.Ordinal);
+        Assert.Contains("#725", output, StringComparison.Ordinal);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_G311_RefusesPrCreatedWhenPrBodyHasMultipleDistinctClosingReferences()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            // Body text closes two different issues; GitHub-resolved
+            // closingIssuesReferences left empty so the body parser runs.
+            Body = "Closes #725 and Fixes #800.",
+            ClosingIssuesReferences = Array.Empty<GitHubPrClosingIssueReference>(),
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "725",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "724",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("multiple", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_G311_AcceptsPrCreatedWhenGitHubClosingIssuesReferencesContainSourceIssue()
+    {
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        // The PR body wording is irrelevant — GitHub-resolved
+        // closingIssuesReferences is the authoritative signal.
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Body without explicit Closes wording — GitHub still resolved the link.",
+            ClosingIssuesReferences = new[]
+            {
+                new GitHubPrClosingIssueReference { Number = 725, Repository = null },
+            },
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "725",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "724",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        // Mutator must have been called — the gate did NOT block the write.
+        Assert.NotEmpty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_G311_DryRunAlsoEnforcesGate_NoMutation()
+    {
+        // Dry-run must report the same refusal so an automation operator
+        // never thinks the completion plan is safe when it isn't.
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "no closing reference here",
+            ClosingIssuesReferences = Array.Empty<GitHubPrClosingIssueReference>(),
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "725",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "724",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
     private static string StripCsharpComments(string source)
     {
         var noBlockComments = System.Text.RegularExpressions.Regex.Replace(
@@ -919,6 +1118,53 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         }
         throw new FileNotFoundException(
             $"Could not locate source file {fileName} from {directory}");
+    }
+
+    /// <summary>
+    /// G311: default <see cref="IGitHubPrLookup"/> fake that satisfies the
+    /// closing-reference gate for any issue number used by pre-existing
+    /// tests. Returns a body that names both 514 and 525 in
+    /// <c>closingIssuesReferences</c> with <c>Repository = null</c> so
+    /// <c>IsSameRepo</c> accepts it. Tests that need to exercise the
+    /// gate's failure paths inject a different fake via
+    /// <see cref="WorkerCompleteCommand.PrLookupFactory"/>.
+    /// </summary>
+    internal sealed class PermissivePrLookup : IGitHubPrLookup
+    {
+        public GitHubPrLookupResult Lookup(string repo, int prNumber) => new()
+        {
+            Number = prNumber,
+            State = "OPEN",
+            Title = "permissive fake",
+            Body = "Closes #525\nCloses #514",
+            ClosingIssuesReferences = new[]
+            {
+                new GitHubPrClosingIssueReference { Number = 514, Repository = null },
+                new GitHubPrClosingIssueReference { Number = 525, Repository = null },
+            },
+        };
+    }
+
+    /// <summary>
+    /// G311: parametric <see cref="IGitHubPrLookup"/> fake. Tests inject
+    /// this when they want to exercise the gate's failure paths or vary
+    /// the body text and closing-issue references PR-by-PR.
+    /// </summary>
+    internal sealed class StubPrLookup : IGitHubPrLookup
+    {
+        public string Body { get; init; } = string.Empty;
+
+        public IReadOnlyList<GitHubPrClosingIssueReference> ClosingIssuesReferences { get; init; }
+            = Array.Empty<GitHubPrClosingIssueReference>();
+
+        public GitHubPrLookupResult Lookup(string repo, int prNumber) => new()
+        {
+            Number = prNumber,
+            State = "OPEN",
+            Title = "stub",
+            Body = Body,
+            ClosingIssuesReferences = ClosingIssuesReferences,
+        };
     }
 
     internal sealed class FakeMutator : IGitHubLabelMutator

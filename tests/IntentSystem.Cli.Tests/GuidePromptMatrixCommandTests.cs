@@ -841,6 +841,46 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_ChildLoopPrompt_MentionsClosingReferenceMandatory_G311()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        // The G311 rule must name itself, the three accepted keywords, and the gate.
+        Assert.Contains("PR closing reference is mandatory (G311)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Closes #<issue>", prompt, StringComparison.Ordinal);
+        Assert.Contains("Fixes #<issue>", prompt, StringComparison.Ordinal);
+        Assert.Contains("Resolves #<issue>", prompt, StringComparison.Ordinal);
+        Assert.Contains("worker complete --kind issue --outcome pr-created", prompt, StringComparison.Ordinal);
+        Assert.Contains("refuses to mark complete", prompt, StringComparison.Ordinal);
+        // Bare links such as `see #N` are explicitly excluded.
+        Assert.Contains("not bare links", prompt, StringComparison.Ordinal);
+        // The repair path must use `gh pr edit` (not raw label mutation).
+        Assert.Contains("gh pr edit", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildOneshotPrompt_MentionsClosingReferenceMandatory_G311()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("PR closing reference is mandatory (G311)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Closes #<issue>", prompt, StringComparison.Ordinal);
+        Assert.Contains("worker complete", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostOneshotPrompt_MentionsStructuredClarificationWorkflow_G310()
     {
         using var writer = new StringWriter();
