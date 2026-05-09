@@ -179,13 +179,8 @@ public sealed class HostLoopNextActionAnalyzerTests
     }
 
     [Fact]
-    public void TrueIdle_WhenOpenIntentTargetButNoLease()
+    public void WipCapBlocked_WhenOpenIntentTargetButNoLease()
     {
-        // Edge case: there is an open intent-target but no worker holds it (e.g.
-        // intent-pr-created sitting idle waiting for host approval). Today the
-        // analyzer treats this as true-idle because no review/publish/repair
-        // signal arrived; the actionable-review-pr signal has its own gate and
-        // is the right place to flag review-pr.
         var input = NewInput() with
         {
             OpenIntentTargetPrOrIssueExists = true,
@@ -194,7 +189,9 @@ public sealed class HostLoopNextActionAnalyzerTests
 
         var result = HostLoopNextActionAnalyzer.Analyze(input);
 
-        Assert.Equal("true-idle", result.Classification);
+        Assert.Equal("wip-cap-blocked", result.Classification);
+        Assert.False(result.MutationAllowed);
+        Assert.Contains("host-review-diagnostics", result.RecommendedCommand!, StringComparison.Ordinal);
     }
 
     private static HostLoopNextActionInput NewInput() =>

@@ -52,6 +52,7 @@ internal static class HostLoopNextActionAnalyzer
     public const string ClassificationRepairHostMetadata = "repair-host-metadata";
     public const string ClassificationPublishNextIssue = "publish-next-issue";
     public const string ClassificationHardClarification = "hard-clarification";
+    public const string ClassificationWipCapBlocked = "wip-cap-blocked";
     public const string ClassificationWaitForChild = "wait-for-child";
     public const string ClassificationTrueIdle = "true-idle";
 
@@ -155,6 +156,18 @@ internal static class HostLoopNextActionAnalyzer
                     "Use `clarification next` to retrieve the structured question and `clarification answer --write` after the operator answers."
                 },
                 "Hard clarification open — surface to operator before any mutation.");
+        }
+
+        if (input.OpenIntentTargetPrOrIssueExists && !input.AnyChildWorkerLeaseHeld)
+        {
+            return Result(ClassificationWipCapBlocked, mutationAllowed: false,
+                $"intent-cli automation host-review-diagnostics --repo {input.Repo} --format json",
+                new[]
+                {
+                    "An open `intent-target` PR/issue exists, so the WIP cap blocks new next-slice publication.",
+                    "No child worker lease is currently visible; re-run host-review-diagnostics to distinguish waiting from a stale label/metadata condition."
+                },
+                "WIP cap blocked by open intent-target work — no new issue publication.");
         }
 
         // 8. wait-for-child (open intent-target work currently held by a worker)
