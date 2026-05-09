@@ -161,6 +161,23 @@ internal static class IntentNextSliceCommand
 
         var clarificationOpen = clarificationAnalysis?.HasOpenBlocker ?? false;
         var staleClarificationMetadata = clarificationAnalysis?.StaleClarificationMetadata ?? false;
+
+        // G302: structured clarifications under
+        // `intents/<domain>/clarifications/*.toml` block next-slice the
+        // same way the legacy markdown blocker does.
+        try
+        {
+            if (StructuredClarificationsDirectory.HasOpenBlocker(context.RepoRoot, domain))
+            {
+                clarificationOpen = true;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Treat parse errors as non-blocking here; the dedicated
+            // `clarification status` surface returns the structured error
+            // when the operator audits it directly.
+        }
         IntentNextSliceCandidate? candidate = null;
         if (Directory.Exists(packetRoot))
         {

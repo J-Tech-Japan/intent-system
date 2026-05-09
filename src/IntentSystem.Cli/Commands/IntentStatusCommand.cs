@@ -129,6 +129,22 @@ internal static class IntentStatusCommand
             clarificationOpen = ClarificationOpenDetector.HasOpenBlocker(File.ReadAllText(clarificationPath!));
         }
 
+        // G302: structured clarifications under
+        // `intents/<domain>/clarifications/*.toml` are an additive open
+        // signal. ANY open structured clarification flips
+        // `clarification_open` true regardless of the markdown shape.
+        try
+        {
+            if (StructuredClarificationsDirectory.HasOpenBlocker(context.RepoRoot, domain))
+            {
+                clarificationOpen = true;
+            }
+        }
+        catch (InvalidOperationException exception)
+        {
+            notes.Add($"structured clarification could not be parsed: {exception.Message}");
+        }
+
         return new IntentStatusResult
         {
             Domain = domain,
