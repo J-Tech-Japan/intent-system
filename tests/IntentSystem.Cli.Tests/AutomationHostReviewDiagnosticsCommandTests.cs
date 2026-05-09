@@ -519,6 +519,55 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_PublishRecoveryRepairsAvailable_ClassifiesPublishRecoveryReady_G313()
+    {
+        // G313: when publish-recovery has unapplied high-confidence repairs
+        // and no other terminal class fits, surface `publish-recovery-ready`
+        // so the host loop runs publish-recovery (not generic reconcile)
+        // first for missing-linked_pr blockers backed by publish artifacts.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--publish-recovery-repairs-available", "1", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("publish-recovery-ready", result.Classification);
+        Assert.Contains("publish-recovery", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Contains("--write", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        // The summary should mention publish.yaml so the operator can tell
+        // this lane apart from generic reconcile.
+        Assert.Contains("publish.yaml", result.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PublishRecoveryAndReconcileBothAvailable_PrefersPublishRecoveryReady_G313()
+    {
+        // G313: when BOTH publish-recovery and reconcile have unapplied
+        // high-confidence repairs, publish-recovery wins because its
+        // evidence is stronger (publish-artifact-backed, single-issue
+        // single-queue-item convergence).
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system",
+             "--publish-recovery-repairs-available", "1",
+             "--reconcile-repairs-available", "2",
+             "--format", "json"],
+            writer);
+
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("publish-recovery-ready", result.Classification);
+    }
+
+    [Fact]
     public void Execute_ReconcileRepairsAvailableButCandidatePresent_PrefersIssuePublishReady_G286()
     {
         // G286: when both a publish-ready candidate AND unapplied repairs are

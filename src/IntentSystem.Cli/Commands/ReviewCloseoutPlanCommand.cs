@@ -189,6 +189,16 @@ internal static class ReviewCloseoutPlanCommand
         // implementation-review-finding when both are present so the host
         // loop runs reconcile first. Posting a PR comment for a wake that is
         // host-metadata-blocked is forbidden by the host-loop guide.
+        //
+        // G313: when the host-metadata blocker is specifically "no queue
+        // item found with linked_pr matching #N" AND at least one
+        // `.intent-cli/issues/<unit>/publish.yaml` exists on disk, the
+        // first-class recovery is `automation publish-recovery` (G303),
+        // not generic reconcile. publish-recovery uses the publish-artifact
+        // evidence to deterministically repair the queue's linked_pr;
+        // generic reconcile is a fallback for cases without publish
+        // artifacts. When publish artifacts are absent, generic reconcile
+        // is still the recommended primary command.
         var ready = gaps.Count == 0 && matchedItem is not null;
         string blockerClassification;
         string? recommendedRecoveryCommand;
@@ -200,7 +210,12 @@ internal static class ReviewCloseoutPlanCommand
         else if (gaps.Any(g => string.Equals(g.Classification, GapClassificationHostMetadata, StringComparison.Ordinal)))
         {
             blockerClassification = BlockerClassificationHostMetadataBlocked;
-            recommendedRecoveryCommand = $"intent-cli automation reconcile --lane host-review --repo {repo} --format json";
+            var missingLinkedPrGap = matchedItem is null
+                && gaps.Any(g => string.Equals(g.Classification, GapClassificationHostMetadata, StringComparison.Ordinal)
+                    && g.Description.Contains("no queue item found with linked_pr", StringComparison.Ordinal));
+            recommendedRecoveryCommand = missingLinkedPrGap && PublishArtifactsExist(context.RepoRoot)
+                ? $"intent-cli automation publish-recovery --repo {repo} --format json"
+                : $"intent-cli automation reconcile --lane host-review --repo {repo} --format json";
         }
         else
         {
@@ -241,6 +256,40 @@ internal static class ReviewCloseoutPlanCommand
         }
 
         return result.Ready ? 0 : 1;
+    }
+
+    /// <summary>
+    /// G313: returns true iff at least one
+    /// <c>.intent-cli/issues/&lt;unit&gt;/publish.yaml</c> exists under
+    /// <paramref name="repoRoot"/>. Used to choose
+    /// <c>automation publish-recovery</c> over generic reconcile when the
+    /// closeout-plan blocker is a missing <c>linked_pr</c> on a wake whose
+    /// publish artifacts can deterministically repair the link.
+    /// </summary>
+    internal static bool PublishArtifactsExist(string repoRoot)
+    {
+        var issuesDir = Path.Combine(repoRoot, ".intent-cli", "issues");
+        if (!Directory.Exists(issuesDir))
+        {
+            return false;
+        }
+        try
+        {
+            foreach (var unitDir in Directory.EnumerateDirectories(issuesDir))
+            {
+                if (File.Exists(Path.Combine(unitDir, "publish.yaml")))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Permission/IO errors fall through to "no publish artifacts
+            // available"; generic reconcile is then the safe default.
+            return false;
+        }
+        return false;
     }
 
     private static ReviewCloseoutPlanGap HostMetadataGap(string description) =>

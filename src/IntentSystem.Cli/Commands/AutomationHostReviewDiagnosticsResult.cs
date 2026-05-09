@@ -125,6 +125,19 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     public const string RepairedAndRetry = "repaired-and-retry";
 
     /// <summary>
+    /// G313: terminal class returned when <c>publish-recovery</c> reports
+    /// at least one unapplied high-confidence repair targeting the
+    /// selected review PR (publish-artifact-backed evidence converged on
+    /// a single execution unit / source issue). The host loop should run
+    /// <c>automation publish-recovery --write</c> first — before generic
+    /// reconcile — and retry the wake. Distinct from
+    /// <see cref="RepairedAndRetry"/> so the host-loop guidance can route
+    /// publish-artifact-backed missing-linked_pr blockers to the
+    /// publish-recovery lane as the primary recovery surface.
+    /// </summary>
+    public const string PublishRecoveryReady = "publish-recovery-ready";
+
+    /// <summary>
     /// G297: terminal class returned when a selected review PR is still
     /// draft. Host approval / closeout / next-slice publish must be
     /// blocked because GitHub will reject the merge with "Pull Request is
