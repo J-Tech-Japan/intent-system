@@ -127,6 +127,117 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         Assert.Equal(0, doc.RootElement.GetProperty("unsafe_stops").GetArrayLength());
     }
 
+    // --- G315: queue-state-backed linked_pr lane (no publish.yaml needed) ----
+
+    [Fact]
+    public void Execute_LinkedIssuePresentNoPr_DryRun_ReportsG315HighConfidenceRepair()
+    {
+        // SKS-G219-style fixture: queue already has linked_issue=#558,
+        // linked_pr=null. PR #559 closes #558. No publish.yaml needed.
+        using var workspace = new RecoveryWorkspace();
+        var li = new LinkedIssue
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            Number = 558,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/558"
+        };
+        workspace.WriteQueueState(BuildQueueState("SKS-G219", linkedIssue: li, linkedPr: null));
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(559, "Closes #558") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("dry-run", doc.RootElement.GetProperty("mode").GetString());
+        Assert.Equal(1, doc.RootElement.GetProperty("safe_repairs").GetArrayLength());
+        Assert.Equal(0, doc.RootElement.GetProperty("applied_count").GetInt32());
+
+        var repair = doc.RootElement.GetProperty("safe_repairs")[0];
+        Assert.Equal(
+            PublishRecoveryAnalyzer.RepairTypeLinkedIssueClosingPr,
+            repair.GetProperty("type").GetString());
+        Assert.Equal(558, repair.GetProperty("linked_issue_number").GetInt32());
+        Assert.Equal(559, repair.GetProperty("linked_pr_number").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_LinkedIssuePresentNoPr_Write_FillsLinkedPr_PreservesLinkedIssue()
+    {
+        using var workspace = new RecoveryWorkspace();
+        var li = new LinkedIssue
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            Number = 558,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/558"
+        };
+        workspace.WriteQueueState(BuildQueueState("SKS-G219", linkedIssue: li, linkedPr: null));
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(559, "Closes #558") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var queueAfter = QueueStateSerializer.Deserialize(
+            File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        var item = queueAfter.Items[0];
+        Assert.NotNull(item.LinkedIssue);
+        Assert.Equal(558, item.LinkedIssue!.Number);
+        Assert.Equal("J-Tech-Japan/intent-system", item.LinkedIssue.Repo);
+        // The original linked_issue URL must be preserved verbatim — the
+        // G315 lane only fills in linked_pr.
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/558", item.LinkedIssue.Url);
+        Assert.Contains("/pull/559", item.LinkedPr!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_LinkedIssuePresentNoPr_NoClosingPr_StaysUnsafe_NoMutation()
+    {
+        using var workspace = new RecoveryWorkspace();
+        var li = new LinkedIssue
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            Number = 558,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/558"
+        };
+        workspace.WriteQueueState(BuildQueueState("SKS-G219", linkedIssue: li, linkedPr: null));
+
+        // PR exists but doesn't close #558 — operator must repair the PR
+        // body before host metadata can recover.
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(559, "no closing reference here") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("safe_repairs").GetArrayLength());
+        Assert.Equal(1, doc.RootElement.GetProperty("unsafe_stops").GetArrayLength());
+        Assert.Equal(
+            PublishRecoveryAnalyzer.UnsafeNoClosingPrForLinkedIssue,
+            doc.RootElement.GetProperty("unsafe_stops")[0].GetProperty("kind").GetString());
+
+        // Mutation invariant — the queue row stays unchanged.
+        var queueAfter = QueueStateSerializer.Deserialize(
+            File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        Assert.Null(queueAfter.Items[0].LinkedPr);
+        Assert.NotNull(queueAfter.Items[0].LinkedIssue);
+    }
+
     [Fact]
     public void Execute_RequiresRepoFlag()
     {
