@@ -237,6 +237,146 @@ public sealed class GuideReviewCommandTests
         Assert.Contains("--format must be 'markdown' or 'json'", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // --- G316: intent-and-packet-aware review --------------------------------
+
+    [Fact]
+    public void Execute_G316_JsonIncludesPacketPathsAndIntentReferenceAndSufficiencyFields()
+    {
+        // Acceptance: guide review must surface structured packet_paths
+        // (canonical packet files with exists flags), intent_reference_paths
+        // (specs/intent-tree/rules under the resolved domain),
+        // approval_summary_requirements, request_update_requirements, and
+        // tests_pass_is_necessary_not_sufficient: true.
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G316", "review", title: "intent-aware review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G316/packet.yaml", "execution_unit: G316");
+        workspace.WriteFile(".intent-cli/issues/G316/implementation.md", "# Implementation");
+        // Seed only specs/ to confirm exists is true for some entries and false for others.
+        workspace.WriteFile("intents/intent-cli/specs/00-map.md", "map");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+
+        // tests-pass sufficiency signal
+        Assert.True(root.GetProperty("tests_pass_is_necessary_not_sufficient").GetBoolean());
+
+        // packet_paths covers the four canonical files in the documented order
+        var packetPaths = root.GetProperty("packet_paths").EnumerateArray().ToArray();
+        Assert.Equal(4, packetPaths.Length);
+        Assert.Equal("packet.yaml", packetPaths[0].GetProperty("name").GetString());
+        Assert.Equal("implementation.md", packetPaths[1].GetProperty("name").GetString());
+        Assert.Equal("review-context.md", packetPaths[2].GetProperty("name").GetString());
+        Assert.Equal("github-body.md", packetPaths[3].GetProperty("name").GetString());
+        Assert.True(packetPaths[0].GetProperty("exists").GetBoolean()); // packet.yaml seeded
+        Assert.True(packetPaths[1].GetProperty("exists").GetBoolean()); // implementation.md seeded
+        Assert.False(packetPaths[2].GetProperty("exists").GetBoolean()); // review-context.md not seeded
+        Assert.False(packetPaths[3].GetProperty("exists").GetBoolean()); // github-body.md not seeded
+
+        // intent_reference_paths covers specs/intent-tree/rules under the
+        // domain, with relative_path always populated and exists reflecting
+        // what's on disk.
+        var intentRefs = root.GetProperty("intent_reference_paths").EnumerateArray().ToArray();
+        Assert.Equal(3, intentRefs.Length);
+        var specsRef = intentRefs.Single(e => e.GetProperty("kind").GetString() == "specs");
+        Assert.Equal("intents/intent-cli/specs", specsRef.GetProperty("relative_path").GetString());
+        Assert.True(specsRef.GetProperty("exists").GetBoolean());
+        var intentTreeRef = intentRefs.Single(e => e.GetProperty("kind").GetString() == "intent-tree");
+        Assert.False(intentTreeRef.GetProperty("exists").GetBoolean());
+        var rulesRef = intentRefs.Single(e => e.GetProperty("kind").GetString() == "rules");
+        Assert.False(rulesRef.GetProperty("exists").GetBoolean());
+
+        // approval_summary_requirements references packet contract, AC, OOS,
+        // intent reference, tests-pass-paired-with-evidence, and Closes ref.
+        var approvalReqs = root.GetProperty("approval_summary_requirements")
+            .EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.True(approvalReqs.Length >= 5);
+        Assert.Contains(approvalReqs, r => r.Contains("packet.yaml", StringComparison.Ordinal));
+        Assert.Contains(approvalReqs, r => r.Contains("acceptance criteria", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(approvalReqs, r => r.Contains("out-of-scope", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(approvalReqs, r => r.Contains("intent / spec / rule", StringComparison.Ordinal));
+        Assert.Contains(approvalReqs, r => r.Contains("Closes #", StringComparison.Ordinal));
+        Assert.Contains(approvalReqs, r => r.Contains("necessary, not sufficient", StringComparison.Ordinal));
+
+        // request_update_requirements force the three-way classification.
+        var requestReqs = root.GetProperty("request_update_requirements")
+            .EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Contains(requestReqs, r => r.Contains("implementation-finding", StringComparison.Ordinal));
+        Assert.Contains(requestReqs, r => r.Contains("host-metadata-blocked", StringComparison.Ordinal));
+        Assert.Contains(requestReqs, r => r.Contains("intent-ambiguity", StringComparison.Ordinal));
+        // Tests-only failure mode is itself an implementation-finding.
+        Assert.Contains(requestReqs, r => r.Contains("tests pass but evidence missing", StringComparison.Ordinal)
+            || r.Contains("packet/intent conformance", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G316_ChecklistEnforcesPacketAndIntentEvidenceBeyondTests()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G316", "review", title: "intent-aware review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G316/packet.yaml", "x");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var checklist = document.RootElement.GetProperty("review_checklist")
+            .EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+        // Each canonical packet file is named in the checklist.
+        Assert.Contains(checklist, item => item.Contains("packet.yaml", StringComparison.Ordinal));
+        Assert.Contains(checklist, item => item.Contains("implementation.md", StringComparison.Ordinal));
+        Assert.Contains(checklist, item => item.Contains("review-context.md", StringComparison.Ordinal));
+        // Acceptance Criteria + Out-of-Scope boundaries
+        Assert.Contains(checklist, item => item.Contains("Acceptance Criteria", StringComparison.Ordinal));
+        Assert.Contains(checklist, item => item.Contains("Out-of-scope boundaries", StringComparison.Ordinal));
+        // Related intent/spec/rule reference
+        Assert.Contains(checklist, item => item.Contains("intent / spec / rule", StringComparison.Ordinal)
+            || item.Contains("design intent", StringComparison.Ordinal));
+        // PR closing reference (G311) — explicitly required
+        Assert.Contains(checklist, item => item.Contains("Closes/Fixes/Resolves", StringComparison.Ordinal)
+            || item.Contains("G311", StringComparison.Ordinal));
+        // Tests-pass-not-sufficient explicit
+        Assert.Contains(checklist, item =>
+            item.Contains("NECESSARY but NOT SUFFICIENT", StringComparison.Ordinal)
+            || item.Contains("necessary but not sufficient", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Execute_G316_MarkdownIncludesNewSections()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G316", "review", title: "intent-aware review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G316/packet.yaml", "x");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("## Intent reference paths", output, StringComparison.Ordinal);
+        Assert.Contains("## Sufficiency of evidence", output, StringComparison.Ordinal);
+        Assert.Contains("tests_pass_is_necessary_not_sufficient: yes", output, StringComparison.Ordinal);
+        Assert.Contains("## Approval summary requirements", output, StringComparison.Ordinal);
+        Assert.Contains("## Request-update requirements", output, StringComparison.Ordinal);
+        Assert.Contains("canonical paths:", output, StringComparison.Ordinal);
+        // Domain placeholder is the test workspace's intent-cli domain.
+        Assert.Contains("intents/intent-cli/specs", output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Execute_HelpFlag_PrintsUsage()
     {

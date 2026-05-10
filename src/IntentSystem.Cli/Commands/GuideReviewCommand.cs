@@ -6,14 +6,23 @@ using IntentSystem.Supervisor.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G248: Read-only <c>intent-cli guide review</c> command. Emits PR-specific
-/// review guidance so an AI reviewer can ask intent-cli what to inspect
-/// without reading local skill files. Resolves the execution unit via
-/// the queue item's <c>linked_pr</c> field, lists packet refs, surfaces
-/// the head of <c>review-context.md</c> when present, and emits a
+/// G248 / G316: Read-only <c>intent-cli guide review</c> command. Emits
+/// PR-specific review guidance so an AI reviewer can ask intent-cli what
+/// to inspect without reading local skill files. Resolves the execution
+/// unit via the queue item's <c>linked_pr</c> field, lists packet refs,
+/// surfaces the head of <c>review-context.md</c> when present, and emits a
 /// deterministic review checklist, boundaries, and validation
 /// suggestions. Never launches an AI provider, never posts comments,
 /// never mutates state.
+///
+/// G316 extends the output to be intent-and-packet aware: structured
+/// <c>packet_paths</c> for the canonical packet files, structured
+/// <c>intent_reference_paths</c> for the parent intent host's
+/// <c>specs</c>/<c>intent-tree</c>/<c>rules</c> directories under the
+/// resolved domain, an explicit <c>tests_pass_is_necessary_not_sufficient</c>
+/// signal, and approval-summary / request-update requirement lists so
+/// reviewers tie evidence to packet contract and intent boundaries
+/// rather than tests-only.
 /// </summary>
 internal static class GuideReviewCommand
 {
@@ -25,15 +34,48 @@ internal static class GuideReviewCommand
     private const string UsageLine =
         "Usage: intent-cli guide review --pr <n> --repo <owner/repo> [--domain <name>] [--format markdown|json]";
 
+    // G316: canonical packet filenames the reviewer must consult before
+    // approval. Order matches the order the reviewer should read them in:
+    // packet contract (yaml) → implementation requirements →
+    // review-context focus → published GitHub body (verifiable on the PR).
+    private static readonly IReadOnlyList<string> CanonicalPacketFiles = new[]
+    {
+        "packet.yaml",
+        "implementation.md",
+        "review-context.md",
+        "github-body.md"
+    };
+
+    // G316: parent intent host subdirectories (relative to the host repo
+    // root, joined with the resolved domain). Surfaced so the reviewer
+    // can locate related design intent without grepping the tree.
+    private static readonly IReadOnlyList<(string Kind, string RelativeSubdir)> CanonicalIntentReferenceDirs = new[]
+    {
+        ("specs", "specs"),
+        ("intent-tree", "intent-tree"),
+        ("rules", "rules")
+    };
+
     private static readonly IReadOnlyList<string> ReviewChecklist = new[]
     {
-        "PR scope matches the issue body's In Scope / Out Of Scope sections.",
-        "Acceptance Criteria from the issue body are satisfied by the changeset.",
-        "Verification steps named in the issue body are runnable and pass.",
+        // G316: intent-and-packet-aware checklist. Reviewer must trace
+        // each item to packet/issue/intent evidence, not just to test
+        // output.
+        "Linked issue body's In Scope / Out Of Scope sections are honored by the changeset (cite the section).",
+        "packet.yaml execution-unit contract (scope, dependencies, contract pre/post) matches the changeset.",
+        "implementation.md requirements are reflected in the diff (cite the requirement → file/symbol mapping).",
+        "review-context.md focus areas have been inspected end-to-end (cite the focus area).",
+        "github-body.md (if present) is consistent with what the PR actually delivered.",
+        "Acceptance Criteria from the issue body are satisfied — each criterion mapped to a concrete change or test.",
+        "Verification steps named in the issue body are runnable AND pass.",
+        "Out-of-scope boundaries from the issue body are NOT silently expanded by the PR.",
+        "Related parent intent / spec / rule references are checked: the change does not contradict design intent for the resolved domain.",
+        "PR closing reference (Closes/Fixes/Resolves #<source-issue>) is present and points at the linked source issue (G311).",
         "No prompt-specific label mutation knowledge leaked into the change.",
         "No `intent-target` or `intent-pr-created` are added to the PR by the change.",
         "No AI provider is launched by `intent-cli` in the change.",
-        "Generated artifacts alone are not treated as the solution when real code changes are required."
+        "Generated artifacts alone are not treated as the solution when real code changes are required.",
+        "Passing tests is NECESSARY but NOT SUFFICIENT — tests-pass without packet/intent conformance evidence is a request-update, not an approval."
     };
 
     private static readonly IReadOnlyList<string> ReviewBoundaries = new[]
@@ -41,14 +83,43 @@ internal static class GuideReviewCommand
         "Review is read-only; do not push commits or mutate labels from this loop.",
         "Do not merge the PR from this command; merge happens via the host closeout path.",
         "Do not invent label transitions; rely on installed `intent-cli` claim/complete recommendations.",
-        "Do not read parent host packet files to fill contract gaps; flag the gap and stop instead."
+        "Do not read parent host packet files to fill contract gaps; flag the gap and stop instead.",
+        // G316: bound the intent-trace. Reviewers should NOT read the
+        // entire intent tree per PR — packet/review-context references
+        // are the primary signal.
+        "Do not read the full intent tree per PR — packet.yaml + review-context.md are the primary intent signal; intent_reference_paths are supplementary and consulted only when the packet itself points at them."
+    };
+
+    // G316: approval is gated on packet/intent conformance evidence, not
+    // just the test result. Surfaced as a structured field so the host
+    // loop can quote each requirement back into the approval summary.
+    private static readonly IReadOnlyList<string> ApprovalSummaryRequirements = new[]
+    {
+        "Name the execution unit and packet contract that was checked (packet.yaml scope and pre/post).",
+        "Name the issue acceptance criteria that were verified, mapped to changes or tests in the PR.",
+        "State that out-of-scope boundaries from the issue body were NOT crossed.",
+        "Cite at least one related intent / spec / rule reference (or explicitly state none applied) that the change is consistent with.",
+        "Report the test command(s) executed AND state that tests-pass is treated as necessary, not sufficient — pair the test result with packet/intent evidence.",
+        "Confirm the PR closing reference (`Closes #<source-issue>`) matches the linked source issue (G311)."
+    };
+
+    // G316: request-update comments must distinguish three classes so
+    // the implementer knows what they own and what host owns.
+    private static readonly IReadOnlyList<string> RequestUpdateRequirements = new[]
+    {
+        "Classify each finding as ONE of: implementation-finding (code/contract gap the implementer fixes on the PR branch), host-metadata-blocked (parent host metadata; never a PR comment — G287), or intent-ambiguity (packet/issue/intent text is unclear — operator clarification, not a code change).",
+        "For implementation-finding entries, tie the finding to a specific packet contract clause, acceptance criterion, or intent reference; vague review notes are not actionable.",
+        "Do NOT post host-metadata-blocked or intent-ambiguity findings as PR comments (G287); surface them as structured operator stops instead.",
+        "Tests-only failure mode (\"tests pass but evidence missing\") is itself an implementation-finding when the PR cannot show packet/intent conformance — request the implementer to add the missing evidence (test names mapped to AC, comments tying changes to packet clauses, etc.)."
     };
 
     private static readonly IReadOnlyList<string> DefaultValidationSuggestions = new[]
     {
         "Run focused tests named in the packet's Verification section.",
         "Run `git diff --check` against the merge result.",
-        "Confirm the PR head SHA before and after the review pass."
+        "Confirm the PR head SHA before and after the review pass.",
+        // G316: validation is not just test execution.
+        "After tests pass, restate at least one packet contract clause AND one intent reference touched by the diff in your approval summary; if you cannot, treat the PR as request-update."
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -117,6 +188,7 @@ internal static class GuideReviewCommand
 
         string? packetDirectory = null;
         IReadOnlyList<string> packetFiles = Array.Empty<string>();
+        IReadOnlyList<GuideReviewPacketPath> packetPaths = Array.Empty<GuideReviewPacketPath>();
         string? reviewContextHead = null;
         if (matchedItem is not null)
         {
@@ -138,7 +210,46 @@ internal static class GuideReviewCommand
             {
                 gaps.Add($"packet directory not found: {packetDirectory}");
             }
+
+            // G316: enumerate the canonical packet files (whether or not
+            // the packet directory exists) so the reviewer always sees
+            // exactly which files are expected and which are missing.
+            packetPaths = CanonicalPacketFiles
+                .Select(name =>
+                {
+                    var absolute = Path.Combine(
+                        packetDirectory ?? string.Empty,
+                        name);
+                    return new GuideReviewPacketPath
+                    {
+                        Name = name,
+                        Path = absolute,
+                        Exists = File.Exists(absolute)
+                    };
+                })
+                .ToArray();
         }
+
+        // G316: structured intent-reference paths. These are conceptual
+        // pointers under the parent intent host's `intents/<domain>/...`
+        // tree. The reviewer should consult them only when the packet
+        // explicitly references them; the bound is enforced by the
+        // ReviewBoundaries entry that says "do not read the full intent
+        // tree per PR".
+        var intentReferencePaths = CanonicalIntentReferenceDirs
+            .Select(entry =>
+            {
+                var relative = Path.Combine("intents", domain, entry.RelativeSubdir);
+                var absolute = Path.Combine(context.RepoRoot, relative);
+                return new GuideReviewIntentReferencePath
+                {
+                    Kind = entry.Kind,
+                    RelativePath = relative.Replace(Path.DirectorySeparatorChar, '/'),
+                    Path = absolute,
+                    Exists = Directory.Exists(absolute)
+                };
+            })
+            .ToArray();
 
         var result = new GuideReviewResult
         {
@@ -151,10 +262,15 @@ internal static class GuideReviewCommand
             QueueItemState = matchedItem?.State.ToString().ToLowerInvariant(),
             PacketDirectory = packetDirectory,
             PacketFiles = packetFiles,
+            PacketPaths = packetPaths,
+            IntentReferencePaths = intentReferencePaths,
             ReviewContextHead = reviewContextHead,
             ReviewChecklist = ReviewChecklist,
             ReviewBoundaries = ReviewBoundaries,
+            ApprovalSummaryRequirements = ApprovalSummaryRequirements,
+            RequestUpdateRequirements = RequestUpdateRequirements,
             ValidationSuggestions = DefaultValidationSuggestions,
+            TestsPassIsNecessaryNotSufficient = true,
             Gaps = gaps,
             Ready = gaps.Count == 0 && matchedItem is not null
         };
@@ -225,6 +341,18 @@ internal static class GuideReviewCommand
                 writer.WriteLine($"  - {file}");
             }
         }
+
+        // G316: canonical packet paths block — always present (even when
+        // the packet directory is missing) so the reviewer knows which
+        // files are required for an intent/packet-aware review.
+        if (result.PacketPaths.Count > 0)
+        {
+            writer.WriteLine("- canonical paths:");
+            foreach (var path in result.PacketPaths)
+            {
+                writer.WriteLine($"  - {path.Name}: {path.Path} (exists: {(path.Exists ? "yes" : "no")})");
+            }
+        }
         writer.WriteLine();
 
         if (!string.IsNullOrWhiteSpace(result.ReviewContextHead))
@@ -237,6 +365,15 @@ internal static class GuideReviewCommand
             writer.WriteLine();
         }
 
+        // G316: intent reference paths under the resolved domain.
+        writer.WriteLine("## Intent reference paths");
+        writer.WriteLine($"- domain: {result.Domain}");
+        foreach (var reference in result.IntentReferencePaths)
+        {
+            writer.WriteLine($"- {reference.Kind}: `{reference.RelativePath}` (exists: {(reference.Exists ? "yes" : "no")})");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Review checklist");
         foreach (var item in result.ReviewChecklist)
         {
@@ -246,6 +383,27 @@ internal static class GuideReviewCommand
 
         writer.WriteLine("## Review boundaries");
         foreach (var item in result.ReviewBoundaries)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+
+        // G316: tests-pass disclosure + structured approval / request-update
+        // requirement blocks so the host loop can quote them verbatim.
+        writer.WriteLine("## Sufficiency of evidence");
+        writer.WriteLine($"- tests_pass_is_necessary_not_sufficient: {(result.TestsPassIsNecessaryNotSufficient ? "yes" : "no")}");
+        writer.WriteLine("- Passing tests is necessary but NOT sufficient for approval. Approval requires packet/intent conformance evidence per the requirements below.");
+        writer.WriteLine();
+
+        writer.WriteLine("## Approval summary requirements");
+        foreach (var item in result.ApprovalSummaryRequirements)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## Request-update requirements");
+        foreach (var item in result.RequestUpdateRequirements)
         {
             writer.WriteLine($"- {item}");
         }
@@ -410,6 +568,22 @@ internal sealed record GuideReviewResult
     [JsonPropertyName("packet_files")]
     public required IReadOnlyList<string> PacketFiles { get; init; }
 
+    /// <summary>
+    /// G316: structured per-canonical-file packet path entries with
+    /// existence flags so the reviewer always knows which expected
+    /// packet artifacts are present.
+    /// </summary>
+    [JsonPropertyName("packet_paths")]
+    public required IReadOnlyList<GuideReviewPacketPath> PacketPaths { get; init; }
+
+    /// <summary>
+    /// G316: structured intent-reference directory entries
+    /// (`specs`/`intent-tree`/`rules` under the resolved domain) so the
+    /// reviewer can locate parent design intent without grepping.
+    /// </summary>
+    [JsonPropertyName("intent_reference_paths")]
+    public required IReadOnlyList<GuideReviewIntentReferencePath> IntentReferencePaths { get; init; }
+
     [JsonPropertyName("review_context_head")]
     public string? ReviewContextHead { get; init; }
 
@@ -419,12 +593,69 @@ internal sealed record GuideReviewResult
     [JsonPropertyName("review_boundaries")]
     public required IReadOnlyList<string> ReviewBoundaries { get; init; }
 
+    /// <summary>
+    /// G316: requirements the reviewer must include in an approval
+    /// summary; tests-pass alone is not sufficient.
+    /// </summary>
+    [JsonPropertyName("approval_summary_requirements")]
+    public required IReadOnlyList<string> ApprovalSummaryRequirements { get; init; }
+
+    /// <summary>
+    /// G316: requirements for request-update comments — distinguish
+    /// implementation-finding from host-metadata-blocked from
+    /// intent-ambiguity, and tie each finding to a packet/intent clause.
+    /// </summary>
+    [JsonPropertyName("request_update_requirements")]
+    public required IReadOnlyList<string> RequestUpdateRequirements { get; init; }
+
     [JsonPropertyName("validation_suggestions")]
     public required IReadOnlyList<string> ValidationSuggestions { get; init; }
+
+    /// <summary>
+    /// G316: explicit signal that passing tests is necessary but not
+    /// sufficient for approval. Always true; surfaced as a structured
+    /// field so automation can quote it back into the approval summary.
+    /// </summary>
+    [JsonPropertyName("tests_pass_is_necessary_not_sufficient")]
+    public required bool TestsPassIsNecessaryNotSufficient { get; init; }
 
     [JsonPropertyName("gaps")]
     public required IReadOnlyList<string> Gaps { get; init; }
 
     [JsonPropertyName("ready")]
     public required bool Ready { get; init; }
+}
+
+/// <summary>
+/// G316: single canonical packet file entry for the reviewer.
+/// </summary>
+internal sealed record GuideReviewPacketPath
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("exists")]
+    public required bool Exists { get; init; }
+}
+
+/// <summary>
+/// G316: single intent-reference directory pointer (specs / intent-tree
+/// / rules) for the reviewer.
+/// </summary>
+internal sealed record GuideReviewIntentReferencePath
+{
+    [JsonPropertyName("kind")]
+    public required string Kind { get; init; }
+
+    [JsonPropertyName("relative_path")]
+    public required string RelativePath { get; init; }
+
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("exists")]
+    public required bool Exists { get; init; }
 }
