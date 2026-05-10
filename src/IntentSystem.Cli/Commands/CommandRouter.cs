@@ -24,6 +24,7 @@ internal static class CommandRouter
         "automation",
         "safety",
         "tasking",
+        "task",
         "worker",
         "metadata",
         "guide",
@@ -195,6 +196,13 @@ internal static class CommandRouter
             {
                 ["validate"] = MetadataValidateCommand.Execute,
                 ["update"] = MetadataUpdateCommand.Execute
+            },
+            ["task"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["issue-to-pr"] = (ctx, args, w) => TaskCommand.Execute(ctx, ["issue-to-pr", .. args], w),
+                ["review-pr"] = (ctx, args, w) => TaskCommand.Execute(ctx, ["review-pr", .. args], w),
+                ["fix-pr-comments"] = (ctx, args, w) => TaskCommand.Execute(ctx, ["fix-pr-comments", .. args], w),
+                ["publish-next-issue"] = (ctx, args, w) => TaskCommand.Execute(ctx, ["publish-next-issue", .. args], w)
             },
             ["tasking"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
