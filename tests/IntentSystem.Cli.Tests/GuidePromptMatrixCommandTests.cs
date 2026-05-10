@@ -881,6 +881,207 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_AgentCodex_NamesCurrentThreadHeartbeatAndForbidsNewThread_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "codex", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        // The G314 hard rule must appear with its name + agent-specific content.
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("current-thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("heartbeat", prompt, StringComparison.Ordinal);
+        // The forbidden list must explicitly reject every common non-local
+        // surface so Codex has no path to a separate-thread schedule.
+        Assert.Contains("Do NOT spawn a new Codex thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("remote/cloud scheduler", prompt, StringComparison.Ordinal);
+        Assert.Contains("external cron", prompt, StringComparison.Ordinal);
+        Assert.Contains("out-of-process monitor", prompt, StringComparison.Ordinal);
+        // The operator-supplied frequency must appear in the contract so the
+        // agent is reminded which interval to wake at.
+        Assert.Contains("at 5m", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopPrompt_AgentClaude_NamesSameThreadLoopPrimitive_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("same-thread", prompt, StringComparison.Ordinal);
+        // The Claude rule names `/loop <frequency> <prompt>` as the
+        // canonical wake primitive.
+        Assert.Contains("/loop 5m <prompt>", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT create a new Claude Code thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("remote/cloud scheduler", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopPrompt_AgentCodex_IncludesLocalSchedulingContract_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "codex", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("current-thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT spawn a new Codex thread", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopPrompt_AgentClaude_IncludesLocalSchedulingContract_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("/loop 5m <prompt>", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopPrompt_AgentGeneric_StillIncludesContractWithoutAgentSpecificPrimitive_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "generic", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        // Generic agent must still name same-thread / current-thread, must
+        // still forbid remote/cloud schedules, but must NOT name `/loop` or
+        // `Codex` as the primitive (those are agent-specific).
+        Assert.Contains("current-thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("remote/cloud scheduler", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("/loop 5m <prompt>", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopPrompt_AgentCodex_NoFrequency_StillEmitsSchedulingContract_G314()
+    {
+        // G314 review feedback on PR #732: the operator's typical setup
+        // request omits `--frequency`; the agent calls `prompt-matrix`,
+        // learns the contract, then asks the operator for the interval.
+        // The unresolved-frequency branch must therefore still emit the
+        // per-agent G314 contract so the agent knows BEFORE the interval
+        // is resolved that it must use current-thread heartbeat / `/loop`
+        // and never a remote scheduler.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "codex", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("current-thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("heartbeat", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT spawn a new Codex thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("remote/cloud scheduler", prompt, StringComparison.Ordinal);
+        Assert.Contains("external cron", prompt, StringComparison.Ordinal);
+        Assert.Contains("out-of-process monitor", prompt, StringComparison.Ordinal);
+        // Frequency is still unresolved — the IMPORTANT preamble must
+        // still tell the agent to ask the operator before scheduling.
+        Assert.Contains("frequency is unresolved", prompt, StringComparison.Ordinal);
+        // The placeholder `<frequency>` should appear in the contract so
+        // the agent has language to reuse once the operator answers.
+        Assert.Contains("at <frequency>", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopPrompt_AgentClaude_NoFrequency_StillEmitsSchedulingContract_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("same-thread", prompt, StringComparison.Ordinal);
+        // Claude's wake primitive uses `/loop <frequency> <prompt>` — when
+        // the operator hasn't picked an interval yet the placeholder should
+        // be `<frequency>` so the agent can substitute later.
+        Assert.Contains("/loop <frequency> <prompt>", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT create a new Claude Code thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("frequency is unresolved", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopPrompt_AgentCodex_NoFrequency_StillEmitsSchedulingContract_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "codex", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT spawn a new Codex thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("frequency is unresolved", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopPrompt_AgentClaude_NoFrequency_StillEmitsSchedulingContract_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("/loop <frequency> <prompt>", prompt, StringComparison.Ordinal);
+        Assert.Contains("frequency is unresolved", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopPrompt_DocumentsDoctorBinarySourceAcceptance_G314()
+    {
+        // G314 acceptance: doctor `status: ok` accepts both
+        // `path-global-tool` and `cwd-local-shim`. The prompt already
+        // surfaces this — lock it down so a regression cannot drop it.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("path-global-tool", prompt, StringComparison.Ordinal);
+        Assert.Contains("cwd-local-shim", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostLoopPrompt_OrdersPublishRecoveryBeforeReconcile_G313()
     {
         using var writer = new StringWriter();

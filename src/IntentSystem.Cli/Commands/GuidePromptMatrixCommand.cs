@@ -152,11 +152,26 @@ internal static class GuidePromptMatrixCommand
         var resolvedAgent = NormalizeAgent(agent);
         if (string.IsNullOrWhiteSpace(frequency))
         {
+            // G314 review feedback (PR #732): the local scheduling contract
+            // must surface BEFORE the operator resolves `--frequency`. The
+            // typical operator path is to ask the agent to set up a loop
+            // without naming an interval; the agent calls
+            // `prompt-matrix` to learn the contract, then asks the operator
+            // for the interval. If this branch only emits the short
+            // paragraph, the agent never sees the agent-specific
+            // current-thread / `/loop` requirement and may pick a
+            // separate-thread or remote schedule before the interval is
+            // even resolved. So we emit the same per-agent contract here
+            // with `<frequency>` as a placeholder, plus the standard
+            // forbidden list.
+            var unresolvedSchedulingContract = RenderLocalSchedulingContract(resolvedAgent, "<frequency>");
             return
 $@"IMPORTANT — frequency is unresolved; ask the operator for the desired frequency before creating any cron, monitor, or recurring wakeup. Never guess or use a tool-default interval.
 - High-frequency local loops (active development): 5 minutes.
 - Low-frequency local loops (background / idle polling): ~20 minutes.
-- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.";
+- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.
+
+{unresolvedSchedulingContract}";
         }
 
         var schedulingHint = resolvedAgent switch
@@ -166,11 +181,38 @@ $@"IMPORTANT — frequency is unresolved; ask the operator for the desired frequ
             _ => $"Schedule via the agent's local same-thread/current-thread automation at {frequency}; cloud or new-thread schedulers cannot access local paths."
         };
 
+        var schedulingContract = RenderLocalSchedulingContract(resolvedAgent, frequency);
+
         return
 $@"Frequency: {frequency} (operator-resolved). {schedulingHint}
 - High-frequency local loops (active development): 5 minutes.
-- Low-frequency local loops (background / idle polling): ~20 minutes.";
+- Low-frequency local loops (background / idle polling): ~20 minutes.
+
+{schedulingContract}";
     }
+
+    /// <summary>
+    /// G314: agent-specific local scheduling contract surfaced as a
+    /// stand-alone hard rule paragraph in the rendered prompt. The
+    /// substance was previously buried as a single-sentence frequency
+    /// hint, which let Codex spawn a new thread or remote scheduler
+    /// that could not reach the operator's local <c>.intent-cli</c>
+    /// host paths. This block names the wake primitive each agent
+    /// must use, the local-path access requirement, and the explicit
+    /// forbidden list (new thread / remote scheduler / cloud schedule
+    /// / disconnected monitor) so a fresh agent has no path to a
+    /// non-local schedule.
+    /// </summary>
+    private static string RenderLocalSchedulingContract(string resolvedAgent, string frequency) =>
+        resolvedAgent switch
+        {
+            AgentClaude =>
+$@"**Local scheduling contract (G314)**: this loop runs **same-thread** in the active Claude Code session via `/loop {frequency} <prompt>`. Each wake reuses this thread's local filesystem paths (host repo cwd, child worktree, `.intent-cli/` packages); a different thread / new chat / remote process cannot reach those paths. Do NOT create a new Claude Code thread, a separate chat, a remote/cloud scheduler, an external cron, an out-of-process monitor, or any automation that cannot exec the host's local `intent-cli` against the host repo. If `/loop` is unavailable in the current session, surface the gap to the operator instead of substituting a non-local schedule.",
+            AgentCodex =>
+$@"**Local scheduling contract (G314)**: this loop runs **current-thread** in the active Codex session via local-automation / heartbeat at {frequency}. Each wake reuses this thread's local filesystem paths (host repo cwd, child worktree, `.intent-cli/` packages); a different thread / new chat / remote process cannot reach those paths. Do NOT spawn a new Codex thread, a separate chat, a remote/cloud scheduler, an external cron, an out-of-process monitor, or any automation that cannot exec the host's local `intent-cli` against the host repo. If current-thread heartbeat is unavailable in this session, surface the gap to the operator instead of substituting a non-local schedule.",
+            _ =>
+$@"**Local scheduling contract (G314)**: this loop runs in the **agent's current-thread / same-session** automation surface at {frequency}. Each wake reuses this thread's local filesystem paths (host repo cwd, child worktree, `.intent-cli/` packages); a different thread / new chat / remote process cannot reach those paths. Do NOT create a new thread / chat, a remote/cloud scheduler, an external cron, an out-of-process monitor, or any automation that cannot exec the host's local `intent-cli` against the host repo. If the agent has no same-thread loop primitive, surface the gap to the operator instead of substituting a non-local schedule."
+        };
 
     private static string NormalizeAgent(string? agent)
     {
