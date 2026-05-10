@@ -164,6 +164,227 @@ public sealed class PublishRecoveryAnalyzerTests
         Assert.Equal(706, result.SafeRepairs[0].LinkedPrNumber);
     }
 
+    // --- G315: queue-linked-issue → closing-PR lane -----------------------------
+
+    [Fact]
+    public void Analyze_LinkedIssuePresentNoPr_UniqueClosingPr_ProducesG315HighConfidenceRepair()
+    {
+        // Mirrors the SKS-G219 incident: queue already has linked_issue=#558,
+        // linked_pr=null; PR #559 closes #558 deterministically. The G315 lane
+        // should classify this as a high-confidence repair and preserve the
+        // existing linked_issue URL.
+        var candidate = NewLinkedIssueCandidate(
+            executionUnit: "SKS-G219",
+            linkedIssueRepo: "J-Tech-Japan/SekibanAsAService",
+            linkedIssueNumber: 558,
+            linkedIssueUrl: "https://github.com/J-Tech-Japan/SekibanAsAService/issues/558");
+        var pr = BuildPr(559, "SKS-G219 implement", body: "Closes #558");
+
+        var result = PublishRecoveryAnalyzer.Analyze(
+            "J-Tech-Japan/SekibanAsAService",
+            new[] { candidate },
+            new[] { pr });
+
+        Assert.Single(result.SafeRepairs);
+        Assert.Empty(result.UnsafeStops);
+        var repair = result.SafeRepairs[0];
+        Assert.Equal(PublishRecoveryAnalyzer.RepairTypeLinkedIssueClosingPr, repair.Type);
+        Assert.Equal("SKS-G219", repair.ExecutionUnit);
+        Assert.Equal(558, repair.LinkedIssueNumber);
+        Assert.Equal(559, repair.LinkedPrNumber);
+        Assert.Equal("J-Tech-Japan/SekibanAsAService", repair.LinkedIssueRepo);
+        Assert.Equal("https://github.com/J-Tech-Japan/SekibanAsAService/issues/558", repair.LinkedIssueUrl);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/559", repair.LinkedPrUrl); // BuildPr URL host
+        Assert.Equal("high", repair.Confidence);
+        Assert.Contains(repair.Evidence, e => e.Contains("linked_issue #558", StringComparison.Ordinal));
+        Assert.Contains(repair.Evidence, e => e.Contains("PR #559", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Analyze_LinkedIssue_UsesStructuredClosingIssuesReferences()
+    {
+        // GitHub's `closingIssuesReferences` graph data is the primary signal
+        // — even if the body has no Closes/Fixes text, the structured
+        // reference must drive the match.
+        var candidate = NewLinkedIssueCandidate(
+            executionUnit: "G300",
+            linkedIssueRepo: "J-Tech-Japan/intent-system",
+            linkedIssueNumber: 703,
+            linkedIssueUrl: null);
+        var pr = new GitHubAutomationPrCandidate
+        {
+            Number = 706,
+            Title = "G300 implement (no closes keyword in body)",
+            Url = "https://github.com/J-Tech-Japan/intent-system/pull/706",
+            Body = "PR description with no closing keyword.",
+            CreatedAt = "2026-05-08T00:00:00Z",
+            UpdatedAt = "2026-05-08T00:00:00Z",
+            Labels = Array.Empty<GitHubAutomationLabel>(),
+            State = "OPEN",
+            ClosingIssuesReferences = new[]
+            {
+                new GitHubPrClosingIssueReference
+                {
+                    Number = 703,
+                    Repository = new GitHubPrClosingIssueRepository
+                    {
+                        Name = "intent-system",
+                        Owner = new GitHubPrClosingIssueRepositoryOwner { Login = "J-Tech-Japan" }
+                    }
+                }
+            }
+        };
+
+        var result = PublishRecoveryAnalyzer.Analyze(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate },
+            new[] { pr });
+
+        Assert.Single(result.SafeRepairs);
+        Assert.Equal(706, result.SafeRepairs[0].LinkedPrNumber);
+        // The repair must synthesize a linked_issue URL when the queue row
+        // didn't carry one.
+        Assert.Equal(
+            "https://github.com/J-Tech-Japan/intent-system/issues/703",
+            result.SafeRepairs[0].LinkedIssueUrl);
+    }
+
+    [Fact]
+    public void Analyze_LinkedIssue_NoClosingPr_PointsToG311()
+    {
+        var candidate = NewLinkedIssueCandidate(
+            executionUnit: "SKS-G219",
+            linkedIssueRepo: "J-Tech-Japan/SekibanAsAService",
+            linkedIssueNumber: 558,
+            linkedIssueUrl: null);
+        var unrelatedPr = BuildPr(700, "Unrelated", body: "Closes #999");
+
+        var result = PublishRecoveryAnalyzer.Analyze(
+            "J-Tech-Japan/SekibanAsAService",
+            new[] { candidate },
+            new[] { unrelatedPr });
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Single(result.UnsafeStops);
+        var stop = result.UnsafeStops[0];
+        Assert.Equal(PublishRecoveryAnalyzer.UnsafeNoClosingPrForLinkedIssue, stop.Kind);
+        // G311 owns the PR-body closing-reference repair; the stop reason
+        // must point operators in that direction rather than guessing.
+        Assert.Contains("G311", stop.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Analyze_LinkedIssue_RepoMismatch_ReturnsUnsafeStop()
+    {
+        var candidate = NewLinkedIssueCandidate(
+            executionUnit: "SKS-G219",
+            linkedIssueRepo: "SomeoneElse/different-repo",
+            linkedIssueNumber: 558,
+            linkedIssueUrl: null);
+        var pr = BuildPr(559, "SKS-G219", body: "Closes #558");
+
+        var result = PublishRecoveryAnalyzer.Analyze(
+            "J-Tech-Japan/SekibanAsAService",
+            new[] { candidate },
+            new[] { pr });
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Single(result.UnsafeStops);
+        Assert.Equal(PublishRecoveryAnalyzer.UnsafeLinkedIssueRepoMismatch, result.UnsafeStops[0].Kind);
+    }
+
+    [Fact]
+    public void Analyze_LinkedIssue_MultipleClosingPrs_ReturnsUnsafeStop()
+    {
+        var candidate = NewLinkedIssueCandidate(
+            executionUnit: "SKS-G219",
+            linkedIssueRepo: "J-Tech-Japan/SekibanAsAService",
+            linkedIssueNumber: 558,
+            linkedIssueUrl: null);
+        var pr559 = BuildPr(559, "first", body: "Closes #558");
+        var pr560 = BuildPr(560, "second", body: "Fixes #558");
+
+        var result = PublishRecoveryAnalyzer.Analyze(
+            "J-Tech-Japan/SekibanAsAService",
+            new[] { candidate },
+            new[] { pr559, pr560 });
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Single(result.UnsafeStops);
+        Assert.Equal(PublishRecoveryAnalyzer.UnsafeMultipleClosingPrsForLinkedIssue, result.UnsafeStops[0].Kind);
+        Assert.Contains("#559", result.UnsafeStops[0].Reason, StringComparison.Ordinal);
+        Assert.Contains("#560", result.UnsafeStops[0].Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Analyze_LinkedIssue_MultipleQueueItemsForSameIssue_BothAreUnsafe()
+    {
+        // Two queue items both reference linked_issue #558 — neither can
+        // claim the unique closing PR deterministically.
+        var candidate1 = NewLinkedIssueCandidate(
+            executionUnit: "SKS-G219",
+            linkedIssueRepo: "J-Tech-Japan/SekibanAsAService",
+            linkedIssueNumber: 558,
+            linkedIssueUrl: null);
+        var candidate2 = NewLinkedIssueCandidate(
+            executionUnit: "SKS-G220",
+            linkedIssueRepo: "J-Tech-Japan/SekibanAsAService",
+            linkedIssueNumber: 558,
+            linkedIssueUrl: null);
+        var pr = BuildPr(559, "shared", body: "Closes #558");
+
+        var result = PublishRecoveryAnalyzer.Analyze(
+            "J-Tech-Japan/SekibanAsAService",
+            new[] { candidate1, candidate2 },
+            new[] { pr });
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Equal(2, result.UnsafeStops.Count);
+        Assert.All(result.UnsafeStops, stop =>
+            Assert.Equal(PublishRecoveryAnalyzer.UnsafeMultipleQueueItemsForLinkedIssue, stop.Kind));
+    }
+
+    [Fact]
+    public void Analyze_LinkedIssueAlreadyHasLinkedPr_NoRepair()
+    {
+        // End-to-end linked: nothing for any lane to do.
+        var candidate = new PublishRecoveryCandidate
+        {
+            ExecutionUnit = "SKS-G219",
+            LinkedIssueRepo = "J-Tech-Japan/SekibanAsAService",
+            LinkedIssueNumber = 558,
+            LinkedIssueUrl = "https://github.com/J-Tech-Japan/SekibanAsAService/issues/558",
+            LinkedPrUrl = "https://github.com/J-Tech-Japan/SekibanAsAService/pull/559",
+            PublishArtifact = null,
+            PublishArtifactExpectedPath = ".intent-cli/issues/SKS-G219/publish.yaml"
+        };
+        var pr = BuildPr(559, "SKS-G219", body: "Closes #558");
+
+        var result = PublishRecoveryAnalyzer.Analyze(
+            "J-Tech-Japan/SekibanAsAService",
+            new[] { candidate },
+            new[] { pr });
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Empty(result.UnsafeStops);
+    }
+
+    private static PublishRecoveryCandidate NewLinkedIssueCandidate(
+        string executionUnit,
+        string linkedIssueRepo,
+        int linkedIssueNumber,
+        string? linkedIssueUrl) =>
+        new()
+        {
+            ExecutionUnit = executionUnit,
+            LinkedIssueRepo = linkedIssueRepo,
+            LinkedIssueNumber = linkedIssueNumber,
+            LinkedIssueUrl = linkedIssueUrl,
+            LinkedPrUrl = null,
+            PublishArtifact = null,
+            PublishArtifactExpectedPath = $".intent-cli/issues/{executionUnit}/publish.yaml"
+        };
+
     private static PublishRecoveryCandidate NewCandidate(string executionUnit, IssuePublishArtifact? publishArtifact) =>
         new()
         {

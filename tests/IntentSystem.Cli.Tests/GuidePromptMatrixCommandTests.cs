@@ -1127,6 +1127,52 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_MentionsG315LinkedIssueRecoveryLane()
+    {
+        // G315: when queue-state already has linked_issue but linked_pr is
+        // null, the host-loop prompt must tell agents that
+        // `automation publish-recovery` now also covers this case (no
+        // publish artifact required) and must order it BEFORE the generic
+        // `automation reconcile` fallback.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("G315", prompt, StringComparison.Ordinal);
+        Assert.Contains("Queue-state-backed linked_pr recovery (G315)", prompt, StringComparison.Ordinal);
+        Assert.Contains("queue-linked-issue-closing-pr-recovery", prompt, StringComparison.Ordinal);
+        Assert.Contains("closingIssuesReferences", prompt, StringComparison.Ordinal);
+        // The G315 section must appear before any fallback to
+        // `automation reconcile --lane host-review`, mirroring the G313
+        // ordering in the recovery flow.
+        var g315Index = prompt.IndexOf("Queue-state-backed linked_pr recovery (G315)", StringComparison.Ordinal);
+        var reconcileIndex = prompt.LastIndexOf("automation reconcile --lane host-review", StringComparison.Ordinal);
+        Assert.True(g315Index >= 0, "G315 hard rule missing from host-loop prompt");
+        Assert.True(g315Index < reconcileIndex,
+            "G315: queue-state-backed linked_pr recovery hard rule must appear before the final reconcile fallback reference");
+    }
+
+    [Fact]
+    public void Execute_HostOneshotPrompt_MentionsG315LinkedIssueRecoveryLane()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("G315", prompt, StringComparison.Ordinal);
+        Assert.Contains("Linked_pr recovery from existing linked_issue (G315)", prompt, StringComparison.Ordinal);
+        Assert.Contains("queue-linked-issue-closing-pr-recovery", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostLoopPrompt_MentionsDurableStatePreflight_G312()
     {
         using var writer = new StringWriter();

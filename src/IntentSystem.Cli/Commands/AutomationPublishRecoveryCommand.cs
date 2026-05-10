@@ -129,11 +129,12 @@ internal static class AutomationPublishRecoveryCommand
         var candidates = new List<PublishRecoveryCandidate>();
         foreach (var item in queueState.Items)
         {
-            var hasIssue = item.LinkedIssue is { Number: not null } || (item.LinkedIssue is { } li && !string.IsNullOrWhiteSpace(li.Repo));
-            var hasPr = !string.IsNullOrWhiteSpace(item.LinkedPr);
-            if (hasIssue || hasPr)
+            // G315: items with linked_issue populated but linked_pr null
+            // are now in scope (queue-state-backed lane). Skip only items
+            // that already have a linked_pr — those are fully linked.
+            if (!string.IsNullOrWhiteSpace(item.LinkedPr))
             {
-                continue; // already linked; out of G303 scope.
+                continue;
             }
 
             var publishPath = Path.Combine(
@@ -157,6 +158,7 @@ internal static class AutomationPublishRecoveryCommand
                 ExecutionUnit = item.ExecutionUnit,
                 LinkedIssueRepo = item.LinkedIssue?.Repo,
                 LinkedIssueNumber = item.LinkedIssue?.Number,
+                LinkedIssueUrl = item.LinkedIssue?.Url,
                 LinkedPrUrl = item.LinkedPr,
                 PublishArtifact = artifact,
                 PublishArtifactExpectedPath = publishPath
@@ -187,14 +189,26 @@ internal static class AutomationPublishRecoveryCommand
             }
 
             var existing = items[index];
-            items[index] = existing with
-            {
-                LinkedIssue = new LinkedIssue
+            // G315: when the repair is the linked-issue→closing-PR lane,
+            // queue-state already has linked_issue as the durable host
+            // source-of-truth. Preserve it verbatim and only fill in
+            // linked_pr. The G303 lane (publish-artifact) writes both refs.
+            var linkedIssue = string.Equals(repair.Type, PublishRecoveryAnalyzer.RepairTypeLinkedIssueClosingPr, StringComparison.Ordinal)
+                ? existing.LinkedIssue ?? new LinkedIssue
                 {
                     Repo = repair.LinkedIssueRepo,
                     Number = repair.LinkedIssueNumber,
                     Url = repair.LinkedIssueUrl
-                },
+                }
+                : new LinkedIssue
+                {
+                    Repo = repair.LinkedIssueRepo,
+                    Number = repair.LinkedIssueNumber,
+                    Url = repair.LinkedIssueUrl
+                };
+            items[index] = existing with
+            {
+                LinkedIssue = linkedIssue,
                 LinkedPr = repair.LinkedPrUrl ?? $"https://github.com/{repair.LinkedIssueRepo}/pull/{repair.LinkedPrNumber}"
             };
         }
@@ -210,7 +224,7 @@ internal static class AutomationPublishRecoveryCommand
     {
         if (analysis.SafeRepairs.Count == 0 && analysis.UnsafeStops.Count == 0)
         {
-            return $"No queue items in '{analysis.Repo}' need publish-recovery (no items with both linked refs null).";
+            return $"No queue items in '{analysis.Repo}' need publish-recovery (no items with linked_pr missing).";
         }
 
         return write
@@ -234,7 +248,7 @@ internal static class AutomationPublishRecoveryCommand
             writer.WriteLine("## High-confidence repairs");
             foreach (var repair in result.SafeRepairs)
             {
-                writer.WriteLine($"- **`{repair.ExecutionUnit}`** → linked_issue=#{repair.LinkedIssueNumber}, linked_pr=#{repair.LinkedPrNumber}");
+                writer.WriteLine($"- **`{repair.ExecutionUnit}`** ({repair.Type}) → linked_issue=#{repair.LinkedIssueNumber}, linked_pr=#{repair.LinkedPrNumber}");
                 foreach (var evidence in repair.Evidence)
                 {
                     writer.WriteLine($"  - {evidence}");

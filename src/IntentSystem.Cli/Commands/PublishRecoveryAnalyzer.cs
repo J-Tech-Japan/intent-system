@@ -3,16 +3,25 @@ using System.Text.RegularExpressions;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G303: pure analyzer for publish-artifact-backed host-review metadata
-/// recovery. The G284 reconcile lane handles items that already have a
-/// <c>linked_issue</c> but no <c>linked_pr</c>; this analyzer covers the
-/// opposite case where a queued execution unit has BOTH refs null but
+/// G303 / G315: pure analyzer for two host-review metadata recovery lanes.
+///
+/// Lane A (G303): the publish-artifact-backed lane covers queued execution
+/// units where BOTH <c>linked_issue</c> and <c>linked_pr</c> are null but
 /// the host repo's <c>.intent-cli/issues/&lt;execution-unit&gt;/publish.yaml</c>
 /// recorded a created issue number, AND exactly one open PR uniquely
-/// closes that issue. In that case the repair is fully deterministic and
-/// can be applied with <c>--write</c>; ambiguity, repo mismatch,
-/// missing publish artifact, or already-conflicting metadata produce
-/// structured unsafe stops instead.
+/// closes that issue.
+///
+/// Lane B (G315): the queue-state-backed lane covers queued execution
+/// units where <c>linked_issue</c> is already populated (durable host
+/// source-of-truth) but <c>linked_pr</c> is null, AND exactly one open PR
+/// closes that linked issue. Publish-artifact evidence is not required
+/// for this lane — the existing queue <c>linked_issue</c> + GitHub closing
+/// reference is deterministic enough on its own.
+///
+/// In both lanes the repair is fully deterministic and can be applied
+/// with <c>--write</c>; ambiguity (multiple matching PRs or queue items),
+/// repo mismatch, missing publish artifact, or missing closing reference
+/// produce structured unsafe stops instead.
 ///
 /// Pure data in, pure data out — no `gh` calls, no file I/O. The
 /// command layer captures the inputs and applies the writes.
@@ -20,11 +29,18 @@ namespace IntentSystem.Cli.Commands;
 internal static class PublishRecoveryAnalyzer
 {
     public const string RepairType = "publish-artifact-linked-refs-recovery";
+    public const string RepairTypeLinkedIssueClosingPr = "queue-linked-issue-closing-pr-recovery";
     public const string UnsafeMissingPublishArtifact = "missing-publish-artifact";
     public const string UnsafeMissingCreatedIssue = "publish-artifact-no-created-issue";
     public const string UnsafeNoClosingPr = "no-closing-pr-for-published-issue";
     public const string UnsafeMultipleClosingPrs = "multiple-closing-prs-for-published-issue";
     public const string UnsafeRepoMismatch = "publish-recovery-repo-mismatch";
+    // G315 unsafe stop kinds — distinct from the G303 lane so operators can
+    // tell which evidence path produced the stop.
+    public const string UnsafeNoClosingPrForLinkedIssue = "no-closing-pr-for-linked-issue";
+    public const string UnsafeMultipleClosingPrsForLinkedIssue = "multiple-closing-prs-for-linked-issue";
+    public const string UnsafeMultipleQueueItemsForLinkedIssue = "multiple-queue-items-for-linked-issue";
+    public const string UnsafeLinkedIssueRepoMismatch = "linked-issue-repo-mismatch";
 
     private static readonly Regex ClosesIssueRegex = new(
         @"(?i)\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+(?:(?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?<number>\d+)\b",
@@ -42,16 +58,60 @@ internal static class PublishRecoveryAnalyzer
         var repairs = new List<PublishRecoveryRepair>();
         var unsafeStops = new List<PublishRecoveryUnsafeStop>();
 
+        // G315 ambiguity guard: precompute how many in-scope queue items
+        // claim each linked_issue number for `repo`. If two queue items
+        // both reference the same linked_issue, we cannot deterministically
+        // decide which one should be paired with a single closing PR — both
+        // surface as unsafe stops instead of either getting a repair.
+        var linkedIssueQueueOccurrences = new Dictionary<int, int>();
+        foreach (var c in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(c.LinkedPrUrl))
+            {
+                continue; // already linked end-to-end; not in scope.
+            }
+            if (c.LinkedIssueNumber is not int n)
+            {
+                continue;
+            }
+            if (!string.IsNullOrEmpty(c.LinkedIssueRepo)
+                && !string.Equals(c.LinkedIssueRepo, repo, StringComparison.OrdinalIgnoreCase))
+            {
+                continue; // cross-repo link is out of this analyzer's scope.
+            }
+            linkedIssueQueueOccurrences[n] = linkedIssueQueueOccurrences.TryGetValue(n, out var existing)
+                ? existing + 1
+                : 1;
+        }
+
         foreach (var candidate in candidates)
         {
-            if (!string.IsNullOrEmpty(candidate.LinkedIssueRepo)
-                || candidate.LinkedIssueNumber is not null
-                || !string.IsNullOrEmpty(candidate.LinkedPrUrl))
+            // Already linked end-to-end: nothing for either lane to do.
+            if (!string.IsNullOrEmpty(candidate.LinkedPrUrl))
             {
-                // The queue row already has at least one linked ref. G284
-                // handles the linked_issue → linked_pr case; this analyzer
-                // is scoped to BOTH-null rows so we don't accidentally
-                // overwrite live state.
+                continue;
+            }
+
+            // Lane B (G315): existing linked_issue, missing linked_pr.
+            if (candidate.LinkedIssueNumber is int linkedIssueNumber)
+            {
+                AnalyzeLinkedIssueLane(
+                    repo,
+                    candidate,
+                    linkedIssueNumber,
+                    linkedIssueQueueOccurrences,
+                    openPrs,
+                    repairs,
+                    unsafeStops);
+                continue;
+            }
+
+            // Lane A (G303): both linked_issue and linked_pr null. Falls
+            // through to the publish-artifact-driven path below.
+            if (!string.IsNullOrEmpty(candidate.LinkedIssueRepo))
+            {
+                // Defensive: linked_issue.repo set but no number — this is
+                // a malformed row; we can't repair it deterministically.
                 continue;
             }
 
@@ -129,6 +189,81 @@ internal static class PublishRecoveryAnalyzer
         };
     }
 
+    private static void AnalyzeLinkedIssueLane(
+        string repo,
+        PublishRecoveryCandidate candidate,
+        int linkedIssueNumber,
+        IReadOnlyDictionary<int, int> linkedIssueQueueOccurrences,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        List<PublishRecoveryRepair> repairs,
+        List<PublishRecoveryUnsafeStop> unsafeStops)
+    {
+        // Repo mismatch: if the queue item explicitly tags a different
+        // repo for its linked_issue, this analyzer (scoped to `--repo`)
+        // is not authoritative.
+        if (!string.IsNullOrEmpty(candidate.LinkedIssueRepo)
+            && !string.Equals(candidate.LinkedIssueRepo, repo, StringComparison.OrdinalIgnoreCase))
+        {
+            unsafeStops.Add(NewStop(candidate, UnsafeLinkedIssueRepoMismatch,
+                $"queue item '{candidate.ExecutionUnit}' has linked_issue.repo = '{candidate.LinkedIssueRepo}' which does not match analyzer repo '{repo}'; refusing to attach a linked_pr from a different repository."));
+            return;
+        }
+
+        // Multiple queue items point at the same linked_issue: cannot
+        // deterministically pair one PR with one queue item without an
+        // operator nudge.
+        if (linkedIssueQueueOccurrences.TryGetValue(linkedIssueNumber, out var occurrences)
+            && occurrences > 1)
+        {
+            unsafeStops.Add(NewStop(candidate, UnsafeMultipleQueueItemsForLinkedIssue,
+                $"{occurrences} queue items reference linked_issue #{linkedIssueNumber}; cannot deterministically decide which queue item to attach a closing PR to."));
+            return;
+        }
+
+        var closingPrs = openPrs
+            .Where(pr => ExtractLinkedIssueNumbers(repo, pr).Contains(linkedIssueNumber))
+            .ToArray();
+
+        if (closingPrs.Length == 0)
+        {
+            unsafeStops.Add(NewStop(candidate, UnsafeNoClosingPrForLinkedIssue,
+                $"queue item '{candidate.ExecutionUnit}' has linked_issue #{linkedIssueNumber} in '{repo}' but no open PR closes that issue. PR may be missing a Closes/Fixes/Resolves reference (G311) — repair the PR body before retrying linked_pr recovery."));
+            return;
+        }
+
+        if (closingPrs.Length > 1)
+        {
+            unsafeStops.Add(NewStop(candidate, UnsafeMultipleClosingPrsForLinkedIssue,
+                $"{closingPrs.Length} open PRs close linked_issue #{linkedIssueNumber} for '{candidate.ExecutionUnit}': {string.Join(", ", closingPrs.Select(pr => "#" + pr.Number))}. Cannot deterministically pick which PR to record as linked_pr."));
+            return;
+        }
+
+        var pr = closingPrs[0];
+        var linkedIssueUrl = !string.IsNullOrEmpty(candidate.LinkedIssueUrl)
+            ? candidate.LinkedIssueUrl
+            : $"https://github.com/{repo}/issues/{linkedIssueNumber}";
+
+        repairs.Add(new PublishRecoveryRepair
+        {
+            Type = RepairTypeLinkedIssueClosingPr,
+            ExecutionUnit = candidate.ExecutionUnit,
+            LinkedIssueRepo = repo,
+            LinkedIssueNumber = linkedIssueNumber,
+            LinkedIssueUrl = linkedIssueUrl,
+            LinkedPrNumber = pr.Number,
+            LinkedPrUrl = pr.Url,
+            PublishArtifactPath = candidate.PublishArtifactExpectedPath,
+            Confidence = AutomationReconcileConfidence.High,
+            Evidence = new[]
+            {
+                $"queue item '{candidate.ExecutionUnit}' has linked_issue #{linkedIssueNumber} (durable host source-of-truth) and linked_pr = null.",
+                $"PR #{pr.Number} ({pr.Url}) is the only open PR in '{repo}' that closes issue #{linkedIssueNumber}.",
+                "no other queue item references the same linked_issue, so the pairing is unambiguous."
+            },
+            Summary = $"Recover linked_pr/#{pr.Number} for '{candidate.ExecutionUnit}' (linked_issue #{linkedIssueNumber} already in queue-state)."
+        });
+    }
+
     private static PublishRecoveryUnsafeStop NewStop(
         PublishRecoveryCandidate candidate,
         string kind,
@@ -148,6 +283,31 @@ internal static class PublishRecoveryAnalyzer
         GitHubAutomationPrCandidate pr)
     {
         var numbers = new List<int>();
+
+        // Prefer GitHub's structured `closingIssuesReferences` graph data
+        // — it is the same signal `gh pr view` returns and is what the
+        // GitHub UI uses to render "Linked issues". Fall back to
+        // body/title regex parsing for callers (and tests) that don't
+        // populate the structured field.
+        foreach (var reference in pr.ClosingIssuesReferences)
+        {
+            if (reference.Number <= 0)
+            {
+                continue;
+            }
+            if (reference.Repository is { } refRepo
+                && !string.IsNullOrEmpty(refRepo.Name)
+                && refRepo.Owner is { } refOwner
+                && !string.IsNullOrEmpty(refOwner.Login))
+            {
+                var refDescriptor = $"{refOwner.Login}/{refRepo.Name}";
+                if (!string.Equals(refDescriptor, repo, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+            }
+            numbers.Add(reference.Number);
+        }
 
         var sources = new[] { pr.Body ?? string.Empty, pr.Title ?? string.Empty };
         foreach (var source in sources)
@@ -182,6 +342,13 @@ internal sealed record PublishRecoveryCandidate
     public required string ExecutionUnit { get; init; }
     public required string? LinkedIssueRepo { get; init; }
     public required int? LinkedIssueNumber { get; init; }
+    /// <summary>
+    /// G315: optional existing linked_issue URL captured from queue-state.
+    /// When set, the linked-issue lane preserves this URL on the repair so
+    /// `linked_issue` is not silently rewritten when only `linked_pr` was
+    /// missing.
+    /// </summary>
+    public string? LinkedIssueUrl { get; init; }
     public required string? LinkedPrUrl { get; init; }
     public required IssuePublishArtifact? PublishArtifact { get; init; }
     public required string PublishArtifactExpectedPath { get; init; }
