@@ -46,15 +46,25 @@ internal static class GuideReviewCommand
         "github-body.md"
     };
 
-    // G316: parent intent host subdirectories (relative to the host repo
-    // root, joined with the resolved domain). Surfaced so the reviewer
-    // can locate related design intent without grepping the tree.
-    private static readonly IReadOnlyList<(string Kind, string RelativeSubdir)> CanonicalIntentReferenceDirs = new[]
-    {
-        ("specs", "specs"),
-        ("intent-tree", "intent-tree"),
-        ("rules", "rules")
-    };
+    // G316 (post-review-fix): intent_reference_paths now surfaces only
+    // PR-specific references parsed from the packet artifacts
+    // (packet.yaml / implementation.md / review-context.md /
+    // github-body.md). Broad directory pointers like
+    // `intents/<domain>/specs/` are no longer emitted unprompted —
+    // surfacing them unconditionally encouraged full-tree traversal,
+    // which contradicts the G316 boundary "do not read the full intent
+    // tree per PR". When the packet is silent, the field is empty.
+    //
+    // The classification heuristic is path-prefix based: each reference
+    // path beginning with `intents/` is mapped to one of `specs` /
+    // `intent-tree` / `rules` (any other intents/<domain>/<X>/...
+    // bucket is reported as `other`).
+    private static readonly System.Text.RegularExpressions.Regex IntentReferencePathRegex = new(
+        @"\bintents/[A-Za-z0-9_.\-]+/(?<kind>[A-Za-z0-9_.\-]+)(?:/[A-Za-z0-9_.\-/]+)*\.(?:md|markdown|ya?ml|txt)\b",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Collections.Generic.HashSet<string> KnownIntentReferenceKinds =
+        new(StringComparer.OrdinalIgnoreCase) { "specs", "intent-tree", "rules" };
 
     private static readonly IReadOnlyList<string> ReviewChecklist = new[]
     {
@@ -230,26 +240,16 @@ internal static class GuideReviewCommand
                 .ToArray();
         }
 
-        // G316: structured intent-reference paths. These are conceptual
-        // pointers under the parent intent host's `intents/<domain>/...`
-        // tree. The reviewer should consult them only when the packet
-        // explicitly references them; the bound is enforced by the
-        // ReviewBoundaries entry that says "do not read the full intent
-        // tree per PR".
-        var intentReferencePaths = CanonicalIntentReferenceDirs
-            .Select(entry =>
-            {
-                var relative = Path.Combine("intents", domain, entry.RelativeSubdir);
-                var absolute = Path.Combine(context.RepoRoot, relative);
-                return new GuideReviewIntentReferencePath
-                {
-                    Kind = entry.Kind,
-                    RelativePath = relative.Replace(Path.DirectorySeparatorChar, '/'),
-                    Path = absolute,
-                    Exists = Directory.Exists(absolute)
-                };
-            })
-            .ToArray();
+        // G316 (post-review-fix): scan packet artifacts for explicit
+        // references to `intents/<domain>/<kind>/<file>` paths and
+        // surface only those — never broad directory pointers. Order
+        // is deterministic: paths appear in the order they were first
+        // encountered while reading packet.yaml → implementation.md →
+        // review-context.md → github-body.md.
+        var intentReferencePaths = ExtractIntentReferencePaths(
+            packetDirectory,
+            packetPaths,
+            context.RepoRoot);
 
         var result = new GuideReviewResult
         {
@@ -286,6 +286,73 @@ internal static class GuideReviewCommand
         }
 
         return result.Ready ? 0 : 1;
+    }
+
+    // G316 (post-review-fix): parse the packet artifacts for explicit
+    // `intents/<domain>/<kind>/<file>` references and return one
+    // structured entry per unique path. Returns an empty list when the
+    // packet directory is missing or none of the canonical packet files
+    // mention any intent path — broad directory pointers are
+    // intentionally NOT synthesized.
+    private static IReadOnlyList<GuideReviewIntentReferencePath> ExtractIntentReferencePaths(
+        string? packetDirectory,
+        IReadOnlyList<GuideReviewPacketPath> packetPaths,
+        string repoRoot)
+    {
+        if (string.IsNullOrEmpty(packetDirectory) || packetPaths.Count == 0)
+        {
+            return Array.Empty<GuideReviewIntentReferencePath>();
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<GuideReviewIntentReferencePath>();
+
+        // Read in canonical order: packet.yaml → implementation.md →
+        // review-context.md → github-body.md.
+        foreach (var packetPath in packetPaths)
+        {
+            if (!packetPath.Exists)
+            {
+                continue;
+            }
+
+            string content;
+            try
+            {
+                content = File.ReadAllText(packetPath.Path);
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            foreach (System.Text.RegularExpressions.Match match in IntentReferencePathRegex.Matches(content))
+            {
+                var relative = match.Value.Replace('\\', '/');
+                if (!seen.Add(relative))
+                {
+                    continue;
+                }
+                var kindGroup = match.Groups["kind"].Value;
+                var kind = KnownIntentReferenceKinds.Contains(kindGroup) ? kindGroup : "other";
+                var absolute = Path.Combine(
+                    repoRoot,
+                    relative.Replace('/', Path.DirectorySeparatorChar));
+                ordered.Add(new GuideReviewIntentReferencePath
+                {
+                    Kind = kind,
+                    RelativePath = relative,
+                    Path = absolute,
+                    Exists = File.Exists(absolute) || Directory.Exists(absolute)
+                });
+            }
+        }
+
+        return ordered;
     }
 
     private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
@@ -365,12 +432,23 @@ internal static class GuideReviewCommand
             writer.WriteLine();
         }
 
-        // G316: intent reference paths under the resolved domain.
+        // G316 (post-review-fix): intent reference paths now lists ONLY
+        // PR-specific references parsed from the packet artifacts;
+        // when the packet is silent, the section explicitly reports
+        // "(none referenced by packet)" so the reviewer is not nudged
+        // toward broad-tree traversal.
         writer.WriteLine("## Intent reference paths");
         writer.WriteLine($"- domain: {result.Domain}");
-        foreach (var reference in result.IntentReferencePaths)
+        if (result.IntentReferencePaths.Count == 0)
         {
-            writer.WriteLine($"- {reference.Kind}: `{reference.RelativePath}` (exists: {(reference.Exists ? "yes" : "no")})");
+            writer.WriteLine("- (none referenced by packet)");
+        }
+        else
+        {
+            foreach (var reference in result.IntentReferencePaths)
+            {
+                writer.WriteLine($"- {reference.Kind}: `{reference.RelativePath}` (exists: {(reference.Exists ? "yes" : "no")})");
+            }
         }
         writer.WriteLine();
 

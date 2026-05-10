@@ -243,15 +243,17 @@ public sealed class GuideReviewCommandTests
     public void Execute_G316_JsonIncludesPacketPathsAndIntentReferenceAndSufficiencyFields()
     {
         // Acceptance: guide review must surface structured packet_paths
-        // (canonical packet files with exists flags), intent_reference_paths
-        // (specs/intent-tree/rules under the resolved domain),
-        // approval_summary_requirements, request_update_requirements, and
-        // tests_pass_is_necessary_not_sufficient: true.
+        // (canonical packet files with exists flags),
+        // intent_reference_paths (PR-specific paths parsed from packet
+        // artifacts — never broad directory pointers),
+        // approval_summary_requirements, request_update_requirements,
+        // and tests_pass_is_necessary_not_sufficient: true.
         using var workspace = new GuideReviewWorkspace();
         workspace.WriteQueueState(BuildQueueState("G316", "review", title: "intent-aware review", linkedPr: "598"));
         workspace.WriteFile(".intent-cli/issues/G316/packet.yaml", "execution_unit: G316");
         workspace.WriteFile(".intent-cli/issues/G316/implementation.md", "# Implementation");
-        // Seed only specs/ to confirm exists is true for some entries and false for others.
+        // Seed only specs/ to confirm intent_reference_paths is NOT
+        // populated by directory existence alone — narrow semantics.
         workspace.WriteFile("intents/intent-cli/specs/00-map.md", "map");
 
         using var writer = new StringWriter();
@@ -279,18 +281,13 @@ public sealed class GuideReviewCommandTests
         Assert.False(packetPaths[2].GetProperty("exists").GetBoolean()); // review-context.md not seeded
         Assert.False(packetPaths[3].GetProperty("exists").GetBoolean()); // github-body.md not seeded
 
-        // intent_reference_paths covers specs/intent-tree/rules under the
-        // domain, with relative_path always populated and exists reflecting
-        // what's on disk.
+        // G316 review-fix: when the packet text does NOT mention any
+        // `intents/<domain>/...` path, intent_reference_paths is empty.
+        // The mere existence of `intents/intent-cli/specs/` on disk is
+        // NOT enough to populate the field — that would nudge the
+        // reviewer toward full-tree traversal.
         var intentRefs = root.GetProperty("intent_reference_paths").EnumerateArray().ToArray();
-        Assert.Equal(3, intentRefs.Length);
-        var specsRef = intentRefs.Single(e => e.GetProperty("kind").GetString() == "specs");
-        Assert.Equal("intents/intent-cli/specs", specsRef.GetProperty("relative_path").GetString());
-        Assert.True(specsRef.GetProperty("exists").GetBoolean());
-        var intentTreeRef = intentRefs.Single(e => e.GetProperty("kind").GetString() == "intent-tree");
-        Assert.False(intentTreeRef.GetProperty("exists").GetBoolean());
-        var rulesRef = intentRefs.Single(e => e.GetProperty("kind").GetString() == "rules");
-        Assert.False(rulesRef.GetProperty("exists").GetBoolean());
+        Assert.Empty(intentRefs);
 
         // approval_summary_requirements references packet contract, AC, OOS,
         // intent reference, tests-pass-paired-with-evidence, and Closes ref.
@@ -373,8 +370,123 @@ public sealed class GuideReviewCommandTests
         Assert.Contains("## Approval summary requirements", output, StringComparison.Ordinal);
         Assert.Contains("## Request-update requirements", output, StringComparison.Ordinal);
         Assert.Contains("canonical paths:", output, StringComparison.Ordinal);
-        // Domain placeholder is the test workspace's intent-cli domain.
-        Assert.Contains("intents/intent-cli/specs", output, StringComparison.Ordinal);
+        // G316 review-fix: when the packet text references no
+        // `intents/...` paths, the markdown explicitly says "(none
+        // referenced by packet)" rather than listing broad domain
+        // directories that nudge the reviewer toward full-tree
+        // traversal.
+        Assert.Contains("(none referenced by packet)", output, StringComparison.Ordinal);
+    }
+
+    // --- G316 review-fix: PR-specific intent_reference_paths -----------------
+
+    [Fact]
+    public void Execute_G316_PacketReferencesIntentPaths_SurfacesOnlyThosePaths()
+    {
+        // Mirrors the G316 issue body's related-links: when packet
+        // artifacts cite specific files like
+        // `intents/intent-cli/intent-tree/means/07-review-worker-strategy.md`
+        // and `intents/intent-cli/specs/05-intent-cli-surface.md`, those
+        // exact paths are surfaced (in canonical-file order, deduped),
+        // and broad directory pointers are NOT emitted.
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G316", "review", title: "intent-aware review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G316/packet.yaml",
+            "execution_unit: G316\nrelated_intents:\n  - intents/intent-cli/intent-tree/means/07-review-worker-strategy.md\n");
+        workspace.WriteFile(".intent-cli/issues/G316/review-context.md",
+            "Read intents/intent-cli/specs/05-intent-cli-surface.md for the surface contract.\n"
+            + "(also referenced again: intents/intent-cli/specs/05-intent-cli-surface.md)\n");
+        // Disk fixtures so `exists` reflects truth.
+        workspace.WriteFile("intents/intent-cli/intent-tree/means/07-review-worker-strategy.md", "review");
+        workspace.WriteFile("intents/intent-cli/specs/05-intent-cli-surface.md", "surface");
+        // A `rules/` directory exists on disk but the packet does NOT
+        // reference any rules path → it must NOT appear.
+        workspace.WriteFile("intents/intent-cli/rules/01-queue-governance.md", "rule");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var intentRefs = document.RootElement.GetProperty("intent_reference_paths")
+            .EnumerateArray().ToArray();
+
+        // Exactly the two referenced paths, deduped, packet.yaml first.
+        Assert.Equal(2, intentRefs.Length);
+        Assert.Equal(
+            "intents/intent-cli/intent-tree/means/07-review-worker-strategy.md",
+            intentRefs[0].GetProperty("relative_path").GetString());
+        Assert.Equal("intent-tree", intentRefs[0].GetProperty("kind").GetString());
+        Assert.True(intentRefs[0].GetProperty("exists").GetBoolean());
+
+        Assert.Equal(
+            "intents/intent-cli/specs/05-intent-cli-surface.md",
+            intentRefs[1].GetProperty("relative_path").GetString());
+        Assert.Equal("specs", intentRefs[1].GetProperty("kind").GetString());
+        Assert.True(intentRefs[1].GetProperty("exists").GetBoolean());
+
+        // Broad directory pointers are NOT emitted: nothing under
+        // `kind: rules` despite rules/ existing on disk.
+        Assert.DoesNotContain(intentRefs, e => e.GetProperty("kind").GetString() == "rules");
+    }
+
+    [Fact]
+    public void Execute_G316_PacketSilent_IntentReferencePathsIsEmpty_NoBroadPointers()
+    {
+        // Packet exists but does not reference any `intents/...` path.
+        // Even when `intents/<domain>/{specs,intent-tree,rules}` all
+        // exist on disk, the field stays empty — broad-directory
+        // prompting is the bug being fixed.
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G316", "review", title: "intent-aware review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G316/packet.yaml", "execution_unit: G316\n");
+        workspace.WriteFile(".intent-cli/issues/G316/review-context.md", "Review only the diff.\n");
+        workspace.WriteFile("intents/intent-cli/specs/00-map.md", "x");
+        workspace.WriteFile("intents/intent-cli/intent-tree/00-map.md", "x");
+        workspace.WriteFile("intents/intent-cli/rules/00-map.md", "x");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var intentRefs = document.RootElement.GetProperty("intent_reference_paths");
+        Assert.Equal(0, intentRefs.GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_G316_PacketReferencesMissingIntentPath_StillSurfacesItWithExistsFalse()
+    {
+        // When the packet cites a path the host hasn't materialized,
+        // surface the path with exists=false rather than silently
+        // dropping it — the reviewer needs to know the intent reference
+        // is dangling.
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G316", "review", title: "intent-aware review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G316/packet.yaml",
+            "see intents/intent-cli/specs/99-not-yet-written.md");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var intentRefs = document.RootElement.GetProperty("intent_reference_paths")
+            .EnumerateArray().ToArray();
+        Assert.Single(intentRefs);
+        Assert.Equal(
+            "intents/intent-cli/specs/99-not-yet-written.md",
+            intentRefs[0].GetProperty("relative_path").GetString());
+        Assert.False(intentRefs[0].GetProperty("exists").GetBoolean());
     }
 
     [Fact]
