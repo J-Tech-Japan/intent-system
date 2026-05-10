@@ -295,6 +295,20 @@ internal static class CommandRouter
             return RunCommand.Execute(context, [], writer);
         }
 
+        // G317 review-fix: `intent-cli task` (no subcommand) and
+        // `intent-cli task --help` must reach the task help surface.
+        // Without this special-case, `task` falls through to the
+        // "group and subcommand required" branch and `task --help`
+        // looks up "--help" in the per-group dictionary and fails as
+        // "not yet implemented", which makes the task surface
+        // undiscoverable from the installed CLI entry path.
+        if (string.Equals(args[0], "task", StringComparison.Ordinal)
+            && (args.Length == 1
+                || (args.Length == 2 && string.Equals(args[1], "--help", StringComparison.Ordinal))))
+        {
+            return TaskCommand.Execute(context, args[1..], writer);
+        }
+
         if (args.Length < 2)
         {
             writer.WriteLine("A command group and subcommand are required.");
