@@ -166,6 +166,14 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "task",
+            Classification = ClassificationSupport,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerOperator,
+            Purpose = "G317 explicit one-shot task planners (issue-to-pr / review-pr / fix-pr-comments / publish-next-issue). Returns a bounded executable contract — preconditions, steps, label transitions, abort conditions — for controllers that already know the target. Read-only: never calls gh, never mutates state, never launches AI providers."
+        },
+        new CommandGroupEntry
+        {
             Name = "intake",
             Classification = ClassificationExperimental,
             Mutability = MutabilityMixed,

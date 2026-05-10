@@ -24,6 +24,7 @@ internal static class CommandRouter
         "automation",
         "safety",
         "tasking",
+        "task",
         "worker",
         "metadata",
         "guide",
@@ -196,6 +197,13 @@ internal static class CommandRouter
                 ["validate"] = MetadataValidateCommand.Execute,
                 ["update"] = MetadataUpdateCommand.Execute
             },
+            ["task"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["issue-to-pr"] = (ctx, args, w) => TaskCommand.Execute(ctx, ["issue-to-pr", .. args], w),
+                ["review-pr"] = (ctx, args, w) => TaskCommand.Execute(ctx, ["review-pr", .. args], w),
+                ["fix-pr-comments"] = (ctx, args, w) => TaskCommand.Execute(ctx, ["fix-pr-comments", .. args], w),
+                ["publish-next-issue"] = (ctx, args, w) => TaskCommand.Execute(ctx, ["publish-next-issue", .. args], w)
+            },
             ["tasking"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["handoff"] = TaskingHandoffCommand.Execute,
@@ -285,6 +293,20 @@ internal static class CommandRouter
         if (args.Length == 1 && string.Equals(args[0], "run", StringComparison.Ordinal))
         {
             return RunCommand.Execute(context, [], writer);
+        }
+
+        // G317 review-fix: `intent-cli task` (no subcommand) and
+        // `intent-cli task --help` must reach the task help surface.
+        // Without this special-case, `task` falls through to the
+        // "group and subcommand required" branch and `task --help`
+        // looks up "--help" in the per-group dictionary and fails as
+        // "not yet implemented", which makes the task surface
+        // undiscoverable from the installed CLI entry path.
+        if (string.Equals(args[0], "task", StringComparison.Ordinal)
+            && (args.Length == 1
+                || (args.Length == 2 && string.Equals(args[1], "--help", StringComparison.Ordinal))))
+        {
+            return TaskCommand.Execute(context, args[1..], writer);
         }
 
         if (args.Length < 2)

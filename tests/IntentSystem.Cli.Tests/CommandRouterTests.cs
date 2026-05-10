@@ -79,6 +79,72 @@ public sealed class CommandRouterTests
         Assert.Contains("not yet implemented", writer.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    // G317 review-fix: `intent-cli task --help` and `intent-cli task`
+    // must reach TaskCommand's help surface through the real router
+    // entry path, not only through direct `TaskCommand.Execute` calls.
+    [Fact]
+    public void Execute_GivenTaskHelpFlag_DispatchesToTaskHelp_ExitZero()
+    {
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["task", "--help"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Usage: intent-cli task", output, StringComparison.Ordinal);
+        Assert.Contains("issue-to-pr", output, StringComparison.Ordinal);
+        Assert.Contains("review-pr", output, StringComparison.Ordinal);
+        Assert.Contains("fix-pr-comments", output, StringComparison.Ordinal);
+        Assert.Contains("publish-next-issue", output, StringComparison.Ordinal);
+        // Must NOT regress to the old "not yet implemented" surface.
+        Assert.DoesNotContain("not yet implemented", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_GivenTaskGroupNoSubcommand_DispatchesToTaskUsage_ExitOne()
+    {
+        // `intent-cli task` (no subcommand) shows usage and returns 1
+        // — same contract as direct `TaskCommand.Execute(args=[])`.
+        // Critically, it must NOT fall through to the router's
+        // "command group and subcommand are required" message.
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["task"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Usage: intent-cli task", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("A command group and subcommand are required", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenTaskIssueToPr_DispatchesToTaskCommandViaRouter()
+    {
+        // The four subcommand kinds dispatch through the router's
+        // dictionary entries — verify with a happy-path issue-to-pr
+        // call that the kind threads through and returns a valid
+        // executable contract.
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["task", "issue-to-pr", "--repo", "J-Tech-Japan/intent-system",
+             "--issue", "5000", "--workdir", "/tmp/child", "--format", "json"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("\"task\":", output, StringComparison.Ordinal);
+        Assert.Contains("\"issue-to-pr\"", output, StringComparison.Ordinal);
+        Assert.Contains("--number 5000", output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Execute_GivenProjectStatusCommand_DispatchesToProjectStatusRenderer()
     {
