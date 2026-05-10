@@ -978,6 +978,92 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_AgentCodex_NoFrequency_StillEmitsSchedulingContract_G314()
+    {
+        // G314 review feedback on PR #732: the operator's typical setup
+        // request omits `--frequency`; the agent calls `prompt-matrix`,
+        // learns the contract, then asks the operator for the interval.
+        // The unresolved-frequency branch must therefore still emit the
+        // per-agent G314 contract so the agent knows BEFORE the interval
+        // is resolved that it must use current-thread heartbeat / `/loop`
+        // and never a remote scheduler.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "codex", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("current-thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("heartbeat", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT spawn a new Codex thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("remote/cloud scheduler", prompt, StringComparison.Ordinal);
+        Assert.Contains("external cron", prompt, StringComparison.Ordinal);
+        Assert.Contains("out-of-process monitor", prompt, StringComparison.Ordinal);
+        // Frequency is still unresolved — the IMPORTANT preamble must
+        // still tell the agent to ask the operator before scheduling.
+        Assert.Contains("frequency is unresolved", prompt, StringComparison.Ordinal);
+        // The placeholder `<frequency>` should appear in the contract so
+        // the agent has language to reuse once the operator answers.
+        Assert.Contains("at <frequency>", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopPrompt_AgentClaude_NoFrequency_StillEmitsSchedulingContract_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("same-thread", prompt, StringComparison.Ordinal);
+        // Claude's wake primitive uses `/loop <frequency> <prompt>` — when
+        // the operator hasn't picked an interval yet the placeholder should
+        // be `<frequency>` so the agent can substitute later.
+        Assert.Contains("/loop <frequency> <prompt>", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT create a new Claude Code thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("frequency is unresolved", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopPrompt_AgentCodex_NoFrequency_StillEmitsSchedulingContract_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "codex", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT spawn a new Codex thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("frequency is unresolved", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildLoopPrompt_AgentClaude_NoFrequency_StillEmitsSchedulingContract_G314()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Local scheduling contract (G314)", prompt, StringComparison.Ordinal);
+        Assert.Contains("/loop <frequency> <prompt>", prompt, StringComparison.Ordinal);
+        Assert.Contains("frequency is unresolved", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostLoopPrompt_DocumentsDoctorBinarySourceAcceptance_G314()
     {
         // G314 acceptance: doctor `status: ok` accepts both

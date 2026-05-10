@@ -152,11 +152,26 @@ internal static class GuidePromptMatrixCommand
         var resolvedAgent = NormalizeAgent(agent);
         if (string.IsNullOrWhiteSpace(frequency))
         {
+            // G314 review feedback (PR #732): the local scheduling contract
+            // must surface BEFORE the operator resolves `--frequency`. The
+            // typical operator path is to ask the agent to set up a loop
+            // without naming an interval; the agent calls
+            // `prompt-matrix` to learn the contract, then asks the operator
+            // for the interval. If this branch only emits the short
+            // paragraph, the agent never sees the agent-specific
+            // current-thread / `/loop` requirement and may pick a
+            // separate-thread or remote schedule before the interval is
+            // even resolved. So we emit the same per-agent contract here
+            // with `<frequency>` as a placeholder, plus the standard
+            // forbidden list.
+            var unresolvedSchedulingContract = RenderLocalSchedulingContract(resolvedAgent, "<frequency>");
             return
 $@"IMPORTANT — frequency is unresolved; ask the operator for the desired frequency before creating any cron, monitor, or recurring wakeup. Never guess or use a tool-default interval.
 - High-frequency local loops (active development): 5 minutes.
 - Low-frequency local loops (background / idle polling): ~20 minutes.
-- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.";
+- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.
+
+{unresolvedSchedulingContract}";
         }
 
         var schedulingHint = resolvedAgent switch
