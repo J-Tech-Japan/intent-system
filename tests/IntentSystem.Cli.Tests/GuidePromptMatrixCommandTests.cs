@@ -1173,6 +1173,68 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_RequiresIntentAndPacketAwareReview_G316()
+    {
+        // G316 contract: host-loop must tell the reviewer that tests-pass
+        // is necessary but not sufficient, must surface guide review's new
+        // structured fields, must require packet/intent conformance
+        // evidence in the approval summary, and must require classified
+        // findings in request-update comments.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("G316", prompt, StringComparison.Ordinal);
+        // The intent-and-packet-aware review block must name the four
+        // canonical packet files and the intent-reference field.
+        Assert.Contains("Intent-and-packet-aware review (G316)", prompt, StringComparison.Ordinal);
+        Assert.Contains("packet.yaml", prompt, StringComparison.Ordinal);
+        Assert.Contains("implementation.md", prompt, StringComparison.Ordinal);
+        Assert.Contains("review-context.md", prompt, StringComparison.Ordinal);
+        Assert.Contains("github-body.md", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent_reference_paths", prompt, StringComparison.Ordinal);
+        Assert.Contains("tests_pass_is_necessary_not_sufficient", prompt, StringComparison.Ordinal);
+        // Approval summary must require packet/intent evidence beyond tests.
+        Assert.Contains("approval_summary_requirements", prompt, StringComparison.Ordinal);
+        Assert.Contains("packet/intent evidence", prompt, StringComparison.Ordinal);
+        // Request-update guidance must require finding classification.
+        Assert.Contains("request_update_requirements", prompt, StringComparison.Ordinal);
+        Assert.Contains("implementation-finding", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-ambiguity", prompt, StringComparison.Ordinal);
+        // Tests-pass-not-sufficient must appear as a hard rule, not just
+        // a stage hint.
+        Assert.Contains("Tests-pass is necessary, not sufficient (G316)", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostOneshotPrompt_RequiresIntentAndPacketAwareReview_G316()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("G316", prompt, StringComparison.Ordinal);
+        Assert.Contains("Intent-and-packet-aware review (G316)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Tests-pass is necessary, not sufficient (G316)", prompt, StringComparison.Ordinal);
+        Assert.Contains("packet.yaml", prompt, StringComparison.Ordinal);
+        Assert.Contains("review-context.md", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent_reference_paths", prompt, StringComparison.Ordinal);
+        Assert.Contains("approval_summary_requirements", prompt, StringComparison.Ordinal);
+        Assert.Contains("request_update_requirements", prompt, StringComparison.Ordinal);
+        Assert.Contains("implementation-finding", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostLoopPrompt_MentionsDurableStatePreflight_G312()
     {
         using var writer = new StringWriter();
