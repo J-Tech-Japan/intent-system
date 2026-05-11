@@ -944,6 +944,186 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Equal(withKind.ToString(), withPurpose.ToString());
     }
 
+    // --- G321: purpose / agent / cwd-role normalization -------------------
+
+    [Theory]
+    [InlineData("実装")]
+    [InlineData("PR comment update")]
+    [InlineData("implementation")]
+    [InlineData("implement")]
+    [InlineData("child")]
+    [InlineData("pr-comment-fix")]
+    public void Execute_PurposeAliasResolvesToChildImplement(string alias)
+    {
+        // G321: minimal Japanese / English child-loop phrases all
+        // normalize to the canonical `child-implement` kind.
+        using var writer = new StringWriter();
+        var exit = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--purpose", alias, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("child-implement", root.GetProperty("kind").GetString());
+        Assert.Equal("child-implement", root.GetProperty("canonical_purpose").GetString());
+        Assert.Equal(alias, root.GetProperty("raw_purpose").GetString());
+        Assert.Equal("child", root.GetProperty("cwd_role").GetString());
+    }
+
+    [Theory]
+    [InlineData("review")]
+    [InlineData("review & next slice")]
+    [InlineData("next slice")]
+    [InlineData("host")]
+    [InlineData("レビュー")]
+    [InlineData("次スライス")]
+    public void Execute_PurposeAliasResolvesToHostReviewNextSlice(string alias)
+    {
+        using var writer = new StringWriter();
+        var exit = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--purpose", alias,
+             "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system",
+             "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("host-review-next-slice", root.GetProperty("kind").GetString());
+        Assert.Equal("host-review-next-slice", root.GetProperty("canonical_purpose").GetString());
+        Assert.Equal(alias, root.GetProperty("raw_purpose").GetString());
+        Assert.Equal("host", root.GetProperty("cwd_role").GetString());
+    }
+
+    [Theory]
+    [InlineData("Claude Code", "claude")]
+    [InlineData("claude-code", "claude")]
+    [InlineData("CLAUDE", "claude")]
+    [InlineData("codex-cli", "codex")]
+    public void Execute_AgentAliasResolvesToCanonical(string alias, string expectedCanonical)
+    {
+        using var writer = new StringWriter();
+        var exit = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--purpose", "child-implement",
+             "--agent", alias,
+             "--frequency", "5m",
+             "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal(expectedCanonical, root.GetProperty("canonical_agent").GetString());
+        Assert.Equal(alias, root.GetProperty("raw_agent").GetString());
+        Assert.Equal(alias, root.GetProperty("agent").GetString());
+        var schedulingMechanism = root.GetProperty("scheduling_mechanism").GetString();
+        Assert.Equal(
+            expectedCanonical == "claude" ? "claude-loop-same-thread" : "codex-heartbeat-same-thread",
+            schedulingMechanism);
+    }
+
+    [Fact]
+    public void Execute_UnknownAgentAlias_DoesNotSilentlyAdoptClaudeOrCodex()
+    {
+        // G321 acceptance: unknown agents must produce the operator-ask
+        // contract, never silently inherit Claude's `/loop` or Codex's
+        // heartbeat semantics.
+        using var writer = new StringWriter();
+        var exit = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--purpose", "child-implement",
+             "--agent", "vscode-copilot",
+             "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("unknown", root.GetProperty("canonical_agent").GetString());
+        Assert.Equal("vscode-copilot", root.GetProperty("raw_agent").GetString());
+        Assert.Equal("unknown-ask-operator", root.GetProperty("scheduling_mechanism").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        // The unknown-agent scheduling block legitimately mentions "/loop"
+        // in a NEGATIVE context ("Do NOT guess `/loop`..."), so the bare
+        // "/loop" substring is allowed. What matters is that the prompt
+        // does NOT contain the positive Claude / Codex scheduling
+        // contracts (the very mechanisms G321 forbids guessing).
+        Assert.DoesNotContain("Claude Code same-thread `/loop", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Codex current-thread local automation", prompt, StringComparison.Ordinal);
+        Assert.Contains("ASK the operator", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ExplicitCwdRoleMatchesPurpose_PreservesRole()
+    {
+        using var writer = new StringWriter();
+        var exit = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--purpose", "host-review-next-slice",
+             "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system",
+             "--cwd-role", "host",
+             "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("host", doc.RootElement.GetProperty("cwd_role").GetString());
+    }
+
+    [Fact]
+    public void Execute_ConflictingCwdRole_RefusesWithStructuredMessage()
+    {
+        // G321 acceptance: host purpose + child cwd role is a structured
+        // conflict; the command must refuse rather than silently pick a
+        // side.
+        using var writer = new StringWriter();
+        var exit = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--purpose", "host-review-next-slice",
+             "--domain", "intent-cli",
+             "--target-repo", "J-Tech-Japan/intent-system",
+             "--cwd-role", "child",
+             "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exit);
+        var output = writer.ToString();
+        Assert.Contains("--cwd-role 'child' conflicts with --purpose 'host-review-next-slice'", output, StringComparison.Ordinal);
+        Assert.Contains("expected cwd-role 'host'", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_InvalidCwdRole_ReturnsUsageError()
+    {
+        using var writer = new StringWriter();
+        var exit = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--purpose", "child-implement", "--cwd-role", "garbage", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("--cwd-role must be", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AliasResolver_InferCwdRoleMatchesCanonicalPurpose()
+    {
+        // Direct unit-style sanity check on the pure normalizer; keeps
+        // alias coverage tractable without spinning up the whole command.
+        Assert.Equal(
+            "child",
+            GuideAutomationSetupAliasResolver.InferCwdRole(GuideAutomationSetupAliasResolver.CanonicalPurposeChildImplement));
+        Assert.Equal(
+            "host",
+            GuideAutomationSetupAliasResolver.InferCwdRole(GuideAutomationSetupAliasResolver.CanonicalPurposeHostReviewNextSlice));
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
