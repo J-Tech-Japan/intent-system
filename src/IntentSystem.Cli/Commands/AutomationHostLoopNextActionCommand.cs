@@ -62,6 +62,10 @@ internal static class AutomationHostLoopNextActionCommand
         }
 
         var actionableReviewPr = FindActionableReviewPr(openPrs);
+        var approvedPr = FindApprovedPrPendingContinuation(
+            openPrs,
+            parsed.ApprovedPrMergeStateStatus,
+            parsed.ApprovedPrMetadataBlocked);
         var openIntentTargetExists = OpenIntentTargetExists(openPrs, openIssues);
         var anyLeaseHeld = AnyChildWorkerLeaseHeld(openPrs, openIssues);
 
@@ -73,6 +77,7 @@ internal static class AutomationHostLoopNextActionCommand
             SyncClassification = parsed.SyncClassification,
             SafeStashRequired = parsed.SafeStashRequired,
             ActionableReviewPr = actionableReviewPr,
+            ApprovedPrPendingMergeCloseout = approvedPr,
             PublishRecoveryRepairsAvailable = parsed.PublishRecoveryRepairsAvailable,
             PublishLifecycleDriftCount = parsed.PublishLifecycleDriftCount,
             NextSliceIssueCutReady = parsed.NextSliceIssueCutReady,
@@ -122,6 +127,67 @@ internal static class AutomationHostLoopNextActionCommand
             {
                 return new ActionableReviewPr { Number = pr.Number, Url = pr.Url };
             }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// G319: find an open PR carrying both <c>intent-target</c> and
+    /// <c>intent-pr-approved</c> that the host loop must continue
+    /// through merge + closeout BEFORE reporting wip-cap-blocked.
+    /// Skips PRs that are simultaneously holding a child-worker lease
+    /// (<c>intent-pr-update-in-progress</c>) or carrying a fresh
+    /// request-update label (<c>intent-pr-request-update</c>) — those
+    /// states mean review hasn't reached a stable approval point and
+    /// the review-pr / request-update lanes own them.
+    /// </summary>
+    private static ApprovedPrContinuation? FindApprovedPrPendingContinuation(
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        string? mergeStateStatusOverride,
+        bool hostMetadataBlocked)
+    {
+        foreach (var pr in openPrs)
+        {
+            var labels = (pr.Labels ?? Array.Empty<GitHubAutomationLabel>())
+                .Select(label => label.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            var hasIntentTarget = labels.Contains(WorkerNextActionConstants.Labels.IntentTarget);
+            var hasApproved = labels.Contains(WorkerNextActionConstants.Labels.IntentPrApproved);
+            var hasUpdateInProgress = labels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress);
+            var hasRequestUpdate = labels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate);
+            if (!hasIntentTarget || !hasApproved || hasUpdateInProgress || hasRequestUpdate)
+            {
+                continue;
+            }
+
+            // G289 defensive: skip PRs that aren't actually OPEN (the
+            // lister already filters by --state open, but live data may
+            // race against a recent merge).
+            if (!string.IsNullOrEmpty(pr.State)
+                && !string.Equals(pr.State, "OPEN", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            int? linkedIssueNumber = null;
+            if (pr.ClosingIssuesReferences is { Count: > 0 })
+            {
+                var first = pr.ClosingIssuesReferences[0];
+                if (first.Number > 0)
+                {
+                    linkedIssueNumber = first.Number;
+                }
+            }
+
+            return new ApprovedPrContinuation
+            {
+                Number = pr.Number,
+                Url = pr.Url,
+                IsDraft = pr.IsDraft,
+                MergeStateStatus = mergeStateStatusOverride,
+                HostMetadataBlocked = hostMetadataBlocked,
+                LinkedIssueNumber = linkedIssueNumber
+            };
         }
         return null;
     }
@@ -189,6 +255,8 @@ internal static class AutomationHostLoopNextActionCommand
         var nextSliceIssueCutReady = false;
         string? publishNextSliceExecutionUnit = null;
         var hardClarificationOpen = false;
+        string? approvedPrMergeStateStatus = null;
+        var approvedPrMetadataBlocked = false;
         var format = FormatMarkdown;
 
         for (var index = 0; index < args.Length; index++)
@@ -249,6 +317,24 @@ internal static class AutomationHostLoopNextActionCommand
                 case "--hard-clarification-open":
                     hardClarificationOpen = true;
                     break;
+                case "--approved-pr-merge-state":
+                    // G319: optional override of `gh pr view --json
+                    // mergeStateStatus` for the approved PR continuation
+                    // lane. Pass `CLEAN` (or omit entirely) for the happy
+                    // path; `BLOCKED` / `CONFLICTING` / `DIRTY` / `BEHIND`
+                    // / `UNKNOWN` map to `approved-pr-merge-blocked`.
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--approved-pr-merge-state requires a value (e.g. CLEAN, BLOCKED, CONFLICTING)."; return false;
+                    }
+                    approvedPrMergeStateStatus = args[++index].Trim();
+                    break;
+                case "--approved-pr-metadata-blocked":
+                    // G319: operator/preflight has determined the parent
+                    // host metadata (queue-state linked_pr / linked_issue
+                    // / packet directory) is not ready for closeout.
+                    approvedPrMetadataBlocked = true;
+                    break;
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -285,6 +371,8 @@ internal static class AutomationHostLoopNextActionCommand
             NextSliceIssueCutReady = nextSliceIssueCutReady,
             PublishNextSliceExecutionUnit = publishNextSliceExecutionUnit,
             HardClarificationOpen = hardClarificationOpen,
+            ApprovedPrMergeStateStatus = approvedPrMergeStateStatus,
+            ApprovedPrMetadataBlocked = approvedPrMetadataBlocked,
             Format = format
         };
         return true;
@@ -302,6 +390,8 @@ internal static class AutomationHostLoopNextActionCommand
         public required bool NextSliceIssueCutReady { get; init; }
         public string? PublishNextSliceExecutionUnit { get; init; }
         public required bool HardClarificationOpen { get; init; }
+        public string? ApprovedPrMergeStateStatus { get; init; }
+        public required bool ApprovedPrMetadataBlocked { get; init; }
         public required string Format { get; init; }
     }
 }

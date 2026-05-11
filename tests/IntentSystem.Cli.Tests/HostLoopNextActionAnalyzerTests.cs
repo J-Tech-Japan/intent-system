@@ -194,6 +194,228 @@ public sealed class HostLoopNextActionAnalyzerTests
         Assert.Contains("host-review-diagnostics", result.RecommendedCommand!, StringComparison.Ordinal);
     }
 
+    // --- G319: approved-PR continuation lane ---------------------------------
+
+    [Fact]
+    public void ApprovedPr_OutranksWipCapBlocked_AndRecommendsMergeCloseout()
+    {
+        // Mirrors the SKS-G219 incident: PR #571 is OPEN, non-draft,
+        // mergeStateStatus=CLEAN, carries intent-target + intent-pr-approved;
+        // host loop previously stopped at wip-cap-blocked. With G319 the
+        // open approved PR is the next host action.
+        var input = NewInput() with
+        {
+            OpenIntentTargetPrOrIssueExists = true,
+            AnyChildWorkerLeaseHeld = false,
+            ApprovedPrPendingMergeCloseout = new ApprovedPrContinuation
+            {
+                Number = 571,
+                Url = "https://github.com/J-Tech-Japan/SekibanAsAService/pull/571",
+                IsDraft = false,
+                MergeStateStatus = "CLEAN",
+                HostMetadataBlocked = false,
+                LinkedIssueNumber = 570
+            }
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal("approved-pr-merge-closeout", result.Classification);
+        Assert.NotEqual("wip-cap-blocked", result.Classification);
+        Assert.True(result.MutationAllowed);
+        Assert.Contains("--pr 571", result.RecommendedCommand!, StringComparison.Ordinal);
+        Assert.Contains("review closeout-plan", result.RecommendedCommand!, StringComparison.Ordinal);
+        // Evidence cites both the PR identity and the G311 closing reference reminder.
+        Assert.Contains(result.Evidence, e => e.Contains("#571", StringComparison.Ordinal));
+        Assert.Contains(result.Evidence, e => e.Contains("Closes #570", StringComparison.Ordinal));
+        Assert.Contains(result.Evidence, e =>
+            e.Contains("Approved continuation outranks wip-cap-blocked", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ApprovedPr_WithoutLinkedIssue_StillSelectsMergeCloseout_NoG311Evidence()
+    {
+        var input = NewInput() with
+        {
+            OpenIntentTargetPrOrIssueExists = true,
+            ApprovedPrPendingMergeCloseout = new ApprovedPrContinuation
+            {
+                Number = 700,
+                Url = "https://github.com/owner/repo/pull/700",
+                IsDraft = false,
+                MergeStateStatus = null, // operator didn't pre-check; analyzer treats as CLEAN
+                HostMetadataBlocked = false,
+                LinkedIssueNumber = null
+            }
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal("approved-pr-merge-closeout", result.Classification);
+        Assert.DoesNotContain(result.Evidence, e => e.Contains("Closes #", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ApprovedPr_Draft_MapsToApprovedPrDraftBlocked_NotGenericWipCap()
+    {
+        var input = NewInput() with
+        {
+            OpenIntentTargetPrOrIssueExists = true,
+            ApprovedPrPendingMergeCloseout = new ApprovedPrContinuation
+            {
+                Number = 571,
+                Url = "https://github.com/J-Tech-Japan/SekibanAsAService/pull/571",
+                IsDraft = true,
+                MergeStateStatus = "CLEAN",
+                HostMetadataBlocked = false
+            }
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal("approved-pr-draft-blocked", result.Classification);
+        Assert.False(result.MutationAllowed);
+        // Recommended command releases the review lease (G292) cleanly.
+        Assert.Contains("pr-transition --transition review-release", result.RecommendedCommand!, StringComparison.Ordinal);
+        Assert.Contains(result.Evidence, e => e.Contains("G297", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ApprovedPr_DirtyMergeState_MapsToApprovedPrMergeBlocked()
+    {
+        var input = NewInput() with
+        {
+            OpenIntentTargetPrOrIssueExists = true,
+            ApprovedPrPendingMergeCloseout = new ApprovedPrContinuation
+            {
+                Number = 571,
+                Url = "https://github.com/J-Tech-Japan/SekibanAsAService/pull/571",
+                IsDraft = false,
+                MergeStateStatus = "CONFLICTING",
+                HostMetadataBlocked = false
+            }
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal("approved-pr-merge-blocked", result.Classification);
+        Assert.False(result.MutationAllowed);
+        Assert.Contains("CONFLICTING", result.Summary, StringComparison.Ordinal);
+        Assert.Contains(result.Evidence, e => e.Contains("CONFLICTING", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ApprovedPr_HostMetadataBlocked_MapsToApprovedPrMetadataBlocked()
+    {
+        var input = NewInput() with
+        {
+            OpenIntentTargetPrOrIssueExists = true,
+            ApprovedPrPendingMergeCloseout = new ApprovedPrContinuation
+            {
+                Number = 571,
+                Url = "https://github.com/J-Tech-Japan/SekibanAsAService/pull/571",
+                IsDraft = false,
+                MergeStateStatus = "CLEAN",
+                HostMetadataBlocked = true
+            }
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal("approved-pr-metadata-blocked", result.Classification);
+        Assert.False(result.MutationAllowed);
+        Assert.Contains("closeout-plan", result.RecommendedCommand!, StringComparison.Ordinal);
+        Assert.Contains(result.Evidence, e =>
+            e.Contains("MUST NOT become PR repair comments", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ApprovedPr_BlockerPrecedence_DraftBeatsMergeBeatsMetadata()
+    {
+        // If multiple blockers are reported simultaneously, the analyzer
+        // picks the most specific one in a stable order: draft > merge >
+        // metadata. This keeps the operator-facing classification
+        // deterministic.
+        var input = NewInput() with
+        {
+            OpenIntentTargetPrOrIssueExists = true,
+            ApprovedPrPendingMergeCloseout = new ApprovedPrContinuation
+            {
+                Number = 571,
+                Url = "https://github.com/owner/repo/pull/571",
+                IsDraft = true,
+                MergeStateStatus = "CONFLICTING",
+                HostMetadataBlocked = true
+            }
+        };
+
+        Assert.Equal("approved-pr-draft-blocked",
+            HostLoopNextActionAnalyzer.Analyze(input).Classification);
+
+        var mergeOnly = input with
+        {
+            ApprovedPrPendingMergeCloseout = input.ApprovedPrPendingMergeCloseout! with { IsDraft = false }
+        };
+        Assert.Equal("approved-pr-merge-blocked",
+            HostLoopNextActionAnalyzer.Analyze(mergeOnly).Classification);
+
+        var metadataOnly = mergeOnly with
+        {
+            ApprovedPrPendingMergeCloseout = mergeOnly.ApprovedPrPendingMergeCloseout! with { MergeStateStatus = "CLEAN" }
+        };
+        Assert.Equal("approved-pr-metadata-blocked",
+            HostLoopNextActionAnalyzer.Analyze(metadataOnly).Classification);
+    }
+
+    [Fact]
+    public void WipCapBlocked_StillFires_WhenNoApprovedPrContinuation()
+    {
+        // Acceptance: "Given only an in-flight issue/PR without approved
+        // closeout work, WIP-cap blocking remains unchanged." Open
+        // intent-target exists but no approved PR is pending → fall
+        // through to the existing wip-cap-blocked classification.
+        var input = NewInput() with
+        {
+            OpenIntentTargetPrOrIssueExists = true,
+            AnyChildWorkerLeaseHeld = false,
+            ApprovedPrPendingMergeCloseout = null
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal("wip-cap-blocked", result.Classification);
+        Assert.False(result.MutationAllowed);
+    }
+
+    [Fact]
+    public void ApprovedPr_DoesNotOverride_HigherPriorityBlockers()
+    {
+        // stale-cli, dirty-host-state, safe-stash, and review-pr all
+        // outrank the approved-PR continuation lane — those signals
+        // represent unsafe states / earlier review work that must be
+        // resolved first.
+        var approved = new ApprovedPrContinuation
+        {
+            Number = 571,
+            Url = "https://github.com/owner/repo/pull/571",
+            IsDraft = false,
+            MergeStateStatus = "CLEAN"
+        };
+
+        Assert.Equal("stale-cli", HostLoopNextActionAnalyzer.Analyze(
+            NewInput() with { StaleCli = true, ApprovedPrPendingMergeCloseout = approved }).Classification);
+
+        Assert.Equal("dirty-host-state", HostLoopNextActionAnalyzer.Analyze(
+            NewInput() with { SyncClassification = "dirty-host-durable-state", ApprovedPrPendingMergeCloseout = approved }).Classification);
+
+        Assert.Equal("review-pr", HostLoopNextActionAnalyzer.Analyze(
+            NewInput() with
+            {
+                ActionableReviewPr = new ActionableReviewPr { Number = 700, Url = "https://github.com/owner/repo/pull/700" },
+                ApprovedPrPendingMergeCloseout = approved
+            }).Classification);
+    }
+
     private static HostLoopNextActionInput NewInput() =>
         new()
         {
