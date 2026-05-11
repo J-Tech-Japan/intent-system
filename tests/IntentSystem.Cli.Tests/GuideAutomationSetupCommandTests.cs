@@ -124,7 +124,9 @@ public sealed class GuideAutomationSetupCommandTests
             writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("--kind is required.", writer.ToString(), StringComparison.Ordinal);
+        // G320: error message names both --kind and --purpose since the
+        // operator-facing alias must be discoverable from the usage line.
+        Assert.Contains("--kind (or --purpose) is required.", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -722,6 +724,224 @@ public sealed class GuideAutomationSetupCommandTests
         var prompt = document.RootElement.GetProperty("prompt").GetString()!;
         Assert.Contains("PR comment update loop", prompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("intent-cli に聞いて", prompt, StringComparison.Ordinal);
+    }
+
+    // --- G320: agent-aware setup contract --------------------------------
+
+    [Fact]
+    public void Execute_ChildImplementClaudeMarkdown_NamesClaudeLoopSameThread()
+    {
+        // G320: minimal operator request (purpose + agent + domain +
+        // target-repo + cwd + frequency) must yield a complete contract.
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            [
+                "--purpose", "child-implement",
+                "--agent", "claude",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system",
+                "--cwd", "/Users/op/work/repo",
+                "--frequency", "5m",
+                "--format", "markdown"
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("- agent: claude", output, StringComparison.Ordinal);
+        Assert.Contains("- cwd: /Users/op/work/repo", output, StringComparison.Ordinal);
+        Assert.Contains("- frequency: 5m", output, StringComparison.Ordinal);
+        Assert.Contains("- scheduling mechanism: claude-loop-same-thread", output, StringComparison.Ordinal);
+        Assert.Contains("Claude Code same-thread `/loop 5m", output, StringComparison.Ordinal);
+        Assert.Contains("Scheduling for this agent (G320)", output, StringComparison.Ordinal);
+        // Operator-supplied cwd MUST be embedded so the agent confirms
+        // before acting.
+        Assert.Contains("Operator-supplied cwd: `/Users/op/work/repo`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementClaudeJson_EmitsAgentFrequencyAndSchedulingFields()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            [
+                "--purpose", "child-implement",
+                "--agent", "claude",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system",
+                "--cwd", "/Users/op/work/repo",
+                "--frequency", "5m",
+                "--format", "json"
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("child-implement", root.GetProperty("kind").GetString());
+        Assert.Equal("claude", root.GetProperty("agent").GetString());
+        Assert.Equal("/Users/op/work/repo", root.GetProperty("cwd").GetString());
+        Assert.Equal("5m", root.GetProperty("frequency").GetString());
+        Assert.Equal("claude-loop-same-thread", root.GetProperty("scheduling_mechanism").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.Contains("Claude Code same-thread `/loop 5m", prompt, StringComparison.Ordinal);
+        // G314 cross-reference: must forbid new chat/remote scheduler.
+        Assert.Contains("do NOT spawn a new chat", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementCodexMarkdown_NamesCodexCurrentThreadHeartbeat()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            [
+                "--purpose", "child-implement",
+                "--agent", "codex",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system",
+                "--frequency", "5m",
+                "--format", "markdown"
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("- agent: codex", output, StringComparison.Ordinal);
+        Assert.Contains("- scheduling mechanism: codex-heartbeat-same-thread", output, StringComparison.Ordinal);
+        Assert.Contains("Codex current-thread local automation / heartbeat", output, StringComparison.Ordinal);
+        // Codex contract MUST NOT silently borrow Claude's `/loop`.
+        Assert.DoesNotContain("`/loop 5m`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ChildImplementUnknownAgent_SurfacesAskInsteadOfGuessing()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            [
+                "--purpose", "child-implement",
+                "--agent", "robot",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system",
+                "--format", "json"
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("robot", root.GetProperty("agent").GetString());
+        Assert.Equal("unknown-ask-operator", root.GetProperty("scheduling_mechanism").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.Contains("ASK the operator", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT guess", prompt, StringComparison.Ordinal);
+        // Frequency is intentionally optional for unknown agents — the
+        // contract refuses to pin a cadence it cannot validate.
+        Assert.False(root.TryGetProperty("frequency", out _) && root.GetProperty("frequency").ValueKind != JsonValueKind.Null);
+    }
+
+    [Fact]
+    public void Execute_KnownAgentWithoutFrequency_ReturnsUsageError()
+    {
+        // G320: claude/codex contracts MUST pin a cadence; missing
+        // --frequency is a usage error rather than a guessed default.
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            [
+                "--purpose", "child-implement",
+                "--agent", "claude",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system"
+            ],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("--frequency is required when --agent is 'claude'", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostReviewClaudeMarkdown_NamesClaudeLoopSameThread()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            [
+                "--purpose", "host-review-next-slice",
+                "--agent", "claude",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system",
+                "--cwd", "/Users/op/MyIntentHost",
+                "--frequency", "5m",
+                "--format", "markdown"
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("- agent: claude", output, StringComparison.Ordinal);
+        Assert.Contains("- scheduling mechanism: claude-loop-same-thread", output, StringComparison.Ordinal);
+        Assert.Contains("Claude Code same-thread `/loop 5m", output, StringComparison.Ordinal);
+        Assert.Contains("Operator-supplied parent host root: `/Users/op/MyIntentHost`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostReviewClaudeJson_EmitsAgentFrequencyAndSchedulingFields()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            [
+                "--purpose", "host-review-next-slice",
+                "--agent", "claude",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system",
+                "--cwd", "/Users/op/MyIntentHost",
+                "--frequency", "5m",
+                "--format", "json"
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("host-review-next-slice", root.GetProperty("kind").GetString());
+        Assert.Equal("claude", root.GetProperty("agent").GetString());
+        Assert.Equal("/Users/op/MyIntentHost", root.GetProperty("cwd").GetString());
+        Assert.Equal("5m", root.GetProperty("frequency").GetString());
+        Assert.Equal("claude-loop-same-thread", root.GetProperty("scheduling_mechanism").GetString());
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.Contains("Claude Code same-thread `/loop 5m", prompt, StringComparison.Ordinal);
+        Assert.Contains("Operator-supplied parent host root", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PurposeIsAliasOfKind_ProducesIdenticalKindField()
+    {
+        // G320: `--purpose` is the operator-facing alias of `--kind`. Output
+        // shape MUST stay identical so controllers and host loops can keep
+        // routing on `kind`.
+        using var withPurpose = new StringWriter();
+        var purposeExit = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--purpose", "child-implement", "--format", "json"],
+            withPurpose);
+
+        using var withKind = new StringWriter();
+        var kindExit = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement", "--format", "json"],
+            withKind);
+
+        Assert.Equal(0, purposeExit);
+        Assert.Equal(0, kindExit);
+        Assert.Equal(withKind.ToString(), withPurpose.ToString());
     }
 
     private static CliContext CreateContext()
