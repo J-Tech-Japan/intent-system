@@ -264,6 +264,7 @@ Loop body (single wake; the operator drives subsequent wakes if any):
 Hard rules:
 - Do not read `intents/rules/**`, local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.), or copied prompt files for routine collaboration. Use `intent-cli guide ...` instead.
 - Do not call `intent-cli run` from this loop. `run` is advanced runtime (integration smoke / replay / dogfooding), not the chat-first path.
+- If `intent-cli automation doctor` reports `stale-host-cli` or a missing required surface, **abort the wake** before any mutation and refresh the installed CLI. Never fall back to direct DLL invocation or `dotnet run`.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
 - All label transitions go through installed `intent-cli automation` / `intent-cli worker` commands. No manual `gh ... edit --add-label` / `--remove-label` fallback for workflow labels.
