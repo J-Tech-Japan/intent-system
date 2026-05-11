@@ -17,11 +17,13 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     public AutomationHostLoopNextActionCommandTests()
     {
         AutomationHostLoopNextActionCommand.CandidateListerFactory = null;
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
     }
 
     public void Dispose()
     {
         AutomationHostLoopNextActionCommand.CandidateListerFactory = null;
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
     }
 
     [Fact]
@@ -220,6 +222,214 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
             Labels = labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray(),
             State = "OPEN"
         };
+
+    // --- G318: automatic intent next-slice --dry-run probe ----------------
+
+    [Fact]
+    public void Execute_NextSliceProbeReturnsIssueCutReady_SelectsPublishNextIssue_NotTrueIdle()
+    {
+        // Mirrors SKS-G224: empty repo (no review PR, no open intent-target,
+        // no host-metadata drift), `intent next-slice --dry-run` reports
+        // `issue-cut-ready`. Before G318 the host loop reported true-idle;
+        // the command now auto-probes next-slice and surfaces the publish
+        // action.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G224" });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("publish-next-issue", root.GetProperty("classification").GetString());
+        Assert.True(root.GetProperty("mutation_allowed").GetBoolean());
+        var recommended = root.GetProperty("recommended_command").GetString()!;
+        Assert.Contains("--execution-unit SKS-G224", recommended, StringComparison.Ordinal);
+        Assert.Contains("--target-repo J-Tech-Japan/SekibanAsAService", recommended, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_NextSliceProbeReturnsNoActionableItem_FallsThroughToTrueIdle()
+    {
+        // G318 acceptance: when next-slice has no candidate AND no other
+        // host signal exists, true-idle remains a valid outcome.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("true-idle", doc.RootElement.GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_NextSliceProbe_IsNotInvoked_WhenOperatorPrePipesFlag()
+    {
+        // G318 backward-compat: pre-piped `--next-slice-issue-cut-ready`
+        // wins; the probe is not invoked even when --domain is present.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        var probeWasInvoked = false;
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "ignored", ExecutionUnit = "ignored" },
+            onProbe: () => probeWasInvoked = true);
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service",
+             "--next-slice-issue-cut-ready",
+             "--publish-next-execution-unit", "OPERATOR-PIPED",
+             "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        Assert.False(probeWasInvoked, "operator-supplied next-slice flag must short-circuit the probe");
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("publish-next-issue", doc.RootElement.GetProperty("classification").GetString());
+        Assert.Contains("--execution-unit OPERATOR-PIPED",
+            doc.RootElement.GetProperty("recommended_command").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_NextSliceProbeReturnsIssueCutReady_ButWipCapActive_BlocksPublish()
+    {
+        // G318 acceptance: even when next-slice is `issue-cut-ready`, an
+        // open intent-target issue/PR must keep the WIP-cap-blocked
+        // classification (publish-next-issue requires WIP cap empty).
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: new[] { NewIssue(900, labels: new[] { "intent-target" }) });
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G225" });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("wip-cap-blocked",
+            JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_NextSliceProbeReturnsClarificationRequired_SurfacesHardClarification_NotTrueIdle()
+    {
+        // G318 review fix (PR #744): a blocked next-slice outcome must not
+        // collapse into `true-idle`. `clarification-required` from
+        // `intent next-slice --dry-run` maps to the analyzer's
+        // `hard-clarification` lane so the operator gets a precise stop
+        // and a clarification-next pointer instead of an idle wake.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "clarification-required", ExecutionUnit = null });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("hard-clarification", doc.RootElement.GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_NextSliceProbeReturnsSkipDueToWip_SurfacesWipCapBlocked_NotTrueIdle()
+    {
+        // G318 review fix (PR #744): when queue-state authoritatively
+        // reports `skip-next-slice-due-to-wip` (e.g. labels and queue
+        // diverge), the command MUST surface `wip-cap-blocked` instead of
+        // collapsing into `true-idle` because the GitHub label listing
+        // happens to look empty.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "skip-next-slice-due-to-wip", ExecutionUnit = null });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("wip-cap-blocked", doc.RootElement.GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_NextSliceProbe_IsNotInvoked_WhenDomainMissing()
+    {
+        // G318 safety rail: `intent next-slice --dry-run` requires a
+        // domain. Without `--domain` the probe is skipped to avoid an
+        // unconditional in-process invocation that the analyzer cannot
+        // use anyway.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        var probeWasInvoked = false;
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "IGNORED" },
+            onProbe: () => probeWasInvoked = true);
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        Assert.False(probeWasInvoked, "probe must not run without --domain");
+        Assert.Equal("true-idle",
+            JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("classification").GetString());
+    }
+
+    private sealed class FakeNextSliceProbe : INextSliceDryRunProbe
+    {
+        private readonly NextSliceProbeResult? _canned;
+        private readonly Action? _onProbe;
+
+        public FakeNextSliceProbe(NextSliceProbeResult? canned, Action? onProbe = null)
+        {
+            _canned = canned;
+            _onProbe = onProbe;
+        }
+
+        public NextSliceProbeResult? Probe(string repo, string domain)
+        {
+            _onProbe?.Invoke();
+            return _canned;
+        }
+    }
 
     private sealed class FakeLister : IGitHubAutomationCandidateLister
     {

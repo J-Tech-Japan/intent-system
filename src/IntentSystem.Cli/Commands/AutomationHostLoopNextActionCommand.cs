@@ -28,6 +28,16 @@ internal static class AutomationHostLoopNextActionCommand
 
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
+    /// <summary>
+    /// G318: testability seam for the automatic <c>intent next-slice --dry-run</c>
+    /// probe. Production uses <see cref="IntentCliNextSliceDryRunProbe"/>
+    /// (in-process invocation of <see cref="IntentNextSliceCommand"/>) so
+    /// the host loop never reports <c>true-idle</c> when a candidate is
+    /// ready to publish. Tests inject a fake that returns canned outcomes
+    /// without touching the live queue-state.
+    /// </summary>
+    public static Func<CliContext, INextSliceDryRunProbe>? NextSliceDryRunProbeFactory { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -69,6 +79,70 @@ internal static class AutomationHostLoopNextActionCommand
         var openIntentTargetExists = OpenIntentTargetExists(openPrs, openIssues);
         var anyLeaseHeld = AnyChildWorkerLeaseHeld(openPrs, openIssues);
 
+        // G318: automatically probe `intent next-slice --dry-run` when the
+        // operator did not pre-pipe the flag. The host loop must NOT report
+        // `true-idle` while a matching next-slice candidate is ready to
+        // publish OR a blocked next-slice outcome (clarification-required,
+        // skip-next-slice-due-to-wip) is pending, so the command takes
+        // ownership of the probe instead of relying on the caller to wire
+        // it. An operator-supplied `--next-slice-issue-cut-ready` (with
+        // `--publish-next-execution-unit`) still wins so existing pre-pipe
+        // flows are byte-identical.
+        var nextSliceIssueCutReady = parsed.NextSliceIssueCutReady;
+        var publishNextSliceExecutionUnit = parsed.PublishNextSliceExecutionUnit;
+        var hardClarificationOpen = parsed.HardClarificationOpen;
+        var openIntentTargetExistsResolved = openIntentTargetExists;
+        if (!nextSliceIssueCutReady && !string.IsNullOrWhiteSpace(parsed.Domain))
+        {
+            var probe = NextSliceDryRunProbeFactory?.Invoke(context)
+                ?? new IntentCliNextSliceDryRunProbe(context);
+            var probed = probe.Probe(parsed.Repo, parsed.Domain!);
+            if (probed != null)
+            {
+                switch (probed.RecommendedOutcome)
+                {
+                    case "issue-cut-ready":
+                        // Happy path: surface the publish-next-issue lane.
+                        if (!string.IsNullOrWhiteSpace(probed.ExecutionUnit))
+                        {
+                            nextSliceIssueCutReady = true;
+                            publishNextSliceExecutionUnit = probed.ExecutionUnit;
+                        }
+                        break;
+
+                    case "clarification-required":
+                        // G318 review fix: a blocked next-slice with an
+                        // open hard-clarification must NOT fall through to
+                        // true-idle. Force the analyzer's
+                        // `hard-clarification` lane.
+                        hardClarificationOpen = true;
+                        break;
+
+                    case "skip-next-slice-due-to-wip":
+                        // G318 review fix: queue-state authoritatively
+                        // reports a WIP-cap block. Surface the existing
+                        // `wip-cap-blocked` classification vocabulary even
+                        // when the GitHub label listing happens to look
+                        // empty (queue-state and label state can diverge
+                        // transiently). The analyzer's wip-cap-blocked
+                        // lane requires `!AnyChildWorkerLeaseHeld`, which
+                        // matches the next-slice "skip" semantic (the
+                        // skip is about new publication, not about a
+                        // child worker holding a lease).
+                        openIntentTargetExistsResolved = true;
+                        break;
+
+                    case "no-actionable-item":
+                    default:
+                        // Truly idle from next-slice's perspective; let
+                        // the analyzer fall through to existing lanes
+                        // (review-pr / wip-cap-blocked / wait-for-child /
+                        // true-idle).
+                        break;
+                }
+            }
+        }
+
         var input = new HostLoopNextActionInput
         {
             Repo = parsed.Repo,
@@ -80,11 +154,11 @@ internal static class AutomationHostLoopNextActionCommand
             ApprovedPrPendingMergeCloseout = approvedPr,
             PublishRecoveryRepairsAvailable = parsed.PublishRecoveryRepairsAvailable,
             PublishLifecycleDriftCount = parsed.PublishLifecycleDriftCount,
-            NextSliceIssueCutReady = parsed.NextSliceIssueCutReady,
-            PublishNextSliceExecutionUnit = parsed.PublishNextSliceExecutionUnit,
-            OpenIntentTargetPrOrIssueExists = openIntentTargetExists,
+            NextSliceIssueCutReady = nextSliceIssueCutReady,
+            PublishNextSliceExecutionUnit = publishNextSliceExecutionUnit,
+            OpenIntentTargetPrOrIssueExists = openIntentTargetExistsResolved,
             AnyChildWorkerLeaseHeld = anyLeaseHeld,
-            HardClarificationOpen = parsed.HardClarificationOpen
+            HardClarificationOpen = hardClarificationOpen
         };
 
         var result = HostLoopNextActionAnalyzer.Analyze(input);
