@@ -317,7 +317,8 @@ Frequency policy (applies only when a recurring local loop is explicitly request
                 "copied prompt files"
             },
             LabelOwnership = "All label transitions delegated to installed intent-cli automation / worker commands. Manual `gh ... edit --label` fallback is forbidden.",
-            WorktreeFriendly = "The prompt resolves the repo from the child worktree's `gh` / `git remote` and runs the selector from the parent host root with --workdir; no hard-coded paths, and the same prompt works across local worktrees."
+            WorktreeFriendly = "The prompt resolves the repo from the child worktree's `gh` / `git remote` and runs the selector from the parent host root with --workdir; no hard-coded paths, and the same prompt works across local worktrees.",
+            Prohibitions = GuidanceProhibitionCatalog.All
         };
     }
 
@@ -432,7 +433,8 @@ Frequency policy (applies only when a recurring local loop is explicitly request
                 "copied prompt files"
             },
             LabelOwnership = "All review-side and issue-side label transitions delegated to installed `intent-cli automation pr-transition` / `automation issue-publish` / `worker claim` / `worker complete`. Manual `gh ... edit --label` fallback is forbidden.",
-            WorktreeFriendly = "The prompt names the parent host root as cwd but does not hardcode any operator-specific path beyond that; the same prompt works across host-side checkouts."
+            WorktreeFriendly = "The prompt names the parent host root as cwd but does not hardcode any operator-specific path beyond that; the same prompt works across host-side checkouts.",
+            Prohibitions = GuidanceProhibitionCatalog.All
         };
     }
 
@@ -804,4 +806,17 @@ internal sealed record GuideAutomationSetupResult
 
     [JsonPropertyName("worktree_friendly")]
     public required string WorktreeFriendly { get; init; }
+
+    /// <summary>
+    /// G323: structured prohibitions list. Every generated setup
+    /// contract advertises the same canonical safety prohibitions
+    /// (no local rules / skill / copied prompt fallback, no stale
+    /// memory fallback, no `dotnet run`, no raw `gh` label edits, no
+    /// AI provider launch, no `intent-cli run` from chat-first loops,
+    /// abort on stale-cli / missing command surface). Controllers can
+    /// dispatch on the structured <c>id</c> values without parsing
+    /// prose.
+    /// </summary>
+    [JsonPropertyName("prohibitions")]
+    public IReadOnlyList<GuidanceProhibition>? Prohibitions { get; init; }
 }
