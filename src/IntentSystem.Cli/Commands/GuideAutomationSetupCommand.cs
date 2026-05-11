@@ -38,9 +38,9 @@ internal static class GuideAutomationSetupCommand
     private const string SchedulingUnknownAskOperator = "unknown-ask-operator";
 
     private const string UsageLine =
-        "Usage: intent-cli guide automation setup --kind|--purpose <child-implement|host-review-next-slice> "
+        "Usage: intent-cli guide automation setup --kind|--purpose <child-implement|host-review-next-slice|alias> "
         + "[--repo <owner/repo>] [--domain <name>] [--target-repo <owner/repo>] "
-        + "[--agent claude|codex|unknown] [--cwd <path>] [--frequency <NNm|NNh>] "
+        + "[--agent claude|codex|claude code|codex-cli|unknown] [--cwd <path>] [--cwd-role host|child] [--frequency <NNm|NNh>] "
         + "[--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -57,17 +57,74 @@ internal static class GuideAutomationSetupCommand
 
         if (!TryParseArguments(
                 args,
-                out var kind,
+                out var rawKind,
                 out var repo,
                 out var domain,
                 out var targetRepo,
-                out var agent,
+                out var rawAgent,
                 out var cwd,
+                out var rawCwdRole,
                 out var frequency,
                 out var format,
                 out var error))
         {
             writer.WriteLine(error);
+            writer.WriteLine(UsageLine);
+            return 1;
+        }
+
+        // G321: normalize the operator-supplied purpose/agent vocabulary
+        // BEFORE any downstream validation so Japanese / English / hyphen
+        // / case variants ("実装", "Claude Code", "review & next slice")
+        // all hash to the canonical kind + agent names. Unknown purpose
+        // falls through to the existing "--kind must be ..." usage error;
+        // unknown agent resolves to `unknown` (surfaced via
+        // <see cref="ResolveScheduling"/> as the operator ask).
+        var canonicalPurpose = GuideAutomationSetupAliasResolver.ResolvePurpose(rawKind);
+        var kind = canonicalPurpose ?? rawKind;
+        var canonicalAgent = string.IsNullOrWhiteSpace(rawAgent)
+            ? null
+            : GuideAutomationSetupAliasResolver.ResolveAgent(rawAgent);
+        var agent = canonicalAgent;
+
+        // G321: cwd-role resolution. When the operator did not supply
+        // `--cwd-role`, we infer it from the canonical purpose. When they
+        // did, we validate it and surface a structured conflict if it
+        // contradicts the canonical purpose's host/child semantic.
+        string? cwdRoleConflict = null;
+        string? cwdRoleCanonical = null;
+        if (!string.IsNullOrWhiteSpace(rawCwdRole))
+        {
+            cwdRoleCanonical = GuideAutomationSetupAliasResolver.ResolveCwdRole(rawCwdRole);
+            if (cwdRoleCanonical is null)
+            {
+                writer.WriteLine(
+                    $"--cwd-role must be '{GuideAutomationSetupAliasResolver.CanonicalCwdRoleHost}' or '{GuideAutomationSetupAliasResolver.CanonicalCwdRoleChild}' (got '{rawCwdRole}').");
+                writer.WriteLine(UsageLine);
+                return 1;
+            }
+        }
+        if (canonicalPurpose is not null)
+        {
+            var inferredCwdRole = GuideAutomationSetupAliasResolver.InferCwdRole(canonicalPurpose);
+            if (cwdRoleCanonical is null)
+            {
+                cwdRoleCanonical = inferredCwdRole;
+            }
+            else if (!string.Equals(cwdRoleCanonical, inferredCwdRole, StringComparison.Ordinal))
+            {
+                // Structured conflict (G321): host purpose with child cwd
+                // (or vice versa) cannot be satisfied without picking one
+                // side. Refuse to generate a contract that silently buries
+                // the contradiction.
+                cwdRoleConflict =
+                    $"--cwd-role '{cwdRoleCanonical}' conflicts with --purpose '{canonicalPurpose}' (expected cwd-role '{inferredCwdRole}'). Re-run with a matching --cwd-role or change --purpose.";
+            }
+        }
+
+        if (cwdRoleConflict is not null)
+        {
+            writer.WriteLine(cwdRoleConflict);
             writer.WriteLine(UsageLine);
             return 1;
         }
@@ -90,7 +147,7 @@ internal static class GuideAutomationSetupCommand
         switch (kind)
         {
             case KindChildImplement:
-                return EmitResult(writer, format, BuildChildImplement(repo, domain, agent, cwd, frequency));
+                return EmitResult(writer, format, BuildChildImplement(repo, domain, agent, cwd, frequency, cwdRoleCanonical, rawKind, rawAgent));
 
             case KindHostReviewNextSlice:
                 if (string.IsNullOrWhiteSpace(domain))
@@ -106,7 +163,7 @@ internal static class GuideAutomationSetupCommand
                     return 1;
                 }
 
-                return EmitResult(writer, format, BuildHostReviewNextSlice(domain!, targetRepo!, agent, cwd, frequency));
+                return EmitResult(writer, format, BuildHostReviewNextSlice(domain!, targetRepo!, agent, cwd, frequency, cwdRoleCanonical, rawKind, rawAgent));
 
             default:
                 writer.WriteLine(
@@ -171,7 +228,10 @@ Scheduling mechanism: unknown — ASK the operator which same-thread / local-aut
         string? domain,
         string? agent,
         string? cwd,
-        string? frequency)
+        string? frequency,
+        string? cwdRoleCanonical = null,
+        string? rawPurpose = null,
+        string? rawAgent = null)
     {
         var repoLabel = string.IsNullOrWhiteSpace(repo) ? "the repo in the current worktree" : $"`{repo}`";
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
@@ -223,10 +283,22 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         return new GuideAutomationSetupResult
         {
             Kind = KindChildImplement,
+            CanonicalPurpose = KindChildImplement,
+            RawPurpose = NullIfBlank(rawPurpose),
             Repo = string.IsNullOrWhiteSpace(repo) ? null : repo,
             Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
-            Agent = string.IsNullOrWhiteSpace(agent) ? null : agent,
+            // G321: keep `agent` as the operator-facing string. For known
+            // agents (claude / codex) raw and canonical agree; for unknown
+            // agents we surface the raw string ("robot") so the operator
+            // sees their own input, while `canonical_agent` carries the
+            // normalized "unknown" identifier.
+            Agent = NullIfBlank(rawAgent) ?? (string.IsNullOrWhiteSpace(agent) ? null : agent),
+            CanonicalAgent = string.IsNullOrWhiteSpace(agent) ? null : agent,
+            RawAgent = NullIfBlank(rawAgent),
             Cwd = string.IsNullOrWhiteSpace(cwd) ? null : cwd,
+            CwdRole = string.IsNullOrWhiteSpace(cwdRoleCanonical)
+                ? GuideAutomationSetupAliasResolver.CanonicalCwdRoleChild
+                : cwdRoleCanonical,
             Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency,
             SchedulingMechanism = string.IsNullOrWhiteSpace(agent) ? null : schedulingMechanism,
             Prompt = prompt,
@@ -248,12 +320,18 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         };
     }
 
+    private static string? NullIfBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
     private static GuideAutomationSetupResult BuildHostReviewNextSlice(
         string domain,
         string targetRepo,
         string? agent,
         string? cwd,
-        string? frequency)
+        string? frequency,
+        string? cwdRoleCanonical = null,
+        string? rawPurpose = null,
+        string? rawAgent = null)
     {
         var (schedulingMechanism, schedulingBlock) = ResolveScheduling(agent, frequency);
         var cwdLine = string.IsNullOrWhiteSpace(cwd)
@@ -318,10 +396,22 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         return new GuideAutomationSetupResult
         {
             Kind = KindHostReviewNextSlice,
+            CanonicalPurpose = KindHostReviewNextSlice,
+            RawPurpose = NullIfBlank(rawPurpose),
             Domain = domain,
             TargetRepo = targetRepo,
-            Agent = string.IsNullOrWhiteSpace(agent) ? null : agent,
+            // G321: keep `agent` as the operator-facing string. For known
+            // agents (claude / codex) raw and canonical agree; for unknown
+            // agents we surface the raw string ("robot") so the operator
+            // sees their own input, while `canonical_agent` carries the
+            // normalized "unknown" identifier.
+            Agent = NullIfBlank(rawAgent) ?? (string.IsNullOrWhiteSpace(agent) ? null : agent),
+            CanonicalAgent = string.IsNullOrWhiteSpace(agent) ? null : agent,
+            RawAgent = NullIfBlank(rawAgent),
             Cwd = string.IsNullOrWhiteSpace(cwd) ? null : cwd,
+            CwdRole = string.IsNullOrWhiteSpace(cwdRoleCanonical)
+                ? GuideAutomationSetupAliasResolver.CanonicalCwdRoleHost
+                : cwdRoleCanonical,
             Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency,
             SchedulingMechanism = string.IsNullOrWhiteSpace(agent) ? null : schedulingMechanism,
             Prompt = prompt,
@@ -377,6 +467,22 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         {
             writer.WriteLine($"- scheduling mechanism: {result.SchedulingMechanism}");
         }
+        if (!string.IsNullOrWhiteSpace(result.CwdRole))
+        {
+            writer.WriteLine($"- cwd role: {result.CwdRole}");
+        }
+        if (!string.IsNullOrWhiteSpace(result.CanonicalPurpose)
+            && !string.IsNullOrWhiteSpace(result.RawPurpose)
+            && !string.Equals(result.CanonicalPurpose, result.RawPurpose, StringComparison.Ordinal))
+        {
+            writer.WriteLine($"- canonical purpose: {result.CanonicalPurpose} (raw: {result.RawPurpose})");
+        }
+        if (!string.IsNullOrWhiteSpace(result.RawAgent)
+            && !string.IsNullOrWhiteSpace(result.CanonicalAgent)
+            && !string.Equals(result.RawAgent, result.CanonicalAgent, StringComparison.Ordinal))
+        {
+            writer.WriteLine($"- canonical agent: {result.CanonicalAgent} (raw: {result.RawAgent})");
+        }
         writer.WriteLine();
 
         writer.WriteLine("## First-call sequence (read-only)");
@@ -418,6 +524,7 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         out string? targetRepo,
         out string? agent,
         out string? cwd,
+        out string? cwdRole,
         out string? frequency,
         out string format,
         out string error)
@@ -428,6 +535,7 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         targetRepo = null;
         agent = null;
         cwd = null;
+        cwdRole = null;
         frequency = null;
         format = FormatMarkdown;
         error = string.Empty;
@@ -508,6 +616,17 @@ Frequency policy (applies only when a recurring local loop is explicitly request
                     index++;
                     break;
 
+                case "--cwd-role":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--cwd-role requires a value (host or child).";
+                        return false;
+                    }
+
+                    cwdRole = args[index + 1];
+                    index++;
+                    break;
+
                 case "--frequency":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -577,6 +696,25 @@ internal sealed record GuideAutomationSetupResult
     [JsonPropertyName("kind")]
     public required string Kind { get; init; }
 
+    /// <summary>
+    /// G321: canonical purpose name (<c>child-implement</c> /
+    /// <c>host-review-next-slice</c>) — equal to <see cref="Kind"/> but
+    /// emitted as its own controller-facing field so downstream consumers
+    /// can dispatch on a stable identifier independent of the legacy
+    /// <c>kind</c> wire vocabulary.
+    /// </summary>
+    [JsonPropertyName("canonical_purpose")]
+    public string? CanonicalPurpose { get; init; }
+
+    /// <summary>
+    /// G321: original operator-supplied purpose / kind phrase before
+    /// alias resolution (e.g. <c>実装</c>, <c>Claude Code</c>,
+    /// <c>review &amp; next slice</c>). <c>null</c> when the operator
+    /// already passed the canonical value.
+    /// </summary>
+    [JsonPropertyName("raw_purpose")]
+    public string? RawPurpose { get; init; }
+
     [JsonPropertyName("repo")]
     public string? Repo { get; init; }
 
@@ -594,6 +732,37 @@ internal sealed record GuideAutomationSetupResult
     /// </summary>
     [JsonPropertyName("agent")]
     public string? Agent { get; init; }
+
+    /// <summary>
+    /// G321: canonical agent identifier (<c>claude</c>, <c>codex</c>,
+    /// <c>unknown</c>). Identical to <see cref="Agent"/> after
+    /// normalization; kept as a separate field so controllers can switch
+    /// on a stable name even if a future refactor renames
+    /// <see cref="Agent"/>.
+    /// </summary>
+    [JsonPropertyName("canonical_agent")]
+    public string? CanonicalAgent { get; init; }
+
+    /// <summary>
+    /// G321: original operator-supplied agent phrase before alias
+    /// resolution (e.g. <c>Claude Code</c>, <c>codex-cli</c>).
+    /// <c>null</c> when the operator already passed the canonical value
+    /// or no agent at all.
+    /// </summary>
+    [JsonPropertyName("raw_agent")]
+    public string? RawAgent { get; init; }
+
+    /// <summary>
+    /// G321: cwd-role inference. <c>host</c> for host review/next-slice
+    /// loops (cwd is the parent host repo root). <c>child</c> for child
+    /// implementation/PR-comment-update loops (cwd is a child worktree
+    /// with a parent host root reference). When the operator passes an
+    /// explicit <c>--cwd-role</c> that conflicts with the canonical
+    /// purpose, the command refuses (structured conflict) instead of
+    /// silently picking one side.
+    /// </summary>
+    [JsonPropertyName("cwd_role")]
+    public string? CwdRole { get; init; }
 
     /// <summary>
     /// G320: operator-supplied cwd hint (parent host root for host-loop,
