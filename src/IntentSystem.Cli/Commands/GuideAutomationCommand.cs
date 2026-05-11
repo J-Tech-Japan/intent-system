@@ -49,6 +49,13 @@ internal static class GuideAutomationCommand
             return GuideAutomationLocalLoopCommand.Execute(context, args[1..], writer);
         }
 
+        // G322: nested `guide automation lint ...` validates a generated
+        // contract against the required safety clauses.
+        if (args.Length >= 1 && string.Equals(args[0], "lint", StringComparison.Ordinal))
+        {
+            return GuideAutomationLintCommand.Execute(context, args[1..], writer);
+        }
+
         if (!TryParseArguments(args, out var kind, out var domain, out var repo, out var format, out var error))
         {
             writer.WriteLine(error);
