@@ -89,6 +89,35 @@ Some automation setup that says:
     }
 
     [Fact]
+    public void Lint_ContractThatDescribesIntentCliRunWithoutProhibition_FailsClause()
+    {
+        // G322 review fix (PR #748): a contract that merely describes
+        // `intent-cli run` as "the advanced runtime path" (or otherwise
+        // permissively mentions it) MUST fail the `no-intent-cli-run`
+        // clause. Only an explicit negative prohibition counts as
+        // satisfying the safety clause. Mirrors the
+        // `Lint_ContractThatAllowsDotnetRunFallback_FailsClause`
+        // permissive-contract test for the `intent-cli run` surface.
+        const string contract = @"
+Some automation setup that says:
+- You may use `intent-cli run` if you want the advanced runtime path.
+- Same-thread `/loop 5m` is the scheduling mechanism.
+- automation doctor is OK; stale-host-cli would abort the wake.
+- Do not run `dotnet run` as a fallback.
+- No manual `gh ... edit --add-label` / `--remove-label` fallback.
+- Do not ask `intent-cli` to launch Claude/Codex.
+- worker next-action / worker claim / worker complete drive dispatch.
+- stop with `idle` when next-action returns none.
+- Do not read `intents/rules/**` or copied prompt files.
+";
+
+        var result = GuideAutomationContractLinter.Lint(contract);
+
+        Assert.Equal("fail", result.Status);
+        Assert.Contains(result.MissingClauses, m => m.Id == "no-intent-cli-run");
+    }
+
+    [Fact]
     public void Lint_JsonOutput_HasControllerFriendlyShape()
     {
         // G322 acceptance: JSON output exposes status / found_clauses /

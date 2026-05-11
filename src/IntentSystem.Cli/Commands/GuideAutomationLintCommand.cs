@@ -350,13 +350,15 @@ internal static class GuideAutomationContractLinter
             "Contract explicitly forbids `intent-cli run` from the chat-first loop (advanced-only).",
             new[]
             {
-                // G322: only negative-form prohibition counts. A contract
-                // that says "you may use `intent-cli run`" must fail.
+                // G322 review fix (PR #748): only negative-form
+                // prohibition counts. A contract that says "you may use
+                // `intent-cli run` — it is the advanced runtime path"
+                // must FAIL this clause, so the bare "advanced runtime"
+                // descriptor is intentionally excluded.
                 "do not call `intent-cli run`",
                 "do not call intent-cli run",
                 "never `intent-cli run`",
-                "never intent-cli run",
-                "advanced runtime"
+                "never intent-cli run"
             }),
         new Clause(
             "no-provider-launch",
