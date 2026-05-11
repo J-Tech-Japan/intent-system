@@ -82,23 +82,64 @@ internal static class AutomationHostLoopNextActionCommand
         // G318: automatically probe `intent next-slice --dry-run` when the
         // operator did not pre-pipe the flag. The host loop must NOT report
         // `true-idle` while a matching next-slice candidate is ready to
-        // publish, so the command takes ownership of the probe instead of
-        // relying on the caller to wire it. An operator-supplied
-        // `--next-slice-issue-cut-ready` (with `--publish-next-execution-unit`)
-        // still wins so existing pre-pipe flows are byte-identical.
+        // publish OR a blocked next-slice outcome (clarification-required,
+        // skip-next-slice-due-to-wip) is pending, so the command takes
+        // ownership of the probe instead of relying on the caller to wire
+        // it. An operator-supplied `--next-slice-issue-cut-ready` (with
+        // `--publish-next-execution-unit`) still wins so existing pre-pipe
+        // flows are byte-identical.
         var nextSliceIssueCutReady = parsed.NextSliceIssueCutReady;
         var publishNextSliceExecutionUnit = parsed.PublishNextSliceExecutionUnit;
+        var hardClarificationOpen = parsed.HardClarificationOpen;
+        var openIntentTargetExistsResolved = openIntentTargetExists;
         if (!nextSliceIssueCutReady && !string.IsNullOrWhiteSpace(parsed.Domain))
         {
             var probe = NextSliceDryRunProbeFactory?.Invoke(context)
                 ?? new IntentCliNextSliceDryRunProbe(context);
             var probed = probe.Probe(parsed.Repo, parsed.Domain!);
-            if (probed != null
-                && string.Equals(probed.RecommendedOutcome, "issue-cut-ready", StringComparison.Ordinal)
-                && !string.IsNullOrWhiteSpace(probed.ExecutionUnit))
+            if (probed != null)
             {
-                nextSliceIssueCutReady = true;
-                publishNextSliceExecutionUnit = probed.ExecutionUnit;
+                switch (probed.RecommendedOutcome)
+                {
+                    case "issue-cut-ready":
+                        // Happy path: surface the publish-next-issue lane.
+                        if (!string.IsNullOrWhiteSpace(probed.ExecutionUnit))
+                        {
+                            nextSliceIssueCutReady = true;
+                            publishNextSliceExecutionUnit = probed.ExecutionUnit;
+                        }
+                        break;
+
+                    case "clarification-required":
+                        // G318 review fix: a blocked next-slice with an
+                        // open hard-clarification must NOT fall through to
+                        // true-idle. Force the analyzer's
+                        // `hard-clarification` lane.
+                        hardClarificationOpen = true;
+                        break;
+
+                    case "skip-next-slice-due-to-wip":
+                        // G318 review fix: queue-state authoritatively
+                        // reports a WIP-cap block. Surface the existing
+                        // `wip-cap-blocked` classification vocabulary even
+                        // when the GitHub label listing happens to look
+                        // empty (queue-state and label state can diverge
+                        // transiently). The analyzer's wip-cap-blocked
+                        // lane requires `!AnyChildWorkerLeaseHeld`, which
+                        // matches the next-slice "skip" semantic (the
+                        // skip is about new publication, not about a
+                        // child worker holding a lease).
+                        openIntentTargetExistsResolved = true;
+                        break;
+
+                    case "no-actionable-item":
+                    default:
+                        // Truly idle from next-slice's perspective; let
+                        // the analyzer fall through to existing lanes
+                        // (review-pr / wip-cap-blocked / wait-for-child /
+                        // true-idle).
+                        break;
+                }
             }
         }
 
@@ -115,9 +156,9 @@ internal static class AutomationHostLoopNextActionCommand
             PublishLifecycleDriftCount = parsed.PublishLifecycleDriftCount,
             NextSliceIssueCutReady = nextSliceIssueCutReady,
             PublishNextSliceExecutionUnit = publishNextSliceExecutionUnit,
-            OpenIntentTargetPrOrIssueExists = openIntentTargetExists,
+            OpenIntentTargetPrOrIssueExists = openIntentTargetExistsResolved,
             AnyChildWorkerLeaseHeld = anyLeaseHeld,
-            HardClarificationOpen = parsed.HardClarificationOpen
+            HardClarificationOpen = hardClarificationOpen
         };
 
         var result = HostLoopNextActionAnalyzer.Analyze(input);

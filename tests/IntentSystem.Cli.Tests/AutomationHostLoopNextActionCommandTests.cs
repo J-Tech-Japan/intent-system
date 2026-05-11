@@ -335,6 +335,58 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_NextSliceProbeReturnsClarificationRequired_SurfacesHardClarification_NotTrueIdle()
+    {
+        // G318 review fix (PR #744): a blocked next-slice outcome must not
+        // collapse into `true-idle`. `clarification-required` from
+        // `intent next-slice --dry-run` maps to the analyzer's
+        // `hard-clarification` lane so the operator gets a precise stop
+        // and a clarification-next pointer instead of an idle wake.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "clarification-required", ExecutionUnit = null });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("hard-clarification", doc.RootElement.GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_NextSliceProbeReturnsSkipDueToWip_SurfacesWipCapBlocked_NotTrueIdle()
+    {
+        // G318 review fix (PR #744): when queue-state authoritatively
+        // reports `skip-next-slice-due-to-wip` (e.g. labels and queue
+        // diverge), the command MUST surface `wip-cap-blocked` instead of
+        // collapsing into `true-idle` because the GitHub label listing
+        // happens to look empty.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "skip-next-slice-due-to-wip", ExecutionUnit = null });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("wip-cap-blocked", doc.RootElement.GetProperty("classification").GetString());
+    }
+
+    [Fact]
     public void Execute_NextSliceProbe_IsNotInvoked_WhenDomainMissing()
     {
         // G318 safety rail: `intent next-slice --dry-run` requires a
