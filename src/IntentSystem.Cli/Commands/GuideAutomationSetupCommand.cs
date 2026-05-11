@@ -24,9 +24,24 @@ internal static class GuideAutomationSetupCommand
     private const string KindChildImplement = "child-implement";
     private const string KindHostReviewNextSlice = "host-review-next-slice";
 
+    // G320: agent-specific scheduling contract. `--agent claude` resolves to
+    // same-thread `/loop <frequency>`; `--agent codex` resolves to a
+    // current-thread local-automation heartbeat at the requested frequency;
+    // `--agent unknown` (or any other value) MUST surface the required
+    // mechanism instead of guessing.
+    private const string AgentClaude = "claude";
+    private const string AgentCodex = "codex";
+    private const string AgentUnknown = "unknown";
+
+    private const string SchedulingClaudeLoopSameThread = "claude-loop-same-thread";
+    private const string SchedulingCodexHeartbeatSameThread = "codex-heartbeat-same-thread";
+    private const string SchedulingUnknownAskOperator = "unknown-ask-operator";
+
     private const string UsageLine =
-        "Usage: intent-cli guide automation setup --kind <child-implement|host-review-next-slice> "
-        + "[--repo <owner/repo>] [--domain <name>] [--target-repo <owner/repo>] [--format markdown|json]";
+        "Usage: intent-cli guide automation setup --kind|--purpose <child-implement|host-review-next-slice> "
+        + "[--repo <owner/repo>] [--domain <name>] [--target-repo <owner/repo>] "
+        + "[--agent claude|codex|unknown] [--cwd <path>] [--frequency <NNm|NNh>] "
+        + "[--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -40,9 +55,34 @@ internal static class GuideAutomationSetupCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var kind, out var repo, out var domain, out var targetRepo, out var format, out var error))
+        if (!TryParseArguments(
+                args,
+                out var kind,
+                out var repo,
+                out var domain,
+                out var targetRepo,
+                out var agent,
+                out var cwd,
+                out var frequency,
+                out var format,
+                out var error))
         {
             writer.WriteLine(error);
+            writer.WriteLine(UsageLine);
+            return 1;
+        }
+
+        // G320: agent + frequency are coupled. If the operator supplies an
+        // agent we know how to handle (claude/codex) we also require a
+        // frequency so the generated contract can pin the exact same-thread
+        // loop cadence instead of inventing one.
+        if (!string.IsNullOrWhiteSpace(agent)
+            && (string.Equals(agent, AgentClaude, StringComparison.Ordinal)
+                || string.Equals(agent, AgentCodex, StringComparison.Ordinal))
+            && string.IsNullOrWhiteSpace(frequency))
+        {
+            writer.WriteLine(
+                $"--frequency is required when --agent is '{agent}' so the generated contract can name the exact same-thread loop cadence.");
             writer.WriteLine(UsageLine);
             return 1;
         }
@@ -50,7 +90,7 @@ internal static class GuideAutomationSetupCommand
         switch (kind)
         {
             case KindChildImplement:
-                return EmitResult(writer, format, BuildChildImplement(repo, domain));
+                return EmitResult(writer, format, BuildChildImplement(repo, domain, agent, cwd, frequency));
 
             case KindHostReviewNextSlice:
                 if (string.IsNullOrWhiteSpace(domain))
@@ -66,7 +106,7 @@ internal static class GuideAutomationSetupCommand
                     return 1;
                 }
 
-                return EmitResult(writer, format, BuildHostReviewNextSlice(domain!, targetRepo!));
+                return EmitResult(writer, format, BuildHostReviewNextSlice(domain!, targetRepo!, agent, cwd, frequency));
 
             default:
                 writer.WriteLine(
@@ -74,6 +114,41 @@ internal static class GuideAutomationSetupCommand
                 writer.WriteLine(UsageLine);
                 return 1;
         }
+    }
+
+    /// <summary>
+    /// G320: resolve the operator-supplied agent into a stable scheduling
+    /// mechanism identifier + a human-readable contract block. Unknown
+    /// agents MUST NOT silently default to claude/codex behavior — the
+    /// contract surfaces the required ask instead.
+    /// </summary>
+    private static (string Mechanism, string ContractBlock) ResolveScheduling(string? agent, string? frequency)
+    {
+        var normalizedAgent = string.IsNullOrWhiteSpace(agent) ? null : agent!.Trim().ToLowerInvariant();
+        var freq = string.IsNullOrWhiteSpace(frequency) ? null : frequency!.Trim();
+
+        if (string.Equals(normalizedAgent, AgentClaude, StringComparison.Ordinal))
+        {
+            return (
+                SchedulingClaudeLoopSameThread,
+                $@"Agent: Claude (Claude Code).
+Scheduling mechanism: Claude Code same-thread `/loop {freq} <prompt>` (G314). Each wake re-enters the same chat thread; do NOT spawn a new chat, a new Claude Code session, a remote/cloud scheduler, an external cron, or an out-of-process monitor — those cannot reach this thread's local filesystem paths or `.intent-cli` packages. If the current Claude Code session lacks `/loop`, surface the gap to the operator instead of substituting a non-local schedule.");
+        }
+
+        if (string.Equals(normalizedAgent, AgentCodex, StringComparison.Ordinal))
+        {
+            return (
+                SchedulingCodexHeartbeatSameThread,
+                $@"Agent: Codex.
+Scheduling mechanism: Codex current-thread local automation / heartbeat at {freq} (G314). Each wake re-enters the same Codex session; do NOT open a new Codex session, a remote/cloud scheduler, or any out-of-process monitor — those cannot reach this thread's local paths. If the active Codex session has no heartbeat surface, surface the gap to the operator instead of substituting a non-local schedule.");
+        }
+
+        // Unknown / unsupplied agent: refuse to guess.
+        var nameForBlock = string.IsNullOrWhiteSpace(normalizedAgent) ? "<unspecified>" : normalizedAgent;
+        return (
+            SchedulingUnknownAskOperator,
+            $@"Agent: {nameForBlock}.
+Scheduling mechanism: unknown — ASK the operator which same-thread / local-automation mechanism `{nameForBlock}` exposes before creating any cron, monitor, scheduler, or recurring wakeup. Do NOT guess `/loop`, a heartbeat, a remote cron, or a cloud scheduler. The chosen mechanism MUST reach this thread's local filesystem paths and `.intent-cli` packages; remote/cloud schedulers are not acceptable substitutes.");
     }
 
     private static int EmitResult(TextWriter writer, string format, GuideAutomationSetupResult result)
@@ -91,10 +166,22 @@ internal static class GuideAutomationSetupCommand
         return 0;
     }
 
-    private static GuideAutomationSetupResult BuildChildImplement(string? repo, string? domain)
+    private static GuideAutomationSetupResult BuildChildImplement(
+        string? repo,
+        string? domain,
+        string? agent,
+        string? cwd,
+        string? frequency)
     {
         var repoLabel = string.IsNullOrWhiteSpace(repo) ? "the repo in the current worktree" : $"`{repo}`";
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
+        var (schedulingMechanism, schedulingBlock) = ResolveScheduling(agent, frequency);
+        var cwdLine = string.IsNullOrWhiteSpace(cwd)
+            ? string.Empty
+            : $"\n\nOperator-supplied cwd: `{cwd}`. Confirm the current directory matches this path before running the loop body; if not, stop with `wrong-cwd` and surface to the operator instead of guessing.";
+        var schedulingSuffix = string.IsNullOrWhiteSpace(agent)
+            ? string.Empty
+            : $"\n\nScheduling for this agent (G320):\n{schedulingBlock}";
 
         var prompt =
 $@"Set up the child implementation and PR-comment-update loop for {repoLabel} once. Operator minimal trigger phrase: ""intent-cli に聞いて、この repo の実装と PR comment update loop を設定してください"" — the detailed procedure below is what intent-cli emits. Do not register any cron, monitor, reminder, scheduler, or recurring wakeup as part of this setup unless the operator explicitly asks.
@@ -131,13 +218,17 @@ Frequency policy (applies only when a recurring local loop is explicitly request
 - If the operator asks for a recurring loop, ask for the frequency before creating any cron, monitor, or scheduler. Never guess or use a tool-default interval.
 - High-frequency local loops (active development): 5 minutes.
 - Low-frequency local loops (background / idle polling): about 20 minutes.
-- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.";
+- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.{cwdLine}{schedulingSuffix}";
 
         return new GuideAutomationSetupResult
         {
             Kind = KindChildImplement,
             Repo = string.IsNullOrWhiteSpace(repo) ? null : repo,
             Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
+            Agent = string.IsNullOrWhiteSpace(agent) ? null : agent,
+            Cwd = string.IsNullOrWhiteSpace(cwd) ? null : cwd,
+            Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency,
+            SchedulingMechanism = string.IsNullOrWhiteSpace(agent) ? null : schedulingMechanism,
             Prompt = prompt,
             FirstCalls = new[]
             {
@@ -157,8 +248,20 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         };
     }
 
-    private static GuideAutomationSetupResult BuildHostReviewNextSlice(string domain, string targetRepo)
+    private static GuideAutomationSetupResult BuildHostReviewNextSlice(
+        string domain,
+        string targetRepo,
+        string? agent,
+        string? cwd,
+        string? frequency)
     {
+        var (schedulingMechanism, schedulingBlock) = ResolveScheduling(agent, frequency);
+        var cwdLine = string.IsNullOrWhiteSpace(cwd)
+            ? string.Empty
+            : $"\n\nOperator-supplied parent host root: `{cwd}`. Confirm cwd matches this path before running the loop body; if not, stop with `wrong-host-root` and surface to the operator instead of guessing.";
+        var schedulingSuffix = string.IsNullOrWhiteSpace(agent)
+            ? string.Empty
+            : $"\n\nScheduling for this agent (G320):\n{schedulingBlock}";
         var prompt =
 $@"Set up the host review and next-slice loop for domain `{domain}` against `{targetRepo}` once, in this existing chat thread.
 
@@ -210,13 +313,17 @@ Frequency policy (applies only when a recurring local loop is explicitly request
 - If the operator asks for a recurring loop, ask for the frequency before creating any cron, monitor, or scheduler. Never guess or use a tool-default interval.
 - High-frequency local loops (active development): 5 minutes.
 - Low-frequency local loops (background / idle polling): about 20 minutes.
-- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.";
+- Local same-thread loops are the baseline for workflows that depend on local paths or local `.intent-cli` packages. Cloud or new-thread schedulers cannot access local paths.{cwdLine}{schedulingSuffix}";
 
         return new GuideAutomationSetupResult
         {
             Kind = KindHostReviewNextSlice,
             Domain = domain,
             TargetRepo = targetRepo,
+            Agent = string.IsNullOrWhiteSpace(agent) ? null : agent,
+            Cwd = string.IsNullOrWhiteSpace(cwd) ? null : cwd,
+            Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency,
+            SchedulingMechanism = string.IsNullOrWhiteSpace(agent) ? null : schedulingMechanism,
             Prompt = prompt,
             FirstCalls = new[]
             {
@@ -253,6 +360,22 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         if (!string.IsNullOrWhiteSpace(result.TargetRepo))
         {
             writer.WriteLine($"- target repo: {result.TargetRepo}");
+        }
+        if (!string.IsNullOrWhiteSpace(result.Agent))
+        {
+            writer.WriteLine($"- agent: {result.Agent}");
+        }
+        if (!string.IsNullOrWhiteSpace(result.Cwd))
+        {
+            writer.WriteLine($"- cwd: {result.Cwd}");
+        }
+        if (!string.IsNullOrWhiteSpace(result.Frequency))
+        {
+            writer.WriteLine($"- frequency: {result.Frequency}");
+        }
+        if (!string.IsNullOrWhiteSpace(result.SchedulingMechanism))
+        {
+            writer.WriteLine($"- scheduling mechanism: {result.SchedulingMechanism}");
         }
         writer.WriteLine();
 
@@ -293,6 +416,9 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         out string? repo,
         out string? domain,
         out string? targetRepo,
+        out string? agent,
+        out string? cwd,
+        out string? frequency,
         out string format,
         out string error)
     {
@@ -300,6 +426,9 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         repo = null;
         domain = null;
         targetRepo = null;
+        agent = null;
+        cwd = null;
+        frequency = null;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -308,10 +437,15 @@ Frequency policy (applies only when a recurring local loop is explicitly request
             var argument = args[index];
             switch (argument)
             {
+                // G320: `--purpose` is the new operator-facing flag name; it is
+                // an exact alias of the existing `--kind` value so prior tests,
+                // host-loop callers, and copy-pasted automation summaries keep
+                // working without churn.
                 case "--kind":
+                case "--purpose":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
-                        error = "--kind requires a value.";
+                        error = $"{argument} requires a value.";
                         return false;
                     }
 
@@ -352,6 +486,39 @@ Frequency policy (applies only when a recurring local loop is explicitly request
                     index++;
                     break;
 
+                case "--agent":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--agent requires a value (claude, codex, or unknown).";
+                        return false;
+                    }
+
+                    agent = args[index + 1];
+                    index++;
+                    break;
+
+                case "--cwd":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--cwd requires a value.";
+                        return false;
+                    }
+
+                    cwd = args[index + 1];
+                    index++;
+                    break;
+
+                case "--frequency":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--frequency requires a value (e.g. 5m, 20m, 1h).";
+                        return false;
+                    }
+
+                    frequency = args[index + 1];
+                    index++;
+                    break;
+
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -379,7 +546,7 @@ Frequency policy (applies only when a recurring local loop is explicitly request
 
         if (string.IsNullOrWhiteSpace(kind))
         {
-            error = "--kind is required.";
+            error = "--kind (or --purpose) is required.";
             return false;
         }
 
@@ -418,6 +585,40 @@ internal sealed record GuideAutomationSetupResult
 
     [JsonPropertyName("target_repo")]
     public string? TargetRepo { get; init; }
+
+    /// <summary>
+    /// G320: operator-supplied agent identifier. <c>null</c> when the caller
+    /// did not name an agent (backward-compat path); explicit values are
+    /// <c>claude</c>, <c>codex</c>, or any other string (treated as unknown
+    /// in <see cref="SchedulingMechanism"/>).
+    /// </summary>
+    [JsonPropertyName("agent")]
+    public string? Agent { get; init; }
+
+    /// <summary>
+    /// G320: operator-supplied cwd hint (parent host root for host-loop,
+    /// child worktree path for child-loop). Pure documentation: the loop
+    /// body still resolves runtime cwd via <c>git rev-parse</c>.
+    /// </summary>
+    [JsonPropertyName("cwd")]
+    public string? Cwd { get; init; }
+
+    /// <summary>
+    /// G320: operator-requested loop cadence (e.g. <c>5m</c>, <c>20m</c>).
+    /// Pinned into the generated contract instead of letting agents
+    /// invent one.
+    /// </summary>
+    [JsonPropertyName("frequency")]
+    public string? Frequency { get; init; }
+
+    /// <summary>
+    /// G320: stable identifier for the scheduling mechanism the generated
+    /// contract names. Controller-friendly equivalent of the rendered
+    /// "Scheduling for this agent" block. <c>null</c> when no agent was
+    /// supplied (backward-compat).
+    /// </summary>
+    [JsonPropertyName("scheduling_mechanism")]
+    public string? SchedulingMechanism { get; init; }
 
     [JsonPropertyName("prompt")]
     public required string Prompt { get; init; }
