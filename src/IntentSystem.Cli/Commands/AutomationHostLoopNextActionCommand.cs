@@ -28,6 +28,16 @@ internal static class AutomationHostLoopNextActionCommand
 
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
+    /// <summary>
+    /// G318: testability seam for the automatic <c>intent next-slice --dry-run</c>
+    /// probe. Production uses <see cref="IntentCliNextSliceDryRunProbe"/>
+    /// (in-process invocation of <see cref="IntentNextSliceCommand"/>) so
+    /// the host loop never reports <c>true-idle</c> when a candidate is
+    /// ready to publish. Tests inject a fake that returns canned outcomes
+    /// without touching the live queue-state.
+    /// </summary>
+    public static Func<CliContext, INextSliceDryRunProbe>? NextSliceDryRunProbeFactory { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -69,6 +79,29 @@ internal static class AutomationHostLoopNextActionCommand
         var openIntentTargetExists = OpenIntentTargetExists(openPrs, openIssues);
         var anyLeaseHeld = AnyChildWorkerLeaseHeld(openPrs, openIssues);
 
+        // G318: automatically probe `intent next-slice --dry-run` when the
+        // operator did not pre-pipe the flag. The host loop must NOT report
+        // `true-idle` while a matching next-slice candidate is ready to
+        // publish, so the command takes ownership of the probe instead of
+        // relying on the caller to wire it. An operator-supplied
+        // `--next-slice-issue-cut-ready` (with `--publish-next-execution-unit`)
+        // still wins so existing pre-pipe flows are byte-identical.
+        var nextSliceIssueCutReady = parsed.NextSliceIssueCutReady;
+        var publishNextSliceExecutionUnit = parsed.PublishNextSliceExecutionUnit;
+        if (!nextSliceIssueCutReady && !string.IsNullOrWhiteSpace(parsed.Domain))
+        {
+            var probe = NextSliceDryRunProbeFactory?.Invoke(context)
+                ?? new IntentCliNextSliceDryRunProbe(context);
+            var probed = probe.Probe(parsed.Repo, parsed.Domain!);
+            if (probed != null
+                && string.Equals(probed.RecommendedOutcome, "issue-cut-ready", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(probed.ExecutionUnit))
+            {
+                nextSliceIssueCutReady = true;
+                publishNextSliceExecutionUnit = probed.ExecutionUnit;
+            }
+        }
+
         var input = new HostLoopNextActionInput
         {
             Repo = parsed.Repo,
@@ -80,8 +113,8 @@ internal static class AutomationHostLoopNextActionCommand
             ApprovedPrPendingMergeCloseout = approvedPr,
             PublishRecoveryRepairsAvailable = parsed.PublishRecoveryRepairsAvailable,
             PublishLifecycleDriftCount = parsed.PublishLifecycleDriftCount,
-            NextSliceIssueCutReady = parsed.NextSliceIssueCutReady,
-            PublishNextSliceExecutionUnit = parsed.PublishNextSliceExecutionUnit,
+            NextSliceIssueCutReady = nextSliceIssueCutReady,
+            PublishNextSliceExecutionUnit = publishNextSliceExecutionUnit,
             OpenIntentTargetPrOrIssueExists = openIntentTargetExists,
             AnyChildWorkerLeaseHeld = anyLeaseHeld,
             HardClarificationOpen = parsed.HardClarificationOpen
