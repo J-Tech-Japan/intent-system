@@ -59,6 +59,16 @@ internal sealed record GitHubAutomationPrCandidate
     /// </summary>
     [JsonPropertyName("state")]
     public string State { get; init; } = string.Empty;
+
+    /// <summary>
+    /// G319: GitHub PR draft flag from <c>gh pr list --json isDraft</c>.
+    /// Defaults to <c>false</c> so existing test fakes that don't seed it
+    /// keep the prior non-draft behavior. Consumed by the host-loop-next-action
+    /// approved-PR continuation lane (G297 forbids merging a draft PR
+    /// even after an approval transition).
+    /// </summary>
+    [JsonPropertyName("isDraft")]
+    public bool IsDraft { get; init; }
 }
 
 /// <summary>
@@ -117,7 +127,10 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     // fakes) don't pre-apply `--state open`.
     internal const string ListJsonFields = "number,title,url,createdAt,labels,state";
 
-    internal const string PrListJsonFields = "number,title,url,body,createdAt,updatedAt,labels,closingIssuesReferences,state";
+    // G319: also request `isDraft` so the host-loop-next-action analyzer
+    // can map an approved-but-draft PR to `approved-pr-draft-blocked`
+    // (G297) instead of attempting a merge.
+    internal const string PrListJsonFields = "number,title,url,body,createdAt,updatedAt,labels,closingIssuesReferences,state,isDraft";
 
     /// <summary>
     /// G206: builds the <c>gh pr list</c> argument list shared by the live

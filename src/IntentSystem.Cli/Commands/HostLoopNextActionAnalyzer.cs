@@ -23,6 +23,12 @@ namespace IntentSystem.Cli.Commands;
 ///    (G306 lane); recommend the begin/end safe-stash flow.
 /// 4. <c>review-pr</c> — there is an actionable review PR; recommend
 ///    closeout-plan and approval/merge.
+/// 4.5 (G319) <c>approved-pr-merge-closeout</c> — an open PR already
+///    carries <c>intent-pr-approved</c> and must be merged + closed out
+///    before any wip-cap-blocked stop. Unsafe variants surface as
+///    <c>approved-pr-draft-blocked</c> (G297), <c>approved-pr-merge-blocked</c>
+///    (mergeStateStatus != CLEAN), or <c>approved-pr-metadata-blocked</c>
+///    (queue/linked_pr/linked_issue inconsistent).
 /// 5. <c>repair-host-metadata</c> — `intent-pr-created` exists on an
 ///    issue but the queue has no `linked_pr` (G303 publish-recovery
 ///    case), or the publish artifact lifecycle has a deterministic
@@ -49,6 +55,13 @@ internal static class HostLoopNextActionAnalyzer
     public const string ClassificationDirtyHostState = "dirty-host-state";
     public const string ClassificationSafeStash = "safe-stash";
     public const string ClassificationReviewPr = "review-pr";
+    // G319: approved-PR continuation lane — fires BEFORE WIP-cap so an
+    // already-approved-but-unmerged PR is completed before the wake stops
+    // for "an open intent-target exists".
+    public const string ClassificationApprovedPrMergeCloseout = "approved-pr-merge-closeout";
+    public const string ClassificationApprovedPrDraftBlocked = "approved-pr-draft-blocked";
+    public const string ClassificationApprovedPrMergeBlocked = "approved-pr-merge-blocked";
+    public const string ClassificationApprovedPrMetadataBlocked = "approved-pr-metadata-blocked";
     public const string ClassificationRepairHostMetadata = "repair-host-metadata";
     public const string ClassificationPublishNextIssue = "publish-next-issue";
     public const string ClassificationHardClarification = "hard-clarification";
@@ -106,6 +119,67 @@ internal static class HostLoopNextActionAnalyzer
                     "Run `review closeout-plan` to confirm host metadata, then `pr-transition --transition approved --write`, merge, then `closeout pr --pr-merged true --write`."
                 },
                 $"Review PR actionable: #{reviewPr.Number}.");
+        }
+
+        // 4.5 (G319) approved-PR continuation — fires BEFORE WIP-cap so an
+        // approved-but-unmerged PR is completed first. Distinguish the
+        // happy path (merge + closeout ready) from specific unsafe
+        // blockers so the operator gets a precise stop instead of generic
+        // wip-cap-blocked.
+        if (input.ApprovedPrPendingMergeCloseout is { } approvedPr)
+        {
+            if (approvedPr.IsDraft)
+            {
+                return Result(ClassificationApprovedPrDraftBlocked, mutationAllowed: false,
+                    $"intent-cli automation pr-transition --transition review-release --repo {input.Repo} --pr {approvedPr.Number} --write --format json",
+                    new[]
+                    {
+                        $"PR #{approvedPr.Number} ({approvedPr.Url}) carries `intent-pr-approved` but is currently a draft (G297 — draft PRs cannot be merged).",
+                        "Drop the lease via `pr-transition --transition review-release --write` and surface the gap; the PR must be readied for review by the implementer or operator before approval/merge can complete."
+                    },
+                    $"Approved PR #{approvedPr.Number} is draft — refusing to merge (G297).");
+            }
+            if (!string.IsNullOrEmpty(approvedPr.MergeStateStatus)
+                && !string.Equals(approvedPr.MergeStateStatus, "CLEAN", StringComparison.OrdinalIgnoreCase))
+            {
+                return Result(ClassificationApprovedPrMergeBlocked, mutationAllowed: false,
+                    $"gh pr view {approvedPr.Number} --repo {input.Repo} --json mergeStateStatus,mergeable,headRefName,baseRefName",
+                    new[]
+                    {
+                        $"PR #{approvedPr.Number} ({approvedPr.Url}) carries `intent-pr-approved` but mergeStateStatus is `{approvedPr.MergeStateStatus}` (expected CLEAN).",
+                        "Surface the gap to the operator: rebase / resolve conflicts / re-run CI before re-attempting merge. Do NOT silently retry."
+                    },
+                    $"Approved PR #{approvedPr.Number} merge blocked — mergeStateStatus={approvedPr.MergeStateStatus}.");
+            }
+            if (approvedPr.HostMetadataBlocked)
+            {
+                return Result(ClassificationApprovedPrMetadataBlocked, mutationAllowed: false,
+                    $"intent-cli review closeout-plan --pr {approvedPr.Number} --repo {input.Repo} --format json",
+                    new[]
+                    {
+                        $"PR #{approvedPr.Number} ({approvedPr.Url}) carries `intent-pr-approved` but host metadata is inconsistent (e.g. queue-state linked_pr missing, linked_issue mismatch, packet directory missing).",
+                        "Run `review closeout-plan` to surface the structured `host-metadata-blocked` reason and the `recommended_recovery_command` (typically `automation publish-recovery --write` for G313/G315 cases). Host metadata blockers MUST NOT become PR repair comments."
+                    },
+                    $"Approved PR #{approvedPr.Number} host-metadata-blocked — run closeout-plan + publish-recovery before merge.");
+            }
+
+            // Happy path: clean approved PR pending merge + closeout.
+            var mergeCommand = $"intent-cli review closeout-plan --pr {approvedPr.Number} --repo {input.Repo} --format json";
+            var evidence = new List<string>
+            {
+                $"PR #{approvedPr.Number} ({approvedPr.Url}) carries `intent-target` + `intent-pr-approved` and is open, non-draft, and not blocked.",
+                "Approved continuation outranks wip-cap-blocked: the open approved PR IS the next host action — merge and closeout before any new next-slice publish.",
+                $"Sequence: `review closeout-plan --pr {approvedPr.Number} --write` → merge via host's existing merge step → capture `IS_MERGED=$(gh pr view {approvedPr.Number} --json merged --jq .merged)` → `closeout pr --pr {approvedPr.Number} --pr-merged $IS_MERGED --write` (G297 gate). Commit + push parent durable state before stopping the wake."
+            };
+            if (approvedPr.LinkedIssueNumber is int linkedIssue)
+            {
+                evidence.Add($"linked source issue #{linkedIssue} — confirm `Closes #{linkedIssue}` is present in the PR body before merge (G311); closeout pr --write validates and refuses on missing/wrong/multiple.");
+            }
+
+            return Result(ClassificationApprovedPrMergeCloseout, mutationAllowed: true,
+                mergeCommand,
+                evidence,
+                $"Approved PR #{approvedPr.Number} pending merge + closeout — continue before WIP-cap.");
         }
 
         // 5. host metadata repair (G303 publish-recovery + G307 lifecycle)
@@ -228,6 +302,15 @@ internal sealed record HostLoopNextActionInput
     /// <summary>An actionable review PR captured by host-review-preflight, or null.</summary>
     public ActionableReviewPr? ActionableReviewPr { get; init; }
 
+    /// <summary>
+    /// G319: an open PR that already carries `intent-pr-approved` and
+    /// is pending the merge + closeout continuation. When set, the
+    /// analyzer surfaces this BEFORE wip-cap-blocked so the host loop
+    /// completes the approved PR before stopping for "an open
+    /// intent-target exists".
+    /// </summary>
+    public ApprovedPrContinuation? ApprovedPrPendingMergeCloseout { get; init; }
+
     /// <summary>G303: count of high-confidence linked-ref repairs available.</summary>
     public int PublishRecoveryRepairsAvailable { get; init; }
 
@@ -254,6 +337,53 @@ internal sealed record ActionableReviewPr
 {
     public required int Number { get; init; }
     public required string Url { get; init; }
+}
+
+/// <summary>
+/// G319: open PR carrying `intent-pr-approved` that the host loop must
+/// continue through merge + closeout before any new next-slice publish.
+/// Caller may pre-fetch additional state (draft, merge state, host
+/// metadata readiness) and feed those into the analyzer; when all
+/// blockers are absent, the analyzer selects the happy-path
+/// <c>approved-pr-merge-closeout</c> classification.
+/// </summary>
+internal sealed record ApprovedPrContinuation
+{
+    public required int Number { get; init; }
+    public required string Url { get; init; }
+
+    /// <summary>
+    /// True when the PR is currently a draft. G297 forbids merging a
+    /// draft PR even if approval transitioned earlier; analyzer maps to
+    /// <c>approved-pr-draft-blocked</c>.
+    /// </summary>
+    public bool IsDraft { get; init; }
+
+    /// <summary>
+    /// Optional `gh pr view --json mergeStateStatus` value, e.g.
+    /// `CLEAN` / `BLOCKED` / `CONFLICTING` / `BEHIND` / `DIRTY` /
+    /// `UNKNOWN`. When null, the analyzer treats it as unverified and
+    /// proceeds on the happy path (the merge step itself will refuse if
+    /// the live state is unsafe). When non-null and not `CLEAN`, the
+    /// analyzer maps to <c>approved-pr-merge-blocked</c>.
+    /// </summary>
+    public string? MergeStateStatus { get; init; }
+
+    /// <summary>
+    /// True when the operator/preflight has determined the parent host
+    /// metadata is not ready for closeout (e.g. queue-state linked_pr
+    /// missing / linked_issue mismatch / packet directory missing).
+    /// Maps to <c>approved-pr-metadata-blocked</c>.
+    /// </summary>
+    public bool HostMetadataBlocked { get; init; }
+
+    /// <summary>
+    /// Optional GitHub closing-reference issue number captured from
+    /// `gh pr view --json closingIssuesReferences`. Surfaced in the
+    /// happy-path evidence to remind the operator that
+    /// <c>closeout pr --write</c> validates the G311 closing reference.
+    /// </summary>
+    public int? LinkedIssueNumber { get; init; }
 }
 
 internal sealed record HostLoopNextActionResult
