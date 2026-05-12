@@ -88,7 +88,7 @@ internal static class GuideWorkflowTaskIssuePublishCommand
     {
         "Run `intent-cli issue publish-flow <execution-unit> --repo <r> --format json` (no `--write`) FIRST. If it reports `errors[]` naming missing contract sections, stop and repair the packet — `intent-cli guide workflow task packet-draft --format json` lists the required sections.",
         "`intent-cli issue validate-body --from-file <github-body.md> --format json` reports errors (missing `Closes #<source-issue>` / G311 reference, missing AC, missing Verification): stop, repair body, validate again.",
-        "`intent-cli automation host-sync-preflight --repo <r> --format json` reports `dirty-host-durable-state` without `durable-state-preflight` having converged: stop, do not publish on top of a dirty host.",
+        "`intent-cli automation host-sync-preflight --format json` (run from the host repo root) reports `dirty-host-durable-state` without `durable-state-preflight` having converged: stop, do not publish on top of a dirty host.",
         "`intent-cli automation publish-recovery --repo <r> --format json` reports `unsafe_stops`: stop, surface to the operator — never re-run `issue publish-flow` blindly.",
         "Operator names `intent-target` on the issue manually: refuse, point at `automation issue-publish` as the canonical write path."
     };

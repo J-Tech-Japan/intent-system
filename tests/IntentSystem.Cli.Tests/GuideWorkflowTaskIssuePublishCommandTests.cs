@@ -154,6 +154,77 @@ public sealed class GuideWorkflowTaskIssuePublishCommandTests
     }
 
     [Fact]
+    public void StopConditions_CommandExamples_FlagsExistInActualCliCommandSource()
+    {
+        // PR #778 review finding: a stop-condition example listed
+        // `automation host-sync-preflight --repo <r>` even though
+        // AutomationHostSyncPreflightCommand only accepts `--format`.
+        // This regression check walks every `intent-cli <cmd>` snippet
+        // inside backticks in each stop-condition string and asserts
+        // every `--flag` after a recognized subcommand prefix appears
+        // verbatim in the matching command's source file. Mirrors the
+        // G336 PR #776 fix pattern but operates on StopConditions so
+        // missing-flag drift surfaces before reaching the operator.
+        var repoRoot = FindRepoRoot();
+        var commandsDir = Path.Combine(repoRoot, "src/IntentSystem.Cli/Commands");
+
+        // Stable mapping from `intent-cli` subcommand prefix to the
+        // command source file that owns its flag parser. Add a new
+        // row whenever a new subcommand surfaces in StopConditions.
+        var subcommandToSourceFile = new (string Prefix, string FileName)[]
+        {
+            ("issue publish-flow", "IssuePublishFlowCommand.cs"),
+            ("issue validate-body", "IssueValidateBodyCommand.cs"),
+            ("automation host-sync-preflight", "AutomationHostSyncPreflightCommand.cs"),
+            ("automation publish-recovery", "AutomationPublishRecoveryCommand.cs"),
+            ("automation issue-publish", "AutomationIssuePublishCommand.cs"),
+            ("guide workflow task packet-draft", "GuideWorkflowTaskPacketDraftCommand.cs"),
+        };
+
+        var backtickSpan = new System.Text.RegularExpressions.Regex(
+            "`([^`]+)`",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+        var flagPattern = new System.Text.RegularExpressions.Regex(
+            @"--[a-z][a-z-]*",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        foreach (var stopCondition in GuideWorkflowTaskIssuePublishCommand.StopConditions)
+        {
+            foreach (System.Text.RegularExpressions.Match span in backtickSpan.Matches(stopCondition))
+            {
+                var code = span.Groups[1].Value;
+                if (!code.StartsWith("intent-cli ", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                // Strip the leading `intent-cli ` so prefix matching
+                // works without anchor surprises.
+                var afterCli = code.Substring("intent-cli ".Length);
+                var match = subcommandToSourceFile
+                    .Where(row => afterCli.StartsWith(row.Prefix, StringComparison.Ordinal))
+                    .OrderByDescending(row => row.Prefix.Length)
+                    .FirstOrDefault();
+                Assert.False(
+                    match.Prefix is null,
+                    $"Stop-condition references an unmapped `intent-cli` subcommand: `{code}`. Add a row to subcommandToSourceFile so its flags can be parity-checked.");
+
+                var sourcePath = Path.Combine(commandsDir, match.FileName);
+                Assert.True(File.Exists(sourcePath), $"Expected command source file is missing: {sourcePath}");
+                var source = File.ReadAllText(sourcePath);
+
+                foreach (System.Text.RegularExpressions.Match flagMatch in flagPattern.Matches(afterCli))
+                {
+                    var flag = flagMatch.Value;
+                    Assert.True(
+                        source.Contains($"\"{flag}\"", StringComparison.Ordinal),
+                        $"`{flag}` is missing from {match.FileName} but appears in stop-condition example: `{code}`");
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void Execute_UnknownArgument_ExitsOne()
     {
         using var writer = new StringWriter();
