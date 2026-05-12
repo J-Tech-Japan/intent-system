@@ -448,6 +448,198 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
         Assert.Equal("intent-cli", root.GetProperty("domain").GetString());
     }
 
+    [Fact]
+    public void Execute_PublishRecoveryProbe_SurfacesRepairHostMetadata_WhenSafeRepairsAvailable()
+    {
+        // G342: when `automation publish-recovery --dry-run` reports
+        // safe_repairs > 0 (the deterministic `linked_pr` recovery
+        // case), the host loop must surface `repair-host-metadata`
+        // instead of falling through to `true-idle`.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 1, UnsafeStopCount = 0 });
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
+            new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationClean });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            var root = JsonDocument.Parse(writer.ToString()).RootElement;
+            Assert.Equal("repair-host-metadata", root.GetProperty("classification").GetString());
+            Assert.True(root.GetProperty("mutation_allowed").GetBoolean());
+            Assert.Contains("publish-recovery", root.GetProperty("recommended_command").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+            AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_HostSyncPreflightProbe_SurfacesSafeStash_WhenDirtyUnrelatedSubmodule()
+    {
+        // G342: when host-sync-preflight reports
+        // `dirty-unrelated-submodule` (the recoverable workspace
+        // case), the host loop must surface `safe-stash` with the
+        // `workspace-guard --mode begin --write` recommendation
+        // instead of falling through to `true-idle`.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 0, UnsafeStopCount = 0 });
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
+            new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationDirtyUnrelatedSubmodule });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "owner/repo", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            var root = JsonDocument.Parse(writer.ToString()).RootElement;
+            Assert.Equal("safe-stash", root.GetProperty("classification").GetString());
+            Assert.True(root.GetProperty("mutation_allowed").GetBoolean());
+            Assert.Contains("workspace-guard", root.GetProperty("recommended_command").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+            AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_HostSyncPreflightProbe_SurfacesDirtyHostState_WhenDurableStateDirty()
+    {
+        // G342: when host-sync-preflight reports
+        // `dirty-host-durable-state` (NOT recoverable — operator
+        // must commit/revert), the host loop must surface
+        // `dirty-host-state` with `mutation_allowed: false` and a
+        // structured stop. This is the unambiguous-block lane that
+        // protects against publishing on top of dirty durable state.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 0, UnsafeStopCount = 0 });
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
+            new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationDirtyDurableState });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "owner/repo", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            var root = JsonDocument.Parse(writer.ToString()).RootElement;
+            Assert.Equal("dirty-host-state", root.GetProperty("classification").GetString());
+            Assert.False(root.GetProperty("mutation_allowed").GetBoolean());
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+            AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_TrueIdle_RemainsPossible_WhenAllSafeRepairProbesIdle()
+    {
+        // G342 acceptance: `true-idle` is still emitted when every
+        // safe-repair probe (next-slice, publish-recovery,
+        // host-sync-preflight) reports no actionable signal.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 0, UnsafeStopCount = 0 });
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
+            new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationClean });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "owner/repo", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            Assert.Equal("true-idle",
+                JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("classification").GetString());
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+            AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_OperatorSupplied_PublishRecoveryRepairs_BypassesProbe()
+    {
+        // G342: when the operator pre-supplies
+        // `--publish-recovery-repairs <N>`, the probe is skipped so
+        // upstream tooling that already computed the count routes
+        // through the operator value.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        var probeInvoked = false;
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            canned: null) { };
+        // Use a probe that records invocation so we can assert it was bypassed.
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ =>
+        {
+            probeInvoked = true;
+            return new FakePublishRecoveryProbe(new PublishRecoveryProbeResult { SafeRepairCount = 99, UnsafeStopCount = 0 });
+        };
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "owner/repo", "--publish-recovery-repairs", "1", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            Assert.False(probeInvoked, "publish-recovery probe must not run when --publish-recovery-repairs is operator-supplied");
+            // The operator-supplied value (1) wins, surfacing
+            // repair-host-metadata regardless of probe.
+            Assert.Equal("repair-host-metadata",
+                JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("classification").GetString());
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+        }
+    }
+
     private static CliContext CreateContextWithoutDomain() =>
         new()
         {
@@ -462,6 +654,31 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
                 }
             }
         };
+
+    /// <summary>
+    /// G342: deterministic stand-in for the publish-recovery probe.
+    /// Returns the canned safe-repair / unsafe-stop counts the host
+    /// loop tests need to drive the analyzer's `repair-host-metadata`
+    /// lane without touching live queue-state.
+    /// </summary>
+    private sealed class FakePublishRecoveryProbe : IPublishRecoveryProbe
+    {
+        private readonly PublishRecoveryProbeResult? _canned;
+        public FakePublishRecoveryProbe(PublishRecoveryProbeResult? canned) { _canned = canned; }
+        public PublishRecoveryProbeResult? Probe(string repo) => _canned;
+    }
+
+    /// <summary>
+    /// G342: deterministic stand-in for the host-sync-preflight probe.
+    /// Tests drive `safe-stash` / `dirty-host-state` lanes by canning
+    /// classifications without touching the local git working tree.
+    /// </summary>
+    private sealed class FakeHostSyncPreflightProbe : IHostSyncPreflightProbe
+    {
+        private readonly HostSyncPreflightProbeResult? _canned;
+        public FakeHostSyncPreflightProbe(HostSyncPreflightProbeResult? canned) { _canned = canned; }
+        public HostSyncPreflightProbeResult? Probe() => _canned;
+    }
 
     private sealed class FakeNextSliceProbe : INextSliceDryRunProbe
     {

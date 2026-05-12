@@ -38,6 +38,22 @@ internal static class AutomationHostLoopNextActionCommand
     /// </summary>
     public static Func<CliContext, INextSliceDryRunProbe>? NextSliceDryRunProbeFactory { get; set; }
 
+    /// <summary>
+    /// G342: testability seam for the publish-recovery auto-probe.
+    /// Production uses <see cref="IntentCliPublishRecoveryProbe"/>;
+    /// tests inject a fake to model recoverable / unsafe-stop /
+    /// no-repairs outcomes without touching live queue-state.
+    /// </summary>
+    public static Func<CliContext, IPublishRecoveryProbe>? PublishRecoveryProbeFactory { get; set; }
+
+    /// <summary>
+    /// G342: testability seam for the host-sync-preflight auto-probe.
+    /// Production uses <see cref="IntentCliHostSyncPreflightProbe"/>;
+    /// tests inject a fake to model clean / behind / dirty-*
+    /// classifications without touching the local git working tree.
+    /// </summary>
+    public static Func<CliContext, IHostSyncPreflightProbe>? HostSyncPreflightProbeFactory { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -170,16 +186,62 @@ internal static class AutomationHostLoopNextActionCommand
             }
         }
 
+        // G342: auto-probe `automation publish-recovery --dry-run` when
+        // the operator did not pre-supply `--publish-recovery-repairs`.
+        // An `safe_repairs.Count > 0` outcome surfaces the existing
+        // `repair-host-metadata` analyzer lane (mutationAllowed: true,
+        // recommends `automation publish-recovery --write`); without
+        // this probe the lane would only fire when the operator typed
+        // the count, and recoverable `linked_pr` blockers would fall
+        // through to true-idle.
+        var publishRecoveryRepairsAvailable = parsed.PublishRecoveryRepairsAvailable;
+        if (publishRecoveryRepairsAvailable == 0)
+        {
+            var recoveryProbe = PublishRecoveryProbeFactory?.Invoke(context)
+                ?? new IntentCliPublishRecoveryProbe(context);
+            var recoveryProbed = recoveryProbe.Probe(parsed.Repo);
+            if (recoveryProbed != null && recoveryProbed.SafeRepairCount > 0)
+            {
+                publishRecoveryRepairsAvailable = recoveryProbed.SafeRepairCount;
+            }
+        }
+
+        // G342: auto-probe `automation host-sync-preflight` when the
+        // operator did not pre-supply `--sync-classification` /
+        // `--safe-stash-required`. `dirty-unrelated-submodule` flips
+        // to the `safe-stash` analyzer lane (recommends
+        // `workspace-guard --mode begin --write`);
+        // `dirty-host-durable-state` and `dirty-mixed` flip to the
+        // `dirty-host-state` block-and-surface lane so the host loop
+        // never silently publishes on top of dirty durable state.
+        var syncClassification = parsed.SyncClassification;
+        var safeStashRequired = parsed.SafeStashRequired;
+        if (string.IsNullOrWhiteSpace(syncClassification) && !safeStashRequired)
+        {
+            var syncProbe = HostSyncPreflightProbeFactory?.Invoke(context)
+                ?? new IntentCliHostSyncPreflightProbe(context);
+            var syncProbed = syncProbe.Probe();
+            if (syncProbed != null
+                && !string.Equals(syncProbed.Classification, HostSyncPreflightAnalyzer.ClassificationClean, StringComparison.Ordinal))
+            {
+                syncClassification = syncProbed.Classification;
+                if (string.Equals(syncProbed.Classification, HostSyncPreflightAnalyzer.ClassificationDirtyUnrelatedSubmodule, StringComparison.Ordinal))
+                {
+                    safeStashRequired = true;
+                }
+            }
+        }
+
         var input = new HostLoopNextActionInput
         {
             Repo = parsed.Repo,
             Domain = parsed.Domain,
             StaleCli = parsed.StaleCli,
-            SyncClassification = parsed.SyncClassification,
-            SafeStashRequired = parsed.SafeStashRequired,
+            SyncClassification = syncClassification,
+            SafeStashRequired = safeStashRequired,
             ActionableReviewPr = actionableReviewPr,
             ApprovedPrPendingMergeCloseout = approvedPr,
-            PublishRecoveryRepairsAvailable = parsed.PublishRecoveryRepairsAvailable,
+            PublishRecoveryRepairsAvailable = publishRecoveryRepairsAvailable,
             PublishLifecycleDriftCount = parsed.PublishLifecycleDriftCount,
             NextSliceIssueCutReady = nextSliceIssueCutReady,
             PublishNextSliceExecutionUnit = publishNextSliceExecutionUnit,

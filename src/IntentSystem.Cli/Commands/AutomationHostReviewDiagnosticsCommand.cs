@@ -171,6 +171,23 @@ internal static class AutomationHostReviewDiagnosticsCommand
             }
         }
 
+        // G342: auto-probe `automation publish-recovery --dry-run`
+        // when the operator did not pre-supply
+        // `--publish-recovery-repairs-available`. A `safe_repairs > 0`
+        // outcome surfaces the existing `publish-recovery-ready`
+        // diagnostics lane (the deterministic `linked_pr` recovery
+        // path) instead of falling through to `true-idle`.
+        if (publishRecoveryRepairsAvailable == 0)
+        {
+            var recoveryProbe = PublishRecoveryProbeFactory?.Invoke(context)
+                ?? new IntentCliPublishRecoveryProbe(context);
+            var recoveryProbed = recoveryProbe.Probe(repo!);
+            if (recoveryProbed != null && recoveryProbed.SafeRepairCount > 0)
+            {
+                publishRecoveryRepairsAvailable = recoveryProbed.SafeRepairCount;
+            }
+        }
+
         var result = AutomationHostReviewDiagnosticsAnalyzer.Analyze(
             repo!,
             openPrs,
@@ -196,6 +213,14 @@ internal static class AutomationHostReviewDiagnosticsCommand
     /// outcomes without touching live queue-state.
     /// </summary>
     public static Func<CliContext, INextSliceDryRunProbe>? NextSliceDryRunProbeFactory { get; set; }
+
+    /// <summary>
+    /// G342: testability seam for the publish-recovery auto-probe.
+    /// Mirrors the seam in <see cref="AutomationHostLoopNextActionCommand"/>
+    /// so both surfaces agree on the same `linked_pr` recoverable
+    /// signal.
+    /// </summary>
+    public static Func<CliContext, IPublishRecoveryProbe>? PublishRecoveryProbeFactory { get; set; }
 
     private static bool TryParseArguments(
         string[] args,
