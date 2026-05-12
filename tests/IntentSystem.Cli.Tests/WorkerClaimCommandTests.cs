@@ -555,6 +555,76 @@ public sealed class WorkerClaimCommandTests : IDisposable
         public required IReadOnlyList<string> RemoveLabels { get; init; }
     }
 
+    // --- G333: --github-only strict child-loop assertion --------------------
+
+    [Fact]
+    public void Execute_G333_GithubOnly_RecordsBindingAndMutatesLabelsOnly()
+    {
+        // G333 acceptance: `worker claim --github-only --write` performs
+        // only GitHub label transitions. The command's data flow is
+        // already mutator-only (no queue-state / runs / packet write);
+        // the flag records the strict child-loop binding on the
+        // result (`github_only: true`).
+        using var workspace = new WorkerClaimWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target" },
+        };
+        WorkerClaimCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerClaimCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "701",
+                "--github-only",
+                "--write",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerClaimResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.True(result.Applied);
+        Assert.True(result.GithubOnly);
+        Assert.Contains("intent-issue-in-progress", result.AddLabels);
+
+        // G333 invariant: queue-state / runs / packet are NEVER touched
+        // — the mutator only mutates labels, and the workspace has no
+        // .intent-cli/ directory created by this command.
+        Assert.False(File.Exists(workspace.Context.GetQueueStatePath()));
+        Assert.False(File.Exists(workspace.Context.GetRunLogPath()));
+    }
+
+    [Fact]
+    public void Execute_G333_WithoutGithubOnly_ResultDoesNotSurfaceField()
+    {
+        // G333 invariant: callers that don't assert the strict
+        // contract see the pre-G333 result shape — `github_only` is
+        // null/omitted on the result.
+        using var workspace = new WorkerClaimWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target" },
+        };
+        WorkerClaimCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerClaimCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--kind", "issue", "--number", "525", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerClaimResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.Null(result.GithubOnly);
+    }
+
     private sealed class WorkerClaimWorkspace : IDisposable
     {
         public WorkerClaimWorkspace()

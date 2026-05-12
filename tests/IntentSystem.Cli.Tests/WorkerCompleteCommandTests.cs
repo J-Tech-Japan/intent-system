@@ -1479,6 +1479,116 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/999", matched.LinkedPr);
     }
 
+    // --- G333: --github-only strict child-loop assertion ---------------------
+
+    [Fact]
+    public void Execute_G333_GithubOnly_ImpliesChildCwdAndRefusesQueueStateMutation()
+    {
+        // G333 acceptance: `--github-only` is the strict assertion used
+        // by the Claude/Codex child implementation loop. It implies
+        // --child-cwd (so the writer never touches parent durable
+        // state), and the result records `github_only: true` so the
+        // host loop can audit the binding.
+        //
+        // Seed BOTH a host parent root AND a local queue-state to prove
+        // --github-only refuses both: even when the writer could find
+        // a parent file, it must not write.
+        using var parent = new WorkerCompleteWorkspace();
+        parent.SeedQueueStateWithLinkedIssue(
+            executionUnit: "G333",
+            title: "host packet",
+            sourceIssueNumber: 525,
+            existingLinkedPr: null);
+        using var workspace = new WorkerCompleteWorkspace(parentIntentRepoRoot: parent.RootPath);
+        workspace.SeedQueueStateWithLinkedIssue(
+            executionUnit: "G333-LOCAL",
+            title: "stray local file",
+            sourceIssueNumber: 525,
+            existingLinkedPr: null);
+        var parentBefore = File.ReadAllText(parent.QueueStatePath);
+        var localBefore = File.ReadAllText(workspace.QueueStatePath);
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exit = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--github-only",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exit);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.True(result.PrTargetApplied);
+        Assert.False(result.LinkedPrSynced);
+        // --github-only implies --child-cwd.
+        Assert.True(result.ChildCwd);
+        Assert.True(result.GithubOnly);
+
+        // Both queue-state files are byte-identical.
+        Assert.Equal(parentBefore, File.ReadAllText(parent.QueueStatePath));
+        Assert.Equal(localBefore, File.ReadAllText(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_G333_WithoutGithubOnly_PreservesPriorBehavior_GithubOnlyFalseOnResult()
+    {
+        // G333 invariant: callers that don't pass --github-only keep
+        // their pre-G333 result shape. The `github_only` field is
+        // explicitly false on host/review-runtime invocations so the
+        // host loop can tell the strict child-loop binding from the
+        // host-context binding.
+        using var parent = new WorkerCompleteWorkspace();
+        parent.SeedQueueStateWithLinkedIssue(
+            executionUnit: "G333",
+            title: "host packet",
+            sourceIssueNumber: 525,
+            existingLinkedPr: null);
+        using var workspace = new WorkerCompleteWorkspace(parentIntentRepoRoot: parent.RootPath);
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exit = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exit);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.False(result.GithubOnly);
+        // The host-context write actually synced linked_pr (pre-G333
+        // behavior preserved).
+        Assert.True(result.LinkedPrSynced);
+    }
+
     private sealed class WorkerCompleteWorkspace : IDisposable
     {
         public WorkerCompleteWorkspace(string parentIntentRepoRoot = "")

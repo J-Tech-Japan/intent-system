@@ -99,6 +99,19 @@ internal static class Program
 
     private static bool IsGuideOneshotCommand(string[] args)
     {
+        // G333: child implementation loops must be able to fetch their
+        // own guidance from a standalone child repo cwd that has no
+        // `.intent-cli/` directory. The `guide` family is read-only —
+        // it emits Markdown / JSON without touching parent durable
+        // state — so every guide subcommand is safe to bootstrap from
+        // an unprovisioned cwd. The previous narrow allow-list left
+        // `prompt-matrix`, `host-ownership`, `intent-work`, `worker`,
+        // and `closeout` fail-closed under G299, which contradicted
+        // the GitHub-contract-only child worker model. The list is
+        // now inclusive of every guide surface the child loop uses;
+        // any future read-only guide command should keep this
+        // behavior by appearing under the `guide` group with no
+        // queue-state read.
         return args.Length >= 2
             && string.Equals(args[0], "guide", StringComparison.Ordinal)
             && (string.Equals(args[1], "oneshot", StringComparison.Ordinal)
@@ -108,7 +121,13 @@ internal static class Program
                 || string.Equals(args[1], "workflow", StringComparison.Ordinal)
                 || string.Equals(args[1], "model", StringComparison.Ordinal)
                 || string.Equals(args[1], "commands", StringComparison.Ordinal)
-                || string.Equals(args[1], "onboarding", StringComparison.Ordinal));
+                || string.Equals(args[1], "onboarding", StringComparison.Ordinal)
+                || string.Equals(args[1], "prompt-matrix", StringComparison.Ordinal)
+                || string.Equals(args[1], "host-ownership", StringComparison.Ordinal)
+                || string.Equals(args[1], "intent-work", StringComparison.Ordinal)
+                || string.Equals(args[1], "worker", StringComparison.Ordinal)
+                || string.Equals(args[1], "closeout", StringComparison.Ordinal)
+                || string.Equals(args[1], "review", StringComparison.Ordinal));
     }
 
     /// <summary>

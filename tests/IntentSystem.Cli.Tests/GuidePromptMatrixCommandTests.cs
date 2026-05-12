@@ -1570,7 +1570,7 @@ public sealed class GuidePromptMatrixCommandTests
 
         using var document = JsonDocument.Parse(writer.ToString());
         var prompt = document.RootElement.GetProperty("prompt").GetString()!;
-        Assert.Contains("**Child cwd is GitHub-contract-only (G300 / G330)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("**Child cwd is GitHub-contract-only (G300 / G330 / G333)**", prompt, StringComparison.Ordinal);
         Assert.Contains("MUST NOT", prompt, StringComparison.Ordinal);
         Assert.Contains("queue-state", prompt, StringComparison.Ordinal);
         // G300 must not couple the child loop to host-only `automation
@@ -1590,7 +1590,7 @@ public sealed class GuidePromptMatrixCommandTests
 
         using var document = JsonDocument.Parse(writer.ToString());
         var prompt = document.RootElement.GetProperty("prompt").GetString()!;
-        Assert.Contains("**Child cwd is GitHub-contract-only (G300 / G330)**", prompt, StringComparison.Ordinal);
+        Assert.Contains("**Child cwd is GitHub-contract-only (G300 / G330 / G333)**", prompt, StringComparison.Ordinal);
     }
 
     // ── G304 pre-wake host sync boundary ────────────────────────────────

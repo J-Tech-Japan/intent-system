@@ -132,6 +132,57 @@ public sealed class ProgramTests
         }
     }
 
+    // ── G333 child-loop guidance is GitHub-contract-only ─────────────────
+
+    [Fact]
+    public void Main_GivenGuidePromptMatrixChildLoopFromChildCwdWithoutIntentCli_Succeeds()
+    {
+        // G333 acceptance: from a standalone child repo cwd that has no
+        // `.intent-cli/`, the child-loop guidance command must run
+        // (bootstrap context, exit 0, no G299 missing-host-state
+        // structured fail-closed). This unblocks Claude / Codex child
+        // loops configured against e.g. /Users/.../SekibanAsAService
+        // where no parent host root is available.
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var childCwd = tempDirectory.CreateDirectory("child-impl");
+            using var consoleScope = new ConsoleScope();
+            using var currentDirectoryScope = new CurrentDirectoryScope(childCwd);
+
+            var exitCode = Program.Main(
+                ["guide", "prompt-matrix", "--mode", "child-loop", "--format", "json"]);
+
+            Assert.Equal(0, exitCode);
+            var stdout = consoleScope.Out.ToString();
+            Assert.DoesNotContain("missing host state (G299)", stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"status\": \"missing-host-state\"", stdout, StringComparison.Ordinal);
+            Assert.Contains("\"mode\": \"child-loop\"", stdout, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Main_GivenGuideHostOwnershipFromChildCwdWithoutIntentCli_Succeeds()
+    {
+        // G333: `guide host-ownership` is also a read-only surface
+        // child loops can reference. Must bootstrap.
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var childCwd = tempDirectory.CreateDirectory("child-impl");
+            using var consoleScope = new ConsoleScope();
+            using var currentDirectoryScope = new CurrentDirectoryScope(childCwd);
+
+            var exitCode = Program.Main(
+                ["guide", "host-ownership", "--role", "child-worker", "--format", "json"]);
+
+            Assert.Equal(0, exitCode);
+            var stdout = consoleScope.Out.ToString();
+            Assert.DoesNotContain("missing host state (G299)", stdout, StringComparison.Ordinal);
+            Assert.Contains("\"focus_role\": \"child-worker\"", stdout, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void Main_GivenIntakeInitCommandWithoutIntentCliRoot_BootstrapsCurrentDirectory()
     {

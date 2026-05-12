@@ -105,4 +105,20 @@ internal sealed record WorkerCompleteResult
 
     [JsonPropertyName("childCwd")]
     public bool? ChildCwdCamel => ChildCwd;
+
+    /// <summary>
+    /// G333: true when the command ran in strict child-loop GitHub-only
+    /// mode (operator passed <c>--github-only</c>). Implies
+    /// <see cref="ChildCwd"/>: never touches parent durable state and
+    /// never reads queue-state regardless of disk presence. Designed
+    /// for cloud Claude / Codex child implementation loops invoked
+    /// from a standalone child repo cwd that has no
+    /// <c>.intent-cli/</c> directory and no configured parent host
+    /// root. Default false on host / review-runtime invocations.
+    /// </summary>
+    [JsonPropertyName("github_only")]
+    public bool? GithubOnly { get; init; }
+
+    [JsonPropertyName("githubOnly")]
+    public bool? GithubOnlyCamel => GithubOnly;
 }
