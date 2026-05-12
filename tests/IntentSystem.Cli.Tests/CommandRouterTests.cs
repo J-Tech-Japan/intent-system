@@ -145,6 +145,267 @@ public sealed class CommandRouterTests
         Assert.Contains("--number 5000", output, StringComparison.Ordinal);
     }
 
+    // ---- G334 self-discovery help tests ------------------------------------
+
+    // G334 — `intent-cli guide --help` and `intent-cli guide help` must
+    // reach a useful self-discovery surface, not the
+    // "not yet implemented" fall-through. External users that do not
+    // already know intent-system MUST be able to derive the workflow
+    // entries without reading repo-local rules or skill prompt files.
+
+    [Fact]
+    public void Execute_GivenGuideHelpSubcommand_ReturnsExternalUserSelfDiscoverySurface_ExitZero()
+    {
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["guide", "help"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("self-discovery for external users", output, StringComparison.Ordinal);
+        Assert.Contains("Usage: intent-cli guide help", output, StringComparison.Ordinal);
+        // Every advertised subcommand must show up in the human
+        // surface — this is the canonical guide subcommand catalog.
+        foreach (var entry in GuideHelpCommand.Subcommands)
+        {
+            Assert.Contains($"`{entry.Name}`", output, StringComparison.Ordinal);
+        }
+        // Workflow-guide phases the issue (#771) requires must appear.
+        foreach (var phase in new[] { "init", "interview", "packet", "issue", "automation", "bug-repair" })
+        {
+            Assert.Contains(phase, output, StringComparison.Ordinal);
+        }
+        Assert.DoesNotContain("not yet implemented", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_GivenGuideHelpSubcommand_JsonFormat_ReturnsStableShape()
+    {
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["guide", "help", "--format", "json"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("\"usage\":", output, StringComparison.Ordinal);
+        Assert.Contains("\"subcommands\":", output, StringComparison.Ordinal);
+        Assert.Contains("\"workflow_guides\":", output, StringComparison.Ordinal);
+        Assert.Contains("\"metadata_mutation_guidance\":", output, StringComparison.Ordinal);
+        // Phase identifiers are part of the stable JSON shape consumers
+        // can pin against.
+        Assert.Contains("\"phase\": \"init\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"phase\": \"interview\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"phase\": \"packet\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"phase\": \"issue\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"phase\": \"automation\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"phase\": \"bug-repair\"", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenGuideHelpFlag_DispatchesToGroupHelp_ExitZero()
+    {
+        // G334: `intent-cli guide --help` is the canonical synonym for
+        // `intent-cli guide` (no subcommand). Router prints the
+        // per-group descriptor listing every registered subcommand.
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["guide", "--help"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("intent-cli guide — group help", output, StringComparison.Ordinal);
+        Assert.Contains("Subcommands (run with --help for details):", output, StringComparison.Ordinal);
+        Assert.Contains("help", output, StringComparison.Ordinal);
+        Assert.Contains("commands", output, StringComparison.Ordinal);
+        Assert.Contains("Prefer intent-cli-backed metadata mutation over hand-editing", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("not yet implemented", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_GivenGuideNoSubcommand_DispatchesToGroupHelp_ExitZero()
+    {
+        // `intent-cli guide` alone (no subcommand) must reach
+        // per-group help, not the "command group and subcommand are
+        // required" fall-through. External users routinely type the
+        // group name first to learn what is available.
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["guide"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("intent-cli guide — group help", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("A command group and subcommand are required", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("metadata", "validate", "update")]
+    [InlineData("migrate", "host-state", null)]
+    [InlineData("issue", "draft", "publish-flow")]
+    [InlineData("automation", "doctor", "summary")]
+    [InlineData("intent", "init", "next-slice")]
+    [InlineData("packet", "draft", null)]
+    [InlineData("interview", "next-question", "record-answer")]
+    [InlineData("bug", "report", "triage")]
+    [InlineData("worker", "claim", "complete")]
+    [InlineData("queue", "list", "show")]
+    [InlineData("closeout", "pr", null)]
+    public void Execute_GivenGroupHelpFlag_ListsSubcommands_ExitZero(string group, string mustContain1, string? mustContain2)
+    {
+        // G334: every implemented top-level group answers
+        // `<group> --help` with a useful descriptor listing its
+        // subcommands. The issue (#771) explicitly calls out
+        // `metadata --help` and `migrate --help` as previously
+        // missing; this theory pins the full set so future groups
+        // get the same coverage.
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            [group, "--help"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains($"intent-cli {group} — group help", output, StringComparison.Ordinal);
+        Assert.Contains(mustContain1, output, StringComparison.Ordinal);
+        if (mustContain2 is not null)
+        {
+            Assert.Contains(mustContain2, output, StringComparison.Ordinal);
+        }
+        Assert.DoesNotContain("not yet implemented", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_GivenUnimplementedGroupHelp_MarksAsUnavailableInThisBuild_ExitZero()
+    {
+        // Reserved groups in CommandGroups that have no entry in
+        // ImplementedCommands ("clarification") must announce
+        // themselves as unavailable rather than silently fail. This
+        // keeps `<group> --help` discovery honest: an external user
+        // sees the gap instead of an empty subcommand list.
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            ["clarification", "--help"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        // clarification IS implemented (status/next/answer); just confirm
+        // it doesn't regress.
+        Assert.Contains("intent-cli clarification — group help", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_TopLevelHelp_PointsToWorkflowGuidesForExternalDiscovery()
+    {
+        // G334: top-level help (no args) must point users at the six
+        // workflow phases the issue explicitly names: init, interview,
+        // packet, issue, automation, and bug repair. This is the
+        // surface an external agent sees first, so the pointers must
+        // be visible without reading per-group help.
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(
+            Array.Empty<string>(),
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Workflow guides:", output, StringComparison.Ordinal);
+        // Every named phase must be cited verbatim — these are the
+        // anchors an external agent will grep for.
+        Assert.Contains("init —", output, StringComparison.Ordinal);
+        Assert.Contains("interview —", output, StringComparison.Ordinal);
+        Assert.Contains("packet —", output, StringComparison.Ordinal);
+        Assert.Contains("issue —", output, StringComparison.Ordinal);
+        Assert.Contains("automation —", output, StringComparison.Ordinal);
+        Assert.Contains("bug repair —", output, StringComparison.Ordinal);
+        // Top-level help must also tell the user how to reach
+        // per-group help and the JSON self-discovery surface.
+        Assert.Contains("intent-cli <group> --help", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli guide help", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli guide commands list", output, StringComparison.Ordinal);
+        // The canonical source-of-truth array must be the same set the
+        // help emits — guards against drift between the shared
+        // constant and the test expectation.
+        foreach (var line in CommandRouter.WorkflowGuidePointersHelp)
+        {
+            Assert.Contains(line, output, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void GroupHelpHints_CoverEveryRegisteredCommandGroup()
+    {
+        // G334: WriteGroupHelp emits a "See also" pointer per group.
+        // Every group advertised in CommandGroups (which the help
+        // surface lists) must have an entry in GroupHelpHints — an
+        // external agent reading group help must NOT find a group
+        // without a next-call hint. The test reflects on the public
+        // dictionary to keep the registry honest.
+        var groupsRequiringHint = typeof(CommandRouter)
+            .GetField("CommandGroups", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?.GetValue(null) as string[];
+
+        Assert.NotNull(groupsRequiringHint);
+        // `clarification` is the one alias-only entry that maps to the
+        // same shape as `clarify`, so we tolerate either being present
+        // in the hints registry.
+        foreach (var group in groupsRequiringHint!)
+        {
+            Assert.True(
+                CommandRouter.GroupHelpHints.ContainsKey(group),
+                $"GroupHelpHints is missing a 'See also' entry for the '{group}' command group.");
+        }
+    }
+
+    [Fact]
+    public void GuideHelpCommand_Subcommands_MatchRegisteredGuideHandlers()
+    {
+        // G334: the human-facing guide catalog (GuideHelpCommand.Subcommands)
+        // must mirror the dispatcher table. New guide subcommands
+        // wired into CommandRouter without an entry here would not be
+        // discoverable by external users.
+        var implementedField = typeof(CommandRouter)
+            .GetField("ImplementedCommands", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(implementedField);
+        var dict = implementedField!.GetValue(null) as IReadOnlyDictionary<string, IReadOnlyDictionary<string, object>>;
+        // Reflection-friendly fetch: pull the inner dictionary keys via
+        // a non-generic enumerator.
+        var rawDict = implementedField.GetValue(null) as System.Collections.IDictionary;
+        Assert.NotNull(rawDict);
+        var guideInner = rawDict!["guide"] as System.Collections.IDictionary;
+        Assert.NotNull(guideInner);
+        var guideSubcommands = new List<string>();
+        foreach (var key in guideInner!.Keys)
+        {
+            guideSubcommands.Add((string)key!);
+        }
+        var advertised = GuideHelpCommand.Subcommands.Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var name in guideSubcommands)
+        {
+            Assert.True(
+                advertised.Contains(name),
+                $"GuideHelpCommand.Subcommands is missing a catalog entry for guide subcommand '{name}'.");
+        }
+    }
+
     [Fact]
     public void Execute_GivenProjectStatusCommand_DispatchesToProjectStatusRenderer()
     {

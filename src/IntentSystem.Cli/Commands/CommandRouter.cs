@@ -257,7 +257,9 @@ internal static class CommandRouter
                 ["closeout"] = GuideCloseoutCommand.Execute,
                 ["prompt-matrix"] = GuidePromptMatrixCommand.Execute,
                 // G326: role-scoped host ownership model.
-                ["host-ownership"] = GuideHostOwnershipCommand.Execute
+                ["host-ownership"] = GuideHostOwnershipCommand.Execute,
+                // G334: self-discovery help surface for external users.
+                ["help"] = GuideHelpCommand.Execute
             },
             ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -316,6 +318,40 @@ internal static class CommandRouter
             return TaskCommand.Execute(context, args[1..], writer);
         }
 
+        // G334: per-group help routing. `intent-cli <group> --help` and
+        // `intent-cli <group> help` must reach a useful surface before
+        // we fall through to "group and subcommand required" / "not
+        // yet implemented". External users should be able to ask any
+        // top-level group for its help without already knowing the
+        // subcommand names. The router prints a per-group descriptor
+        // (subcommands + one-line purpose + workflow guide pointer)
+        // for every group in CommandGroups, including groups whose
+        // subcommands are not yet wired into ImplementedCommands —
+        // those are marked "unavailable in this build" so command
+        // discovery cannot silently fail.
+        if (args.Length == 1
+            && CommandGroups.Contains(args[0], StringComparer.Ordinal))
+        {
+            WriteGroupHelp(args[0], writer);
+            return 0;
+        }
+        if (args.Length == 2
+            && CommandGroups.Contains(args[0], StringComparer.Ordinal)
+            && (string.Equals(args[1], "--help", StringComparison.Ordinal)
+                || string.Equals(args[1], "help", StringComparison.Ordinal)))
+        {
+            // The guide group has a real `help` subcommand that returns
+            // a richer external-user surface; defer to it so JSON
+            // output stays available.
+            if (string.Equals(args[0], "guide", StringComparison.Ordinal)
+                && string.Equals(args[1], "help", StringComparison.Ordinal))
+            {
+                return GuideHelpCommand.Execute(context, Array.Empty<string>(), writer);
+            }
+            WriteGroupHelp(args[0], writer);
+            return 0;
+        }
+
         if (args.Length < 2)
         {
             writer.WriteLine("A command group and subcommand are required.");
@@ -343,6 +379,85 @@ internal static class CommandRouter
         return 1;
     }
 
+    /// <summary>
+    /// G334: emit a per-group help block. Lists the subcommands the
+    /// router can dispatch (or "unavailable in this build" when the
+    /// group is reserved in <see cref="CommandGroups"/> but not wired
+    /// into <see cref="ImplementedCommands"/>), names the canonical
+    /// workflow-guide pointer, and reminds the caller that hand-editing
+    /// metadata is forbidden when an intent-cli command exists. The
+    /// output is intentionally Markdown-friendly so external users see
+    /// the same shape whether they pipe to a chat or to a file.
+    /// </summary>
+    private static void WriteGroupHelp(string group, TextWriter writer)
+    {
+        writer.WriteLine($"intent-cli {group} — group help");
+        writer.WriteLine($"Usage: intent-cli {group} <subcommand> [--help]");
+        writer.WriteLine();
+
+        if (ImplementedCommands.TryGetValue(group, out var subcommands)
+            && subcommands.Count > 0)
+        {
+            writer.WriteLine("Subcommands (run with --help for details):");
+            foreach (var name in subcommands.Keys.OrderBy(s => s, StringComparer.Ordinal))
+            {
+                writer.WriteLine($"- {name}");
+            }
+        }
+        else
+        {
+            writer.WriteLine("Subcommands: unavailable in this build (group reserved but not wired).");
+        }
+        writer.WriteLine();
+
+        if (GroupHelpHints.TryGetValue(group, out var hint))
+        {
+            writer.WriteLine($"See also: {hint}");
+            writer.WriteLine();
+        }
+
+        writer.WriteLine("Prefer intent-cli-backed metadata mutation over hand-editing:");
+        writer.WriteLine("- Ask `intent-cli guide commands list --format json` (or `intent-cli automation summary --domain <d> --format json`) which command performs the transition.");
+        writer.WriteLine("- Do not directly edit queue-state, runs logs, publish artifacts, workflow labels, or runtime metadata by hand when a supported intent-cli command exists.");
+        writer.WriteLine("- Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333).");
+    }
+
+    /// <summary>
+    /// G334: canonical "next call" hint per top-level group. Used by
+    /// <see cref="WriteGroupHelp"/> so an external user always knows
+    /// the next intent-cli command to read. Tests assert each entry
+    /// names a real intent-cli surface (no dangling references).
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, string> GroupHelpHints =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["guide"] = "`intent-cli guide help --format json` (workflow guides + examples).",
+            ["intent"] = "`intent-cli intent init --domain <name> --target-repo <r> --write` (bootstrap), `intent-cli intent next-slice --dry-run --domain <d> --format json` (plan).",
+            ["interview"] = "`intent-cli interview next-question --domain <d> --format json` then `intent-cli interview record-answer ...`.",
+            ["packet"] = "`intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown`.",
+            ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
+            ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness).",
+            ["bug"] = "`intent-cli guide worker pr-comment-fix --format json` (repair guidance), `intent-cli bug report`/`triage` for new-bug intake.",
+            ["worker"] = "`intent-cli worker next-action --repo <r> --workdir <child> --format json` then claim / result-summary / complete.",
+            ["metadata"] = "`intent-cli metadata validate --format json` (read-only); use `intent-cli metadata update --mode completed-closeout --write` for the bounded controlled writer instead of hand-editing.",
+            ["migrate"] = "`intent-cli migrate host-state --from <legacy-path> --to <new-path> --write` (one-way migration; runs read-only without --write).",
+            ["review"] = "`intent-cli guide review --pr <n> --repo <r> --domain <d> --format json` (G316 review surface).",
+            ["closeout"] = "`intent-cli closeout pr --pr <n> --repo <r> --pr-merged true --write --format json`.",
+            ["queue"] = "`intent-cli queue list --format json`, `intent-cli queue show <id> --format json`.",
+            ["status"] = "`intent-cli status brief --format json` (tasking thread brief).",
+            ["context"] = "`intent-cli context collect ...` (tasking-thread context).",
+            ["next-slice"] = "Prefer `intent-cli intent next-slice --dry-run` for collaborative shaping.",
+            ["clarify"] = "`intent-cli clarify open ...` / `list` / `answer` / `draft` / `record`.",
+            ["clarification"] = "`intent-cli clarification status`, `intent-cli clarification next`, `intent-cli clarification answer`.",
+            ["intake"] = "Older concept-intake surface; prefer `guide collaborate` + `interview record-answer` for new flows.",
+            ["task"] = "`intent-cli task issue-to-pr --repo <r> --issue <n> --workdir <path>` (controller-driven planners).",
+            ["tasking"] = "`intent-cli tasking handoff` / `task-packet` / `handoff-bundle` (cross-thread tasking; experimental).",
+            ["safety"] = "`intent-cli safety nested-provider-handoff` (artifact-only nested-provider handoffs).",
+            ["projection"] = "`intent-cli projection generate` / `regenerate` (internal tooling).",
+            ["project"] = "`intent-cli project status` (older surface; prefer `intent status`).",
+            ["run"] = "`intent-cli run ...` is integration smoke / replay / dogfooding — NOT the primary chat-first path."
+        };
+
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("Available command groups:");
@@ -353,6 +468,23 @@ internal static class CommandRouter
 
         writer.WriteLine("Additional top-level commands:");
         writer.WriteLine($"- {GenerateFromCurrentCommandName}");
+
+        // G334: top-level help must point an external agent at the
+        // canonical workflow entries (init / interview / packet /
+        // issue / automation / bug repair) so self-discovery does not
+        // depend on local rules or copied skill prompts.
+        writer.WriteLine();
+        writer.WriteLine("Workflow guides:");
+        foreach (var line in WorkflowGuidePointersHelp)
+        {
+            writer.WriteLine($"- {line}");
+        }
+
+        writer.WriteLine();
+        writer.WriteLine("Per-group help:");
+        writer.WriteLine("- `intent-cli <group> --help` (e.g. `intent-cli guide --help`, `intent-cli metadata --help`, `intent-cli migrate --help`) — list the group's subcommands.");
+        writer.WriteLine("- `intent-cli guide help [--format markdown|json]` — external-user self-discovery surface with examples + workflow guide pointers.");
+        writer.WriteLine("- `intent-cli guide commands list [--format markdown|json]` — full catalog with primary/support/advanced/experimental classification.");
 
         writer.WriteLine();
         writer.WriteLine("Automation commands:");
@@ -367,6 +499,23 @@ internal static class CommandRouter
             writer.WriteLine(line);
         }
     }
+
+    /// <summary>
+    /// G334: canonical one-line pointers for the six workflow phases the
+    /// issue names (init / interview / packet / issue / automation /
+    /// bug repair). Tests assert each phase appears in the top-level
+    /// help output so external agents can find the workflow entry
+    /// without reading local rules.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> WorkflowGuidePointersHelp = new[]
+    {
+        "init — `intent-cli intent init --domain <name> --target-repo <r> --write` (bootstrap host domain).",
+        "interview — `intent-cli interview next-question --domain <d> --format json` (durable Q/A artifact).",
+        "packet — `intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown` (canonical packet scaffold).",
+        "issue — `intent-cli issue publish-flow <id> --repo <r> --write --format json` (publish next-slice issue).",
+        "automation — `intent-cli automation summary --domain <d> --format json` (label-driven capability JSON) + `intent-cli automation doctor` (CLI freshness).",
+        "bug repair — `intent-cli guide worker pr-comment-fix --format json` (narrow PR-comment repair guidance)."
+    };
 
     /// <summary>
     /// G188 — clarifies the accepted role of <c>intent-cli run</c>. The command

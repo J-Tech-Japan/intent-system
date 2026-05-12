@@ -25,7 +25,8 @@ internal static class Program
                 || IsIntentInitCommand(args)
                 || IsAutomationWorktreeCommand(args)
                 || IsGuideOneshotCommand(args)
-                || IsWorkerCommand(args))
+                || IsWorkerCommand(args)
+                || IsHelpCommand(args))
             {
                 return CommandRouter.Execute(args, CreateBootstrapContext(currentDirectory, args), Console.Out);
             }
@@ -127,7 +128,15 @@ internal static class Program
                 || string.Equals(args[1], "intent-work", StringComparison.Ordinal)
                 || string.Equals(args[1], "worker", StringComparison.Ordinal)
                 || string.Equals(args[1], "closeout", StringComparison.Ordinal)
-                || string.Equals(args[1], "review", StringComparison.Ordinal));
+                || string.Equals(args[1], "review", StringComparison.Ordinal)
+                // G334: external-user self-discovery surface. Read-only,
+                // no host state required, so the bootstrap allow-list
+                // must include `guide help` (and the synonymous
+                // `guide --help` form is handled by the per-group help
+                // routing inside CommandRouter, which also requires
+                // bootstrap-friendly entry from a child cwd).
+                || string.Equals(args[1], "help", StringComparison.Ordinal)
+                || string.Equals(args[1], "--help", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -153,6 +162,46 @@ internal static class Program
                 || string.Equals(args[1], "issue-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "pr-review-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "pr-comment-preflight", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// G334: help-style invocations must reach CommandRouter from any
+    /// cwd so external users can self-discover the surface without
+    /// first cd-ing to a host repo. Every recognized help shape is
+    /// read-only — the router prints group descriptors / workflow
+    /// pointers / examples, never touches queue-state, never calls
+    /// gh, and never launches an AI provider. Recognized shapes:
+    /// <list type="bullet">
+    ///   <item><c>intent-cli --help</c> (top-level help).</item>
+    ///   <item><c>intent-cli &lt;group&gt;</c> (per-group help).</item>
+    ///   <item><c>intent-cli &lt;group&gt; --help</c> /
+    ///         <c>intent-cli &lt;group&gt; help</c> (same surface).</item>
+    /// </list>
+    /// The bootstrap context skips host-state resolution; the help
+    /// surface does not consult host state and the per-subcommand
+    /// handlers that DO consult state continue to fail-closed under
+    /// G299 when reached without bootstrap.
+    /// </summary>
+    private static bool IsHelpCommand(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            return false;
+        }
+        if (args.Length == 1)
+        {
+            // `intent-cli --help` reaches the top-level help; bare
+            // `intent-cli <group>` reaches per-group help.
+            return string.Equals(args[0], "--help", StringComparison.Ordinal)
+                || !args[0].StartsWith('-');
+        }
+        if (args.Length == 2)
+        {
+            return !args[0].StartsWith('-')
+                && (string.Equals(args[1], "--help", StringComparison.Ordinal)
+                    || string.Equals(args[1], "help", StringComparison.Ordinal));
+        }
+        return false;
     }
 
     private static CliContext CreateBootstrapContext(string currentDirectory, string[] args)
