@@ -69,12 +69,26 @@ internal static class WorkerCompleteCommand
                 out var outcome,
                 out var prNumber,
                 out var mode,
+                out var childCwd,
                 out var format,
                 out var error))
         {
             writer.WriteLine(error);
             return 1;
         }
+
+        // G330: detect child-cwd mode. Either the operator passed
+        // `--child-cwd` explicitly (recommended for the child loop) or
+        // the context is implicitly a child cwd — no parent intent
+        // repo root configured AND no local `.intent-cli/` present.
+        // In child-cwd mode, the command performs GitHub label
+        // transitions but NEVER touches parent durable state (G300),
+        // and the result records `child_cwd: true` so the host loop
+        // and operator can see the binding explicitly.
+        var implicitChildCwd =
+            string.IsNullOrWhiteSpace(context.ResolveParentIntentRepoRootPath())
+            && !File.Exists(context.GetQueueStatePath());
+        var inChildCwdMode = childCwd || implicitChildCwd;
 
         // G283: issue-to-pr success requires the created PR number so the
         // command can publish it to host review (PR-side intent-target) and
@@ -257,11 +271,28 @@ internal static class WorkerCompleteCommand
 
                 if (prTargetApplied == true)
                 {
-                    var (synced, warning) = TryPatchQueueStateLinkedPr(context, number, repo!, prNumberValue);
-                    linkedPrSynced = synced;
-                    if (!string.IsNullOrWhiteSpace(warning))
+                    if (inChildCwdMode)
                     {
-                        publishWarnings.Add(warning);
+                        // G330: child-cwd mode — never touch parent
+                        // durable state. PR-side intent-target was
+                        // applied via GitHub labels; queue-state
+                        // linked_pr sync is host-owned and happens via
+                        // G329 `review closeout-plan --write-recovered-linkage`
+                        // on the review-runtime workspace.
+                        linkedPrSynced = false;
+                        publishWarnings.Add(
+                            $"child-cwd mode: skipped queue-state linked_pr sync. "
+                            + $"Run `intent-cli review closeout-plan --pr {prNumberValue} --repo {repo} --write-recovered-linkage` "
+                            + "on the host/review-runtime workspace to recover linkage from GitHub closing references (G329).");
+                    }
+                    else
+                    {
+                        var (synced, warning) = TryPatchQueueStateLinkedPr(context, number, repo!, prNumberValue);
+                        linkedPrSynced = synced;
+                        if (!string.IsNullOrWhiteSpace(warning))
+                        {
+                            publishWarnings.Add(warning);
+                        }
                     }
                 }
             }
@@ -308,6 +339,7 @@ internal static class WorkerCompleteCommand
             PrNumber = prNumber,
             PrTargetApplied = prTargetApplied,
             LinkedPrSynced = linkedPrSynced,
+            ChildCwd = inChildCwdMode,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -497,6 +529,7 @@ internal static class WorkerCompleteCommand
         out string? outcome,
         out int? prNumber,
         out string mode,
+        out bool childCwd,
         out string format,
         out string error)
     {
@@ -506,6 +539,7 @@ internal static class WorkerCompleteCommand
         outcome = null;
         prNumber = null;
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
+        childCwd = false;
         format = FormatText;
         error = string.Empty;
 
@@ -575,6 +609,10 @@ internal static class WorkerCompleteCommand
 
                 case "--dry-run":
                     mode = WorkerClaimCompleteConstants.Modes.DryRun;
+                    break;
+
+                case "--child-cwd":
+                    childCwd = true;
                     break;
 
                 case "--format":

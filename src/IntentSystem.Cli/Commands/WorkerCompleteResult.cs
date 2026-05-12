@@ -88,4 +88,21 @@ internal sealed record WorkerCompleteResult
 
     [JsonPropertyName("linkedPrSynced")]
     public bool? LinkedPrSyncedCamel => LinkedPrSynced;
+
+    /// <summary>
+    /// G330: true when the command ran in child-cwd mode — either the
+    /// operator passed <c>--child-cwd</c> explicitly OR the
+    /// environment is implicitly a child cwd (no parent intent repo
+    /// root configured AND no local <c>.intent-cli/queue-state.json</c>
+    /// on disk). In child-cwd mode the command performs GitHub label
+    /// transitions but never touches parent durable state; linked_pr
+    /// sync is host-owned and runs via G329
+    /// <c>review closeout-plan --write-recovered-linkage</c> on the
+    /// review-runtime workspace. False on host/review-runtime hosts.
+    /// </summary>
+    [JsonPropertyName("child_cwd")]
+    public bool? ChildCwd { get; init; }
+
+    [JsonPropertyName("childCwd")]
+    public bool? ChildCwdCamel => ChildCwd;
 }
