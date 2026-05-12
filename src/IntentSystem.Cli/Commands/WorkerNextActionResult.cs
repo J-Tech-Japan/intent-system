@@ -63,6 +63,20 @@ internal static class WorkerNextActionConstants
     {
         public const string PrCommentFix = "pr-comment-fix";
         public const string IssueToPr = "issue-to-pr";
+
+        /// <summary>
+        /// G325: emitted when an existing PR update lease is still active
+        /// (<c>intent-pr-update-in-progress</c> present). The selector
+        /// MUST NOT return <c>none</c> in this case because the system
+        /// is not idle — another worker is in flight. The
+        /// <see cref="WorkerNextActionResult.Number"/> /
+        /// <see cref="WorkerNextActionResult.Url"/> fields point at the
+        /// PR holding the lease so an operator or controller knows
+        /// which lease to monitor or — with explicit authorization —
+        /// release.
+        /// </summary>
+        public const string Wait = "wait";
+
         public const string None = "none";
     }
 
@@ -76,6 +90,17 @@ internal static class WorkerNextActionConstants
     {
         public const string RepairRequired = "repair-required";
         public const string ReadyToImplement = "ready-to-implement";
+
+        /// <summary>
+        /// G325: emitted alongside <see cref="Actions.Wait"/> when an
+        /// active PR update lease (<c>intent-pr-update-in-progress</c>)
+        /// is currently held. Surfaced explicitly so operators can
+        /// distinguish "system is idle" from "another worker is
+        /// repairing this PR" — and so stale-lease recovery is an
+        /// explicit operator/intent-cli action rather than a silent
+        /// fallback.
+        /// </summary>
+        public const string PrUpdateInProgress = "pr-update-in-progress";
     }
 
     public static class Labels

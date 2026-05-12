@@ -63,14 +63,19 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_GivenPrInUpdateInProgress_FallsThroughToIssueToPr()
+    public void Execute_GivenPrInUpdateInProgress_SurfacesWaitLease()
     {
+        // G325 replaces the previous "fall through to issue-to-pr"
+        // behavior with an explicit `wait` action so the active update
+        // lease (intent-pr-update-in-progress) is visible to operators
+        // and controllers instead of being masked as generic `none`
+        // (or, as previously, leaking past the held PR to issue-to-pr,
+        // which would let a second worker race the lease holder).
         using var workspace = new WorkerNextActionWorkspace();
         var lister = new FakeLister
         {
             Prs = new[]
             {
-                // PR already claimed by a worker — must be excluded.
                 BuildPr(514, "Already-claimed PR", "https://github.com/J-Tech-Japan/intent-system/pull/514",
                     createdAt: "2026-04-30T00:00:00Z",
                     labels: new[] { "intent-target", "intent-pr-request-update", "intent-pr-update-in-progress" }),
@@ -92,9 +97,14 @@ public sealed class WorkerNextActionCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
-        Assert.Equal(WorkerNextActionConstants.Actions.IssueToPr, result.Action);
-        Assert.Equal(515, result.Number);
-        Assert.Equal(WorkerNextActionConstants.RecommendedWorkflows.GhIssueToPr, result.RecommendedWorkflow);
+        Assert.Equal(WorkerNextActionConstants.Actions.Wait, result.Action);
+        Assert.Equal(514, result.Number);
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/514", result.Url);
+        Assert.Equal(WorkerNextActionConstants.SourceClassifications.PrUpdateInProgress, result.SourceClassification);
+        Assert.Equal(WorkerNextActionConstants.RecommendedWorkflows.PrCommentFix, result.RecommendedWorkflow);
+        Assert.Contains("active PR update lease", result.Reason, StringComparison.Ordinal);
+        // Issue-to-pr must NOT be surfaced while the lease is held.
+        Assert.NotEqual(515, result.Number);
     }
 
     [Fact]
@@ -686,6 +696,99 @@ public sealed class WorkerNextActionCommandTests : IDisposable
             noBlockComments, @"//.*?$", string.Empty,
             System.Text.RegularExpressions.RegexOptions.Multiline);
         return noLineComments;
+    }
+
+    // --- G325: active PR update lease surfacing -------------------------
+
+    [Fact]
+    public void Execute_GivenPrWithUpdateInProgressOnly_SurfacesWaitLease()
+    {
+        // G325: a PR carrying only `intent-pr-update-in-progress`
+        // (request-update label dropped or never present) is still an
+        // active worker lease; the selector must surface `wait` and
+        // identify the PR, not collapse to `none`.
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(801, "Active lease (no request-update)",
+                    "https://github.com/J-Tech-Japan/intent-system/pull/801",
+                    createdAt: "2026-05-01T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-update-in-progress" }),
+            },
+            Issues = Array.Empty<GitHubAutomationIssueCandidate>(),
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer));
+
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.Wait, result.Action);
+        Assert.Equal(801, result.Number);
+        Assert.Equal(WorkerNextActionConstants.SourceClassifications.PrUpdateInProgress, result.SourceClassification);
+    }
+
+    [Fact]
+    public void Execute_GivenRequestUpdateWithoutLease_StillReturnsPrCommentFix()
+    {
+        // G325 regression guard: the new wait lane must not regress the
+        // canonical actionable-repair path. A PR with
+        // `intent-pr-request-update` and NO `intent-pr-update-in-progress`
+        // must still surface as `pr-comment-fix`.
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(802, "Repair feedback waiting",
+                    "https://github.com/J-Tech-Japan/intent-system/pull/802",
+                    createdAt: "2026-05-01T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+            Issues = Array.Empty<GitHubAutomationIssueCandidate>(),
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer));
+
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+        Assert.Equal(802, result.Number);
+        Assert.Equal(WorkerNextActionConstants.SourceClassifications.RepairRequired, result.SourceClassification);
+    }
+
+    [Fact]
+    public void Execute_GivenNoPrOrIssue_StillReturnsTrueNone()
+    {
+        // G325 regression guard: when there is no PR at all, `wait`
+        // does NOT fire — the selector still returns true `none` so
+        // the host loop can declare idle.
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = Array.Empty<GitHubAutomationPrCandidate>(),
+            Issues = Array.Empty<GitHubAutomationIssueCandidate>(),
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer));
+
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.None, result.Action);
+        Assert.Null(result.Number);
     }
 
     private static GitHubAutomationPrCandidate BuildPr(
