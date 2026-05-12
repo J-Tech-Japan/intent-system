@@ -46,6 +46,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 out var repo,
                 out var workdir,
                 out var candidate,
+                out var domain,
                 out var clarificationRequired,
                 out var staleClarificationMetadata,
                 out var reconcileUnsafeStopKinds,
@@ -58,6 +59,19 @@ internal static class AutomationHostReviewDiagnosticsCommand
         {
             writer.WriteLine(error);
             return 1;
+        }
+
+        // G341: when the operator omits `--domain`, fall back to the
+        // host's configured domain. Needed so the next-slice probe
+        // below can run without requiring the operator to type the
+        // domain every time.
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            var configuredDomain = context.Config?.Project?.Domain;
+            if (!string.IsNullOrWhiteSpace(configuredDomain))
+            {
+                domain = configuredDomain.Trim();
+            }
         }
 
         var resolvedWorkdir = ResolveWorkdir(context, workdir);
@@ -135,6 +149,28 @@ internal static class AutomationHostReviewDiagnosticsCommand
             return 1;
         }
 
+        // G341: when the operator did not pre-supply `--candidate`,
+        // auto-probe `intent next-slice --dry-run` so a real
+        // `issue-cut-ready` candidate is classified as
+        // `issue-publish-ready` rather than `true-idle`. Mirrors the
+        // G318 auto-probe in `automation host-loop-next-action` so
+        // both surfaces agree on the same next-slice signal.
+        // Fail-soft: a probe error (queue-state missing, packet root
+        // unreadable) falls through to the existing
+        // candidate-not-supplied path so the host loop never crashes.
+        if (string.IsNullOrWhiteSpace(candidate) && !string.IsNullOrWhiteSpace(domain))
+        {
+            var probe = NextSliceDryRunProbeFactory?.Invoke(context)
+                ?? new IntentCliNextSliceDryRunProbe(context);
+            var probed = probe.Probe(repo!, domain!);
+            if (probed != null
+                && string.Equals(probed.RecommendedOutcome, "issue-cut-ready", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(probed.ExecutionUnit))
+            {
+                candidate = probed.ExecutionUnit;
+            }
+        }
+
         var result = AutomationHostReviewDiagnosticsAnalyzer.Analyze(
             repo!,
             openPrs,
@@ -152,11 +188,21 @@ internal static class AutomationHostReviewDiagnosticsCommand
         return 0;
     }
 
+    /// <summary>
+    /// G341: testability seam for the auto-probe of
+    /// <c>intent next-slice --dry-run</c>. Production uses
+    /// <see cref="IntentCliNextSliceDryRunProbe"/>; tests inject a
+    /// fake to model `issue-cut-ready` / `no-actionable-item`
+    /// outcomes without touching live queue-state.
+    /// </summary>
+    public static Func<CliContext, INextSliceDryRunProbe>? NextSliceDryRunProbeFactory { get; set; }
+
     private static bool TryParseArguments(
         string[] args,
         out string? repo,
         out string? workdir,
         out string? candidate,
+        out string? domain,
         out bool clarificationRequired,
         out bool staleClarificationMetadata,
         out IReadOnlyList<string> reconcileUnsafeStopKinds,
@@ -170,6 +216,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         repo = null;
         workdir = null;
         candidate = null;
+        domain = null;
         clarificationRequired = false;
         staleClarificationMetadata = false;
         var unsafeStops = new List<string>();
@@ -211,6 +258,15 @@ internal static class AutomationHostReviewDiagnosticsCommand
                         return false;
                     }
                     candidate = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--domain":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--domain requires a value.";
+                        return false;
+                    }
+                    domain = args[index + 1].Trim();
                     index++;
                     break;
                 case "--clarification-required":
@@ -361,7 +417,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation host-review-diagnostics");
-        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--pr-draft true|false] [--format text|json]");
+        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--domain <name>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--pr-draft true|false] [--format text|json]");
         writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, draft-merge-blocked (G297), and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. With `--pr-draft true` and a selected review PR (G297), the diagnostic returns `draft-merge-blocked` so the host loop can release the review lease and surface the gap. Never mutates GitHub or local state.");
     }
 }
