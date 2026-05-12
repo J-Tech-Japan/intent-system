@@ -511,8 +511,8 @@ internal static class CommandRouter
     {
         "init — `intent-cli guide workflow task init-host --format json` (pick design / review-runtime / child-implementation role + scaffold plan, G335) then `intent-cli intent init --domain <name> --target-repo <r> --write` for host roles.",
         "interview — `intent-cli guide workflow task intent-interview --format json` (product-owner interview / clarification loop guide, G336) then `intent-cli interview next-question --domain <d> --format json` for the durable Q/A artifact.",
-        "packet — `intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown` (canonical packet scaffold).",
-        "issue — `intent-cli issue publish-flow <id> --repo <r> --write --format json` (publish next-slice issue).",
+        "packet — `intent-cli guide workflow task packet-draft --format json` (packet files + standalone issue contract, G337) then `intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown` to scaffold.",
+        "issue — `intent-cli guide workflow task issue-publish --format json` (draft/create/publish-flow/intent-target boundary guide, G337) then `intent-cli issue publish-flow <id> --repo <r> --write --format json` and `automation issue-publish --write`.",
         "automation — `intent-cli automation summary --domain <d> --format json` (label-driven capability JSON) + `intent-cli automation doctor` (CLI freshness).",
         "bug repair — `intent-cli guide worker pr-comment-fix --format json` (narrow PR-comment repair guidance)."
     };
