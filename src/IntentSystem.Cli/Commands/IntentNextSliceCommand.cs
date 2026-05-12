@@ -22,6 +22,16 @@ internal static class IntentNextSliceCommand
     private const string OutcomeSkipDueToWip = "skip-next-slice-due-to-wip";
     private const string OutcomeClarificationRequired = "clarification-required";
     private const string OutcomeNoActionableItem = "no-actionable-item";
+    /// <summary>
+    /// G328: emitted when no prepared packet exists and runtime
+    /// creation is NOT permitted (the operator did not pass
+    /// <c>--runtime-creation-allowed</c>). Signals to the host loop
+    /// that the situation is not truly idle — the next move is a
+    /// design-side packet draft, not a wait-and-retry. The
+    /// host-loop-next-action analyzer maps this onto its own
+    /// <c>design-needed</c> classification (G328).
+    /// </summary>
+    internal const string OutcomeDesignNeeded = "design-needed";
 
     // G285: surfaced in `warnings` when the clarification file has stale
     // front-matter (`intent_state: open`) but the body explicitly records no
@@ -29,7 +39,7 @@ internal static class IntentNextSliceCommand
     internal const string WarningStaleClarificationMetadata = "stale-clarification-metadata";
 
     private const string UsageLine =
-        "Usage: intent-cli intent next-slice --dry-run [--domain <name>] [--target-repo <owner/repo>] [--format json|markdown]";
+        "Usage: intent-cli intent next-slice --dry-run [--domain <name>] [--target-repo <owner/repo>] [--runtime-creation-allowed] [--format json|markdown]";
 
     private static readonly IReadOnlyList<string> RequiredContractSections =
         new[]
@@ -58,7 +68,7 @@ internal static class IntentNextSliceCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var dryRun, out var domainOverride, out var targetRepo, out var format, out var error))
+        if (!TryParseArguments(args, out var dryRun, out var domainOverride, out var targetRepo, out var runtimeCreationAllowed, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -72,7 +82,7 @@ internal static class IntentNextSliceCommand
             return 1;
         }
 
-        var result = Analyze(context, domainOverride, targetRepo);
+        var result = Analyze(context, domainOverride, targetRepo, runtimeCreationAllowed);
 
         if (string.Equals(format, FormatMarkdown, StringComparison.Ordinal))
         {
@@ -88,6 +98,24 @@ internal static class IntentNextSliceCommand
     }
 
     internal static IntentNextSliceResult Analyze(CliContext context, string? domainOverride, string? targetRepo)
+    {
+        return Analyze(context, domainOverride, targetRepo, runtimeCreationAllowed: false);
+    }
+
+    /// <summary>
+    /// G328 overload — accepts an explicit <paramref name="runtimeCreationAllowed"/>
+    /// flag. When false (the safe default), absence of a prepared
+    /// packet causes the recommendation to surface
+    /// <see cref="OutcomeDesignNeeded"/> rather than
+    /// <see cref="OutcomeNoActionableItem"/>, so the host loop can
+    /// tell the difference between "truly idle" and "needs design
+    /// work before any next slice can be cut".
+    /// </summary>
+    internal static IntentNextSliceResult Analyze(
+        CliContext context,
+        string? domainOverride,
+        string? targetRepo,
+        bool runtimeCreationAllowed)
     {
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
@@ -233,7 +261,8 @@ internal static class IntentNextSliceCommand
         var recommendedOutcome = ComputeRecommendedOutcome(
             clarificationOpen,
             wip.Count > 0,
-            candidate);
+            candidate,
+            runtimeCreationAllowed);
 
         var warnings = new List<string>();
         if (staleClarificationMetadata)
@@ -260,6 +289,7 @@ internal static class IntentNextSliceCommand
             PacketRoot = packetRoot,
             Candidate = candidate,
             RecommendedOutcome = recommendedOutcome,
+            RuntimeCreationAllowed = runtimeCreationAllowed,
             Warnings = warnings,
             Notes = notes
         };
@@ -287,12 +317,19 @@ internal static class IntentNextSliceCommand
             missing.AddRange(RequiredContractSections);
         }
 
+        // G328: surface packet provenance so downstream tooling (host
+        // loop / packet publish / closeout) can audit which role
+        // authored the packet. Pre-G328 packets fall back to
+        // `default-design` per `NextSlicePacketProvenanceReader`.
+        var provenance = NextSlicePacketProvenanceReader.Read(directory);
+
         return new IntentNextSliceCandidate
         {
             ExecutionUnit = executionUnit,
             PacketDirectory = directory,
             GithubBodyPresent = githubBodyPresent,
-            MissingContractSections = missing
+            MissingContractSections = missing,
+            Provenance = provenance
         };
     }
 
@@ -320,7 +357,8 @@ internal static class IntentNextSliceCommand
     private static string ComputeRecommendedOutcome(
         bool clarificationOpen,
         bool wipPresent,
-        IntentNextSliceCandidate? candidate)
+        IntentNextSliceCandidate? candidate,
+        bool runtimeCreationAllowed)
     {
         if (clarificationOpen)
         {
@@ -334,7 +372,18 @@ internal static class IntentNextSliceCommand
 
         if (candidate is null)
         {
-            return OutcomeNoActionableItem;
+            // G328: when no prepared packet exists, the recommendation
+            // splits on whether runtime creation is permitted. The
+            // safe default (runtime creation NOT allowed) surfaces
+            // `design-needed` so the host loop never reports
+            // true-idle while a design-side packet draft is the
+            // actual next move. Operators / review-runtime workspaces
+            // that have been granted runtime-creation authority can
+            // pass `--runtime-creation-allowed` to fall through to
+            // the pre-G328 `no-actionable-item` semantics.
+            return runtimeCreationAllowed
+                ? OutcomeNoActionableItem
+                : OutcomeDesignNeeded;
         }
 
         if (candidate.MissingContractSections.Count > 0)
@@ -582,12 +631,14 @@ internal static class IntentNextSliceCommand
         out bool dryRun,
         out string? domainOverride,
         out string? targetRepo,
+        out bool runtimeCreationAllowed,
         out string format,
         out string error)
     {
         dryRun = false;
         domainOverride = null;
         targetRepo = null;
+        runtimeCreationAllowed = false;
         format = FormatJson;
         error = string.Empty;
 
@@ -598,6 +649,10 @@ internal static class IntentNextSliceCommand
             {
                 case "--dry-run":
                     dryRun = true;
+                    break;
+
+                case "--runtime-creation-allowed":
+                    runtimeCreationAllowed = true;
                     break;
 
                 case "--domain":
@@ -706,6 +761,15 @@ internal sealed record IntentNextSliceResult
     [JsonPropertyName("recommended_outcome")]
     public required string RecommendedOutcome { get; init; }
 
+    /// <summary>
+    /// G328: did the caller pass <c>--runtime-creation-allowed</c>?
+    /// Surfaced in the result so downstream tooling (host-loop-next-action)
+    /// can verify the policy gate that produced the recommendation
+    /// without re-parsing the original CLI argv.
+    /// </summary>
+    [JsonPropertyName("runtime_creation_allowed")]
+    public required bool RuntimeCreationAllowed { get; init; }
+
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }
 
@@ -726,4 +790,14 @@ internal sealed record IntentNextSliceCandidate
 
     [JsonPropertyName("missing_contract_sections")]
     public required IReadOnlyList<string> MissingContractSections { get; init; }
+
+    /// <summary>
+    /// G328: packet provenance — which role authored the packet
+    /// (<c>design</c> vs <c>review-runtime</c>), which host workspace
+    /// produced it, and (for runtime-created packets) the source PR.
+    /// Pre-G328 packets fall back to the default-design record so
+    /// the field is never null.
+    /// </summary>
+    [JsonPropertyName("provenance")]
+    public required NextSlicePacketProvenance Provenance { get; init; }
 }

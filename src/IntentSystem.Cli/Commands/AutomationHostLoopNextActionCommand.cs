@@ -92,6 +92,7 @@ internal static class AutomationHostLoopNextActionCommand
         var publishNextSliceExecutionUnit = parsed.PublishNextSliceExecutionUnit;
         var hardClarificationOpen = parsed.HardClarificationOpen;
         var openIntentTargetExistsResolved = openIntentTargetExists;
+        var designNeeded = false; // G328
         if (!nextSliceIssueCutReady && !string.IsNullOrWhiteSpace(parsed.Domain))
         {
             var probe = NextSliceDryRunProbeFactory?.Invoke(context)
@@ -108,6 +109,16 @@ internal static class AutomationHostLoopNextActionCommand
                             nextSliceIssueCutReady = true;
                             publishNextSliceExecutionUnit = probed.ExecutionUnit;
                         }
+                        break;
+
+                    case "design-needed":
+                        // G328: probe reports no prepared packet and
+                        // runtime creation is not permitted. Route the
+                        // analyzer to the `design-needed` lane so the
+                        // host loop never falls through to `true-idle`
+                        // while a design-side packet draft is the
+                        // actual next move.
+                        designNeeded = true;
                         break;
 
                     case "clarification-required":
@@ -158,7 +169,8 @@ internal static class AutomationHostLoopNextActionCommand
             PublishNextSliceExecutionUnit = publishNextSliceExecutionUnit,
             OpenIntentTargetPrOrIssueExists = openIntentTargetExistsResolved,
             AnyChildWorkerLeaseHeld = anyLeaseHeld,
-            HardClarificationOpen = hardClarificationOpen
+            HardClarificationOpen = hardClarificationOpen,
+            DesignNeeded = designNeeded
         };
 
         var result = HostLoopNextActionAnalyzer.Analyze(input);
