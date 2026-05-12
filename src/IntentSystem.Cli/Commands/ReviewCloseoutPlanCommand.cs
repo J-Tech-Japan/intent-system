@@ -125,7 +125,21 @@ internal static class ReviewCloseoutPlanCommand
             ? context.Config.Project.Domain
             : domainOverride!;
 
-        var queueStatePath = context.GetQueueStatePath();
+        // G332: route queue-state read through the runtime-scoped
+        // resolver. When `.intent-cli/runtime/<domain>/<owner>__<repo>/queue-state.json`
+        // exists on disk it wins; only-legacy hosts (pre-migration)
+        // continue to read the root file (fallback explicitly surfaced
+        // via `state_layout`). The packet lookup under
+        // `.intent-cli/issues/<execution-unit>/` is unchanged (G300).
+        var queueStateLocation = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(
+            context.RepoRoot, domain, repo!);
+        var queueStatePath = queueStateLocation.Path;
+        var stateLayout = queueStateLocation.Kind switch
+        {
+            StateLocationKind.Scoped => "scoped",
+            StateLocationKind.Legacy => "legacy-fallback",
+            _ => "scoped"
+        };
         var gaps = new List<ReviewCloseoutPlanGap>();
 
         QueueState? queueState = null;
@@ -377,7 +391,8 @@ internal static class ReviewCloseoutPlanCommand
             RecoveredLinkage = recoveredLinkage,
             AmbiguousLinkage = ambiguousLinkage,
             ClosingIssuesSource = closingIssuesSource,
-            LinkageRecoveryApplied = false
+            LinkageRecoveryApplied = false,
+            StateLayout = stateLayout
         };
 
         // G329 review fix: when --write-recovered-linkage is supplied
@@ -960,6 +975,18 @@ internal sealed record ReviewCloseoutPlanResult
     /// </summary>
     [JsonPropertyName("linkage_recovery_applied")]
     public required bool LinkageRecoveryApplied { get; init; }
+
+    /// <summary>
+    /// G332: which on-disk layout the runtime-scoped resolver chose
+    /// for the queue-state read — <c>scoped</c> when
+    /// `.intent-cli/runtime/&lt;domain&gt;/&lt;owner&gt;__&lt;repo&gt;/queue-state.json`
+    /// is on disk (or selected as the first-write target),
+    /// <c>legacy-fallback</c> when only the legacy root path exists
+    /// (pre-migration hosts). Surfaced so the host loop and operator
+    /// can audit which state source produced the plan.
+    /// </summary>
+    [JsonPropertyName("state_layout")]
+    public string? StateLayout { get; init; }
 }
 
 /// <summary>

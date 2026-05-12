@@ -881,6 +881,113 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             writer.ToString(), StringComparison.Ordinal);
     }
 
+    // ─── G332 tests: runtime-scoped state preference ────────────────────────
+
+    [Fact]
+    public void Execute_G332_ScopedQueueStatePresent_ReadsScopedAndReportsScopedLayout()
+    {
+        // G332 acceptance: when scoped queue-state exists for
+        // (domain, target-repo), the closeout planner reads from
+        // `.intent-cli/runtime/<domain>/<owner>__<repo>/queue-state.json`
+        // — not the root file. Result records `state_layout: scoped`.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        // Legacy root carries an UNRELATED execution unit. The planner
+        // must ignore it once a scoped file exists.
+        workspace.WriteQueueState(BuildQueueState("UNRELATED-1", "review",
+            linkedPr: "999",
+            linkedIssue: ("J-Tech-Japan/SomeOther", 1, null)));
+        // Scoped state carries the actual target item.
+        var scopedDir = Path.Combine(workspace.Context.RepoRoot, ".intent-cli",
+            "runtime", "intent-cli", "J-Tech-Japan__intent-system");
+        Directory.CreateDirectory(scopedDir);
+        File.WriteAllText(Path.Combine(scopedDir, "queue-state.json"),
+            BuildQueueState("G332", "review",
+                linkedPr: "770",
+                linkedIssue: ("J-Tech-Japan/intent-system", 767,
+                    "https://github.com/J-Tech-Japan/intent-system/issues/767")));
+        workspace.WriteFile(".intent-cli/issues/G332/github-body.md", BuildContractBody());
+
+        using var writer = new StringWriter();
+        var exit = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "770", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("scoped", root.GetProperty("state_layout").GetString());
+        Assert.Equal("G332", root.GetProperty("execution_unit").GetString());
+        // queue_state_path points at the scoped file.
+        Assert.Contains("runtime/intent-cli/J-Tech-Japan__intent-system",
+            root.GetProperty("queue_state_path").GetString()!.Replace('\\', '/'),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G332_NoScopedState_FallsBackToLegacyAndReportsLegacyFallbackLayout()
+    {
+        // G332 transition: pre-migration hosts (G331 not yet run) only
+        // have the legacy root queue-state. The planner falls back to
+        // it and surfaces `state_layout: legacy-fallback` explicitly.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G332", "review",
+            linkedPr: "770",
+            linkedIssue: ("J-Tech-Japan/intent-system", 767,
+                "https://github.com/J-Tech-Japan/intent-system/issues/767")));
+        workspace.WriteFile(".intent-cli/issues/G332/github-body.md", BuildContractBody());
+
+        using var writer = new StringWriter();
+        var exit = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "770", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("legacy-fallback", root.GetProperty("state_layout").GetString());
+    }
+
+    [Fact]
+    public void Execute_G332_ScopedStatePresent_IgnoresUnrelatedRootDomainWork()
+    {
+        // G332 isolation: root queue-state may contain unrelated
+        // domain/repo work (e.g. Sekiban items). The closeout planner
+        // MUST NOT see them via the intent-cli/J-Tech-Japan/intent-system
+        // scope — that was the false-WIP / dirty-state coupling root cause.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithTwoItems(
+            ("G332", "review", "770",
+                ("J-Tech-Japan/intent-system", 767, null)),
+            ("SEKI-1", "active", null,
+                ("J-Tech-Japan/SekibanAsAService", 99, null))));
+        // Scoped state only has the intent-cli item.
+        var scopedDir = Path.Combine(workspace.Context.RepoRoot, ".intent-cli",
+            "runtime", "intent-cli", "J-Tech-Japan__intent-system");
+        Directory.CreateDirectory(scopedDir);
+        File.WriteAllText(Path.Combine(scopedDir, "queue-state.json"),
+            BuildQueueState("G332", "review",
+                linkedPr: "770",
+                linkedIssue: ("J-Tech-Japan/intent-system", 767, null)));
+        workspace.WriteFile(".intent-cli/issues/G332/github-body.md", BuildContractBody());
+
+        using var writer = new StringWriter();
+        var exit = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "770", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("scoped", root.GetProperty("state_layout").GetString());
+        Assert.Equal("G332", root.GetProperty("execution_unit").GetString());
+    }
+
     private static string BuildContractBody()
     {
         return """
