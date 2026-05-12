@@ -736,6 +736,168 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Contains("--pr-draft must be 'true' or 'false'", writer.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_NextSliceProbe_AutoPopulatesCandidate_WhenDomainFlagOrConfigPresent()
+    {
+        // G341: when no `--candidate` is supplied, the command must
+        // auto-probe `intent next-slice --dry-run`. A returned
+        // `issue-cut-ready` outcome flips the classification from
+        // `true-idle` to `issue-publish-ready`, mirroring the
+        // SekibanAsAService SKS-G239 case in the G341 packet.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        var probeWasInvoked = false;
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G239" },
+            onProbe: () => probeWasInvoked = true);
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context, // configured domain = "intent-cli"
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.True(probeWasInvoked, "probe must run when --candidate omitted and config carries a domain");
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.Equal("issue-publish-ready", result.Classification);
+            Assert.NotNull(result.RecommendedNextCommand);
+            Assert.Contains("SKS-G239", result.RecommendedNextCommand!, StringComparison.Ordinal);
+            Assert.Contains("packet draft", result.RecommendedNextCommand!, StringComparison.Ordinal);
+            Assert.Contains("issue publish-flow", result.RecommendedNextCommand!, StringComparison.Ordinal);
+            Assert.Contains("automation issue-publish", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_NextSliceProbe_DomainFlag_OverridesConfiguredDomain()
+    {
+        // G341: `--domain` wins over the configured domain so an
+        // operator can probe a different domain on the same host.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        string? probedDomain = null;
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null },
+            onProbeArgs: (_, d) => probedDomain = d);
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context, // configured domain = "intent-cli"
+                ["--repo", "owner/repo", "--domain", "sekiban-as-a-service", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal("sekiban-as-a-service", probedDomain);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_NextSliceProbe_OperatorCandidateOverridesProbeResult()
+    {
+        // G341: when the operator pre-supplies `--candidate`, the
+        // probe is skipped — the operator-supplied value wins so
+        // upstream tooling that already computed the candidate can
+        // route through `--candidate` and bypass the probe.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        var probeWasInvoked = false;
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "OTHER" },
+            onProbe: () => probeWasInvoked = true);
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "owner/repo", "--candidate", "OPERATOR-G123", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.False(probeWasInvoked, "probe must not run when --candidate is operator-supplied");
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.Equal("issue-publish-ready", result.Classification);
+            Assert.Contains("OPERATOR-G123", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_TrueIdle_RemainsPossible_WhenNextSliceAlsoIdle()
+    {
+        // G341 acceptance: `true-idle` is still emitted when no
+        // review PR, no WIP, no clarification, AND next-slice probe
+        // reports `no-actionable-item`. Guards against an over-
+        // aggressive fallback that would never report true idle.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "owner/repo", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.Equal("true-idle", result.Classification);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    /// <summary>
+    /// G341: deterministic stand-in for <see cref="INextSliceDryRunProbe"/>
+    /// used by the host-review-diagnostics tests. Returns a canned
+    /// <see cref="NextSliceProbeResult"/> and records the (repo, domain)
+    /// pair the command passed in.
+    /// </summary>
+    private sealed class FakeNextSliceProbe : INextSliceDryRunProbe
+    {
+        private readonly NextSliceProbeResult? _canned;
+        private readonly Action? _onProbe;
+        private readonly Action<string, string>? _onProbeArgs;
+
+        public FakeNextSliceProbe(
+            NextSliceProbeResult? canned,
+            Action? onProbe = null,
+            Action<string, string>? onProbeArgs = null)
+        {
+            _canned = canned;
+            _onProbe = onProbe;
+            _onProbeArgs = onProbeArgs;
+        }
+
+        public NextSliceProbeResult? Probe(string repo, string domain)
+        {
+            _onProbe?.Invoke();
+            _onProbeArgs?.Invoke(repo, domain);
+            return _canned;
+        }
+    }
+
     private static GitHubAutomationPrCandidate BuildPr(
         int number,
         string title,

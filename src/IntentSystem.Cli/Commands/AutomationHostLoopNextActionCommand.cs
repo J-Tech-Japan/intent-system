@@ -57,6 +57,22 @@ internal static class AutomationHostLoopNextActionCommand
             return 1;
         }
 
+        // G341: when the operator omits `--domain`, fall back to the
+        // host's configured domain (`context.Config.Project.Domain`).
+        // Without this fallback, the next-slice probe at line ~98 is
+        // skipped and a real `issue-cut-ready` candidate falls through
+        // to `true-idle`, contradicting G318's "host loop must never
+        // report true-idle when a candidate is ready to publish"
+        // contract.
+        if (string.IsNullOrWhiteSpace(parsed.Domain))
+        {
+            var configuredDomain = context.Config?.Project?.Domain;
+            if (!string.IsNullOrWhiteSpace(configuredDomain))
+            {
+                parsed = parsed with { Domain = configuredDomain.Trim() };
+            }
+        }
+
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs;
         IReadOnlyList<GitHubAutomationIssueCandidate> openIssues;
         try

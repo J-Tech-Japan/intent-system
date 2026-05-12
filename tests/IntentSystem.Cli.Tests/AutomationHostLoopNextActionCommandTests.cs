@@ -387,12 +387,14 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_NextSliceProbe_IsNotInvoked_WhenDomainMissing()
+    public void Execute_NextSliceProbe_IsNotInvoked_WhenDomainMissingAndConfigEmpty()
     {
-        // G318 safety rail: `intent next-slice --dry-run` requires a
-        // domain. Without `--domain` the probe is skipped to avoid an
-        // unconditional in-process invocation that the analyzer cannot
-        // use anyway.
+        // G318 safety rail + G341 update: `intent next-slice --dry-run`
+        // requires a domain. The probe is skipped only when neither
+        // `--domain` is supplied nor the CliContext config carries a
+        // configured domain. G341 added the config-domain fallback so
+        // operators can run `automation host-loop-next-action --repo X`
+        // without re-typing the domain every time.
         AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
             prs: Array.Empty<GitHubAutomationPrCandidate>(),
             issues: Array.Empty<GitHubAutomationIssueCandidate>());
@@ -403,15 +405,63 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
 
         using var writer = new StringWriter();
         var exit = AutomationHostLoopNextActionCommand.Execute(
-            CreateContext(),
+            CreateContextWithoutDomain(),
             ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
             writer);
 
         Assert.Equal(0, exit);
-        Assert.False(probeWasInvoked, "probe must not run without --domain");
+        Assert.False(probeWasInvoked, "probe must not run when neither --domain nor config domain is available");
         Assert.Equal("true-idle",
             JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("classification").GetString());
     }
+
+    [Fact]
+    public void Execute_NextSliceProbe_FallsBackToConfiguredDomain_WhenDomainFlagMissing()
+    {
+        // G341: when the operator omits `--domain`, the command falls
+        // back to `context.Config.Project.Domain` so a real
+        // `issue-cut-ready` next-slice candidate is surfaced as
+        // `publish-next-issue` instead of `true-idle`. Mirrors the
+        // SekibanAsAService SKS-G239 case in the G341 packet.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        var probeWasInvoked = false;
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G239" },
+            onProbe: () => probeWasInvoked = true);
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(), // configured domain = "intent-cli"
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        Assert.True(probeWasInvoked, "probe must run when --domain is omitted but config carries a domain");
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("publish-next-issue", root.GetProperty("classification").GetString());
+        Assert.Contains("SKS-G239", root.GetProperty("recommended_command").GetString(), StringComparison.Ordinal);
+        Assert.True(root.GetProperty("mutation_allowed").GetBoolean());
+        // The emitted domain field should carry the fallback so the
+        // operator can see which domain drove the classification.
+        Assert.Equal("intent-cli", root.GetProperty("domain").GetString());
+    }
+
+    private static CliContext CreateContextWithoutDomain() =>
+        new()
+        {
+            RepoRoot = Path.GetTempPath(),
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = string.Empty,
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees"
+                }
+            }
+        };
 
     private sealed class FakeNextSliceProbe : INextSliceDryRunProbe
     {
