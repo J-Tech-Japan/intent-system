@@ -510,7 +510,7 @@ internal static class CommandRouter
     internal static readonly IReadOnlyList<string> WorkflowGuidePointersHelp = new[]
     {
         "init — `intent-cli guide workflow task init-host --format json` (pick design / review-runtime / child-implementation role + scaffold plan, G335) then `intent-cli intent init --domain <name> --target-repo <r> --write` for host roles.",
-        "interview — `intent-cli interview next-question --domain <d> --format json` (durable Q/A artifact).",
+        "interview — `intent-cli guide workflow task intent-interview --format json` (product-owner interview / clarification loop guide, G336) then `intent-cli interview next-question --domain <d> --format json` for the durable Q/A artifact.",
         "packet — `intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown` (canonical packet scaffold).",
         "issue — `intent-cli issue publish-flow <id> --repo <r> --write --format json` (publish next-slice issue).",
         "automation — `intent-cli automation summary --domain <d> --format json` (label-driven capability JSON) + `intent-cli automation doctor` (CLI freshness).",

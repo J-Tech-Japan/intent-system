@@ -53,9 +53,9 @@ internal static class GuideHelpCommand
         new WorkflowGuidePointer
         {
             Phase = "interview",
-            Command = "intent-cli interview next-question --domain <name> --format json",
-            Purpose = "Drive the durable per-domain Q/A artifact. Use `interview record-answer` to persist responses and `interview compile` to assemble the source document.",
-            SeeAlso = new[] { "intent-cli interview record-answer", "intent-cli interview compile" }
+            Command = "intent-cli guide workflow task intent-interview --format json",
+            Purpose = "Product-owner interview / clarification loop guide (G336). Explains the background/question/options/pros-cons/recommendation question structure, distinguishes interview (new concept) from clarification (existing blocker), names durable artifact paths, and lists the canonical `intent-cli interview` / `intent-cli clarification` commands.",
+            SeeAlso = new[] { "intent-cli interview next-question --domain <d> --format json", "intent-cli interview record-answer", "intent-cli interview compile", "intent-cli clarification next" }
         },
         new WorkflowGuidePointer
         {
