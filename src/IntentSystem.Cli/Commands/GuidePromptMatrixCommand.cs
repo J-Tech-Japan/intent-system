@@ -262,10 +262,12 @@ Loop body (single wake; the operator drives subsequent wakes if any):
 1. Save the child worktree path: `CHILD_WORKTREE=""$PWD""`. Confirm it is a git worktree root. Stop with `wrong-worktree` if not.
 2. Resolve `<OWNER>/<REPO>` from the child cwd: `gh repo view --json nameWithOwner --jq .nameWithOwner` (fall back to `git remote get-url origin`).
 3. `git fetch --all --prune` and `git status --short`. If dirty in a dedicated automation worktree, clean local residue (`git reset --hard`, `git clean -fd`, submodule reset). Never `git clean -fdx`. Never clean a personal/shared checkout.
-4. From the parent host root (NOT the child cwd), run `intent-cli worker next-action --repo <OWNER>/<REPO> --workdir $CHILD_WORKTREE --format json`. Dispatch on `action`:
+4. From the child cwd (the child implementation loop does NOT require parent host root access — G333 child-cwd / GitHub-contract-only mode), run `intent-cli worker next-action --repo <OWNER>/<REPO> --github-only --format json`. Pass `--github-only` so the selector is pinned to the label-only data path and the result records the binding (`github_only: true`). Dispatch on `action`:
    - `none` → stop with `idle`.
-   - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr ...` and `worker complete --kind issue --number <n> --outcome <outcome> --write --format json`.
-   - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix ...` and `worker complete --kind pr --number <n> --outcome <outcome> --write --format json`.
+   - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr --repo <OWNER>/<REPO> ...` and `worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
+   - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix --repo <OWNER>/<REPO> ...` and `worker complete --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
+
+Host metadata gaps surfaced by `worker complete` (e.g. `linked_pr_synced: false` from child-cwd mode, G330) are HOST-owned blockers, not child instructions to enter the host repo. The child loop records the gap and moves on; parent host metadata reconciliation runs on the host/review-runtime loop via `intent-cli review closeout-plan --pr <n> --repo <OWNER>/<REPO> --write-recovered-linkage` (G329) — never from the child cwd.
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.), or copied prompt files for routine collaboration. Use `intent-cli guide ...` instead.
@@ -427,10 +429,12 @@ Loop body (single wake only — do not repeat):
 1. Save the child worktree path: `CHILD_WORKTREE=""$PWD""`. Confirm it is a git worktree root. Stop with `wrong-worktree` if not.
 2. Resolve `<OWNER>/<REPO>` from the child cwd: `gh repo view --json nameWithOwner --jq .nameWithOwner` (fall back to `git remote get-url origin`).
 3. `git fetch --all --prune` and `git status --short`. If dirty in a dedicated automation worktree, clean local residue (`git reset --hard`, `git clean -fd`, submodule reset). Never `git clean -fdx`. Never clean a personal/shared checkout.
-4. From the parent host root (NOT the child cwd), run `intent-cli worker next-action --repo <OWNER>/<REPO> --workdir $CHILD_WORKTREE --format json`. Dispatch on `action`:
+4. From the child cwd (the child one-shot does NOT require parent host root access — G333 child-cwd / GitHub-contract-only mode), run `intent-cli worker next-action --repo <OWNER>/<REPO> --github-only --format json`. Pass `--github-only` so the selector is pinned to the label-only data path. Dispatch on `action`:
    - `none` → stop with `idle`.
-   - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr ...` and `worker complete --kind issue --number <n> --outcome <outcome> --write --format json`.
-   - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix ...` and `worker complete --kind pr --number <n> --outcome <outcome> --write --format json`.
+   - `issue-to-pr` → claim with `intent-cli worker claim --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`, run the issue-to-PR workflow on the returned URL only, classify outcome, then `worker result-summary --kind issue-to-pr --repo <OWNER>/<REPO> ...` and `worker complete --kind issue --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
+   - `pr-comment-fix` → claim with `intent-cli worker claim --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --write --format json`, repair only the narrow requested change on the PR branch, classify outcome, then `worker result-summary --kind pr-comment-fix --repo <OWNER>/<REPO> ...` and `worker complete --kind pr --number <n> --repo <OWNER>/<REPO> --github-only --outcome <outcome> --write --format json`.
+
+Host metadata gaps surfaced by `worker complete` (e.g. `linked_pr_synced: false` from child-cwd mode, G330) are HOST-owned blockers, not child instructions to enter the host repo.
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.), or copied prompt files for routine collaboration. Use `intent-cli guide ...` instead.

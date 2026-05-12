@@ -98,6 +98,43 @@ public sealed class GuideWorkflowTaskImplementationLoopCommandTests
     }
 
     [Fact]
+    public void Execute_GeneratedChildLoopPrompt_DoesNotInstructAgentToEnterParentHostRoot()
+    {
+        // PR #780 review finding: the previous child-loop prompt told
+        // agents to run `worker next-action` "From the parent host
+        // root (NOT the child cwd)". That contradicts the G338
+        // acceptance criterion ("Child implementation guide does not
+        // require parent host root after G333") and the
+        // 15-external-user-guided-workflow.md Child Implementation
+        // Isolation Policy. Regression: the generated child-loop
+        // prompt must NOT carry those forbidden anchors and MUST
+        // surface the child-cwd / GitHub-contract-only execution path
+        // (`--github-only`).
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskImplementationLoopCommand.Execute(
+            CreateContext(),
+            new[] { "--target-repo", "example/repo", "--agent", "claude", "--frequency", "5m", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString();
+        Assert.NotNull(prompt);
+        // The forbidden anchors from PR #780 must be gone.
+        Assert.DoesNotContain("From the parent host root", prompt!, StringComparison.Ordinal);
+        Assert.DoesNotContain("NOT the child cwd", prompt!, StringComparison.Ordinal);
+        // The child-cwd / GitHub-contract-only execution path must
+        // be advertised: `worker next-action` runs from the child
+        // cwd, pinned with `--github-only`.
+        Assert.Contains("From the child cwd", prompt!, StringComparison.Ordinal);
+        Assert.Contains("--github-only", prompt!, StringComparison.Ordinal);
+        // Host metadata gaps must be classified as host-owned
+        // blockers, not child instructions to enter the host repo.
+        Assert.Contains("HOST-owned blockers", prompt!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_DoesNotRequireParentHostRootForChildLoopGuide()
     {
         // Acceptance criterion: "Child implementation guide does not
