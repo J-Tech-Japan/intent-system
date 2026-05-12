@@ -60,16 +60,16 @@ internal static class GuideHelpCommand
         new WorkflowGuidePointer
         {
             Phase = "packet",
-            Command = "intent-cli packet draft --execution-unit <id> --target-repo <owner/repo> --format markdown",
-            Purpose = "Scaffold the canonical packet directory (packet.yaml / implementation.md / review-context.md / github-body.md). Read-only without --write.",
-            SeeAlso = new[] { "intent-cli guide intent-work --format json" }
+            Command = "intent-cli guide workflow task packet-draft --format json",
+            Purpose = "Packet directory layout + standalone issue contract sections every `github-body.md` must satisfy BEFORE `issue publish-flow` (G337). After reading the contract, run `intent-cli packet draft` to scaffold the four files.",
+            SeeAlso = new[] { "intent-cli packet draft --execution-unit <id> --target-repo <owner/repo> --format markdown", "intent-cli issue validate-body --from-file <path> --format json", "intent-cli guide intent-work --format json" }
         },
         new WorkflowGuidePointer
         {
             Phase = "issue",
-            Command = "intent-cli issue publish-flow <execution-unit-id> --repo <owner/repo> --write --format json",
-            Purpose = "Publish a next-slice GitHub issue end-to-end: validate packet → create issue → advance durable state. After publish, run `automation issue-publish --write` to apply `intent-target`.",
-            SeeAlso = new[] { "intent-cli automation issue-publish", "intent-cli guide intent-work --format json" }
+            Command = "intent-cli guide workflow task issue-publish --format json",
+            Purpose = "Draft → create → publish-flow → automation issue-publish boundary guide (G337). Names the four publish stages, the intent-target FINAL-boundary rule, and the stop conditions that surface missing contract sections before GitHub mutation.",
+            SeeAlso = new[] { "intent-cli issue publish-flow <id> --repo <r> --write --format json", "intent-cli automation issue-publish --repo <r> --issue <n> --write", "intent-cli guide intent-work --format json" }
         },
         new WorkflowGuidePointer
         {

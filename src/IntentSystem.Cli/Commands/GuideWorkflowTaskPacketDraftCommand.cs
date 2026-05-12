@@ -1,0 +1,296 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace IntentSystem.Cli.Commands;
+
+/// <summary>
+/// G337: read-only <c>intent-cli guide workflow task packet-draft</c>.
+/// Surfaces the canonical packet directory layout (the four files an
+/// execution unit produces) and the standalone issue contract every
+/// GitHub-body must satisfy BEFORE the operator runs
+/// <c>intent-cli issue publish-flow</c>. External agents that have
+/// never seen the project should be able to derive the packet shape
+/// and the contract requirements from this surface alone — no local
+/// rules, no skill prompts.
+///
+/// Pure read-only — never reads parent host queue-state, never calls
+/// <c>gh</c>, never mutates state, never launches an AI provider.
+/// </summary>
+internal static class GuideWorkflowTaskPacketDraftCommand
+{
+    private const string FormatJson = "json";
+    private const string FormatMarkdown = "markdown";
+
+    private const string UsageLine =
+        "Usage: intent-cli guide workflow task packet-draft [--format markdown|json]";
+
+    /// <summary>
+    /// G337: the four files every packet draft produces. Tests pin
+    /// each entry by name and require the purpose to mention what
+    /// the file does and when it is read.
+    /// </summary>
+    internal static readonly IReadOnlyList<PacketFileEntry> PacketFiles = new[]
+    {
+        new PacketFileEntry
+        {
+            Name = "packet.yaml",
+            Purpose = "Structured metadata for the slice (execution-unit id, title, summary, intent references, packet ownership, prepared-by-runtime flag). Drives the validate / publish lifecycle.",
+            ReadBy = "intent-cli packet draft / issue publish-flow / review closeout-plan / review run (G316)."
+        },
+        new PacketFileEntry
+        {
+            Name = "implementation.md",
+            Purpose = "Design + implementation notes for the slice. Captures the design host's reasoning so review and child-implementation agents can converge.",
+            ReadBy = "intent-cli review run / review closeout-plan / guide review (operators reading the spec)."
+        },
+        new PacketFileEntry
+        {
+            Name = "review-context.md",
+            Purpose = "G316 packet-aware review context: the intent references, scope boundaries, prior decisions, and the explicit packet-versus-PR delta the reviewer must cite.",
+            ReadBy = "intent-cli review run / guide review (the canonical input to the reviewer's approval summary)."
+        },
+        new PacketFileEntry
+        {
+            Name = "github-body.md",
+            Purpose = "The standalone GitHub issue body. MUST satisfy the standalone issue contract below — it is rendered into the public GitHub issue, so anything missing here breaks external-agent discoverability.",
+            ReadBy = "intent-cli issue draft / issue prepare / issue validate-body / issue publish / issue publish-flow / automation issue-publish."
+        }
+    };
+
+    /// <summary>
+    /// G337: standalone issue contract sections every <c>github-body.md</c>
+    /// must carry. Tests pin each section by id; the guide JSON
+    /// payload uses the same stable ids so consumers can branch on them.
+    /// </summary>
+    internal static readonly IReadOnlyList<IssueContractSection> IssueContractSections = new[]
+    {
+        new IssueContractSection { Section = "goal", Purpose = "One-paragraph statement of what shipping this slice produces. The agent reading the issue should be able to act on this without context." },
+        new IssueContractSection { Section = "why-this-slice-exists-now", Purpose = "Why this slice cannot wait. Names the blocker and the user observation that forced the slice." },
+        new IssueContractSection { Section = "current-observed-state", Purpose = "What an external agent or operator sees today, before the slice lands. Pins the regression target." },
+        new IssueContractSection { Section = "accepted-baseline-you-may-assume", Purpose = "What the agent does not have to relitigate (collaboration model, intent-cli routing, no-local-rule rule, etc.)." },
+        new IssueContractSection { Section = "target-repo-path-part", Purpose = "Exact repository / folder / surface the change must land in. Disambiguates host-vs-child mutation targets." },
+        new IssueContractSection { Section = "in-scope", Purpose = "Bullet list of what is in scope. Mirrors the slice goal; one slice cuts cleanly so this list stays small." },
+        new IssueContractSection { Section = "out-of-scope", Purpose = "Bullet list of what is explicitly NOT in this slice. Reviewers refuse PRs that broaden scope without an out-of-scope amendment." },
+        new IssueContractSection { Section = "acceptance-criteria", Purpose = "Testable, externally-verifiable criteria. Every criterion maps to a concrete assertion the reviewer can run." },
+        new IssueContractSection { Section = "verification", Purpose = "Which tests / generated assertions prove the criteria. CI + the reviewer cite this list before approval (G316)." },
+        new IssueContractSection { Section = "related-links", Purpose = "Predecessor slices and spec references (e.g. `specs/15-external-user-guided-workflow.md`). Operators trace the lineage without reading the host repo." },
+        new IssueContractSection { Section = "additional-required-guidance", Purpose = "Standing guardrails: prefer intent-cli-backed mutation, child isolation rule, no AI provider launch. Repeated on every slice so the issue is self-contained." }
+    };
+
+    /// <summary>
+    /// G337: the canonical commands an external agent runs to produce
+    /// a packet draft. Tests pin every flag against the corresponding
+    /// command source file (regression for the G336 PR #776 finding).
+    /// </summary>
+    internal static readonly IReadOnlyList<string> Commands = new[]
+    {
+        "intent-cli packet draft --execution-unit <execution-unit-id> [--domain <name>] [--target-repo <owner/repo>] --dry-run --format markdown",
+        "intent-cli packet draft --execution-unit <execution-unit-id> [--domain <name>] [--target-repo <owner/repo>] --format json"
+    };
+
+    /// <summary>
+    /// G337: stop conditions before any GitHub mutation. The guide
+    /// surfaces missing contract sections BEFORE the agent runs
+    /// `issue publish-flow`; this is the acceptance criterion
+    /// (`surfaces missing contract sections before GitHub mutation`).
+    /// </summary>
+    internal static readonly IReadOnlyList<string> StopConditions = new[]
+    {
+        "`packet draft --dry-run` flags missing files: stop, repair the design host packet directory before publishing. Hand-editing the four files is allowed during design; routine automation mutates them through `packet draft --write` only.",
+        "`issue validate-body --from-file <github-body.md> --format json` reports `errors[]` (missing contract sections): stop, repair the body, validate again, only then move to `issue publish-flow`.",
+        "`packet.yaml` lacks `intent_reference_paths` or names them with broad-domain placeholders: stop, narrow to PR-specific references. Broad-domain intent paths defeat G316 review-context isolation.",
+        "Operator names `intent-target` on the GitHub issue manually (raw `gh issue edit --add-label intent-target`): refuse, surface the gap — `intent-target` is the FINAL publish boundary applied by `automation issue-publish --write` after `issue publish-flow` succeeds, never the default."
+    };
+
+    /// <summary>
+    /// G337: explicit invariants every packet-draft surface advertises.
+    /// Tests pin each invariant verbatim.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> Invariants = new[]
+    {
+        "A packet is the standalone unit of intent: the GitHub issue body alone must let an external agent reproduce the implementation, the review, and the closeout decision. If `github-body.md` requires reading the host packet directory to be understood, the slice is not yet ready to publish.",
+        "Packet ownership is design-side; runtime-created packets carry an explicit `runtime-created` flag in `packet.yaml`. The review-runtime workspace MUST NOT silently edit the four files; it goes through `packet draft --write` with the runtime ownership label (G326).",
+        "Prefer intent-cli-backed metadata mutation over hand-editing. Ask `intent-cli guide commands list --format json` or `intent-cli automation summary --domain <d> --format json` which command performs the transition, run that command, then validate the result.",
+        "Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333). The packet directory is host-owned; child agents see only the rendered GitHub issue body.",
+        "Never launch AI providers (Claude / Codex / any LLM) from intent-cli. The chat-first model has the human agent driving the conversation; intent-cli emits text the agent acts on."
+    };
+
+    public static int Execute(CliContext context, string[] args, TextWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        if (!TryParseArguments(args, out var format, out var error))
+        {
+            writer.WriteLine(error);
+            writer.WriteLine(UsageLine);
+            return 1;
+        }
+
+        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        {
+            var payload = new PacketDraftGuidance
+            {
+                Usage = UsageLine,
+                PacketFiles = PacketFiles,
+                IssueContractSections = IssueContractSections,
+                Commands = Commands,
+                StopConditions = StopConditions,
+                Invariants = Invariants
+            };
+            writer.Write(JsonSerializer.Serialize(payload, JsonOptions));
+            writer.WriteLine();
+        }
+        else
+        {
+            WriteMarkdown(writer);
+        }
+
+        return 0;
+    }
+
+    private static void WriteMarkdown(TextWriter writer)
+    {
+        writer.WriteLine("# intent-cli — packet draft workflow guide");
+        writer.WriteLine();
+        writer.WriteLine(UsageLine);
+        writer.WriteLine();
+        writer.WriteLine("A packet is the standalone unit of intent. Four files; one execution unit.");
+        writer.WriteLine();
+
+        writer.WriteLine("## Packet files");
+        writer.WriteLine();
+        writer.WriteLine("| file | purpose | read by |");
+        writer.WriteLine("|------|---------|---------|");
+        foreach (var f in PacketFiles)
+        {
+            writer.WriteLine($"| `{f.Name}` | {f.Purpose} | {f.ReadBy} |");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## Standalone issue contract");
+        writer.WriteLine();
+        writer.WriteLine("Every `github-body.md` MUST carry these sections in order. Missing sections are caught by `intent-cli issue validate-body --from-file <path> --format json` BEFORE any GitHub mutation:");
+        writer.WriteLine();
+        foreach (var section in IssueContractSections)
+        {
+            writer.WriteLine($"- **{section.Section}** — {section.Purpose}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## Commands");
+        foreach (var c in Commands)
+        {
+            writer.WriteLine($"- `{c}`");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## Stop conditions (surface BEFORE GitHub mutation)");
+        foreach (var s in StopConditions)
+        {
+            writer.WriteLine($"- {s}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## Invariants");
+        foreach (var line in Invariants)
+        {
+            writer.WriteLine($"- {line}");
+        }
+    }
+
+    private static bool TryParseArguments(string[] args, out string format, out string error)
+    {
+        format = FormatMarkdown;
+        error = string.Empty;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            switch (arg)
+            {
+                case "--help":
+                    break;
+                case "--format":
+                    if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[i + 1]))
+                    {
+                        error = "--format requires a value (markdown or json).";
+                        return false;
+                    }
+                    var requested = args[i + 1];
+                    if (!string.Equals(requested, FormatMarkdown, StringComparison.Ordinal)
+                        && !string.Equals(requested, FormatJson, StringComparison.Ordinal))
+                    {
+                        error = $"--format must be 'markdown' or 'json' (got '{requested}').";
+                        return false;
+                    }
+                    format = requested;
+                    i++;
+                    break;
+                default:
+                    error = $"Unknown argument '{arg}'.";
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        WriteIndented = true
+    };
+}
+
+/// <summary>
+/// G337: one file in the canonical packet directory.
+/// </summary>
+internal sealed record PacketFileEntry
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("purpose")]
+    public required string Purpose { get; init; }
+
+    [JsonPropertyName("read_by")]
+    public required string ReadBy { get; init; }
+}
+
+/// <summary>
+/// G337: one section of the standalone issue contract.
+/// </summary>
+internal sealed record IssueContractSection
+{
+    [JsonPropertyName("section")]
+    public required string Section { get; init; }
+
+    [JsonPropertyName("purpose")]
+    public required string Purpose { get; init; }
+}
+
+/// <summary>
+/// G337: full JSON payload for <c>guide workflow task packet-draft</c>.
+/// </summary>
+internal sealed record PacketDraftGuidance
+{
+    [JsonPropertyName("usage")]
+    public required string Usage { get; init; }
+
+    [JsonPropertyName("packet_files")]
+    public required IReadOnlyList<PacketFileEntry> PacketFiles { get; init; }
+
+    [JsonPropertyName("issue_contract_sections")]
+    public required IReadOnlyList<IssueContractSection> IssueContractSections { get; init; }
+
+    [JsonPropertyName("commands")]
+    public required IReadOnlyList<string> Commands { get; init; }
+
+    [JsonPropertyName("stop_conditions")]
+    public required IReadOnlyList<string> StopConditions { get; init; }
+
+    [JsonPropertyName("invariants")]
+    public required IReadOnlyList<string> Invariants { get; init; }
+}
