@@ -40,7 +40,8 @@ internal static class GuideAutomationSetupCommand
     private const string UsageLine =
         "Usage: intent-cli guide automation setup --kind|--purpose <child-implement|host-review-next-slice|alias> "
         + "[--repo <owner/repo>] [--domain <name>] [--target-repo <owner/repo>] "
-        + "[--agent claude|codex|claude code|codex-cli|unknown] [--cwd <path>] [--cwd-role host|child] [--frequency <NNm|NNh>] "
+        + "[--agent claude|codex|claude code|codex-cli|unknown] [--cwd <path>] [--cwd-role host|child] "
+        + "[--host-role design|review-runtime|child-worker|ambiguous] [--frequency <NNm|NNh>] "
         + "[--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -64,6 +65,7 @@ internal static class GuideAutomationSetupCommand
                 out var rawAgent,
                 out var cwd,
                 out var rawCwdRole,
+                out var rawHostRole,
                 out var frequency,
                 out var format,
                 out var error))
@@ -129,6 +131,38 @@ internal static class GuideAutomationSetupCommand
             return 1;
         }
 
+        // G326: resolve the host role (design / review-runtime /
+        // child-worker / ambiguous). When the operator did not pass
+        // `--host-role`, infer from the canonical cwd-role: child cwd
+        // implies `child-worker`; host cwd cannot be disambiguated
+        // between design and review-runtime without an explicit flag, so
+        // we surface `ambiguous` and let the operator decide. This keeps
+        // the durable-state ownership decision explicit per G326.
+        string hostRoleCanonical;
+        if (!string.IsNullOrWhiteSpace(rawHostRole))
+        {
+            hostRoleCanonical = HostOwnershipModel.ResolveRole(rawHostRole);
+            if (string.Equals(hostRoleCanonical, HostOwnershipModel.RoleAmbiguous, StringComparison.Ordinal)
+                && !string.Equals(rawHostRole, HostOwnershipModel.RoleAmbiguous, StringComparison.OrdinalIgnoreCase))
+            {
+                writer.WriteLine(
+                    $"--host-role '{rawHostRole}' did not resolve to a known role (design / review-runtime / child-worker / ambiguous).");
+                writer.WriteLine(UsageLine);
+                return 1;
+            }
+        }
+        else if (string.Equals(cwdRoleCanonical, GuideAutomationSetupAliasResolver.CanonicalCwdRoleChild, StringComparison.Ordinal))
+        {
+            hostRoleCanonical = HostOwnershipModel.RoleChildWorker;
+        }
+        else
+        {
+            // Host cwd without an explicit --host-role flag: surface
+            // ambiguous so the operator names design vs review-runtime
+            // before any role-scoped mutation guidance is acted on.
+            hostRoleCanonical = HostOwnershipModel.RoleAmbiguous;
+        }
+
         // G320: agent + frequency are coupled. If the operator supplies an
         // agent we know how to handle (claude/codex) we also require a
         // frequency so the generated contract can pin the exact same-thread
@@ -147,7 +181,7 @@ internal static class GuideAutomationSetupCommand
         switch (kind)
         {
             case KindChildImplement:
-                return EmitResult(writer, format, BuildChildImplement(repo, domain, agent, cwd, frequency, cwdRoleCanonical, rawKind, rawAgent));
+                return EmitResult(writer, format, BuildChildImplement(repo, domain, agent, cwd, frequency, cwdRoleCanonical, rawKind, rawAgent, hostRoleCanonical));
 
             case KindHostReviewNextSlice:
                 if (string.IsNullOrWhiteSpace(domain))
@@ -163,7 +197,7 @@ internal static class GuideAutomationSetupCommand
                     return 1;
                 }
 
-                return EmitResult(writer, format, BuildHostReviewNextSlice(domain!, targetRepo!, agent, cwd, frequency, cwdRoleCanonical, rawKind, rawAgent));
+                return EmitResult(writer, format, BuildHostReviewNextSlice(domain!, targetRepo!, agent, cwd, frequency, cwdRoleCanonical, rawKind, rawAgent, hostRoleCanonical));
 
             default:
                 writer.WriteLine(
@@ -231,7 +265,8 @@ Scheduling mechanism: unknown — ASK the operator which same-thread / local-aut
         string? frequency,
         string? cwdRoleCanonical = null,
         string? rawPurpose = null,
-        string? rawAgent = null)
+        string? rawAgent = null,
+        string? hostRoleCanonical = null)
     {
         var repoLabel = string.IsNullOrWhiteSpace(repo) ? "the repo in the current worktree" : $"`{repo}`";
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
@@ -318,7 +353,8 @@ Frequency policy (applies only when a recurring local loop is explicitly request
             },
             LabelOwnership = "All label transitions delegated to installed intent-cli automation / worker commands. Manual `gh ... edit --label` fallback is forbidden.",
             WorktreeFriendly = "The prompt resolves the repo from the child worktree's `gh` / `git remote` and runs the selector from the parent host root with --workdir; no hard-coded paths, and the same prompt works across local worktrees.",
-            Prohibitions = GuidanceProhibitionCatalog.All
+            Prohibitions = GuidanceProhibitionCatalog.All,
+            HostRole = hostRoleCanonical
         };
     }
 
@@ -333,7 +369,8 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         string? frequency,
         string? cwdRoleCanonical = null,
         string? rawPurpose = null,
-        string? rawAgent = null)
+        string? rawAgent = null,
+        string? hostRoleCanonical = null)
     {
         var (schedulingMechanism, schedulingBlock) = ResolveScheduling(agent, frequency);
         var cwdLine = string.IsNullOrWhiteSpace(cwd)
@@ -434,7 +471,8 @@ Frequency policy (applies only when a recurring local loop is explicitly request
             },
             LabelOwnership = "All review-side and issue-side label transitions delegated to installed `intent-cli automation pr-transition` / `automation issue-publish` / `worker claim` / `worker complete`. Manual `gh ... edit --label` fallback is forbidden.",
             WorktreeFriendly = "The prompt names the parent host root as cwd but does not hardcode any operator-specific path beyond that; the same prompt works across host-side checkouts.",
-            Prohibitions = GuidanceProhibitionCatalog.All
+            Prohibitions = GuidanceProhibitionCatalog.All,
+            HostRole = hostRoleCanonical
         };
     }
 
@@ -528,6 +566,7 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         out string? agent,
         out string? cwd,
         out string? cwdRole,
+        out string? hostRole,
         out string? frequency,
         out string format,
         out string error)
@@ -539,6 +578,7 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         agent = null;
         cwd = null;
         cwdRole = null;
+        hostRole = null;
         frequency = null;
         format = FormatMarkdown;
         error = string.Empty;
@@ -627,6 +667,17 @@ Frequency policy (applies only when a recurring local loop is explicitly request
                     }
 
                     cwdRole = args[index + 1];
+                    index++;
+                    break;
+
+                case "--host-role":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--host-role requires a value (design, review-runtime, child-worker, or ambiguous).";
+                        return false;
+                    }
+
+                    hostRole = args[index + 1];
                     index++;
                     break;
 
@@ -819,4 +870,18 @@ internal sealed record GuideAutomationSetupResult
     /// </summary>
     [JsonPropertyName("prohibitions")]
     public IReadOnlyList<GuidanceProhibition>? Prohibitions { get; init; }
+
+    /// <summary>
+    /// G326: structured host role identifier (<c>design</c>,
+    /// <c>review-runtime</c>, <c>child-worker</c>, or <c>ambiguous</c>).
+    /// Inferred from <see cref="CwdRole"/> when the operator did not
+    /// pass <c>--host-role</c> explicitly: a <c>child</c> cwd resolves
+    /// to <c>child-worker</c>; a <c>host</c> cwd surfaces
+    /// <c>ambiguous</c> because design and review-runtime cannot be
+    /// disambiguated without an explicit flag (see
+    /// <see cref="HostOwnershipModel"/> for the may-write /
+    /// must-not-write matrix).
+    /// </summary>
+    [JsonPropertyName("host_role")]
+    public string? HostRole { get; init; }
 }

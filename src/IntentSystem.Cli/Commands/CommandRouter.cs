@@ -250,7 +250,9 @@ internal static class CommandRouter
                 ["intent-work"] = GuideIntentWorkCommand.Execute,
                 ["worker"] = GuideWorkerCommand.Execute,
                 ["closeout"] = GuideCloseoutCommand.Execute,
-                ["prompt-matrix"] = GuidePromptMatrixCommand.Execute
+                ["prompt-matrix"] = GuidePromptMatrixCommand.Execute,
+                // G326: role-scoped host ownership model.
+                ["host-ownership"] = GuideHostOwnershipCommand.Execute
             },
             ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
