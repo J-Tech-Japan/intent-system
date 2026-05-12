@@ -46,9 +46,9 @@ internal static class GuideHelpCommand
         new WorkflowGuidePointer
         {
             Phase = "init",
-            Command = "intent-cli intent init --domain <name> [--target-repo <owner/repo>] --write",
-            Purpose = "Bootstrap a host intent domain. Read-only without --write; --write provisions `.intent-cli/`, queue-state, and packet/runs scaffolding.",
-            SeeAlso = new[] { "intent-cli intake init", "intent-cli guide model --format json" }
+            Command = "intent-cli guide workflow task init-host --format json",
+            Purpose = "Pick a role for a NEW project (design / review-runtime / child-implementation) and get a scaffold plan + the exact `intent-cli intent init` incantation. Refuses to scaffold a child cwd that already carries `.intent-cli/` unless --force-host (G335).",
+            SeeAlso = new[] { "intent-cli intent init --domain <name> --target-repo <owner/repo> --write", "intent-cli intake init", "intent-cli guide model --format json" }
         },
         new WorkflowGuidePointer
         {
@@ -128,8 +128,8 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "workflow",
-            Purpose = "Workflow suggestion: pick the right intent-cli entry for the operator's described intent.",
-            Example = "intent-cli guide workflow suggest --intent \"publish next issue\" --format json"
+            Purpose = "Workflow suggestion / scaffold plans. Subcommands: suggest (pick the right intent-cli entry for an operator goal); task <name> (bounded scaffold/init plan — today: `task init-host` for new-project role bootstrap, G335).",
+            Example = "intent-cli guide workflow task init-host --format json"
         },
         new GuideSubcommandEntry
         {
