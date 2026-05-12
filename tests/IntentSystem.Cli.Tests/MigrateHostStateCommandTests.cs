@@ -327,6 +327,101 @@ public sealed class MigrateHostStateCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_Write_MixedAmbiguityAndMatch_RefusesAllMutation()
+    {
+        // G331 review fix: ambiguous matches MUST refuse the whole
+        // migration, even when other items in the same legacy file
+        // are deterministically matched. Partial application would
+        // leave half-migrated scoped state alongside the ambiguity
+        // gap and force the operator to clean up both halves.
+        using var workspace = new MigrateWorkspace();
+        workspace.WriteLegacyQueueState(
+            $$"""
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-12T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G331",
+                  "title": "deterministic match",
+                  "state": "review",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {"repo": "J-Tech-Japan/intent-system", "number": 765, "url": "https://github.com/J-Tech-Japan/intent-system/issues/765"},
+                  "linked_pr": null,
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                },
+                {
+                  "execution_unit": "G331-AMBIG",
+                  "title": "conflicting linkage",
+                  "state": "review",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {"repo": "J-Tech-Japan/Sekiban", "number": 1, "url": "https://github.com/J-Tech-Japan/Sekiban/issues/1"},
+                  "linked_pr": "https://github.com/J-Tech-Japan/intent-system/pull/770",
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+        workspace.WriteLegacyRuns(new[]
+        {
+            BuildRunLine("G331", "pr-merged", "J-Tech-Japan/intent-system")
+        });
+        var legacyQueueBefore = File.ReadAllText(workspace.LegacyQueuePath);
+        var legacyRunsBefore = File.ReadAllText(workspace.LegacyRunsPath);
+
+        using var writer = new StringWriter();
+        var exit = MigrateHostStateCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "host-state",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system",
+                "--role", "review-runtime",
+                "--write",
+                "--format", "json"
+            },
+            writer);
+
+        // Exit 2 (ambiguity present).
+        Assert.Equal(2, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.False(root.GetProperty("applied").GetBoolean());
+
+        var plan = root.GetProperty("plan");
+        // The deterministic match is still REPORTED in matching_items
+        // (so the operator sees what would have moved) but NOT applied.
+        var matched = plan.GetProperty("matching_items").EnumerateArray()
+            .Select(e => e.GetProperty("execution_unit").GetString())
+            .ToArray();
+        Assert.Contains("G331", matched);
+        Assert.Single(plan.GetProperty("ambiguities").EnumerateArray());
+
+        // No scoped state was created, no archive was made, and the
+        // legacy files are byte-identical.
+        Assert.False(File.Exists(workspace.ScopedQueuePath(
+            "intent-cli", "J-Tech-Japan__intent-system")));
+        Assert.False(File.Exists(workspace.ScopedRunsPath(
+            "intent-cli", "J-Tech-Japan__intent-system")));
+        Assert.False(Directory.Exists(Path.Combine(workspace.Context.RepoRoot,
+            ".intent-cli", "runtime", "intent-cli", "J-Tech-Japan__intent-system",
+            "legacy-archive")));
+        Assert.Equal(legacyQueueBefore, File.ReadAllText(workspace.LegacyQueuePath));
+        Assert.Equal(legacyRunsBefore, File.ReadAllText(workspace.LegacyRunsPath));
+    }
+
+    [Fact]
     public void Execute_MissingDomainArgument_ReturnsUsageError()
     {
         using var workspace = new MigrateWorkspace();

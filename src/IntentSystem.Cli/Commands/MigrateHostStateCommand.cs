@@ -121,7 +121,18 @@ internal static class MigrateHostStateCommand
         var archive = new List<string>();
         var applied = false;
 
-        if (write && (plan.ItemsToAdd.Count > 0 || plan.RunsToAdd.Count > 0))
+        // G331 review fix: refuse ANY filesystem mutation when the
+        // analyzer surfaced ambiguities, even if some other items in
+        // the same legacy file are deterministically matched. Partial
+        // application would leave the operator with half-migrated
+        // scoped state plus an archive copy, and the structured
+        // `ambiguities` payload would still demand operator review.
+        // Atomic refuse-on-any-gap matches the packet's "ambiguous
+        // matches produce structured unsafe metadata, not guessing"
+        // acceptance criterion.
+        if (write
+            && plan.Ambiguities.Count == 0
+            && (plan.ItemsToAdd.Count > 0 || plan.RunsToAdd.Count > 0))
         {
             ApplyMigration(repoRoot, domain!, targetRepo!,
                 legacyQueueStatePath, legacyRunsLogPath,
