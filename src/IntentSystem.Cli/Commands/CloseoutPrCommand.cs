@@ -58,8 +58,48 @@ internal static class CloseoutPrCommand
             ? context.Config.Project.Domain
             : domainOverride!;
 
-        var queueStatePath = context.GetQueueStatePath();
-        var runsLogPath = context.GetRunLogPath();
+        // G327: route queue-state read/write and runs.jsonl append
+        // through the runtime-scoped resolver so two domain/repo pairs
+        // (e.g. intent-system vs Sekiban) stop sharing the same active
+        // runtime queue at the root `.intent-cli/queue-state.json`.
+        //
+        // queue-state.json is the authoritative source of layout:
+        // - Scoped on disk → both files live under
+        //   `.intent-cli/runtime/<domain>/<owner>__<repo>/`.
+        // - Only legacy queue-state on disk → fall back to legacy root
+        //   for BOTH files (transition fallback; keeps queue + audit
+        //   trail in the same layout so closeout history stays
+        //   consistent).
+        // - Neither exists → scoped first-write target.
+        //
+        // The runs.jsonl path is intentionally bound to the queue-state
+        // layout decision rather than resolved independently — they
+        // are sibling durable-state files for the same closeout.
+        var queueStateLocation = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(
+            context.RepoRoot, domain, repo!);
+        var queueStatePath = queueStateLocation.Path;
+        string runsLogPath;
+        string stateLayout;
+        switch (queueStateLocation.Kind)
+        {
+            case StateLocationKind.Scoped:
+                runsLogPath = RuntimeScopedStateResolver.GetScopedRunLogPath(
+                    context.RepoRoot, domain, repo!);
+                stateLayout = "scoped";
+                break;
+            case StateLocationKind.Legacy:
+                runsLogPath = RuntimeScopedStateResolver.GetLegacyRunLogPath(
+                    context.RepoRoot);
+                stateLayout = "legacy-fallback";
+                break;
+            default:
+                // MissingPreferScoped: queue-state will be created at
+                // the scoped path on first write; runs.jsonl follows it.
+                runsLogPath = RuntimeScopedStateResolver.GetScopedRunLogPath(
+                    context.RepoRoot, domain, repo!);
+                stateLayout = "scoped";
+                break;
+        }
 
         // G297: when the host loop explicitly tells us the PR has not merged
         // (`--pr-merged false`, e.g. captured via `gh pr view <n> --json
@@ -67,14 +107,14 @@ internal static class CloseoutPrCommand
         // non-merged PR would diverge parent durable state from GitHub.
         if (prMerged == false)
         {
-            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr!.Value, queueStatePath, runsLogPath, write,
+            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr!.Value, queueStatePath, runsLogPath, write, stateLayout: stateLayout, error:
                 $"PR #{pr} is not merged; closeout pr requires merge success (G297). Re-run after the PR is merged. If the PR is still draft, ready it for review and re-run host review/merge first."));
             return 1;
         }
 
         if (!File.Exists(queueStatePath))
         {
-            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr!.Value, queueStatePath, runsLogPath, write,
+            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr!.Value, queueStatePath, runsLogPath, write, stateLayout: stateLayout, error:
                 $"queue-state file not found: {queueStatePath}"));
             return 1;
         }
@@ -86,13 +126,13 @@ internal static class CloseoutPrCommand
         }
         catch (JsonException jsonException)
         {
-            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr!.Value, queueStatePath, runsLogPath, write,
+            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr!.Value, queueStatePath, runsLogPath, write, stateLayout: stateLayout, error:
                 $"queue-state JSON could not be parsed: {jsonException.Message}"));
             return 1;
         }
         catch (InvalidOperationException invalidOperation)
         {
-            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr!.Value, queueStatePath, runsLogPath, write,
+            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr!.Value, queueStatePath, runsLogPath, write, stateLayout: stateLayout, error:
                 $"queue-state payload was invalid: {invalidOperation.Message}"));
             return 1;
         }
@@ -112,7 +152,7 @@ internal static class CloseoutPrCommand
             var hint = linkedIssueNumber.HasValue
                 ? $"no queue item found with linked_pr matching #{pr} or linked_issue.number {linkedIssueNumber.Value}."
                 : $"no queue item found with linked_pr matching #{pr}. If the queue item has linked_issue but not linked_pr, retry with --issue <n>.";
-            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr.Value, queueStatePath, runsLogPath, write, hint));
+            EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr.Value, queueStatePath, runsLogPath, write, hint, stateLayout: stateLayout));
             return 1;
         }
 
@@ -130,7 +170,8 @@ internal static class CloseoutPrCommand
             && matchedItem.State != QueueItemState.Fixing)
         {
             EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr.Value, queueStatePath, runsLogPath, write,
-                $"queue item '{matchedItem.ExecutionUnit}' is in state '{beforeState}'; closeout supports queued/active/review/fixing → completed only."));
+                $"queue item '{matchedItem.ExecutionUnit}' is in state '{beforeState}'; closeout supports queued/active/review/fixing → completed only.",
+                stateLayout: stateLayout));
             return 1;
         }
 
@@ -156,8 +197,14 @@ internal static class CloseoutPrCommand
                 UpdatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
                 Items = updatedItems
             };
+            // G327: the scoped runtime tree may need its directory
+            // created on first write (legacy root path is always
+            // present because RepoRoot/.intent-cli/ exists by host
+            // contract). Idempotent.
+            Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
             File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
 
+            Directory.CreateDirectory(Path.GetDirectoryName(runsLogPath)!);
             using var stream = new FileStream(runsLogPath, FileMode.Append, FileAccess.Write);
             using var streamWriter = new StreamWriter(stream);
             foreach (var line in runsEvents)
@@ -209,7 +256,8 @@ internal static class CloseoutPrCommand
             RunsEvents = runsEvents,
             ContinuationHint = continuation,
             NextSteps = nextSteps,
-            Error = null
+            Error = null,
+            StateLayout = stateLayout
         };
 
         EmitResult(writer, result, format);
@@ -304,7 +352,8 @@ internal static class CloseoutPrCommand
         string queueStatePath,
         string runsLogPath,
         bool write,
-        string error)
+        string error,
+        string? stateLayout = null)
     {
         return new CloseoutPrResult
         {
@@ -321,7 +370,8 @@ internal static class CloseoutPrCommand
             RunsEvents = Array.Empty<string>(),
             ContinuationHint = null,
             NextSteps = Array.Empty<string>(),
-            Error = error
+            Error = error,
+            StateLayout = stateLayout
         };
     }
 
@@ -628,4 +678,15 @@ internal sealed record CloseoutPrResult
 
     [JsonPropertyName("error")]
     public string? Error { get; init; }
+
+    /// <summary>
+    /// G327: which on-disk layout the runtime-scoped resolver chose
+    /// for this closeout — <c>scoped</c> when the per-(domain, repo)
+    /// `.intent-cli/runtime/&lt;domain&gt;/&lt;owner&gt;__&lt;repo&gt;/queue-state.json`
+    /// is on disk (or selected as the first-write target), or
+    /// <c>legacy-fallback</c> when only the legacy root path exists.
+    /// Surfaced for operator/controller diagnostics during migration.
+    /// </summary>
+    [JsonPropertyName("state_layout")]
+    public string? StateLayout { get; init; }
 }
