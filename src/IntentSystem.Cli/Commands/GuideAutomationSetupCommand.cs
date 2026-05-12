@@ -512,6 +512,16 @@ Frequency policy (applies only when a recurring local loop is explicitly request
         {
             writer.WriteLine($"- cwd role: {result.CwdRole}");
         }
+        if (!string.IsNullOrWhiteSpace(result.HostRole))
+        {
+            // G326 review fix (PR #756): render the resolved host role
+            // (design / review-runtime / child-worker / ambiguous) in
+            // the markdown contract operators paste and follow. JSON
+            // exposes `host_role` separately; this line ensures markdown
+            // does not silently lose the role binding that decides what
+            // the cwd is allowed to mutate.
+            writer.WriteLine($"- host role: {result.HostRole}");
+        }
         if (!string.IsNullOrWhiteSpace(result.CanonicalPurpose)
             && !string.IsNullOrWhiteSpace(result.RawPurpose)
             && !string.Equals(result.CanonicalPurpose, result.RawPurpose, StringComparison.Ordinal))

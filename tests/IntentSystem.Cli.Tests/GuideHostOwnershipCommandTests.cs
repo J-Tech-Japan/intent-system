@@ -238,6 +238,52 @@ public sealed class GuideHostOwnershipCommandTests
     }
 
     [Fact]
+    public void GuideAutomationSetup_Markdown_RendersResolvedHostRoleLine()
+    {
+        // G326 review fix (PR #756): the operator-facing markdown
+        // contract MUST render the resolved host role alongside the
+        // cwd role; the JSON-only `host_role` field is invisible to
+        // operators who paste the markdown contract and follow it.
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            new[]
+            {
+                "--purpose", "host-review-next-slice",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system",
+                "--host-role", "review-runtime",
+                "--format", "markdown"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("- host role: review-runtime", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GuideAutomationSetup_Markdown_ChildImplementInfersChildWorkerRoleInMarkdown()
+    {
+        // G326 review fix (PR #756): child-implement purpose without
+        // `--host-role` infers `child-worker`; markdown MUST render
+        // that resolved role so the operator-facing contract reflects
+        // the same binding the JSON exposes via `host_role`.
+        using var writer = new StringWriter();
+        var exitCode = GuideAutomationSetupCommand.Execute(
+            CreateContext(),
+            new[]
+            {
+                "--purpose", "child-implement",
+                "--format", "markdown"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("- host role: child-worker", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GuideAutomationSetup_UnknownHostRoleValue_ReturnsUsageError()
     {
         using var writer = new StringWriter();
