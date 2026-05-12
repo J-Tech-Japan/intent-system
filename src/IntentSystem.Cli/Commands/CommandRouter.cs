@@ -30,7 +30,8 @@ internal static class CommandRouter
         "guide",
         "intent",
         "packet",
-        "closeout"
+        "closeout",
+        "migrate"
     ];
 
     private static readonly IReadOnlyList<string> AutomationCommandHelp =
@@ -196,6 +197,10 @@ internal static class CommandRouter
             {
                 ["validate"] = MetadataValidateCommand.Execute,
                 ["update"] = MetadataUpdateCommand.Execute
+            },
+            ["migrate"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["host-state"] = (ctx, args, w) => MigrateHostStateCommand.Execute(ctx, ["host-state", .. args], w)
             },
             ["task"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
