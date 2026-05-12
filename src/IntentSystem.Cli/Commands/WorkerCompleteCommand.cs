@@ -282,7 +282,7 @@ internal static class WorkerCompleteCommand
                         linkedPrSynced = false;
                         publishWarnings.Add(
                             $"child-cwd mode: skipped queue-state linked_pr sync. "
-                            + "Run `intent-cli review closeout-plan --pr {0} --repo {1} --write-recovered-linkage` "
+                            + $"Run `intent-cli review closeout-plan --pr {prNumberValue} --repo {repo} --write-recovered-linkage` "
                             + "on the host/review-runtime workspace to recover linkage from GitHub closing references (G329).");
                     }
                     else

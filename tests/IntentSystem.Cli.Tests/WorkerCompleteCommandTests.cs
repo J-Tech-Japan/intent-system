@@ -1324,6 +1324,16 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.DoesNotContain(result.Warnings,
             w => w.Contains("queue-state.json not found", StringComparison.Ordinal));
 
+        // G330 review fix: the child-cwd warning must contain the
+        // ACTUAL pr number and repo, not the literal `{0}` / `{1}`
+        // placeholders. A child worker pasting the warning text into
+        // a host shell must get a directly runnable command.
+        Assert.Contains(result.Warnings,
+            w => w.Contains("--pr 764", StringComparison.Ordinal)
+                && w.Contains("--repo J-Tech-Japan/intent-system", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Warnings,
+            w => w.Contains("{0}", StringComparison.Ordinal) || w.Contains("{1}", StringComparison.Ordinal));
+
         // No queue-state file was ever created by the writer.
         Assert.False(File.Exists(workspace.QueueStatePath));
     }

@@ -152,7 +152,7 @@ internal static class TaskCommand
                 "Active lease conflict: `worker claim` returns errors other than the expected linked_pr_synced warning → stop, do not re-claim without operator authorization.",
                 "Missing closing reference: `worker complete` refuses because PR body lacks `Closes #" + parsed.Issue + "` → repair PR body and retry; never approve without the reference (G311).",
                 "Base branch policy mismatch: `automation base-branch-check` reports a non-`main` base → stop, surface the gap.",
-                "`linked_pr_synced: false` from `worker complete` is the EXPECTED child-cwd warning (G300); not an abort."
+                "`linked_pr_synced: false` from `worker complete` is the EXPECTED child-cwd warning (G300/G330); not an abort. In child-cwd mode the result records `child_cwd: true` and surfaces a pointer to the host-side `review closeout-plan --write-recovered-linkage` recovery path (G329)."
             },
             Notes = new[]
             {
@@ -328,7 +328,7 @@ internal static class TaskCommand
                 "Wrong PR head: `gh pr view` reports a head SHA different from the local checkout after `git pull` → stop, do not push.",
                 "Scope drift: the diff touches files not referenced by the actionable comment → stop, narrow the change before push.",
                 "Active lease held by another worker without operator re-claim → stop, surface the gap (G305 abort condition).",
-                "`worker complete` returns errors other than the expected linked_pr_synced warning → stop, do not retry blindly."
+                "`worker complete` returns errors other than the expected linked_pr_synced / child-cwd warning → stop, do not retry blindly. In child-cwd mode the result records `child_cwd: true` (G330) — pr-comment-fix completion does not touch parent durable state."
             },
             Notes = new[]
             {
