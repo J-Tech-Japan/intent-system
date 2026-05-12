@@ -5,8 +5,33 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
-public sealed class ReviewCloseoutPlanCommandTests
+public sealed class ReviewCloseoutPlanCommandTests : IDisposable
 {
+    public ReviewCloseoutPlanCommandTests()
+    {
+        // G329 review fix: default the closing-issues fetcher to an
+        // empty result so unit tests never shell out to live `gh`. Tests
+        // that exercise the auto-fetch lane override this with a fake
+        // returning the issue numbers they want to reconstruct.
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+    }
+
+    public void Dispose()
+    {
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory = null;
+    }
+
+    private sealed class FakePrClosingIssuesFetcher : IPrClosingIssuesFetcher
+    {
+        private readonly IReadOnlyList<int> closingIssues;
+        public FakePrClosingIssuesFetcher(IReadOnlyList<int> closingIssues)
+        {
+            this.closingIssues = closingIssues;
+        }
+        public IReadOnlyList<int> Fetch(string repo, int prNumber) => closingIssues;
+    }
+
     [Fact]
     public void Execute_GivenCompletePacketAndQueueMatch_ReportsReadyTrue()
     {
@@ -636,6 +661,203 @@ public sealed class ReviewCloseoutPlanCommandTests
         Assert.True(root.GetProperty("ready").GetBoolean());
         Assert.False(root.TryGetProperty("recovered_linkage", out _),
             "recovered_linkage must be null when queue-state already has the link.");
+    }
+
+    [Fact]
+    public void Execute_G329_AutoFetchesClosingIssuesFromGitHub_WhenFlagOmitted()
+    {
+        // G329 review fix: the host review path must not have to pipe
+        // `--closing-issues` manually. When the operator omits the flag,
+        // closeout-plan auto-fetches closing issues via the
+        // PrClosingIssuesFetcher seam (production = gh pr view).
+        // Deterministic recovery still applies; result records
+        // `closing_issues_source: github-auto-fetch`.
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(new[] { 759 });
+
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G329", "review",
+            linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 759,
+                "https://github.com/J-Tech-Japan/intent-system/issues/759")));
+        workspace.WriteFile(".intent-cli/issues/G329/github-body.md", BuildContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "760", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("github-auto-fetch",
+            root.GetProperty("closing_issues_source").GetString());
+        Assert.Equal("G329",
+            root.GetProperty("recovered_linkage")
+                .GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_G329_AutoFetchEmpty_FallsThroughToHostMetadataBlocked()
+    {
+        // When auto-fetch returns no closing issues (PR body has none,
+        // or gh CLI failed), the planner falls through to existing
+        // host-metadata-blocked behavior — no guessing.
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G329", "review",
+            linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 759, null)));
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "760", "--format", "json" },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("host-metadata-blocked",
+            root.GetProperty("blocker_classification").GetString());
+        Assert.False(root.TryGetProperty("closing_issues_source", out _),
+            "closing_issues_source must be null when no closing issues were available.");
+    }
+
+    [Fact]
+    public void Execute_G329_WriteRecoveredLinkage_PersistsToQueueStateAndRunsLog()
+    {
+        // G329 review fix: with `--write-recovered-linkage` the
+        // deterministic recovery is committed to queue-state (linked_pr
+        // set on the matched item) and appended to runs.jsonl
+        // (`linkage-recovered` event). Host-owned write — the review
+        // closeout-plan command is invoked by the host loop, not child
+        // workers.
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(new[] { 759 });
+
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G329", "review",
+            linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 759,
+                "https://github.com/J-Tech-Japan/intent-system/issues/759")));
+        workspace.WriteFile(".intent-cli/issues/G329/github-body.md", BuildContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--write-recovered-linkage",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("linkage_recovery_applied").GetBoolean());
+
+        // queue-state.json now has linked_pr set on the matched item.
+        // (Indented serializer emits `"linked_pr": "https://..."` with a
+        // space; parse the JSON instead of substring-matching.)
+        var queueAfter = File.ReadAllText(workspace.Context.GetQueueStatePath());
+        using var queueDoc = JsonDocument.Parse(queueAfter);
+        var matchedAfter = queueDoc.RootElement.GetProperty("items").EnumerateArray()
+            .Single(e => e.GetProperty("execution_unit").GetString() == "G329");
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/760",
+            matchedAfter.GetProperty("linked_pr").GetString());
+
+        // runs.jsonl was appended with a `linkage-recovered` event.
+        var runsLines = File.ReadAllLines(
+            Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "runs.jsonl"));
+        Assert.Single(runsLines);
+        Assert.Contains("\"event\":\"linkage-recovered\"", runsLines[0], StringComparison.Ordinal);
+        Assert.Contains("\"execution_unit\":\"G329\"", runsLines[0], StringComparison.Ordinal);
+        Assert.Contains("\"pr\":760", runsLines[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G329_WriteRecoveredLinkage_NeverPersistsAmbiguousMatches()
+    {
+        // G329 invariant: ambiguous matches MUST NOT be persisted even
+        // with --write-recovered-linkage. The structured ambiguity
+        // payload is the operator-facing disambiguation contract; the
+        // host loop must not "pick the first candidate".
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(new[] { 759 });
+
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithTwoItems(
+            ("G329", "review", null,
+                ("J-Tech-Japan/intent-system", 759, null)),
+            ("G329-PRIME", "review", null,
+                ("J-Tech-Japan/intent-system", 759, null))));
+        var queueBefore = File.ReadAllText(workspace.Context.GetQueueStatePath());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--write-recovered-linkage",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("linkage_recovery_applied").GetBoolean());
+        Assert.True(root.TryGetProperty("ambiguous_linkage", out _));
+        // Queue-state must be byte-identical — no item picked.
+        Assert.Equal(queueBefore, File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        // runs.jsonl was never created.
+        Assert.False(File.Exists(
+            Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "runs.jsonl")));
+    }
+
+    [Fact]
+    public void Execute_G329_ClosingIssuesFlagWins_RecordsOperatorFlagSource()
+    {
+        // When the operator passes --closing-issues, that wins over the
+        // auto-fetch path and the result records `operator-flag` as the
+        // source.
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(new[] { 999 }); // would mismatch
+
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G329", "review",
+            linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 759, null)));
+        workspace.WriteFile(".intent-cli/issues/G329/github-body.md", BuildContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--closing-issues", "759",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("operator-flag",
+            root.GetProperty("closing_issues_source").GetString());
     }
 
     [Fact]
