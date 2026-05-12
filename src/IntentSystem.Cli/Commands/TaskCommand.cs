@@ -159,7 +159,8 @@ internal static class TaskCommand
                 "`task issue-to-pr` is the explicit-target counterpart to `worker next-action` returning `action: issue-to-pr`. The dispatch contract is identical; only the discovery path differs.",
                 "Selector loops remain valid — use `worker next-action` for autonomous polling, this planner for controller-driven dispatch.",
                 "Never launch Claude/Codex/AI providers from `intent-cli`; this planner is text-only."
-            }
+            },
+            Prohibitions = GuidanceProhibitionCatalog.All
         };
 
         WritePlan(plan, parsed.Format, writer);
@@ -251,7 +252,8 @@ internal static class TaskCommand
                 "`task review-pr` is the explicit-target counterpart to autonomous host-review. Selector-driven host-review-preflight remains valid; this is for controllers who already know the PR.",
                 "G316 is non-negotiable: every approval summary must satisfy `guide review` `approval_summary_requirements`.",
                 "Never launch AI providers from intent-cli; this planner only emits text the controller runs."
-            }
+            },
+            Prohibitions = GuidanceProhibitionCatalog.All
         };
 
         WritePlan(plan, parsed.Format, writer);
@@ -332,7 +334,8 @@ internal static class TaskCommand
             {
                 "`task fix-pr-comments` is the explicit-target counterpart to `worker next-action` returning `action: pr-comment-fix`. Process at most one repair per wake.",
                 "Latest-actionable-comment selection is the controller's responsibility; this planner emits the contract once selection is made."
-            }
+            },
+            Prohibitions = GuidanceProhibitionCatalog.All
         };
 
         WritePlan(plan, parsed.Format, writer);
@@ -408,7 +411,8 @@ internal static class TaskCommand
             {
                 "`task publish-next-issue` is the explicit one-shot for the host's Stage 2 publish; selector-driven `intent next-slice` remains valid.",
                 "At most ONE issue is published per wake; this planner intentionally returns no loop or scheduler instruction."
-            }
+            },
+            Prohibitions = GuidanceProhibitionCatalog.All
         };
 
         WritePlan(plan, parsed.Format, writer);
@@ -705,4 +709,15 @@ internal sealed record TaskPlan
 
     [JsonPropertyName("notes")]
     public required IReadOnlyList<string> Notes { get; init; }
+
+    /// <summary>
+    /// G323: structured prohibitions list. Every task planner advertises
+    /// the same canonical safety prohibitions
+    /// (<see cref="GuidanceProhibitionCatalog"/>) so controllers can
+    /// dispatch on the structured <c>id</c> values without parsing
+    /// prose, and tests can assert each planner output carries the
+    /// guardrails.
+    /// </summary>
+    [JsonPropertyName("prohibitions")]
+    public IReadOnlyList<GuidanceProhibition>? Prohibitions { get; init; }
 }

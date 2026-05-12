@@ -1111,6 +1111,50 @@ public sealed class GuideAutomationSetupCommandTests
         Assert.Contains("--cwd-role must be", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // --- G323: structured prohibitions on every generated contract --------
+
+    [Theory]
+    [InlineData("child-implement", null)]
+    [InlineData("host-review-next-slice", "J-Tech-Japan/intent-system")]
+    public void Execute_AllPurposes_EmitStructuredProhibitionsJson(string purpose, string? targetRepo)
+    {
+        // G323 acceptance: both setup contracts expose the canonical
+        // structured prohibitions list (id + description) so controllers
+        // dispatch on stable ids without parsing prose. The catalog
+        // (`GuidanceProhibitionCatalog`) is the single source of truth
+        // for setup contracts AND task planners (see TaskCommandTests).
+        var args = new List<string>
+        {
+            "--purpose", purpose,
+            "--domain", "intent-cli",
+            "--format", "json"
+        };
+        if (targetRepo is not null)
+        {
+            args.AddRange(new[] { "--target-repo", targetRepo });
+        }
+
+        using var writer = new StringWriter();
+        var exit = GuideAutomationSetupCommand.Execute(CreateContext(), args.ToArray(), writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var prohibitions = doc.RootElement.GetProperty("prohibitions");
+        Assert.True(prohibitions.GetArrayLength() >= 8);
+        var ids = prohibitions.EnumerateArray()
+            .Select(e => e.GetProperty("id").GetString()!)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("local-rules-fallback-forbidden", ids);
+        Assert.Contains("skill-fallback-forbidden", ids);
+        Assert.Contains("copied-prompt-forbidden", ids);
+        Assert.Contains("stale-memory-fallback-forbidden", ids);
+        Assert.Contains("stale-cli-fallback-forbidden", ids);
+        Assert.Contains("dotnet-run-fallback-forbidden", ids);
+        Assert.Contains("raw-gh-label-mutation-forbidden", ids);
+        Assert.Contains("provider-launch-forbidden", ids);
+        Assert.Contains("intent-cli-run-forbidden", ids);
+    }
+
     [Fact]
     public void AliasResolver_InferCwdRoleMatchesCanonicalPurpose()
     {

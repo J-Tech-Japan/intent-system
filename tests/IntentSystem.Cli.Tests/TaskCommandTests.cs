@@ -362,6 +362,55 @@ public sealed class TaskCommandTests
         Assert.Contains("--format must be 'markdown' or 'json'", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // --- G323: structured prohibitions on every task planner ---------------
+
+    [Theory]
+    [InlineData("issue-to-pr")]
+    [InlineData("review-pr")]
+    [InlineData("fix-pr-comments")]
+    [InlineData("publish-next-issue")]
+    public void Execute_AllTaskPlanners_EmitStructuredProhibitionsJson(string subcommand)
+    {
+        // G323 acceptance: every task planner JSON output exposes the
+        // canonical structured `prohibitions` list (id + description)
+        // so controllers can dispatch on stable ids without parsing
+        // prose. The catalog (`GuidanceProhibitionCatalog`) is the
+        // single source of truth for setup contracts AND task planners.
+        using var writer = new StringWriter();
+        var args = subcommand switch
+        {
+            "issue-to-pr" => new[] { "issue-to-pr", "--repo", "x/y", "--issue", "1", "--workdir", "/tmp/c", "--format", "json" },
+            "review-pr" => new[] { "review-pr", "--repo", "x/y", "--pr", "1", "--workdir", "/tmp/c", "--domain", "d", "--format", "json" },
+            "fix-pr-comments" => new[] { "fix-pr-comments", "--repo", "x/y", "--pr", "1", "--workdir", "/tmp/c", "--format", "json" },
+            "publish-next-issue" => new[] { "publish-next-issue", "--repo", "x/y", "--workdir", "/tmp/h", "--domain", "d", "--target-repo", "x/y", "--format", "json" },
+            _ => throw new ArgumentOutOfRangeException(nameof(subcommand))
+        };
+
+        var exit = TaskCommand.Execute(CreateContext(), args, writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var prohibitions = doc.RootElement.GetProperty("prohibitions");
+        Assert.True(prohibitions.GetArrayLength() >= 8);
+        var ids = prohibitions.EnumerateArray()
+            .Select(e => e.GetProperty("id").GetString()!)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("local-rules-fallback-forbidden", ids);
+        Assert.Contains("skill-fallback-forbidden", ids);
+        Assert.Contains("copied-prompt-forbidden", ids);
+        Assert.Contains("stale-memory-fallback-forbidden", ids);
+        Assert.Contains("stale-cli-fallback-forbidden", ids);
+        Assert.Contains("dotnet-run-fallback-forbidden", ids);
+        Assert.Contains("raw-gh-label-mutation-forbidden", ids);
+        Assert.Contains("provider-launch-forbidden", ids);
+        Assert.Contains("intent-cli-run-forbidden", ids);
+        // Each entry must carry a non-empty description.
+        foreach (var entry in prohibitions.EnumerateArray())
+        {
+            Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("description").GetString()));
+        }
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
