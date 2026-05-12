@@ -37,4 +37,20 @@ public sealed record RunEvent
     public string? ReviewContextRef { get; init; }
 
     public string? WorktreePath { get; init; }
+
+    /// <summary>
+    /// G324: GitHub repository the event refers to, in
+    /// <c>owner/repo</c> form. Optional; populated by closeout / PR
+    /// transition events that bind durable bookkeeping to a specific
+    /// GitHub repository.
+    /// </summary>
+    public string? Repo { get; init; }
+
+    /// <summary>
+    /// G324: GitHub PR number the event refers to. Optional; populated
+    /// alongside <see cref="Repo"/> by closeout / PR-merge events so
+    /// downstream consumers can correlate without re-parsing the
+    /// linked_pr URL.
+    /// </summary>
+    public int? Pr { get; init; }
 }

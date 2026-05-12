@@ -2,6 +2,7 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -15,6 +16,105 @@ public sealed class CloseoutPrCommandTests : IDisposable
     public void Dispose()
     {
         CloseoutPrCommand.UtcNowFactory = null;
+    }
+
+    // --- G324: durable writes use current RunEvent schema + auto-commit safe ---
+
+    [Fact]
+    public void Execute_GivenWrite_AppendsCurrentSchemaRunEventsThatDeserialize()
+    {
+        // G324 acceptance: closeout runs.jsonl lines must use the
+        // canonical `ts` / `execution_unit` / `event` / `by` fields
+        // (plus the new `repo` / `pr` correlation) so the supervisor
+        // and the G312 durable-state preflight can deserialize them.
+        // Legacy `timestamp` / `kind` are gone.
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G324", "review", linkedPr: "595"));
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "595", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var lines = workspace.RunsLines();
+        Assert.Equal(2, lines.Length);
+        foreach (var line in lines)
+        {
+            // New schema fields must be present.
+            Assert.Contains("\"ts\":", line, StringComparison.Ordinal);
+            Assert.Contains("\"event\":", line, StringComparison.Ordinal);
+            Assert.Contains("\"by\":", line, StringComparison.Ordinal);
+            Assert.Contains("\"execution_unit\":\"G324\"", line, StringComparison.Ordinal);
+            // Legacy schema fields must NOT appear in the new line.
+            Assert.DoesNotContain("\"timestamp\":", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"kind\":", line, StringComparison.Ordinal);
+            // Every emitted line must round-trip through the supervisor
+            // deserializer with no exception (this is what `RunsJsonlAppendOnlyAnalyzer`
+            // calls to validate appended lines).
+            var deserialized = RunLogSerializer.DeserializeLine(line);
+            Assert.Equal("G324", deserialized.ExecutionUnit);
+            Assert.Equal("intent-cli closeout pr", deserialized.By);
+            Assert.Equal("J-Tech-Japan/intent-system", deserialized.Repo);
+            Assert.Equal(595, deserialized.Pr);
+        }
+        Assert.Equal("pr-merged", RunLogSerializer.DeserializeLine(lines[0]).Event);
+        Assert.Equal("closeout-recorded", RunLogSerializer.DeserializeLine(lines[1]).Event);
+    }
+
+    [Fact]
+    public void Execute_GivenWrite_QueueStateDeltaIsForwardOnlyAutoCommitSafe()
+    {
+        // G324 acceptance: durable-state-preflight (G312) must classify
+        // the closeout-only state change as forward-only / verified so
+        // the host loop's auto-commit lane proceeds without an operator
+        // review stop on the next wake.
+        using var workspace = new CloseoutPrWorkspace();
+        var beforeQueueText = BuildQueueState("G324", "review", linkedPr: "596");
+        workspace.WriteQueueState(beforeQueueText);
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--write", "--format", "json"],
+            writer);
+        Assert.Equal(0, exitCode);
+
+        var afterQueueText = workspace.QueueStateOnDisk();
+        var delta = QueueStateForwardDeltaAnalyzer.Analyze(beforeQueueText, afterQueueText);
+
+        Assert.Equal(QueueStateForwardDeltaAnalyzer.ClassificationForwardOnly, delta.Classification);
+        var change = Assert.Single(delta.Changes);
+        Assert.Equal(QueueStateForwardChangeKind.ClosedOutToCompleted, change.Kind);
+        Assert.Equal("G324", change.ExecutionUnit);
+    }
+
+    [Fact]
+    public void Execute_GivenWrite_RunsLinesAreAppendOnlyAutoCommitSafe()
+    {
+        // G324 acceptance: combined with the queue-state forward delta,
+        // the runs.jsonl append must classify as append-only so the
+        // overall durable-state preflight reports verified-commit-ready.
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G324", "review", linkedPr: "597"));
+        // Seed an empty runs.jsonl as HEAD so the analyzer compares
+        // empty HEAD vs the 2 appended lines.
+        File.WriteAllText(workspace.Context.GetRunLogPath(), string.Empty);
+        var headRuns = File.ReadAllText(workspace.Context.GetRunLogPath());
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "597", "--write", "--format", "json"],
+            writer);
+        Assert.Equal(0, exitCode);
+
+        var workingRuns = File.ReadAllText(workspace.Context.GetRunLogPath());
+        var runsDelta = RunsJsonlAppendOnlyAnalyzer.Analyze(headRuns, workingRuns);
+
+        Assert.Equal(RunsJsonlAppendOnlyAnalyzer.ClassificationAppendOnly, runsDelta.Classification);
+        Assert.Equal(2, runsDelta.AppendedEventCount);
     }
 
     [Fact]
@@ -672,6 +772,12 @@ public sealed class CloseoutPrCommandTests : IDisposable
         {
             File.WriteAllText(Context.GetQueueStatePath(), content);
         }
+
+        public string QueueStateOnDisk() => File.ReadAllText(Context.GetQueueStatePath());
+
+        public string[] RunsLines() => File.Exists(Context.GetRunLogPath())
+            ? File.ReadAllLines(Context.GetRunLogPath())
+            : Array.Empty<string>();
 
         public void Dispose()
         {

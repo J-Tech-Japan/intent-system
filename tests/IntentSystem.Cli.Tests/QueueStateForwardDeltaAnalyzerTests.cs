@@ -223,6 +223,77 @@ public sealed class QueueStateForwardDeltaAnalyzerTests
         };
     }
 
+    // --- G324: closeout state-transition is forward-only auto-commit safe ---
+
+    [Theory]
+    [InlineData(QueueItemState.Queued)]
+    [InlineData(QueueItemState.Active)]
+    [InlineData(QueueItemState.Review)]
+    [InlineData(QueueItemState.Fixing)]
+    public void Analyze_ClosedOutToCompleted_FromAnyValidStartState_ReturnsForwardOnly(QueueItemState startState)
+    {
+        // G324 acceptance: closeout PR durable writes that only change
+        // the matched item's state to Completed (with no other scalar /
+        // dependency / packet / linked-ref changes) MUST classify as
+        // forward-only so the host's auto-commit lane proceeds without
+        // an operator-review stop.
+        var head = BuildState(item => item with { State = startState });
+        var working = BuildState(item => item with { State = QueueItemState.Completed });
+
+        var result = QueueStateForwardDeltaAnalyzer.Analyze(
+            QueueStateSerializer.Serialize(head),
+            QueueStateSerializer.Serialize(working));
+
+        Assert.Equal(QueueStateForwardDeltaAnalyzer.ClassificationForwardOnly, result.Classification);
+        var change = Assert.Single(result.Changes);
+        Assert.Equal(QueueStateForwardChangeKind.ClosedOutToCompleted, change.Kind);
+        Assert.Equal("SKS-G215", change.ExecutionUnit);
+        Assert.Contains("closed out", result.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Analyze_StateTransitionToUnsupportedTarget_StillNeedsOperatorReview()
+    {
+        // G324 safety rail: forward-only is closeout-shaped. A state
+        // transition Queued → Active (or any other non-Completed
+        // target) must still drop into operator review so we don't
+        // accidentally widen the auto-commit lane beyond the closeout
+        // shape.
+        var head = BuildState(item => item with { State = QueueItemState.Queued });
+        var working = BuildState(item => item with { State = QueueItemState.Active });
+
+        var result = QueueStateForwardDeltaAnalyzer.Analyze(
+            QueueStateSerializer.Serialize(head),
+            QueueStateSerializer.Serialize(working));
+
+        Assert.Equal(QueueStateForwardDeltaAnalyzer.ClassificationNeedsOperatorReview, result.Classification);
+    }
+
+    [Fact]
+    public void Analyze_ClosedOutPlusLinkedPrChange_NeedsOperatorReview()
+    {
+        // G324: the closeout forward-only delta is purely the state
+        // transition. A simultaneous linked_pr addition (or any other
+        // forward-change) requires operator review so the auto-commit
+        // lane doesn't bundle multiple distinct mutations.
+        var head = BuildState(item => item with
+        {
+            State = QueueItemState.Review,
+            LinkedPr = null,
+        });
+        var working = BuildState(item => item with
+        {
+            State = QueueItemState.Completed,
+            LinkedPr = "https://github.com/o/r/pull/9",
+        });
+
+        var result = QueueStateForwardDeltaAnalyzer.Analyze(
+            QueueStateSerializer.Serialize(head),
+            QueueStateSerializer.Serialize(working));
+
+        Assert.Equal(QueueStateForwardDeltaAnalyzer.ClassificationNeedsOperatorReview, result.Classification);
+    }
+
     private static QueueItem BuildExtraItem() => new()
     {
         ExecutionUnit = "EXTRA-1",
