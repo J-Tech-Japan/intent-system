@@ -39,45 +39,45 @@ internal static class GuideWorkflowTaskBugToIntentRepairCommand
         {
             Stage = "report",
             Purpose = "Capture the observed problem as a durable artifact: symptom, repro, environment, observed-vs-expected, and the original instruction or guide output that produced the wrong behavior. The report is the only stage that may be authored by anyone (operator, external agent, child loop reporting a failure); every later stage cites it.",
-            Command = "intent-cli guide automation report --format json",
-            Output = "A bug report draft (markdown body + structured metadata) with: symptom, environment, repro steps, observed/expected, original instruction reference (link to the prompt / guide command / spec section that produced the wrong behavior), and any linked issue/PR/commit refs.",
-            Boundary = "No GitHub mutation. The report is local until triage decides the repair path. If the operator wants the report public immediately, they can `gh issue create` against the implementation repo with the `bug` label — but the canonical handoff is into triage so the gap is classified before a repair lane is chosen.",
-            FailsOpen = "If `guide automation report` is unavailable on the installed CLI (`automation doctor` reports `stale-host-cli`), STOP — refresh the installed CLI; do NOT fall back to ad-hoc gh issue comments. The report is the durable head of the chain; freehand comments break the chain."
+            Command = "intent-cli bug report <domain> [<bug-id>] --title <text> [--text <text> | --from-file <path>] [--suspected-failure-locus <text>] [--instruction-refs <csv>] [--affected-intent-refs <csv>] [--affected-rule-spec-refs <csv>] [--clarification-candidates <csv>] [--execution-units <csv>] [--issues <csv>] [--prs <csv>] [--reviews <csv>]",
+            Output = "A durable bug report under the host's bug projection. The `--instruction-refs` flag preserves the link to the prompt / guide command / spec section that produced the wrong behavior; `--affected-intent-refs` / `--affected-rule-spec-refs` carry the cited intent / rule paths; `--execution-units` / `--issues` / `--prs` / `--reviews` carry the linked artifacts so every later stage can cite them.",
+            Boundary = "Runs on the HOST repo (the bug projection is host-owned). No GitHub mutation at this stage. If the operator wants the report public immediately, they can `gh issue create` against the implementation repo with the `bug` label — but the canonical handoff is into triage so the gap is classified before a repair lane is chosen.",
+            FailsOpen = "If `bug report` is unavailable on the installed CLI (`automation doctor` reports `stale-host-cli`), STOP — refresh the installed CLI; do NOT fall back to ad-hoc gh issue comments. The bug projection is the durable head of the chain; freehand comments break the chain."
         },
         new BugRepairStage
         {
             Stage = "triage",
             Purpose = "Classify the gap. Pick exactly one of the five classifications below. Triage is the decision point that picks the repair lane (intent-repair vs implementation-repair vs metadata-repair). Triage must cite the bug report and the classification rationale.",
-            Command = "intent-cli guide workflow task bug-to-intent-repair --format json",
-            Output = "A triage decision: classification id (one of the five), rationale, and the recommended next-stage command. Stored next to the bug report (operator's notes file or the bug issue body's `Triage:` section).",
-            Boundary = "No GitHub mutation. Triage is a reading exercise: read the bug report, the cited spec/rule/packet, and pick the lane. Triage does NOT create the repair artifact itself — that is the plan / intent-repair / implementation-repair stages.",
+            Command = "intent-cli bug triage <bug-id>",
+            Output = "A durable triage artifact (`.intent-cli/bugs/<bug-id>.triage.yaml`) carrying the classification id (one of the five below), rationale, recommended next-stage command, and references back to the bug report.",
+            Boundary = "Runs on the HOST repo (the bug projection is host-owned). No GitHub mutation. Triage is a reading exercise: read the bug report, the cited spec/rule/packet, pick the lane. Triage does NOT create the repair artifact itself — that is the plan / intent-repair / implementation-repair stages.",
             FailsOpen = "If two or more classifications fit, prefer `intent-gap` or `rule-gap` over `implementation-mismatch`. Child code that does the wrong thing because it followed wrong guidance is an intent/rule gap; fixing only the child code leaves the bad guidance to bite the next agent. The exception is `metadata-workflow-gap`, which always wins (label/queue-state bugs are host-owned)."
         },
         new BugRepairStage
         {
             Stage = "plan",
             Purpose = "For the chosen classification, derive the repair packet shape (when the lane is intent-repair / packet-gap / rule-gap) OR the child implementation issue shape (when the lane is implementation-mismatch) OR the host repair task (when the lane is metadata-workflow-gap). Plan output carries the execution-unit id, the design-host packet directory path (host repo only), and the in/out-of-scope split.",
-            Command = "intent-cli intent next-slice --dry-run --domain <domain> --target-repo <owner/repo> --format json",
-            Output = "A plan record: execution-unit id (e.g. `G34X`), repair lane, design-host packet directory the operator will scaffold, in-scope / out-of-scope split, acceptance criteria draft. Stored as `.intent-cli/issues/<unit>/plan.json` on the host repo.",
-            Boundary = "Plan runs on the HOST repo (design role). Child cwd does NOT plan repair packets — that is host-owned. If the bug surfaced from a child loop, the child loop reports the bug and STOPS; planning is operator-driven on the host.",
+            Command = "intent-cli bug plan <bug-id>",
+            Output = "A durable plan artifact (`.intent-cli/bugs/<bug-id>.plan.yaml`) carrying the execution-unit id (e.g. `G34X`), the repair lane, the design-host packet directory the operator will scaffold, the in-scope / out-of-scope split, and the acceptance-criteria draft.",
+            Boundary = "Plan runs on the HOST repo (design role). Child cwd does NOT plan repair packets — that is host-owned. If the bug surfaced from a child loop, the child loop reports the bug and STOPS; planning is operator-driven on the host. Use `intent-cli intent next-slice --dry-run --domain <domain> --target-repo <owner/repo> --format json` to confirm WIP cap / clarification-blockers before publishing the plan.",
             FailsOpen = "If `intent next-slice --dry-run` reports `wip-cap` or `clarification-required`, STOP — the host queue cannot accept the repair packet yet. Drain the existing in-progress slice (or run `clarification next`) before scheduling the bug repair."
         },
         new BugRepairStage
         {
             Stage = "intent-repair",
             Purpose = "Scaffold the repair packet (when the lane is intent-gap / packet-gap / rule-gap). The repair packet follows the standard G337 packet contract (`packet draft` → four files → `issue validate-body` → `issue publish-flow` → `automation issue-publish --write`). The repair PACKET is the canonical fix surface for guidance bugs; a child PR alone does NOT close the loop because the bad guidance remains in the rule/packet file.",
-            Command = "intent-cli packet draft --execution-unit <unit> --target-repo <owner/repo> --domain <domain> --format markdown",
-            Output = "The four packet files (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`) under the host design-host packet directory. The `github-body.md` MUST cite the original bug report and the cited spec/rule/packet section as `Related Links`, and MUST carry G311 `Closes #<bug-report-issue>` so the repair PR closes the bug.",
+            Command = "intent-cli bug intent-repair <bug-id>",
+            Output = "An intent-repair record (`.intent-cli/bugs/<bug-id>.intent-repair.yaml`) tying the bug's report / triage / plan artifacts to the scaffolded packet. Run `intent-cli packet draft --execution-unit <unit>` to scaffold the four packet files (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`). The `github-body.md` MUST cite the original bug report in `Related Links` AND carry G311 `Closes #<bug-report-issue>`.",
             Boundary = "Packet scaffolding runs on the HOST repo. The repair PACKET is host-side; the repair PR (when needed) is opened from a child cwd via the standard child loop after `automation issue-publish --write` labels the repair issue `intent-target`.",
             FailsOpen = "If `issue validate-body --from-file <github-body.md> --format json` reports missing contract sections, STOP and repair the body before publishing. The G337 issue-publish boundary applies verbatim to repair packets; the FORBIDDEN raw `gh issue edit --add-label intent-target` rule still applies."
         },
         new BugRepairStage
         {
             Stage = "implementation-repair",
-            Purpose = "OPTIONAL when the lane is implementation-mismatch — open a child implementation issue (with `intent-target`) so the child loop picks it up via `worker next-action`. Implementation-repair is NOT the primary lane: most bugs that surface in child PRs are caused by intent-gap or rule-gap upstream, so check triage's classification before defaulting here.",
-            Command = "intent-cli intent draft-issue --domain <domain> --target-repo <owner/repo> --execution-unit <unit> --format markdown",
-            Output = "An issue draft body (markdown) the operator publishes via the G337 publish-flow. After publish, the issue carries `intent-target` and the child loop picks it up on the next wake.",
-            Boundary = "Same host/child split as the standard issue-publish flow (G337). The repair issue is created on the implementation repo (e.g. J-Tech-Japan/intent-system); the child PR repair runs on the child cwd via the standard child loop.",
+            Purpose = "OPTIONAL when the lane is implementation-mismatch — scaffold an implementation-repair issue tied to the bug report so the child loop picks it up via `worker next-action`. Implementation-repair is NOT the primary lane: most bugs that surface in child PRs are caused by intent-gap or rule-gap upstream, so check triage's classification before defaulting here.",
+            Command = "intent-cli bug implementation-repair <bug-id> [--issue-number <n>] [--issue-url <url>] [--actor <name>] [--note <text>]",
+            Output = "An implementation-repair record on the bug projection linking the original bug report to the implementation-repair issue / PR. The issue is created on the implementation repo (e.g. J-Tech-Japan/intent-system) and picks up `intent-target` through the standard G337 publish-flow.",
+            Boundary = "The bug-implementation-repair record runs on the HOST repo (the bug projection is host-owned). The actual implementation-repair issue and PR run on the implementation repo via the standard issue/PR/child-loop lifecycle. Use `intent-cli issue draft <execution-unit>` if you want to scaffold the issue body directly from an existing packet artifact.",
             FailsOpen = "If triage classified the gap as intent-gap / packet-gap / rule-gap, do NOT also open an implementation-repair issue without an upstream intent-repair packet — the child PR would re-implement the wrong guidance. The intent-repair stage MUST land first."
         }
     };

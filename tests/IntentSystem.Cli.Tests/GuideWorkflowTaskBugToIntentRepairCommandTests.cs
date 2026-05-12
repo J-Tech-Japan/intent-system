@@ -88,11 +88,18 @@ public sealed class GuideWorkflowTaskBugToIntentRepairCommandTests
             Assert.Equal("intent-repair", match.GetProperty("repair_lane").GetString());
         }
 
-        // The intent-repair stage's command must scaffold via `packet draft`.
+        // The intent-repair stage must mention `packet draft` —
+        // either in the `command` line (when the stage's headline
+        // surface is `packet draft`) or in the `output` description
+        // (when the headline surface is the bug-lifecycle wrapper
+        // `bug intent-repair` and the packet scaffold is the
+        // follow-up step). Either form satisfies the acceptance
+        // criterion that the lane recommends packet creation.
         var intentRepair = document.RootElement.GetProperty("stages")
             .EnumerateArray()
             .First(s => string.Equals(s.GetProperty("stage").GetString(), "intent-repair", StringComparison.Ordinal));
-        Assert.Contains("packet draft", intentRepair.GetProperty("command").GetString(), StringComparison.Ordinal);
+        var combined = intentRepair.GetProperty("command").GetString() + " " + intentRepair.GetProperty("output").GetString();
+        Assert.Contains("packet draft", combined, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -231,6 +238,126 @@ public sealed class GuideWorkflowTaskBugToIntentRepairCommandTests
     }
 
     [Fact]
+    public void Execute_StageCommands_NameRealCliSurfaces()
+    {
+        // PR #782 review finding: the previous guide advertised
+        // `intent-cli guide automation report` (which does not
+        // accept `report`) and `intent-cli intent draft-issue`
+        // (which is not yet implemented). Regression: walk each
+        // stage's `command` string, peel the first
+        // `intent-cli <group> <subcommand>` pair, and assert the
+        // matching command source file exists. Mirrors the G338
+        // PR #780 "wrapper usage line" regression and the G336 /
+        // G337 flag-against-source pattern.
+        var repoRoot = FindRepoRoot();
+        var commandsDir = Path.Combine(repoRoot, "src/IntentSystem.Cli/Commands");
+
+        // Stable mapping from `intent-cli <group> <subcommand>` to
+        // the source file owning the dispatcher entry. Verified
+        // against `CommandRouter.CommandsByGroup` on PR #782 head.
+        var subcommandToSourceFile = new (string Prefix, string FileName)[]
+        {
+            ("bug report", "BugReportCommand.cs"),
+            ("bug triage", "BugTriageCommand.cs"),
+            // The dispatcher key is `bug plan`; the underlying
+            // class is BugExecutionCommand.cs (renamed dispatcher,
+            // kept class name).
+            ("bug plan", "BugExecutionCommand.cs"),
+            ("bug intent-repair", "BugIntentRepairCommand.cs"),
+            ("bug implementation-repair", "BugImplementationRepairCommand.cs"),
+            ("packet draft", "PacketDraftCommand.cs"),
+            ("issue draft", "IssueDraftCommand.cs"),
+            ("issue validate-body", "IssueValidateBodyCommand.cs"),
+            ("issue publish-flow", "IssuePublishFlowCommand.cs"),
+            ("automation issue-publish", "AutomationIssuePublishCommand.cs"),
+            ("automation doctor", "AutomationDoctorCommand.cs"),
+            ("intent next-slice", "IntentNextSliceCommand.cs"),
+            ("clarification next", "ClarificationCommand.cs"),
+            ("review closeout-plan", "ReviewCloseoutPlanCommand.cs"),
+            ("automation publish-recovery", "AutomationPublishRecoveryCommand.cs"),
+            ("automation reconcile", "AutomationReconcileCommand.cs"),
+            ("guide commands list", "GuideCommandsCommand.cs"),
+            ("automation summary", "AutomationSummaryCommand.cs")
+        };
+
+        // Match `intent-cli <token1> <token2>` inside backticks
+        // anywhere in the Command string.
+        var commandSnippet = new System.Text.RegularExpressions.Regex(
+            @"intent-cli\s+([a-z][a-z0-9-]*)\s+([a-z][a-z0-9-]*)",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        foreach (var stage in GuideWorkflowTaskBugToIntentRepairCommand.Stages)
+        {
+            var match = commandSnippet.Match(stage.Command);
+            Assert.True(
+                match.Success,
+                $"Stage `{stage.Stage}` command does not start with `intent-cli <group> <subcommand>`: `{stage.Command}`");
+
+            var prefix = $"{match.Groups[1].Value} {match.Groups[2].Value}";
+            var row = subcommandToSourceFile.FirstOrDefault(r => string.Equals(r.Prefix, prefix, StringComparison.Ordinal));
+            Assert.False(
+                row.Prefix is null,
+                $"Stage `{stage.Stage}` advertises `intent-cli {prefix}` but that prefix is not in the parity allow-list. Add a row (group/subcommand → source file) if the command is real, or change the stage to use an existing surface.");
+
+            var sourcePath = Path.Combine(commandsDir, row.FileName);
+            Assert.True(
+                File.Exists(sourcePath),
+                $"Stage `{stage.Stage}` advertises `intent-cli {prefix}` but the matching source file is missing: {sourcePath}");
+        }
+    }
+
+    [Fact]
+    public void StageCommands_AreReachableThroughCommandRouter()
+    {
+        // Defense-in-depth: even if the source file exists, the
+        // command must be wired into CommandRouter.CommandsByGroup
+        // for `intent-cli <group> <subcommand>` to actually
+        // dispatch. Walk every stage command and invoke it
+        // through CommandRouter.Execute with no args; the router
+        // must NOT reject with "Unknown 'group' subcommand" /
+        // "Command '... ...' is not yet implemented" / "Unknown
+        // command group".
+        var commandSnippet = new System.Text.RegularExpressions.Regex(
+            @"intent-cli\s+([a-z][a-z0-9-]*)\s+([a-z][a-z0-9-]*)",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        foreach (var stage in GuideWorkflowTaskBugToIntentRepairCommand.Stages)
+        {
+            var match = commandSnippet.Match(stage.Command);
+            Assert.True(match.Success);
+            var group = match.Groups[1].Value;
+            var subcommand = match.Groups[2].Value;
+
+            using var writer = new StringWriter();
+            // Run with just the group/subcommand to confirm the
+            // dispatcher reaches the command's argument parser
+            // (which will reject with a command-specific usage
+            // message). The key signal we are guarding against is
+            // the router-level "Unknown 'group' subcommand" /
+            // "is not yet implemented" responses that mean a
+            // missing dispatcher entry.
+            CommandRouter.Execute(
+                new[] { group, subcommand },
+                CreateContext(),
+                writer);
+            var output = writer.ToString();
+
+            Assert.DoesNotContain(
+                $"Unknown '{group}' subcommand",
+                output,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                $"Command '{group} {subcommand}' is not yet implemented",
+                output,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "Unknown command group",
+                output,
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Execute_UnknownArgument_ExitsOne()
     {
         using var writer = new StringWriter();
@@ -337,6 +464,17 @@ public sealed class GuideWorkflowTaskBugToIntentRepairCommandTests
         using var document = JsonDocument.Parse(writer.ToString());
         Assert.Equal(5, document.RootElement.GetProperty("stages").GetArrayLength());
         Assert.Equal(5, document.RootElement.GetProperty("classifications").GetArrayLength());
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null && !Directory.Exists(Path.Combine(dir, "src")))
+        {
+            dir = Path.GetDirectoryName(dir);
+        }
+        Assert.NotNull(dir);
+        return dir!;
     }
 
     private static CliContext CreateContext()
