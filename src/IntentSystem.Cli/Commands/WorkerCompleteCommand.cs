@@ -70,6 +70,7 @@ internal static class WorkerCompleteCommand
                 out var prNumber,
                 out var mode,
                 out var childCwd,
+                out var githubOnly,
                 out var format,
                 out var error))
         {
@@ -85,10 +86,17 @@ internal static class WorkerCompleteCommand
         // transitions but NEVER touches parent durable state (G300),
         // and the result records `child_cwd: true` so the host loop
         // and operator can see the binding explicitly.
+        //
+        // G333: `--github-only` is the strict child-loop assertion.
+        // It implies child-cwd mode and forbids any queue-state file
+        // read or write regardless of disk state. Used by the
+        // GitHub-contract-only child implementation loop (Claude /
+        // Codex) where the child cwd is a standalone repo and
+        // host metadata reconciliation is host-loop work.
         var implicitChildCwd =
             string.IsNullOrWhiteSpace(context.ResolveParentIntentRepoRootPath())
             && !File.Exists(context.GetQueueStatePath());
-        var inChildCwdMode = childCwd || implicitChildCwd;
+        var inChildCwdMode = childCwd || githubOnly || implicitChildCwd;
 
         // G283: issue-to-pr success requires the created PR number so the
         // command can publish it to host review (PR-side intent-target) and
@@ -340,6 +348,7 @@ internal static class WorkerCompleteCommand
             PrTargetApplied = prTargetApplied,
             LinkedPrSynced = linkedPrSynced,
             ChildCwd = inChildCwdMode,
+            GithubOnly = githubOnly,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -530,6 +539,7 @@ internal static class WorkerCompleteCommand
         out int? prNumber,
         out string mode,
         out bool childCwd,
+        out bool githubOnly,
         out string format,
         out string error)
     {
@@ -540,6 +550,7 @@ internal static class WorkerCompleteCommand
         prNumber = null;
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
         childCwd = false;
+        githubOnly = false;
         format = FormatText;
         error = string.Empty;
 
@@ -612,6 +623,14 @@ internal static class WorkerCompleteCommand
                     break;
 
                 case "--child-cwd":
+                    childCwd = true;
+                    break;
+
+                case "--github-only":
+                    // G333: strict child-loop assertion — implies
+                    // --child-cwd and additionally records `github_only`
+                    // on the result so the host loop can audit.
+                    githubOnly = true;
                     childCwd = true;
                     break;
 
