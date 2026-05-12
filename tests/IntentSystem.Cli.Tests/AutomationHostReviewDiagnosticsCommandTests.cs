@@ -868,6 +868,89 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Execute_PublishRecoveryProbe_SurfacesPublishRecoveryReady_WhenSafeRepairsAvailable()
+    {
+        // G342: when `automation publish-recovery --dry-run` reports
+        // safe_repairs > 0, the diagnostics must surface
+        // `publish-recovery-ready` (the `linked_pr` deterministic
+        // recovery lane) instead of `true-idle`. Mirrors the
+        // host-loop-next-action probe so both surfaces agree.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 1, UnsafeStopCount = 0 });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "owner/repo", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.Equal("publish-recovery-ready", result.Classification);
+            Assert.NotNull(result.RecommendedNextCommand);
+            Assert.Contains("publish-recovery", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+            AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_OperatorSupplied_PublishRecoveryRepairs_BypassesProbe_InDiagnostics()
+    {
+        // G342: when the operator pre-supplies
+        // `--publish-recovery-repairs-available <N>`, the diagnostics
+        // skip the probe and use the operator value verbatim.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        var probeInvoked = false;
+        AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = _ =>
+        {
+            probeInvoked = true;
+            return new FakePublishRecoveryProbe(new PublishRecoveryProbeResult { SafeRepairCount = 99, UnsafeStopCount = 0 });
+        };
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "owner/repo", "--publish-recovery-repairs-available", "1", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.False(probeInvoked, "publish-recovery probe must not run when operator pre-supplied the count");
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.Equal("publish-recovery-ready", result.Classification);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+            AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = null;
+        }
+    }
+
+    /// <summary>
+    /// G342: deterministic stand-in for the publish-recovery probe.
+    /// </summary>
+    private sealed class FakePublishRecoveryProbe : IPublishRecoveryProbe
+    {
+        private readonly PublishRecoveryProbeResult? _canned;
+        public FakePublishRecoveryProbe(PublishRecoveryProbeResult? canned) { _canned = canned; }
+        public PublishRecoveryProbeResult? Probe(string repo) => _canned;
+    }
+
     /// <summary>
     /// G341: deterministic stand-in for <see cref="INextSliceDryRunProbe"/>
     /// used by the host-review-diagnostics tests. Returns a canned
