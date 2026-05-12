@@ -284,9 +284,16 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     [Fact]
     public void Execute_IssuePrCreatedOutcome_LinkedPrSyncWarnsWhenQueueStateAbsent()
     {
-        using var workspace = new WorkerCompleteWorkspace();
-        // intentionally do NOT seed queue-state.json
-        Assert.False(File.Exists(workspace.QueueStatePath));
+        // G283/G330: when a parent intent repo root IS configured but
+        // the queue-state file is missing, the writer surfaces the
+        // pre-G330 "queue-state.json not found" warning — this is the
+        // host-context drift signal that recommends running
+        // `automation reconcile`. (Child-cwd mode without a parent
+        // root is exercised in a separate G330 test, see below.)
+        using var parentWorkspace = new WorkerCompleteWorkspace();
+        // intentionally do NOT seed queue-state.json on the parent
+        Assert.False(File.Exists(parentWorkspace.QueueStatePath));
+        using var workspace = new WorkerCompleteWorkspace(parentIntentRepoRoot: parentWorkspace.RootPath);
 
         var mutator = new FakeMutator
         {
@@ -314,6 +321,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.True(result.Proceed);
         Assert.True(result.PrTargetApplied);
         Assert.False(result.LinkedPrSynced);
+        Assert.False(result.ChildCwd,
+            "with a parent intent repo root configured the writer must NOT auto-enter child-cwd mode.");
         Assert.Contains(result.Warnings, w => w.Contains("queue-state.json not found", StringComparison.Ordinal));
     }
 
@@ -1259,6 +1268,205 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         public required int Number { get; init; }
         public required IReadOnlyList<string> AddLabels { get; init; }
         public required IReadOnlyList<string> RemoveLabels { get; init; }
+    }
+
+    // --- G330: child worker flows are parent-host-state-free -----------------
+
+    [Fact]
+    public void Execute_G330_ChildCwdImplicit_IssueToPr_NeverTouchesParentState()
+    {
+        // G330 acceptance: a child worker completing an issue-to-pr
+        // from a child worktree WITHOUT parent .intent-cli/ MUST:
+        //  - apply GitHub label transitions (issue-side + PR-side)
+        //  - report `child_cwd: true` (auto-detected — no parent root
+        //    configured AND no local queue-state)
+        //  - NOT touch any queue-state file
+        //  - surface the G329 closeout-plan recovery command pointer
+        //    so the operator/review-runtime can recover linkage host-side
+        using var workspace = new WorkerCompleteWorkspace();
+        // No parent intent repo root configured; no local queue-state.
+        Assert.False(File.Exists(workspace.QueueStatePath));
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "764",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.True(result.PrTargetApplied);
+        Assert.False(result.LinkedPrSynced);
+        Assert.True(result.ChildCwd);
+        Assert.Contains(result.Warnings,
+            w => w.Contains("child-cwd mode", StringComparison.Ordinal));
+        Assert.Contains(result.Warnings,
+            w => w.Contains("closeout-plan", StringComparison.Ordinal));
+        // The "queue-state.json not found" warning MUST NOT fire in
+        // child-cwd mode — that signal is for hosts with a real
+        // parent-host-root configuration.
+        Assert.DoesNotContain(result.Warnings,
+            w => w.Contains("queue-state.json not found", StringComparison.Ordinal));
+
+        // No queue-state file was ever created by the writer.
+        Assert.False(File.Exists(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_G330_ChildCwdExplicit_SkipsQueueStateEvenWhenLocalFileExists()
+    {
+        // G330 invariant: --child-cwd is a hard refuse-to-write
+        // assertion. Even if a stray local `.intent-cli/queue-state.json`
+        // exists in the child worktree (which violates G300), the
+        // command must NOT touch it.
+        using var workspace = new WorkerCompleteWorkspace();
+        // Seed a local queue-state on the child workspace — a G300
+        // violation, but the test guards against accidentally writing
+        // to it.
+        workspace.SeedQueueStateWithLinkedIssue(
+            executionUnit: "G330",
+            title: "G330 unit",
+            sourceIssueNumber: 525,
+            existingLinkedPr: null);
+        var queueBefore = File.ReadAllText(workspace.QueueStatePath);
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "764",
+                "--child-cwd",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.True(result.ChildCwd);
+        Assert.False(result.LinkedPrSynced);
+
+        // Local queue-state must be byte-identical to before — even
+        // though it existed on disk, --child-cwd refused to touch it.
+        Assert.Equal(queueBefore, File.ReadAllText(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_G330_ChildCwd_PrCommentFix_MovesToRereviewReadyWithoutHostState()
+    {
+        // G330 acceptance: child PR-comment-fix completion (repair-pushed)
+        // moves the PR to rereview-ready via GitHub labels only —
+        // no parent durable state involved at all. linked_pr_synced is
+        // null because that field is issue-to-pr-specific.
+        using var workspace = new WorkerCompleteWorkspace();
+        Assert.False(File.Exists(workspace.QueueStatePath));
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-update-in-progress", "intent-pr-request-update" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "pr",
+                "--number", "762",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.RepairPushed,
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.True(result.Applied);
+        Assert.True(result.ChildCwd,
+            "pr-comment-fix completion from a child cwd must auto-detect child_cwd=true.");
+        Assert.Contains("intent-pr-rereview-ready", result.AddLabels);
+        Assert.DoesNotContain(result.Warnings,
+            w => w.Contains("queue-state.json not found", StringComparison.Ordinal));
+        // No queue-state file ever created.
+        Assert.False(File.Exists(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_G330_HostContextWithParentRootSeeded_ChildCwdFalseAndQueueStateWritten()
+    {
+        // G330 invariant: hosts with a real parent root + seeded
+        // queue-state must NOT auto-enter child-cwd mode. The writer
+        // continues its pre-G330 host behavior: linked_pr is synced
+        // and `child_cwd` is false.
+        using var parent = new WorkerCompleteWorkspace();
+        parent.SeedQueueStateWithLinkedIssue(
+            executionUnit: "G283",
+            title: "host packet",
+            sourceIssueNumber: 525,
+            existingLinkedPr: null);
+        using var workspace = new WorkerCompleteWorkspace(parentIntentRepoRoot: parent.RootPath);
+
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "525",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "999",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.False(result.ChildCwd);
+        Assert.True(result.LinkedPrSynced);
+        // The parent queue-state actually got the linked_pr URL.
+        var parentQueue = QueueStateSerializer.Deserialize(File.ReadAllText(parent.QueueStatePath));
+        var matched = parentQueue.Items.Single(i => i.ExecutionUnit == "G283");
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/999", matched.LinkedPr);
     }
 
     private sealed class WorkerCompleteWorkspace : IDisposable
