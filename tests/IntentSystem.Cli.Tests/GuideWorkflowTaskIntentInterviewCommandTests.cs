@@ -237,6 +237,122 @@ public sealed class GuideWorkflowTaskIntentInterviewCommandTests
         Assert.Contains("interview record-answer", seeAlso, StringComparison.Ordinal);
     }
 
+    // ---- PR #776 regression: guide command examples match real CLI ----
+
+    [Fact]
+    public void InterviewModeCommands_FlagsExistInActualCliCommandSource()
+    {
+        // Regression test for the PR #776 review finding: each
+        // `--flag` named in the guide's interview-mode command
+        // examples MUST exist as a parser case in the real command's
+        // source file. The original draft had `--question-id` /
+        // `--answer-file` that no command implements; this check
+        // catches drift immediately by greppimg the command source
+        // for `case "--flag":` entries.
+        AssertGuideExampleFlagsExistInSource(
+            "interview",
+            new Dictionary<string, string>
+            {
+                ["intent-cli interview next-question"] = "src/IntentSystem.Cli/Commands/InterviewNextQuestionCommand.cs",
+                ["intent-cli interview record-answer"] = "src/IntentSystem.Cli/Commands/InterviewRecordAnswerCommand.cs",
+                ["intent-cli interview compile"] = "src/IntentSystem.Cli/Commands/InterviewCompileCommand.cs",
+                ["intent-cli intent draft-from-interview"] = "src/IntentSystem.Cli/Commands/IntentDraftFromInterviewCommand.cs"
+            });
+    }
+
+    [Fact]
+    public void ClarificationModeCommands_FlagsExistInActualCliCommandSource()
+    {
+        // Same regression check for the clarification mode. The
+        // original draft had `--clarification-id` / `--answer-file`
+        // and a non-existent `--write` flag on `clarify record`
+        // (which is `--from-file` / `--dry-run`); the reviewer
+        // surfaced this and the fix routes each example to the real
+        // flag set.
+        AssertGuideExampleFlagsExistInSource(
+            "clarification",
+            new Dictionary<string, string>
+            {
+                ["intent-cli clarification status"] = "src/IntentSystem.Cli/Commands/ClarificationCommand.cs",
+                ["intent-cli clarification next"] = "src/IntentSystem.Cli/Commands/ClarificationCommand.cs",
+                ["intent-cli clarification answer"] = "src/IntentSystem.Cli/Commands/ClarificationCommand.cs",
+                ["intent-cli clarify draft"] = "src/IntentSystem.Cli/Commands/ClarifyDraftCommand.cs",
+                ["intent-cli clarify record"] = "src/IntentSystem.Cli/Commands/ClarifyRecordCommand.cs"
+            });
+    }
+
+    private static void AssertGuideExampleFlagsExistInSource(
+        string modeId,
+        IReadOnlyDictionary<string, string> commandPrefixToSourcePath)
+    {
+        var mode = GuideWorkflowTaskIntentInterviewCommand.Modes
+            .First(m => string.Equals(m.Mode, modeId, StringComparison.Ordinal));
+
+        var flagPattern = new System.Text.RegularExpressions.Regex(
+            @"--[a-z][a-z-]*",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        var repoRoot = FindRepoRoot();
+
+        foreach (var commandLine in mode.Commands)
+        {
+            var commandPrefix = ExtractCommandPrefix(commandLine);
+            Assert.True(
+                commandPrefixToSourcePath.ContainsKey(commandPrefix),
+                $"Guide example references command '{commandPrefix}' but the test has no source path mapping for it.");
+
+            var relativePath = commandPrefixToSourcePath[commandPrefix];
+            var fullPath = Path.Combine(repoRoot, relativePath);
+            Assert.True(File.Exists(fullPath), $"Expected command source file at {fullPath}");
+            var source = File.ReadAllText(fullPath);
+
+            foreach (System.Text.RegularExpressions.Match match in flagPattern.Matches(commandLine))
+            {
+                var flag = match.Value;
+                // The flag must appear in the source as a parser
+                // case label. We tolerate either `case "--flag":` or
+                // a plain string mention because some commands keep
+                // flag names in const tables; the key invariant is
+                // that the literal flag string is present.
+                Assert.True(
+                    source.Contains($"\"{flag}\"", StringComparison.Ordinal),
+                    $"Guide example for `{commandPrefix}` mentions flag `{flag}` that does not appear in {relativePath}. The guide example must match the real CLI surface.");
+            }
+        }
+    }
+
+    private static string FindRepoRoot()
+    {
+        // Walk upward from the test binary until we find a `src`
+        // folder (the repo root).
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null && !Directory.Exists(Path.Combine(dir, "src")))
+        {
+            dir = Path.GetDirectoryName(dir);
+        }
+        Assert.NotNull(dir);
+        return dir!;
+    }
+
+    private static string ExtractCommandPrefix(string commandLine)
+    {
+        // Read tokens until we hit a flag, an `[optional]`, or a
+        // `<placeholder>` — the prefix is the command itself.
+        var tokens = commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var parts = new List<string>();
+        foreach (var token in tokens)
+        {
+            if (token.StartsWith("--", StringComparison.Ordinal)
+                || token.StartsWith("[", StringComparison.Ordinal)
+                || token.StartsWith("<", StringComparison.Ordinal))
+            {
+                break;
+            }
+            parts.Add(token);
+        }
+        return string.Join(" ", parts);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

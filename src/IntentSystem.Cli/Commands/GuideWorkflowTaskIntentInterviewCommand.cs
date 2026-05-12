@@ -92,13 +92,19 @@ internal static class GuideWorkflowTaskIntentInterviewCommand
         {
             Mode = ModeInterview,
             Purpose = "Shape a NEW concept into a durable intent. The conversation produces the intent tree update and unblocks `intent next-slice` for the first time.",
-            DurableArtifactPath = "intents/<domain>/interview/<date>-<slice>.md (or the per-domain default — confirm via `intent-cli interview compile --domain <d> --format json`).",
+            DurableArtifactPath = "intents/<domain>/interview/<date>-<slice>.md (or the per-domain default — confirm via `intent-cli interview compile --session <session-id> [--domain <d>] --format json`).",
+            // PR #776 reviewer fix: command examples MUST match the
+            // real CLI signatures. The interview surface is
+            // session-keyed (`--session <id>`), uses `--question` +
+            // `--from-file` for record-answer, and `--session` for
+            // compile / draft-from-interview. Domain is optional and
+            // falls back to the host config.
             Commands = new[]
             {
-                "intent-cli interview next-question --domain <domain-name> --format json",
-                "intent-cli interview record-answer --domain <domain-name> --question-id <id> --answer-file <path> --write --format json",
-                "intent-cli interview compile --domain <domain-name> --format json",
-                "intent-cli intent draft-from-interview --domain <domain-name> --write --format json"
+                "intent-cli interview next-question --session <session-id> [--domain <domain-name>] --format json",
+                "intent-cli interview record-answer --session <session-id> --question <question-id> --from-file <answer-path> [--domain <domain-name>] [--prompt <text>] --write --format json",
+                "intent-cli interview compile --session <session-id> [--domain <domain-name>] --format json",
+                "intent-cli intent draft-from-interview --session <session-id> [--domain <domain-name>] --write --format json"
             },
             StopConditions = new[]
             {
@@ -113,19 +119,25 @@ internal static class GuideWorkflowTaskIntentInterviewCommand
             Mode = ModeClarification,
             Purpose = "REPAIR an existing intent that has hit a Hard Clarification blocker. The interview's job is to extract exactly enough operator input to unblock `intent next-slice`; it MUST NOT pretend to be a fresh-concept interview.",
             DurableArtifactPath = "intents/<domain>/clarifications/<clarification-id>.json (created by `clarify open` or `clarification next` — never hand-edited).",
+            // PR #776 reviewer fix: `clarification answer` is a choice
+            // / note flow (the prompt-matrix surface), not a file
+            // upload. `clarify record` consumes a recorded decision
+            // packet via `--from-file`, and `clarify draft` is keyed
+            // on `--question` (the open question text), not a
+            // clarification id.
             Commands = new[]
             {
-                "intent-cli clarification status --domain <domain-name> --format json",
-                "intent-cli clarification next --domain <domain-name> --format json",
-                "intent-cli clarification answer --domain <domain-name> --clarification-id <id> --answer-file <path> --write --format json",
-                "intent-cli clarify draft --domain <domain-name> --clarification-id <id> --format markdown",
-                "intent-cli clarify record --domain <domain-name> --clarification-id <id> --write --format json"
+                "intent-cli clarification status [--domain <domain-name>] --format json",
+                "intent-cli clarification next [--domain <domain-name>] --format json",
+                "intent-cli clarification answer --domain <domain-name> --id <clarification-id> --choice <option-id> [--note <text>] --write --format json",
+                "intent-cli clarify draft --domain <domain-name> --question <open-question-text> --format markdown",
+                "intent-cli clarify record --domain <domain-name> --from-file <decision-packet-path> [--dry-run]"
             },
             StopConditions = new[]
             {
                 "`clarification status` reports the blocker as `answered`; `intent next-slice --dry-run` no longer returns `clarification-required`.",
-                "Operator explicitly closes the clarification with a `won't-fix` or `out-of-scope` answer; the intent tree update is then optional, not blocking.",
-                "Operator answer reveals the blocker is actually a fresh-concept gap (interview-class): stop the clarification cleanly via `clarify record --won't-fix`, then start a new interview via `interview next-question`."
+                "Operator explicitly closes the clarification with a `won't-fix` or `out-of-scope` choice; the intent tree update is then optional, not blocking.",
+                "Operator answer reveals the blocker is actually a fresh-concept gap (interview-class): stop the clarification cleanly (record the decision via `clarify record --from-file`), then start a new interview via `interview next-question --session <id>`."
             },
             FollowUp = "After answering, re-run `intent-cli intent next-slice --dry-run --domain <d> --format json`. If still blocked, the next clarification will be queued and `clarification next` returns it."
         }
