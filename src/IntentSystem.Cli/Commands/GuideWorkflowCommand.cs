@@ -22,7 +22,7 @@ internal static class GuideWorkflowCommand
 
         if (args.Length == 0)
         {
-            writer.WriteLine("guide workflow requires a subcommand. Supported: suggest.");
+            writer.WriteLine("guide workflow requires a subcommand. Supported: suggest, task.");
             WriteHelp(writer);
             return 1;
         }
@@ -31,13 +31,18 @@ internal static class GuideWorkflowCommand
         return subcommand switch
         {
             "suggest" => GuideWorkflowSuggestCommand.Execute(context, args[1..], writer),
+            // G335: `guide workflow task <task-name>` returns a
+            // bounded scaffold/init plan. Today only `init-host` is
+            // wired; future tasks plug in via the GuideWorkflowTaskCommand
+            // dispatcher.
+            "task" => GuideWorkflowTaskCommand.Execute(context, args[1..], writer),
             _ => UnknownSubcommand(writer, subcommand)
         };
     }
 
     private static int UnknownSubcommand(TextWriter writer, string subcommand)
     {
-        writer.WriteLine($"Unknown 'guide workflow' subcommand '{subcommand}'. Supported: suggest.");
+        writer.WriteLine($"Unknown 'guide workflow' subcommand '{subcommand}'. Supported: suggest, task.");
         WriteHelp(writer);
         return 1;
     }
@@ -45,9 +50,12 @@ internal static class GuideWorkflowCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("guide workflow");
-        writer.WriteLine("Usage: intent-cli guide workflow suggest [--domain <name>] (--goal <text> | --from-file <path>) [--format markdown|json]");
+        writer.WriteLine("Usage:");
+        writer.WriteLine("  intent-cli guide workflow suggest [--domain <name>] (--goal <text> | --from-file <path>) [--format markdown|json]");
+        writer.WriteLine("  intent-cli guide workflow task <task-name> [task-specific options]");
         writer.WriteLine();
         writer.WriteLine("Subcommands:");
         writer.WriteLine("- suggest — recommend a workflow + commands + rule topics for a broad operator goal");
+        writer.WriteLine("- task — bounded scaffold/init plans; today: `task init-host` explains the design / review-runtime / child-implementation roles and emits a scaffold plan (G335)");
     }
 }

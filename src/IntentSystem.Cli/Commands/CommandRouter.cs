@@ -509,7 +509,7 @@ internal static class CommandRouter
     /// </summary>
     internal static readonly IReadOnlyList<string> WorkflowGuidePointersHelp = new[]
     {
-        "init — `intent-cli intent init --domain <name> --target-repo <r> --write` (bootstrap host domain).",
+        "init — `intent-cli guide workflow task init-host --format json` (pick design / review-runtime / child-implementation role + scaffold plan, G335) then `intent-cli intent init --domain <name> --target-repo <r> --write` for host roles.",
         "interview — `intent-cli interview next-question --domain <d> --format json` (durable Q/A artifact).",
         "packet — `intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown` (canonical packet scaffold).",
         "issue — `intent-cli issue publish-flow <id> --repo <r> --write --format json` (publish next-slice issue).",
