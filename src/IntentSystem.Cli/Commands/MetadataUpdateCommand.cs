@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using IntentSystem.Cli;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -70,6 +71,8 @@ internal static class MetadataUpdateCommand
                 out var linkedPrUrl,
                 out var headSha,
                 out var mergeCommit,
+                out var scopeDomain,
+                out var scopeTargetRepo,
                 out var format,
                 out var error))
         {
@@ -83,6 +86,16 @@ internal static class MetadataUpdateCommand
         // automation accidentally write whichever repo happens to be
         // the current directory.
         var rootPath = root!;
+
+        // G327: resolve runtime-state paths. When both --scope-domain and
+        // --scope-target-repo are supplied, queue-state and runs.jsonl
+        // writes land under
+        // `.intent-cli/runtime/<domain>/<owner>__<repo>/...` (scoped
+        // layout). Legacy root paths win when a scoped file is missing
+        // but a legacy one exists — that preserves the transition
+        // contract until callers migrate. Packet lookup stays at
+        // `.intent-cli/issues/<execution-unit>/` regardless.
+        var scopedPaths = ResolveScopedPaths(rootPath, scopeDomain, scopeTargetRepo);
 
         // Mode-specific argument coherence.
         if (string.Equals(mode, MetadataUpdateConstants.Modes.CompletedCloseout, StringComparison.Ordinal))
@@ -98,7 +111,7 @@ internal static class MetadataUpdateCommand
         MetadataValidateInputs validateInputs;
         try
         {
-            validateInputs = LoadValidateInputs(rootPath, executionUnit!);
+            validateInputs = LoadValidateInputs(rootPath, executionUnit!, scopedPaths);
         }
         catch (Exception exception) when (
             exception is IOException
@@ -151,7 +164,8 @@ internal static class MetadataUpdateCommand
                         linkedPrUrl,
                         headSha,
                         mergeCommit,
-                        validation.Warnings),
+                        validation.Warnings,
+                        scopedPaths),
                 _ => throw new InvalidOperationException($"unsupported mode '{mode}'"),
             };
         }
@@ -189,10 +203,12 @@ internal static class MetadataUpdateCommand
             .ToArray();
     }
 
-    private static MetadataValidateInputs LoadValidateInputs(string rootPath, string executionUnit)
+    private static MetadataValidateInputs LoadValidateInputs(
+        string rootPath,
+        string executionUnit,
+        ScopedRuntimePaths scopedPaths)
     {
         var unitDir = Path.Combine(rootPath, ".intent-cli", "issues", executionUnit);
-        var queueStatePath = Path.Combine(rootPath, ".intent-cli", "queue-state.json");
         return new MetadataValidateInputs
         {
             ExecutionUnit = executionUnit,
@@ -201,7 +217,13 @@ internal static class MetadataUpdateCommand
             ReviewContextMarkdown = ReadIfExists(Path.Combine(unitDir, "review-context.md")),
             ImplementationMarkdown = ReadIfExists(Path.Combine(unitDir, "implementation.md")),
             PublishYaml = ReadIfExists(Path.Combine(unitDir, "publish.yaml")),
-            QueueStateJson = ReadIfExists(queueStatePath),
+            // G327: the analyzer must see the same queue-state that the
+            // writer will mutate so its findings line up with the
+            // post-write reality. ScopedPaths.QueueStatePath is scoped
+            // when a scoped file exists, legacy when only legacy exists,
+            // and the scoped target when neither exists (a missing read
+            // is fine — the analyzer treats null as "no queue state").
+            QueueStateJson = ReadIfExists(scopedPaths.QueueStatePath),
         };
     }
 
@@ -225,12 +247,19 @@ internal static class MetadataUpdateCommand
         string? linkedPrUrl,
         string? headSha,
         string? mergeCommit,
-        IReadOnlyList<MetadataValidateFinding> warnings)
+        IReadOnlyList<MetadataValidateFinding> warnings,
+        ScopedRuntimePaths scopedPaths)
     {
         var unitDir = Path.Combine(rootPath, ".intent-cli", "issues", executionUnit);
-        var queueStatePath = Path.Combine(rootPath, ".intent-cli", "queue-state.json");
+        // G327: when a scope is named, these point under
+        // `.intent-cli/runtime/<domain>/<owner>__<repo>/...`. Otherwise
+        // they're the legacy root paths (byte-identical pre-G327
+        // behavior).
+        var queueStatePath = scopedPaths.QueueStatePath;
+        var queueStateRelative = scopedPaths.QueueStateRelativePath;
         var publishPath = Path.Combine(unitDir, "publish.yaml");
-        var runsPath = Path.Combine(rootPath, ".intent-cli", "runs.jsonl");
+        var runsPath = scopedPaths.RunLogPath;
+        var runsRelative = scopedPaths.RunLogRelativePath;
 
         var updatedFiles = new List<string>();
         var errors = new List<MetadataValidateFinding>();
@@ -242,7 +271,7 @@ internal static class MetadataUpdateCommand
             {
                 Code = MetadataValidateConstants.Codes.QueueStateMissing,
                 Message = $"required queue-state file not found: {queueStatePath}",
-                Path = ".intent-cli/queue-state.json",
+                Path = queueStateRelative,
             });
             return Failure(executionUnit, errors, warnings);
         }
@@ -266,7 +295,7 @@ internal static class MetadataUpdateCommand
             {
                 Code = MetadataUpdateConstants.Codes.AlreadyCompleted,
                 Message = $"queue-state entry '{executionUnit}' is already marked completed; refusing to clobber.",
-                Path = ".intent-cli/queue-state.json",
+                Path = queueStateRelative,
             });
             return Failure(executionUnit, errors, warnings);
         }
@@ -285,8 +314,12 @@ internal static class MetadataUpdateCommand
         }
 
         // No queue/publish failure: write the updates atomically (per file).
+        // G327: the scoped layout may need its parent directory created
+        // on first write (legacy root is always present because --root
+        // exists). Idempotent.
+        Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
         File.WriteAllText(queueStatePath, newQueueText);
-        updatedFiles.Add(".intent-cli/queue-state.json");
+        updatedFiles.Add(queueStateRelative);
 
         var newPublishText = AppendPrBlockToPublishYaml(
             publishRaw,
@@ -314,8 +347,11 @@ internal static class MetadataUpdateCommand
         if (!string.IsNullOrEmpty(mergeCommit)) eventDoc["merge_commit"] = mergeCommit;
 
         var eventLine = JsonSerializer.Serialize(eventDoc) + "\n";
+        // G327: same first-write directory creation guard for the scoped
+        // runs.jsonl append.
+        Directory.CreateDirectory(Path.GetDirectoryName(runsPath)!);
         File.AppendAllText(runsPath, eventLine);
-        updatedFiles.Add(".intent-cli/runs.jsonl");
+        updatedFiles.Add(runsRelative);
 
         return new MetadataUpdateResult
         {
@@ -588,6 +624,8 @@ internal static class MetadataUpdateCommand
         out string? linkedPrUrl,
         out string? headSha,
         out string? mergeCommit,
+        out string? scopeDomain,
+        out string? scopeTargetRepo,
         out string format,
         out string error)
     {
@@ -599,6 +637,8 @@ internal static class MetadataUpdateCommand
         linkedPrUrl = null;
         headSha = null;
         mergeCommit = null;
+        scopeDomain = null;
+        scopeTargetRepo = null;
         format = FormatText;
         error = string.Empty;
 
@@ -657,6 +697,16 @@ internal static class MetadataUpdateCommand
                         return false;
                     i++;
                     break;
+                case "--scope-domain":
+                    if (!Next(args, i, out scopeDomain, out error, "--scope-domain"))
+                        return false;
+                    i++;
+                    break;
+                case "--scope-target-repo":
+                    if (!Next(args, i, out scopeTargetRepo, out error, "--scope-target-repo"))
+                        return false;
+                    i++;
+                    break;
                 case "--format":
                     if (!Next(args, i, out var fmt, out error, "--format"))
                         return false;
@@ -670,7 +720,7 @@ internal static class MetadataUpdateCommand
                     i++;
                     break;
                 default:
-                    error = $"Unknown argument '{a}'. Supported: --root <path> --execution-unit <ID> --mode <mode> [--linked-pr <n>] [--linked-pr-repo <repo>] [--linked-pr-url <url>] [--head-sha <sha>] [--merge-commit <sha>] [--format text|json].";
+                    error = $"Unknown argument '{a}'. Supported: --root <path> --execution-unit <ID> --mode <mode> [--linked-pr <n>] [--linked-pr-repo <repo>] [--linked-pr-url <url>] [--head-sha <sha>] [--merge-commit <sha>] [--scope-domain <domain>] [--scope-target-repo <owner/repo>] [--format text|json].";
                     return false;
             }
         }
@@ -700,7 +750,94 @@ internal static class MetadataUpdateCommand
             return false;
         }
 
+        // G327: --scope-domain and --scope-target-repo are paired. Either
+        // both are supplied (opt-in scoped runtime layout) or neither is
+        // (legacy root behavior, byte-identical pre-G327). A half-set
+        // is a usage error.
+        var hasScopeDomain = !string.IsNullOrWhiteSpace(scopeDomain);
+        var hasScopeRepo = !string.IsNullOrWhiteSpace(scopeTargetRepo);
+        if (hasScopeDomain != hasScopeRepo)
+        {
+            error = "--scope-domain and --scope-target-repo must be supplied together (or both omitted to keep legacy root behavior).";
+            return false;
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// G327: resolve the queue-state.json and runs.jsonl write/read
+    /// paths for a metadata update. When the caller did NOT name a
+    /// scope, this returns the legacy root paths (byte-identical
+    /// pre-G327 behavior). When the caller named both scope-domain and
+    /// scope-target-repo, the resolver prefers the scoped path when a
+    /// scoped file is on disk, falls back to the legacy root when only
+    /// a legacy file exists, and uses the scoped path as the
+    /// first-write target when neither exists.
+    /// </summary>
+    private static ScopedRuntimePaths ResolveScopedPaths(
+        string rootPath,
+        string? scopeDomain,
+        string? scopeTargetRepo)
+    {
+        var legacyQueueStatePath = Path.Combine(rootPath, ".intent-cli", "queue-state.json");
+        var legacyRunLogPath = Path.Combine(rootPath, ".intent-cli", "runs.jsonl");
+
+        if (string.IsNullOrWhiteSpace(scopeDomain) || string.IsNullOrWhiteSpace(scopeTargetRepo))
+        {
+            return new ScopedRuntimePaths(
+                QueueStatePath: legacyQueueStatePath,
+                QueueStateRelativePath: ".intent-cli/queue-state.json",
+                RunLogPath: legacyRunLogPath,
+                RunLogRelativePath: ".intent-cli/runs.jsonl",
+                Layout: ScopedRuntimePaths.LegacyLayout);
+        }
+
+        var queueLocation = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(
+            rootPath, scopeDomain, scopeTargetRepo);
+        var runLocation = RuntimeScopedStateResolver.ResolveRunLogPathForRead(
+            rootPath, scopeDomain, scopeTargetRepo);
+
+        var layout = queueLocation.Kind switch
+        {
+            StateLocationKind.Scoped => ScopedRuntimePaths.ScopedLayout,
+            StateLocationKind.Legacy => ScopedRuntimePaths.LegacyFallbackLayout,
+            _ => ScopedRuntimePaths.ScopedLayout
+        };
+
+        return new ScopedRuntimePaths(
+            QueueStatePath: queueLocation.Path,
+            QueueStateRelativePath: MakeRelative(rootPath, queueLocation.Path),
+            RunLogPath: runLocation.Path,
+            RunLogRelativePath: MakeRelative(rootPath, runLocation.Path),
+            Layout: layout);
+    }
+
+    private static string MakeRelative(string rootPath, string fullPath)
+    {
+        var relative = Path.GetRelativePath(rootPath, fullPath);
+        // Normalize to forward slashes for the JSON contract (mirrors
+        // pre-G327 "updated_files" entries like ".intent-cli/queue-state.json").
+        return relative.Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// G327: bundle of resolved queue-state.json + runs.jsonl paths
+    /// (absolute) and their report-friendly relative variants.
+    /// <c>Layout</c> records which on-disk layout the resolver chose so
+    /// the writer (and tests) can observe whether scoped won, legacy
+    /// won, or a first-write to scoped was performed.
+    /// </summary>
+    private readonly record struct ScopedRuntimePaths(
+        string QueueStatePath,
+        string QueueStateRelativePath,
+        string RunLogPath,
+        string RunLogRelativePath,
+        string Layout)
+    {
+        public const string LegacyLayout = "legacy";
+        public const string ScopedLayout = "scoped";
+        public const string LegacyFallbackLayout = "legacy-fallback";
     }
 
     private static bool Next(string[] args, int i, out string? value, out string error, string name)
