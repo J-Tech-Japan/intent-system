@@ -464,6 +464,243 @@ public sealed class MetadataUpdateCommandTests : IDisposable
         Assert.Contains("\"eventAppended\"", raw, StringComparison.Ordinal);
     }
 
+    // ---- G327: scoped runtime layout integration ---------------------------
+
+    [Fact]
+    public void Execute_GivenScopeFlagsAndScopedQueueState_WritesUnderScopedRuntimeTree()
+    {
+        // G327 acceptance: when the operator names a scope, the closeout
+        // writer must mutate `.intent-cli/runtime/<domain>/<owner>__<repo>/queue-state.json`
+        // and `.intent-cli/runtime/<domain>/<owner>__<repo>/runs.jsonl`
+        // — NOT the legacy root files — so two domain/repo pairs don't
+        // share the same active runtime queue.
+        using var ws = new MetadataUpdateWorkspace();
+        ws.WriteHostShapePacket("G208", linkedIssue: 521, state: "queued");
+        // Seed the scoped queue-state with the same entry so the scoped
+        // write wins. (Legacy queue-state still exists from the host
+        // packet seed — the resolver must prefer scoped.)
+        var scopedDir = Path.Combine(ws.RootPath, ".intent-cli", "runtime",
+            "intent-cli", "J-Tech-Japan__intent-system");
+        Directory.CreateDirectory(scopedDir);
+        File.Copy(
+            Path.Combine(ws.RootPath, ".intent-cli", "queue-state.json"),
+            Path.Combine(scopedDir, "queue-state.json"));
+        var legacyQueueBefore = File.ReadAllText(
+            Path.Combine(ws.RootPath, ".intent-cli", "queue-state.json"));
+        var legacyRunsExisted = File.Exists(
+            Path.Combine(ws.RootPath, ".intent-cli", "runs.jsonl"));
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataUpdateCommand.Execute(
+            ws.Context,
+            new[]
+            {
+                "--root", ws.RootPath,
+                "--execution-unit", "G208",
+                "--mode", "completed-closeout",
+                "--linked-pr", "999",
+                "--linked-pr-repo", "J-Tech-Japan/intent-system",
+                "--scope-domain", "intent-cli",
+                "--scope-target-repo", "J-Tech-Japan/intent-system",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataUpdateResult>(writer.ToString())!;
+        Assert.True(result.Valid);
+
+        // Scoped queue-state + runs.jsonl appear in updated_files via
+        // the runtime/... relative paths.
+        Assert.Contains(
+            ".intent-cli/runtime/intent-cli/J-Tech-Japan__intent-system/queue-state.json",
+            result.UpdatedFiles);
+        Assert.Contains(
+            ".intent-cli/runtime/intent-cli/J-Tech-Japan__intent-system/runs.jsonl",
+            result.UpdatedFiles);
+        // Legacy root paths must NOT appear in updated_files.
+        Assert.DoesNotContain(".intent-cli/queue-state.json", result.UpdatedFiles);
+        Assert.DoesNotContain(".intent-cli/runs.jsonl", result.UpdatedFiles);
+
+        // Scoped queue-state actually mutated: state="completed".
+        var scopedQueueRaw = File.ReadAllText(
+            Path.Combine(scopedDir, "queue-state.json"));
+        using var doc = JsonDocument.Parse(scopedQueueRaw);
+        var entry = doc.RootElement.GetProperty("items").EnumerateArray()
+            .First(e => e.GetProperty("execution_unit").GetString() == "G208");
+        Assert.Equal("completed", entry.GetProperty("state").GetString());
+
+        // Scoped runs.jsonl created and contains the event.
+        var scopedRunsPath = Path.Combine(scopedDir, "runs.jsonl");
+        Assert.True(File.Exists(scopedRunsPath));
+        Assert.Contains(
+            "\"event\":\"metadata-update.completed-closeout\"",
+            File.ReadAllText(scopedRunsPath),
+            StringComparison.Ordinal);
+
+        // Legacy root queue-state is untouched (byte-identical).
+        Assert.Equal(legacyQueueBefore,
+            File.ReadAllText(Path.Combine(ws.RootPath, ".intent-cli", "queue-state.json")));
+        // Legacy runs.jsonl was never created (or never mutated) by this
+        // scoped write.
+        var legacyRunsAfter = File.Exists(
+            Path.Combine(ws.RootPath, ".intent-cli", "runs.jsonl"));
+        Assert.Equal(legacyRunsExisted, legacyRunsAfter);
+
+        // Packet lookup remains design-owned under .intent-cli/issues/.
+        Assert.Contains($".intent-cli/issues/G208/publish.yaml", result.UpdatedFiles);
+        Assert.False(Directory.Exists(Path.Combine(scopedDir, "issues")),
+            "scoped runtime tree must NOT contain a packet `issues/` copy.");
+    }
+
+    [Fact]
+    public void Execute_GivenScopeFlagsButOnlyLegacyQueueState_FallsBackToLegacyForRead_WritesScopedForRunsLog()
+    {
+        // G327 transition: during migration, a scoped queue-state may
+        // not yet exist. The resolver prefers the legacy queue-state
+        // when only it is on disk so the closeout can still run; the
+        // runs.jsonl side is independent (each path resolves
+        // separately).
+        using var ws = new MetadataUpdateWorkspace();
+        ws.WriteHostShapePacket("G208", linkedIssue: 521, state: "queued");
+        // No scoped seed — only legacy queue-state exists.
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataUpdateCommand.Execute(
+            ws.Context,
+            new[]
+            {
+                "--root", ws.RootPath,
+                "--execution-unit", "G208",
+                "--mode", "completed-closeout",
+                "--linked-pr", "999",
+                "--scope-domain", "intent-cli",
+                "--scope-target-repo", "J-Tech-Japan/intent-system",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataUpdateResult>(writer.ToString())!;
+        Assert.True(result.Valid);
+        // Queue-state resolved to legacy (transition fallback); runs.jsonl
+        // resolved independently and lands at the scoped path because
+        // neither legacy nor scoped runs.jsonl existed before this run.
+        Assert.Contains(".intent-cli/queue-state.json", result.UpdatedFiles);
+        Assert.Contains(
+            ".intent-cli/runtime/intent-cli/J-Tech-Japan__intent-system/runs.jsonl",
+            result.UpdatedFiles);
+    }
+
+    [Fact]
+    public void Execute_GivenScopeFlagsAndIntentSystemAndSekibanDomains_WriteToDifferentScopedFiles()
+    {
+        // G327 acceptance: intent-system and Sekiban closeouts must NOT
+        // share the same active runtime queue. With distinct scope
+        // (domain, owner/repo) pairs, two writers land in different
+        // scoped trees inside the same parent host root.
+        using var ws = new MetadataUpdateWorkspace();
+        ws.WriteHostShapePacket("G208", linkedIssue: 521, state: "queued");
+
+        // Seed a Sekiban-scoped queue-state with a different execution
+        // unit; the intent-cli scoped write must NOT touch it.
+        var sekibanDir = Path.Combine(ws.RootPath, ".intent-cli", "runtime",
+            "sekiban-as-a-service", "J-Tech-Japan__SekibanAsAService");
+        Directory.CreateDirectory(sekibanDir);
+        var sekibanQueue = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["schema_version"] = "1",
+            ["items"] = new List<object?>
+            {
+                new Dictionary<string, object?>
+                {
+                    ["execution_unit"] = "SEKI-1",
+                    ["state"] = "queued"
+                }
+            }
+        }, new JsonSerializerOptions { WriteIndented = true });
+        var sekibanQueuePath = Path.Combine(sekibanDir, "queue-state.json");
+        File.WriteAllText(sekibanQueuePath, sekibanQueue);
+        var sekibanBefore = File.ReadAllText(sekibanQueuePath);
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataUpdateCommand.Execute(
+            ws.Context,
+            new[]
+            {
+                "--root", ws.RootPath,
+                "--execution-unit", "G208",
+                "--mode", "completed-closeout",
+                "--linked-pr", "999",
+                "--scope-domain", "intent-cli",
+                "--scope-target-repo", "J-Tech-Japan/intent-system",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        // Sekiban-scoped queue-state is byte-identical to before.
+        Assert.Equal(sekibanBefore, File.ReadAllText(sekibanQueuePath));
+    }
+
+    [Fact]
+    public void Execute_GivenOnlyScopeDomainWithoutTargetRepo_ReturnsUsageError()
+    {
+        using var ws = new MetadataUpdateWorkspace();
+        ws.WriteHostShapePacket("G208", linkedIssue: 521, state: "queued");
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataUpdateCommand.Execute(
+            ws.Context,
+            new[]
+            {
+                "--root", ws.RootPath,
+                "--execution-unit", "G208",
+                "--mode", "completed-closeout",
+                "--linked-pr", "999",
+                "--scope-domain", "intent-cli",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(
+            "--scope-domain and --scope-target-repo must be supplied together",
+            writer.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_WithoutScopeFlags_WritesLegacyRootPaths_PreservingPreG327Behavior()
+    {
+        // G327 opt-in: callers that don't pass scope flags get
+        // byte-identical pre-G327 behavior (writes to .intent-cli/queue-state.json
+        // and .intent-cli/runs.jsonl directly). No scoped runtime tree
+        // is created.
+        using var ws = new MetadataUpdateWorkspace();
+        ws.WriteHostShapePacket("G208", linkedIssue: 521, state: "queued");
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataUpdateCommand.Execute(
+            ws.Context,
+            new[]
+            {
+                "--root", ws.RootPath,
+                "--execution-unit", "G208",
+                "--mode", "completed-closeout",
+                "--linked-pr", "999",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataUpdateResult>(writer.ToString())!;
+        Assert.Contains(".intent-cli/queue-state.json", result.UpdatedFiles);
+        Assert.Contains(".intent-cli/runs.jsonl", result.UpdatedFiles);
+        Assert.False(Directory.Exists(Path.Combine(ws.RootPath, ".intent-cli", "runtime")),
+            "without scope flags, no scoped runtime tree should be created.");
+    }
+
     private static IReadOnlyList<string> AfterDelta(
         IReadOnlyDictionary<string, string> before,
         IReadOnlyDictionary<string, string> after)

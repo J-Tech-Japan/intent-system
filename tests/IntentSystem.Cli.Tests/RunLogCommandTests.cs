@@ -94,6 +94,189 @@ public sealed class RunLogCommandTests
     }
 
     [Fact]
+    public void Execute_GivenTargetRepoAndScopedRunLog_ReadsScopedRunLogAndPreservesPacketLookup()
+    {
+        // G327: review-runtime read-path integration. When the caller
+        // names the (domain, owner/repo) explicitly, RunLogCommand
+        // resolves the per-scope `.intent-cli/runtime/<domain>/<owner>__<repo>/runs.jsonl`
+        // instead of the shared root file. Packet lookup is unchanged —
+        // queueItem.PacketPaths.Yaml still points at the design-owned
+        // `.intent-cli/issues/<execution-unit>/packet.yaml`.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        // Seed a DIFFERENT legacy runs.jsonl so the test can detect
+        // accidental fallback to the root path.
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            """{"ts":"2026-04-07T08:00:00Z","execution_unit":"G18","event":"issue-created","by":"legacy-root","linked_issue":"https://github.com/J-Tech-Japan/intent-system/issues/64"}""" + Environment.NewLine);
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runtime", "intent-system",
+                "J-Tech-Japan__intent-system", "runs.jsonl"),
+            """{"ts":"2026-04-07T09:00:00Z","execution_unit":"G18","event":"review","by":"scoped-runtime","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/65"}""" + Environment.NewLine);
+        using var writer = new StringWriter();
+
+        var exitCode = RunLogCommand.Execute(
+            CreateContext(repoRoot),
+            ["G18", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Run log source: scoped", output, StringComparison.Ordinal);
+        Assert.Contains(
+            Path.Combine("runtime", "intent-system", "J-Tech-Japan__intent-system", "runs.jsonl"),
+            output,
+            StringComparison.Ordinal);
+        Assert.Contains("event=review", output, StringComparison.Ordinal);
+        // The scoped runs.jsonl had `by=scoped-runtime`; the legacy seed
+        // used `by=legacy-root`. The scoped row must win.
+        Assert.DoesNotContain("legacy-root", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_WithTargetRepo_NeverRoutesPacketLookupThroughRuntimeScopedTree()
+    {
+        // G327 acceptance: even when the run-log read is scoped, the
+        // packet backlog under `.intent-cli/issues/<execution-unit>/`
+        // remains design-owned and MUST NOT be rerouted into
+        // `.intent-cli/runtime/<domain>/<owner>__<repo>/`. The packet
+        // file path comes from QueueItem.PacketPaths.Yaml and is
+        // verified here against the canonical legacy location — the
+        // resolver only redirects runtime audit state.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        // Seed the design-owned packet at its canonical legacy path.
+        var packetPath = tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G18", "packet.yaml"),
+            "execution_unit: G18\n");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runtime", "intent-system",
+                "J-Tech-Japan__intent-system", "runs.jsonl"),
+            """{"ts":"2026-04-07T09:00:00Z","execution_unit":"G18","event":"review","by":"scoped-runtime"}""" + Environment.NewLine);
+        using var writer = new StringWriter();
+
+        var exitCode = RunLogCommand.Execute(
+            CreateContext(repoRoot),
+            ["G18", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        // The original packet path under `.intent-cli/issues/G18/` is
+        // still there and untouched by the scoped read.
+        Assert.True(File.Exists(packetPath));
+        Assert.DoesNotContain(
+            Path.Combine("runtime", "intent-system", "J-Tech-Japan__intent-system", "issues"),
+            writer.ToString(),
+            StringComparison.Ordinal);
+        // And the scoped runtime directory does NOT contain a packet
+        // copy — the migration only owns runtime audit state.
+        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "runtime",
+            "intent-system", "J-Tech-Japan__intent-system", "issues", "G18", "packet.yaml")));
+    }
+
+    [Fact]
+    public void Execute_GivenTargetRepoButOnlyLegacyRunLog_FallsBackToLegacyWithDiagnostic()
+    {
+        // G327: legacy-fallback. When the operator names a target repo
+        // but the scoped runs.jsonl is not yet on disk (mid-migration),
+        // the resolver falls back to the legacy root path and surfaces
+        // the chosen layout so operators can see they read legacy.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+
+        var exitCode = RunLogCommand.Execute(
+            CreateContext(repoRoot),
+            ["G18", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Run log source: legacy", output, StringComparison.Ordinal);
+        Assert.Contains("event=issue-created", output, StringComparison.Ordinal);
+        Assert.Contains("event=activated", output, StringComparison.Ordinal);
+        Assert.Contains("event=review", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenTargetRepoFullGithubUrl_NormalizesToSameScopedDirectory()
+    {
+        // G327: NormalizeOwnerRepo strips `https://github.com/` and
+        // collapses separators. Pasted URLs and bare owner/repo must
+        // resolve to the same scoped runs.jsonl.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runtime", "intent-system",
+                "J-Tech-Japan__intent-system", "runs.jsonl"),
+            """{"ts":"2026-04-07T09:00:00Z","execution_unit":"G18","event":"review","by":"scoped-runtime","linked_pr":"https://github.com/J-Tech-Japan/intent-system/pull/65"}""" + Environment.NewLine);
+        using var writer = new StringWriter();
+
+        var exitCode = RunLogCommand.Execute(
+            CreateContext(repoRoot),
+            ["G18", "--target-repo", "https://github.com/J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Run log source: scoped", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            Path.Combine("J-Tech-Japan__intent-system", "runs.jsonl"),
+            writer.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenNoTargetRepo_PreservesLegacyRootBehaviorWithoutScopeDiagnostic()
+    {
+        // G327: opt-in migration. Callers that don't name a target
+        // repo continue to read the legacy root runs.jsonl exactly as
+        // before — no `Run log source:` banner is emitted.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+
+        var exitCode = RunLogCommand.Execute(CreateContext(repoRoot), ["G18"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("Run log source:", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenTargetRepoMissingValue_ReturnsUsageError()
+    {
+        using var writer = new StringWriter();
+
+        var exitCode = RunLogCommand.Execute(
+            CreateContext("/tmp/intent-system"),
+            ["G18", "--target-repo"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--target-repo requires a value", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenMissingRunLog_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();

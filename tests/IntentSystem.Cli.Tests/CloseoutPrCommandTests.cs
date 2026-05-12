@@ -742,6 +742,175 @@ public sealed class CloseoutPrCommandTests : IDisposable
             """;
     }
 
+    // --- G327: runtime-scoped state layout integration ---------------------
+
+    [Fact]
+    public void Execute_GivenScopedQueueStateOnDisk_WritesUnderRuntimeScopedTree()
+    {
+        // G327 acceptance: `closeout pr --domain <d> --repo <owner/repo>
+        // --write` MUST mutate
+        // `.intent-cli/runtime/<domain>/<owner>__<repo>/queue-state.json`
+        // and append to
+        // `.intent-cli/runtime/<domain>/<owner>__<repo>/runs.jsonl` when
+        // a scoped queue-state is on disk — not the root files. This is
+        // the explicit fix-comment ask: review-runtime commands must
+        // stop rewriting root queue-state as the primary runtime store.
+        using var workspace = new CloseoutPrWorkspace();
+        var scopedDir = Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "runtime",
+            "intent-cli", "J-Tech-Japan__intent-system");
+        Directory.CreateDirectory(scopedDir);
+        var scopedQueuePath = Path.Combine(scopedDir, "queue-state.json");
+        File.WriteAllText(scopedQueuePath,
+            BuildQueueState("G327", "review", linkedPr: "758"));
+        // Seed a DIFFERENT legacy root queue-state so the test can
+        // detect any accidental write to the legacy file.
+        var legacyQueuePath = workspace.Context.GetQueueStatePath();
+        File.WriteAllText(legacyQueuePath,
+            BuildQueueState("OTHER", "review", linkedPr: "999"));
+        var legacyBefore = File.ReadAllText(legacyQueuePath);
+        var legacyRunsExisted = File.Exists(workspace.Context.GetRunLogPath());
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "758",
+                "--domain", "intent-cli", "--write", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutPrResult>(writer.ToString())!;
+        Assert.Equal("scoped", result.StateLayout);
+        Assert.Equal(scopedQueuePath, result.QueueStatePath);
+        Assert.EndsWith(
+            Path.Combine("J-Tech-Japan__intent-system", "runs.jsonl"),
+            result.RunsLogPath);
+
+        // Scoped queue-state was actually mutated: state="completed".
+        var scopedAfter = File.ReadAllText(scopedQueuePath);
+        Assert.Contains("\"state\": \"completed\"", scopedAfter, StringComparison.Ordinal);
+        // Scoped runs.jsonl received the two events.
+        var scopedRuns = File.ReadAllLines(Path.Combine(scopedDir, "runs.jsonl"));
+        Assert.Equal(2, scopedRuns.Length);
+        foreach (var line in scopedRuns)
+        {
+            Assert.Contains("\"execution_unit\":\"G327\"", line, StringComparison.Ordinal);
+        }
+
+        // Legacy root queue-state must be byte-identical to before.
+        Assert.Equal(legacyBefore, File.ReadAllText(legacyQueuePath));
+        // Legacy root runs.jsonl was never created by this scoped write.
+        Assert.Equal(legacyRunsExisted, File.Exists(workspace.Context.GetRunLogPath()));
+    }
+
+    [Fact]
+    public void Execute_GivenOnlyLegacyQueueState_FallsBackToLegacyAndReportsLegacyFallbackLayout()
+    {
+        // G327 transition: callers that haven't migrated to the scoped
+        // layout yet must continue to function. When only legacy root
+        // queue-state exists, the resolver falls back to legacy for
+        // BOTH queue-state and runs.jsonl, and the result surfaces
+        // `state_layout: "legacy-fallback"` so operators see they're
+        // mid-migration.
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G327", "review", linkedPr: "770"));
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "770",
+                "--domain", "intent-cli", "--write", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutPrResult>(writer.ToString())!;
+        Assert.Equal("legacy-fallback", result.StateLayout);
+        Assert.Equal(workspace.Context.GetQueueStatePath(), result.QueueStatePath);
+        Assert.Equal(workspace.Context.GetRunLogPath(), result.RunsLogPath);
+        // Legacy queue-state mutated, legacy runs.jsonl created with events.
+        Assert.Contains("\"state\": \"completed\"", workspace.QueueStateOnDisk(),
+            StringComparison.Ordinal);
+        Assert.Equal(2, workspace.RunsLines().Length);
+
+        // The scoped runtime tree was NEVER created (no scoped seed).
+        Assert.False(Directory.Exists(Path.Combine(workspace.Context.RepoRoot,
+            ".intent-cli", "runtime", "intent-cli", "J-Tech-Japan__intent-system")));
+    }
+
+    [Fact]
+    public void Execute_GivenIntentSystemAndSekibanScopedQueueStates_WriteToDifferentScopedFiles()
+    {
+        // G327 acceptance: per-(domain, owner/repo) scopes must NOT
+        // share the same active runtime queue. When closeout runs for
+        // intent-cli/J-Tech-Japan/intent-system, a Sekiban-scoped
+        // queue-state under the same parent host root must be
+        // byte-identical after the write.
+        using var workspace = new CloseoutPrWorkspace();
+        var intentDir = Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "runtime",
+            "intent-cli", "J-Tech-Japan__intent-system");
+        Directory.CreateDirectory(intentDir);
+        File.WriteAllText(Path.Combine(intentDir, "queue-state.json"),
+            BuildQueueState("G327", "review", linkedPr: "758"));
+
+        var sekibanDir = Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "runtime",
+            "sekiban-as-a-service", "J-Tech-Japan__SekibanAsAService");
+        Directory.CreateDirectory(sekibanDir);
+        var sekibanQueuePath = Path.Combine(sekibanDir, "queue-state.json");
+        File.WriteAllText(sekibanQueuePath,
+            BuildQueueState("SEKI-1", "queued", linkedPr: null));
+        var sekibanBefore = File.ReadAllText(sekibanQueuePath);
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "758",
+                "--domain", "intent-cli", "--write", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        // Sekiban-scoped queue-state is byte-identical to before — the
+        // intent-cli closeout MUST NOT cross domains.
+        Assert.Equal(sekibanBefore, File.ReadAllText(sekibanQueuePath));
+        Assert.False(File.Exists(Path.Combine(sekibanDir, "runs.jsonl")),
+            "intent-cli closeout must not create runs.jsonl in the Sekiban scoped tree.");
+    }
+
+    [Fact]
+    public void Execute_GivenScopedLayout_PreservesPacketLookupUnderIntentCliIssuesDirectory()
+    {
+        // G327 acceptance: the runtime-scoped state migration MUST NOT
+        // affect the design-owned packet backlog. Packets live under
+        // `.intent-cli/issues/<execution-unit>/` (G300) and must NOT
+        // be copied or rerouted into the scoped runtime tree by
+        // closeout writes.
+        using var workspace = new CloseoutPrWorkspace();
+        var scopedDir = Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "runtime",
+            "intent-cli", "J-Tech-Japan__intent-system");
+        Directory.CreateDirectory(scopedDir);
+        File.WriteAllText(Path.Combine(scopedDir, "queue-state.json"),
+            BuildQueueState("G327", "review", linkedPr: "758"));
+        // Seed a packet at the canonical legacy location.
+        var legacyPacketDir = Path.Combine(workspace.Context.RepoRoot,
+            ".intent-cli", "issues", "G327");
+        Directory.CreateDirectory(legacyPacketDir);
+        var packetPath = Path.Combine(legacyPacketDir, "packet.yaml");
+        File.WriteAllText(packetPath, "execution_unit: G327\n");
+        var packetBefore = File.ReadAllText(packetPath);
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "758",
+                "--domain", "intent-cli", "--write", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        // Packet content is unchanged.
+        Assert.Equal(packetBefore, File.ReadAllText(packetPath));
+        // The scoped runtime tree did NOT gain a packet copy.
+        Assert.False(Directory.Exists(Path.Combine(scopedDir, "issues")));
+        Assert.False(File.Exists(Path.Combine(scopedDir, "issues", "G327", "packet.yaml")));
+    }
+
     private sealed class CloseoutPrWorkspace : IDisposable
     {
         private readonly string rootPath = Directory
