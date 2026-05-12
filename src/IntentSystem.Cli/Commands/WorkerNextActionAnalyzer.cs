@@ -67,6 +67,45 @@ internal static class WorkerNextActionAnalyzer
             };
         }
 
+        // G325: Priority 1.5 — active PR update lease. A PR carrying
+        // `intent-pr-update-in-progress` is in flight under another
+        // worker's lease. The selector previously fell through to
+        // `none`, which masked the real state. Surface an explicit
+        // `wait` action so operators / controllers see the held lease,
+        // its target PR, and the recommended repair workflow without
+        // any silent fallback. Stale-lease recovery remains an
+        // explicit operator action (`intent-cli automation
+        // pr-transition` etc.); this selector never releases a lease
+        // on its own.
+        var activeLease = intentTargetPrs
+            .Where(pr =>
+            {
+                var labels = LabelNames(pr.Labels);
+                return labels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress, StringComparer.Ordinal);
+            })
+            .OrderBy(pr => string.IsNullOrEmpty(pr.UpdatedAt) ? pr.CreatedAt : pr.UpdatedAt, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (activeLease is not null)
+        {
+            var leaseLabels = LabelNames(activeLease.Labels);
+            var requestUpdatePresent = leaseLabels.Contains(
+                WorkerNextActionConstants.Labels.IntentPrRequestUpdate, StringComparer.Ordinal);
+            var reason = requestUpdatePresent
+                ? "active PR update lease (intent-pr-update-in-progress + intent-pr-request-update); another worker is in flight"
+                : "active PR update lease (intent-pr-update-in-progress); another worker is in flight";
+            return new WorkerNextActionResult
+            {
+                Action = WorkerNextActionConstants.Actions.Wait,
+                Repo = repo,
+                Number = activeLease.Number,
+                Url = activeLease.Url,
+                Reason = reason,
+                RecommendedWorkflow = WorkerNextActionConstants.RecommendedWorkflows.PrCommentFix,
+                Warnings = warnings,
+                SourceClassification = WorkerNextActionConstants.SourceClassifications.PrUpdateInProgress,
+            };
+        }
+
         // Priority 2: PR review target — intentionally not implemented for
         // child-side automation. Host-side review/next-slice loop owns
         // review selection per the parent-host contract; an implementation
