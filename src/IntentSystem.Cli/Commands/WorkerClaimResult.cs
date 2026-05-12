@@ -63,6 +63,20 @@ internal sealed record WorkerClaimResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    /// <summary>
+    /// G333: true when the caller passed <c>--github-only</c>. The
+    /// command's data flow is already label-mutation-only (no
+    /// queue-state read/write); the flag records the strict child-loop
+    /// binding on the result so the host loop can audit. Null on host /
+    /// review-runtime invocations that don't assert the child-only
+    /// contract.
+    /// </summary>
+    [JsonPropertyName("github_only")]
+    public bool? GithubOnly { get; init; }
+
+    [JsonPropertyName("githubOnly")]
+    public bool? GithubOnlyCamel => GithubOnly;
 }
 
 /// <summary>

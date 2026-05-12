@@ -51,6 +51,19 @@ internal sealed record WorkerNextActionResult
     /// <summary>G206 issue contract alias — camelCase per #517.</summary>
     [JsonPropertyName("sourceClassification")]
     public string? SourceClassificationCamelCase => SourceClassification;
+
+    /// <summary>
+    /// G333: true when the caller passed <c>--github-only</c>. The
+    /// underlying selection is already GitHub-label-based (no
+    /// queue-state read), so the flag is an explicit binding the
+    /// host loop can audit. Null on host/review-runtime invocations
+    /// that do not assert the strict child-loop contract.
+    /// </summary>
+    [JsonPropertyName("github_only")]
+    public bool? GithubOnly { get; init; }
+
+    [JsonPropertyName("githubOnly")]
+    public bool? GithubOnlyCamel => GithubOnly;
 }
 
 /// <summary>

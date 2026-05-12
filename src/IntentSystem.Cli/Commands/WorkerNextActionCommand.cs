@@ -51,7 +51,7 @@ internal static class WorkerNextActionCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var repo, out var workdir, out var format, out var error))
+        if (!TryParseArguments(args, out var repo, out var workdir, out var githubOnly, out var format, out var error))
         {
             writer.WriteLine(error);
             return 1;
@@ -121,6 +121,12 @@ internal static class WorkerNextActionCommand
             {
                 result = result with { Warnings = workdirWarnings };
             }
+        }
+
+        // G333: surface the strict child-loop assertion on the result.
+        if (githubOnly)
+        {
+            result = result with { GithubOnly = true };
         }
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -199,11 +205,13 @@ internal static class WorkerNextActionCommand
         string[] args,
         out string? repo,
         out string? workdir,
+        out bool githubOnly,
         out string format,
         out string error)
     {
         repo = null;
         workdir = null;
+        githubOnly = false;
         format = FormatText;
         error = string.Empty;
 
@@ -232,6 +240,16 @@ internal static class WorkerNextActionCommand
                     index++;
                     break;
 
+                case "--github-only":
+                    // G333: strict child-loop assertion. `worker next-action`
+                    // is already GitHub-label-based by data flow — no
+                    // queue-state read; selection comes from `gh issue
+                    // list` / `gh pr list` via the candidate lister.
+                    // The flag explicitly records the binding on the
+                    // result so the host loop / operator can audit.
+                    githubOnly = true;
+                    break;
+
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -250,7 +268,7 @@ internal static class WorkerNextActionCommand
                     break;
 
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: --repo <owner/repo> [--workdir <path>] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: --repo <owner/repo> [--workdir <path>] [--github-only] [--format text|json].";
                     return false;
             }
         }

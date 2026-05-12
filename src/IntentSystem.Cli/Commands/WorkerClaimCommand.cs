@@ -56,6 +56,7 @@ internal static class WorkerClaimCommand
                 out var kind,
                 out var number,
                 out var mode,
+                out var githubOnly,
                 out var format,
                 out var error))
         {
@@ -127,6 +128,7 @@ internal static class WorkerClaimCommand
             Errors = decision.Errors,
             Warnings = decision.Warnings,
             Summary = decision.Summary,
+            GithubOnly = githubOnly ? true : null,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -205,6 +207,7 @@ internal static class WorkerClaimCommand
         out string? kind,
         out int number,
         out string mode,
+        out bool githubOnly,
         out string format,
         out string error)
     {
@@ -212,6 +215,7 @@ internal static class WorkerClaimCommand
         kind = null;
         number = 0;
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
+        githubOnly = false;
         format = FormatText;
         error = string.Empty;
 
@@ -260,6 +264,15 @@ internal static class WorkerClaimCommand
                     mode = WorkerClaimCompleteConstants.Modes.DryRun;
                     break;
 
+                case "--github-only":
+                    // G333: strict child-loop assertion. `worker claim`
+                    // is already GitHub-label-only by data flow (uses
+                    // IGitHubLabelMutator; no queue-state read/write).
+                    // The flag records the binding on the result so
+                    // the host loop can audit.
+                    githubOnly = true;
+                    break;
+
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -279,7 +292,7 @@ internal static class WorkerClaimCommand
 
                 default:
                     error =
-                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --kind <issue|pr> --number <N> [--write] [--dry-run] [--format text|json].";
+                        $"Unknown argument '{argument}'. Supported: --repo <owner/repo> --kind <issue|pr> --number <N> [--write] [--dry-run] [--github-only] [--format text|json].";
                     return false;
             }
         }

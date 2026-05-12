@@ -684,6 +684,68 @@ public sealed class WorkerNextActionCommandTests : IDisposable
         }
     }
 
+    // --- G333: --github-only strict child-loop assertion --------------------
+
+    [Fact]
+    public void Execute_G333_GithubOnly_RecordsBindingOnResultWithoutChangingSelection()
+    {
+        // G333 acceptance: `worker next-action --github-only --repo <r>`
+        // returns issue-to-pr / pr-comment-fix / none from GitHub state
+        // only. The selection algorithm is already label-based (no
+        // queue-state read); the flag records the strict child-loop
+        // binding so the host loop can audit.
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = Array.Empty<GitHubAutomationPrCandidate>(),
+            Issues = new[]
+            {
+                BuildIssue(701, "G333 Issue", "https://github.com/J-Tech-Japan/intent-system/issues/701",
+                    createdAt: "2026-05-12T00:00:00Z",
+                    labels: new[] { "intent-target" })
+            },
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.IssueToPr, result.Action);
+        Assert.Equal(701, result.Number);
+        Assert.True(result.GithubOnly);
+    }
+
+    [Fact]
+    public void Execute_G333_WithoutGithubOnly_ResultDoesNotSurfaceField()
+    {
+        // G333 invariant: callers that don't assert the strict
+        // contract see the pre-G333 result shape — `github_only` is
+        // null/omitted.
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = Array.Empty<GitHubAutomationPrCandidate>(),
+            Issues = Array.Empty<GitHubAutomationIssueCandidate>(),
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.None, result.Action);
+        Assert.Null(result.GithubOnly);
+    }
+
     private static string StripCsharpComments(string source)
     {
         // Remove block comments (/* … */) including XML doc blocks like
