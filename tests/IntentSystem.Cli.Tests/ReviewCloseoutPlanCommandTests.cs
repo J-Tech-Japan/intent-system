@@ -440,6 +440,301 @@ public sealed class ReviewCloseoutPlanCommandTests
             """;
     }
 
+    // ─── G329 tests: GitHub linkage reconstruction ──────────────────────────
+
+    [Fact]
+    public void Execute_G329_ClosingIssueMatchesSingleQueueItem_RecoversLinkageAndIsReady()
+    {
+        // G329 acceptance: PR with `Closes #issue` and a matching packet
+        // is review-ready even when runtime state lacks `linked_pr`.
+        // The closing issue points at exactly one queue item via
+        // `linked_issue.number`; the reconstructor recovers the linkage
+        // deterministically and the closeout plan reports ready=true
+        // with a structured `recovered_linkage` payload.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G329", "review",
+            linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 759,
+                "https://github.com/J-Tech-Japan/intent-system/issues/759")));
+        workspace.WriteFile(".intent-cli/issues/G329/github-body.md", BuildContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--closing-issues", "759",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("ready", root.GetProperty("blocker_classification").GetString());
+        Assert.Equal("G329", root.GetProperty("execution_unit").GetString());
+
+        var recovered = root.GetProperty("recovered_linkage");
+        Assert.Equal("G329", recovered.GetProperty("execution_unit").GetString());
+        Assert.Equal(760, recovered.GetProperty("linked_pr_number").GetInt32());
+        Assert.Equal("J-Tech-Japan/intent-system", recovered.GetProperty("linked_pr_repo").GetString());
+        Assert.Equal(759, recovered.GetProperty("linked_issue_number").GetInt32());
+        Assert.Equal("github-closing-reference",
+            recovered.GetProperty("recovery_source").GetString());
+    }
+
+    [Fact]
+    public void Execute_G329_ClosingIssueMatchesMultipleQueueItems_SurfacesAmbiguity()
+    {
+        // G329 acceptance: ambiguous closing references produce
+        // structured unsafe metadata, not guessing. When two queue
+        // items both link to the same closing issue number, the
+        // planner emits a `linkage-ambiguous` gap and an
+        // `ambiguous_linkage` payload listing the candidates — and
+        // the aggregate still classifies as host-metadata-blocked so
+        // the host loop refuses to mutate.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithTwoItems(
+            ("G329", "review", null,
+                ("J-Tech-Japan/intent-system", 759,
+                    "https://github.com/J-Tech-Japan/intent-system/issues/759")),
+            ("G329-PRIME", "review", null,
+                ("J-Tech-Japan/intent-system", 759,
+                    "https://github.com/J-Tech-Japan/intent-system/issues/759"))));
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--closing-issues", "759",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("host-metadata-blocked",
+            root.GetProperty("blocker_classification").GetString());
+
+        // Structured ambiguity payload listing both candidates.
+        var ambiguous = root.GetProperty("ambiguous_linkage");
+        var candidates = ambiguous.GetProperty("candidates").EnumerateArray()
+            .Select(c => c.GetProperty("execution_unit").GetString())
+            .ToArray();
+        Assert.Contains("G329", candidates);
+        Assert.Contains("G329-PRIME", candidates);
+        Assert.False(root.TryGetProperty("recovered_linkage", out _),
+            "ambiguous recovery must NOT emit a deterministic recovered_linkage payload.");
+
+        var classified = root.GetProperty("classified_gaps").EnumerateArray()
+            .Select(g => g.GetProperty("classification").GetString())
+            .ToArray();
+        Assert.Contains("linkage-ambiguous", classified);
+    }
+
+    [Fact]
+    public void Execute_G329_NoClosingIssuesSupplied_FallsThroughToHostMetadataBlocked()
+    {
+        // G329 out-of-scope: do NOT guess without a closing issue.
+        // When `--closing-issues` is not passed, the planner keeps the
+        // pre-G329 host-metadata-blocked classification (so the host
+        // loop still routes to reconcile / publish-recovery).
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G329", "review",
+            linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 759, null)));
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("host-metadata-blocked",
+            root.GetProperty("blocker_classification").GetString());
+        Assert.False(root.TryGetProperty("recovered_linkage", out _));
+        Assert.False(root.TryGetProperty("ambiguous_linkage", out _));
+    }
+
+    [Fact]
+    public void Execute_G329_ClosingIssueWithNoQueueMatch_FallsThroughToHostMetadataBlocked()
+    {
+        // G329: when the closing issue is supplied but no queue item
+        // links to it, the planner falls through to the existing
+        // host-metadata-blocked recovery path (publish-recovery /
+        // reconcile) — the closing-issue facts are not enough to
+        // synthesize a queue entry.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("OTHER", "review",
+            linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 1, null)));
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--closing-issues", "759",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("host-metadata-blocked",
+            root.GetProperty("blocker_classification").GetString());
+        Assert.False(root.TryGetProperty("recovered_linkage", out _));
+    }
+
+    [Fact]
+    public void Execute_G329_QueueStateAlreadyHasLinkedPr_PrefersDirectMatchNoRecovery()
+    {
+        // G329 invariant: when queue-state already records the linked_pr,
+        // the reconstructor is never invoked — direct match wins and
+        // recovered_linkage stays null. Confirms the recovery path is a
+        // FALLBACK, not a primary lookup.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G329", "review",
+            linkedPr: "760",
+            linkedIssue: ("J-Tech-Japan/intent-system", 759, null)));
+        workspace.WriteFile(".intent-cli/issues/G329/github-body.md", BuildContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--closing-issues", "759",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.False(root.TryGetProperty("recovered_linkage", out _),
+            "recovered_linkage must be null when queue-state already has the link.");
+    }
+
+    [Fact]
+    public void Execute_G329_ClosingIssuesFlagRejectsNonInteger()
+    {
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--closing-issues", "759,not-a-number",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--closing-issues entry must be a positive integer",
+            writer.ToString(), StringComparison.Ordinal);
+    }
+
+    private static string BuildContractBody()
+    {
+        return """
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Verification
+            x
+
+            ## Related Links
+            - x
+            """;
+    }
+
+    private static string BuildQueueStateWithTwoItems(
+        (string ExecutionUnit, string State, string? LinkedPr, (string Repo, int Number, string? Url) LinkedIssue) a,
+        (string ExecutionUnit, string State, string? LinkedPr, (string Repo, int Number, string? Url) LinkedIssue) b)
+    {
+        static string Item((string ExecutionUnit, string State, string? LinkedPr, (string Repo, int Number, string? Url) LinkedIssue) i)
+        {
+            var linkedPrToken = i.LinkedPr is null ? "null" : $"\"{i.LinkedPr}\"";
+            var url = i.LinkedIssue.Url is null ? "null" : $"\"{i.LinkedIssue.Url}\"";
+            return $$"""
+                {
+                  "execution_unit": "{{i.ExecutionUnit}}",
+                  "title": "title",
+                  "state": "{{i.State}}",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_pr": {{linkedPrToken}},
+                  "linked_issue": {
+                    "repo": "{{i.LinkedIssue.Repo}}",
+                    "number": {{i.LinkedIssue.Number}},
+                    "url": {{url}}
+                  },
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+                """;
+        }
+        return $$"""
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {{Item(a)}},
+                {{Item(b)}}
+              ]
+            }
+            """;
+    }
+
     private static string BuildQueueState(string executionUnit, string state, string? linkedPr, (string Repo, int Number, string? Url)? linkedIssue)
     {
         var linkedPrToken = linkedPr is null ? "null" : $"\"{linkedPr}\"";

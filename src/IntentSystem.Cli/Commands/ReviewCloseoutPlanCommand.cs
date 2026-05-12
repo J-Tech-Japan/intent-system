@@ -38,11 +38,17 @@ internal static class ReviewCloseoutPlanCommand
     /// <summary>G287: per-gap classification kinds.</summary>
     public const string GapClassificationHostMetadata = "host-metadata";
     public const string GapClassificationImplementationReview = "implementation-review";
+    /// <summary>
+    /// G329: structured ambiguity gap when GitHub closing-issue
+    /// reconstruction finds more than one matching queue item.
+    /// Aggregates to <c>host-metadata-blocked</c> (no guessing).
+    /// </summary>
+    public const string GapClassificationLinkageAmbiguous = "linkage-ambiguous";
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
 
     private const string UsageLine =
-        "Usage: intent-cli review closeout-plan --pr <n> --repo <owner/repo> [--domain <name>] [--format json|markdown]";
+        "Usage: intent-cli review closeout-plan --pr <n> --repo <owner/repo> [--domain <name>] [--closing-issues <n>[,<n>...]] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -56,7 +62,7 @@ internal static class ReviewCloseoutPlanCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var pr, out var repo, out var domainOverride, out var format, out var error))
+        if (!TryParseArguments(args, out var pr, out var repo, out var domainOverride, out var closingIssues, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -93,16 +99,62 @@ internal static class ReviewCloseoutPlanCommand
         }
 
         QueueItem? matchedItem = null;
+        RecoveredLinkagePayload? recoveredLinkage = null;
+        AmbiguousLinkagePayload? ambiguousLinkage = null;
         if (queueState is not null)
         {
             var prToken = pr!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
             matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, repo!, prToken));
             if (matchedItem is null)
             {
-                // G287: this is the PR #670-shaped gap — host metadata drift,
-                // not an implementation defect. The host loop must run
-                // `automation reconcile`, not request a child PR repair.
-                gaps.Add(HostMetadataGap($"no queue item found with linked_pr matching #{pr}."));
+                // G329: before classifying this as host-metadata-blocked,
+                // try to reconstruct the linkage from GitHub closing-issue
+                // facts. If the operator passed `--closing-issues <n>[,...]`
+                // and exactly one queue item matches a closing issue,
+                // recover the linkage and treat that queue item as matched
+                // for the rest of planning. Multiple matches surface as a
+                // structured `linkage-ambiguous` gap (no guessing per G329
+                // out-of-scope).
+                var reconstruction = GitHubLinkageReconstructor.Reconstruct(closingIssues, queueState);
+                switch (reconstruction.Kind)
+                {
+                    case LinkageReconstructionKind.Deterministic:
+                        var candidate = reconstruction.Candidates[0];
+                        matchedItem = queueState.Items.First(item =>
+                            string.Equals(item.ExecutionUnit, candidate.ExecutionUnit, StringComparison.Ordinal));
+                        recoveredLinkage = new RecoveredLinkagePayload
+                        {
+                            ExecutionUnit = candidate.ExecutionUnit,
+                            LinkedPrNumber = pr!.Value,
+                            LinkedPrRepo = repo!,
+                            LinkedPrUrl = $"https://github.com/{repo}/pull/{pr}",
+                            LinkedIssueNumber = candidate.LinkedIssueNumber,
+                            LinkedIssueRepo = candidate.LinkedIssueRepo,
+                            LinkedIssueUrl = candidate.LinkedIssueUrl,
+                            RecoverySource = LinkageReconstructionConstants.RecoverySourceGitHubClosingReference
+                        };
+                        break;
+
+                    case LinkageReconstructionKind.Ambiguous:
+                        ambiguousLinkage = new AmbiguousLinkagePayload
+                        {
+                            Candidates = reconstruction.Candidates,
+                            Reason = $"PR #{pr} closes {closingIssues.Count} issue(s) matching {reconstruction.Candidates.Count} queue items; cannot deterministically recover linkage."
+                        };
+                        gaps.Add(LinkageAmbiguousGap(
+                            $"linkage-ambiguous: PR #{pr} closing-issues match {reconstruction.Candidates.Count} queue items "
+                            + $"({string.Join(", ", reconstruction.Candidates.Select(c => c.ExecutionUnit))}); refusing to guess."));
+                        break;
+
+                    case LinkageReconstructionKind.NoClosingReferences:
+                    case LinkageReconstructionKind.NoMatch:
+                    default:
+                        // G287: this is the PR #670-shaped gap — host metadata drift,
+                        // not an implementation defect. The host loop must run
+                        // `automation reconcile`, not request a child PR repair.
+                        gaps.Add(HostMetadataGap($"no queue item found with linked_pr matching #{pr}."));
+                        break;
+                }
             }
         }
 
@@ -207,8 +259,15 @@ internal static class ReviewCloseoutPlanCommand
             blockerClassification = BlockerClassificationReady;
             recommendedRecoveryCommand = null;
         }
-        else if (gaps.Any(g => string.Equals(g.Classification, GapClassificationHostMetadata, StringComparison.Ordinal)))
+        else if (gaps.Any(g =>
+            string.Equals(g.Classification, GapClassificationHostMetadata, StringComparison.Ordinal)
+            || string.Equals(g.Classification, GapClassificationLinkageAmbiguous, StringComparison.Ordinal)))
         {
+            // G329: linkage-ambiguous still aggregates to host-metadata-blocked
+            // (no PR repair comment) — the operator must disambiguate the
+            // closing-reference match before any host mutation. The
+            // structured `ambiguous_linkage` payload on the result gives
+            // them the candidate list.
             blockerClassification = BlockerClassificationHostMetadataBlocked;
             var missingLinkedPrGap = matchedItem is null
                 && gaps.Any(g => string.Equals(g.Classification, GapClassificationHostMetadata, StringComparison.Ordinal)
@@ -242,7 +301,9 @@ internal static class ReviewCloseoutPlanCommand
             ClassifiedGaps = gaps,
             BlockerClassification = blockerClassification,
             RecommendedRecoveryCommand = recommendedRecoveryCommand,
-            Ready = ready
+            Ready = ready,
+            RecoveredLinkage = recoveredLinkage,
+            AmbiguousLinkage = ambiguousLinkage
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -297,6 +358,14 @@ internal static class ReviewCloseoutPlanCommand
 
     private static ReviewCloseoutPlanGap ImplementationReviewGap(string description) =>
         new() { Description = description, Classification = GapClassificationImplementationReview };
+
+    /// <summary>
+    /// G329: structured ambiguity gap surfaced when GitHub closing-issue
+    /// reconstruction finds more than one matching queue item. Refuses to
+    /// guess; the operator (or downstream automation) must disambiguate.
+    /// </summary>
+    private static ReviewCloseoutPlanGap LinkageAmbiguousGap(string description) =>
+        new() { Description = description, Classification = GapClassificationLinkageAmbiguous };
 
     private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
     {
@@ -451,12 +520,14 @@ internal static class ReviewCloseoutPlanCommand
         out int? pr,
         out string? repo,
         out string? domainOverride,
+        out IReadOnlyList<int> closingIssues,
         out string format,
         out string error)
     {
         pr = null;
         repo = null;
         domainOverride = null;
+        closingIssues = Array.Empty<int>();
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -501,6 +572,32 @@ internal static class ReviewCloseoutPlanCommand
                     }
 
                     domainOverride = args[index + 1];
+                    index++;
+                    break;
+
+                case "--closing-issues":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--closing-issues requires a value (comma-separated issue numbers).";
+                        return false;
+                    }
+                    {
+                        var raw = args[index + 1];
+                        var parsed = new List<int>();
+                        foreach (var token in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        {
+                            if (!int.TryParse(token,
+                                    System.Globalization.NumberStyles.Integer,
+                                    System.Globalization.CultureInfo.InvariantCulture,
+                                    out var issueNumber) || issueNumber <= 0)
+                            {
+                                error = $"--closing-issues entry must be a positive integer (got '{token}').";
+                                return false;
+                            }
+                            parsed.Add(issueNumber);
+                        }
+                        closingIssues = parsed;
+                    }
                     index++;
                     break;
 
@@ -633,6 +730,26 @@ internal sealed record ReviewCloseoutPlanResult
 
     [JsonPropertyName("ready")]
     public required bool Ready { get; init; }
+
+    /// <summary>
+    /// G329: emitted when GitHub closing-issue reconstruction
+    /// deterministically recovered the missing <c>linked_pr</c>.
+    /// The review runtime (NOT the child loop) persists this payload
+    /// onto queue-state via its own writer; the child loop only
+    /// surfaces it. Null when no recovery was needed (queue-state
+    /// already had the link) or when recovery was not deterministic.
+    /// </summary>
+    [JsonPropertyName("recovered_linkage")]
+    public RecoveredLinkagePayload? RecoveredLinkage { get; init; }
+
+    /// <summary>
+    /// G329: emitted when GitHub closing-issue reconstruction matched
+    /// more than one queue item. The host loop surfaces this to the
+    /// operator instead of guessing — the structured candidate list
+    /// is the disambiguation contract.
+    /// </summary>
+    [JsonPropertyName("ambiguous_linkage")]
+    public AmbiguousLinkagePayload? AmbiguousLinkage { get; init; }
 }
 
 /// <summary>
