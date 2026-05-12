@@ -135,14 +135,12 @@ internal static class CloseoutPrCommand
         }
 
         var executionUnit = matchedItem.ExecutionUnit;
-        var nowIso = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow)
-            .ToUniversalTime()
-            .ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ", System.Globalization.CultureInfo.InvariantCulture);
+        var nowTs = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
 
         var runsEvents = new List<string>
         {
-            BuildRunsEvent(executionUnit, "pr-merged", repo!, pr.Value, nowIso),
-            BuildRunsEvent(executionUnit, "closeout-recorded", repo!, pr.Value, nowIso)
+            BuildRunsEvent(executionUnit, "pr-merged", repo!, pr.Value, nowTs),
+            BuildRunsEvent(executionUnit, "closeout-recorded", repo!, pr.Value, nowTs)
         };
 
         if (write && !alreadyCompleted)
@@ -258,17 +256,26 @@ internal static class CloseoutPrCommand
         };
     }
 
-    private static string BuildRunsEvent(string executionUnit, string kind, string repo, int pr, string timestampIso)
+    /// <summary>
+    /// G324: emit a current-schema <see cref="RunEvent"/> line that the
+    /// supervisor / durable-state preflight stack can deserialize without
+    /// errors. Replaces the legacy <c>timestamp</c> + <c>kind</c> fields
+    /// (which the strict G312 preflight rejects as invalid) with the
+    /// canonical <c>ts</c> / <c>event</c> / <c>by</c> trio plus the new
+    /// optional <c>repo</c> / <c>pr</c> correlation fields.
+    /// </summary>
+    private static string BuildRunsEvent(string executionUnit, string @event, string repo, int pr, DateTimeOffset ts)
     {
-        var payload = new Dictionary<string, object?>
+        var runEvent = new RunEvent
         {
-            ["timestamp"] = timestampIso,
-            ["execution_unit"] = executionUnit,
-            ["kind"] = kind,
-            ["repo"] = repo,
-            ["pr"] = pr
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = @event,
+            By = "intent-cli closeout pr",
+            Repo = repo,
+            Pr = pr
         };
-        return JsonSerializer.Serialize(payload, RunsEventJsonOptions);
+        return RunLogSerializer.SerializeLine(runEvent);
     }
 
     private static string ClassifyContinuation(QueueState state, string completingUnit)
@@ -572,10 +579,10 @@ internal static class CloseoutPrCommand
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    private static readonly JsonSerializerOptions RunsEventJsonOptions = new()
-    {
-        WriteIndented = false
-    };
+    // G324: legacy raw-dictionary serialization options removed —
+    // closeout now emits canonical `RunEvent` lines via
+    // `RunLogSerializer.SerializeLine` so durable-state preflight can
+    // deserialize them.
 }
 
 internal sealed record CloseoutPrResult

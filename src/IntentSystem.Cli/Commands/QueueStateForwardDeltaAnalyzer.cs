@@ -128,20 +128,94 @@ internal static class QueueStateForwardDeltaAnalyzer
 
     private static ItemClassification ClassifyItem(QueueItem head, QueueItem working)
     {
-        // All scalar/metadata fields (other than LinkedIssue / LinkedPr)
-        // must be byte-identical for the delta to be classified as
-        // forward-only. Anything else is operator-review territory.
-        if (!string.Equals(head.Title, working.Title, StringComparison.Ordinal)
-            || head.State != working.State
+        // G324: closeout state transitions (Queued / Active / Review /
+        // Fixing → Completed) are deterministic forward-only mutations.
+        // When the ONLY scalar change is `state` moving along that
+        // pipeline AND every other scalar field stays byte-identical,
+        // surface the new `ClosedOutToCompleted` change kind so the
+        // host's auto-commit lane accepts a wake-after-closeout.
+        var stateChanged = head.State != working.State;
+        var otherScalarsChanged =
+            !string.Equals(head.Title, working.Title, StringComparison.Ordinal)
             || !string.Equals(head.ClarificationReturnPath, working.ClarificationReturnPath, StringComparison.Ordinal)
             || !string.Equals(head.WorkerRole, working.WorkerRole, StringComparison.Ordinal)
             || !string.Equals(head.ReviewRole, working.ReviewRole, StringComparison.Ordinal)
-            || !string.Equals(head.Priority, working.Priority, StringComparison.Ordinal))
+            || !string.Equals(head.Priority, working.Priority, StringComparison.Ordinal);
+        if (otherScalarsChanged)
         {
             return new ItemClassification(
                 ItemVerdict.Reject,
                 null,
-                $"items[execution_unit=`{head.ExecutionUnit}`] has scalar metadata changes (title/state/role/priority/clarification_return_path); refuse forward-only auto-commit.");
+                $"items[execution_unit=`{head.ExecutionUnit}`] has scalar metadata changes (title/role/priority/clarification_return_path); refuse forward-only auto-commit.");
+        }
+        if (stateChanged)
+        {
+            if (working.State == QueueItemState.Completed
+                && (head.State == QueueItemState.Queued
+                    || head.State == QueueItemState.Active
+                    || head.State == QueueItemState.Review
+                    || head.State == QueueItemState.Fixing))
+            {
+                // Capture the closeout transition as a forward-only change.
+                // Dependencies / packet_paths / linked refs must still be
+                // byte-identical (verified below) for the verdict to
+                // hold.
+                if (!SequenceEquals(head.Dependencies, working.Dependencies)
+                    || !SequenceEquals(head.BlockedBy, working.BlockedBy))
+                {
+                    return new ItemClassification(
+                        ItemVerdict.Reject,
+                        null,
+                        $"items[execution_unit=`{head.ExecutionUnit}`] dependencies / blocked_by changed; refuse forward-only auto-commit.");
+                }
+                if (!PacketPathsEqual(head.PacketPaths, working.PacketPaths))
+                {
+                    return new ItemClassification(
+                        ItemVerdict.Reject,
+                        null,
+                        $"items[execution_unit=`{head.ExecutionUnit}`] packet_paths changed; refuse forward-only auto-commit.");
+                }
+                // Refuse if linked refs simultaneously changed; closeout
+                // is purely the state transition.
+                var linkedIssueDeltaForCloseout = ClassifyLinkedIssue(head, working);
+                if (linkedIssueDeltaForCloseout.Verdict == ItemVerdict.Reject)
+                {
+                    return linkedIssueDeltaForCloseout;
+                }
+                if (linkedIssueDeltaForCloseout.Verdict == ItemVerdict.ForwardChange)
+                {
+                    return new ItemClassification(
+                        ItemVerdict.Reject,
+                        null,
+                        $"items[execution_unit=`{head.ExecutionUnit}`] state transitioned to completed AND linked_issue changed simultaneously; refuse forward-only auto-commit (operator review).");
+                }
+                var linkedPrDeltaForCloseout = ClassifyLinkedPr(head, working);
+                if (linkedPrDeltaForCloseout.Verdict == ItemVerdict.Reject)
+                {
+                    return linkedPrDeltaForCloseout;
+                }
+                if (linkedPrDeltaForCloseout.Verdict == ItemVerdict.ForwardChange)
+                {
+                    return new ItemClassification(
+                        ItemVerdict.Reject,
+                        null,
+                        $"items[execution_unit=`{head.ExecutionUnit}`] state transitioned to completed AND linked_pr changed simultaneously; refuse forward-only auto-commit (operator review).");
+                }
+
+                return new ItemClassification(
+                    ItemVerdict.ForwardChange,
+                    new QueueStateForwardChange
+                    {
+                        ExecutionUnit = head.ExecutionUnit,
+                        Kind = QueueStateForwardChangeKind.ClosedOutToCompleted
+                    },
+                    null);
+            }
+
+            return new ItemClassification(
+                ItemVerdict.Reject,
+                null,
+                $"items[execution_unit=`{head.ExecutionUnit}`] state changed from `{head.State}` to `{working.State}`; only queued/active/review/fixing → completed is supported as forward-only (closeout).");
         }
 
         if (!SequenceEquals(head.Dependencies, working.Dependencies)
@@ -330,6 +404,9 @@ internal static class QueueStateForwardDeltaAnalyzer
                 $"added linked_issue (#{change.LinkedIssueNumber}, {change.LinkedIssueRepo}) on `{change.ExecutionUnit}`",
             QueueStateForwardChangeKind.AddedLinkedIssueAndPr =>
                 $"added linked_issue (#{change.LinkedIssueNumber}, {change.LinkedIssueRepo}) and linked_pr=`{change.LinkedPrUrl}` on `{change.ExecutionUnit}`",
+            // G324: closeout state transition.
+            QueueStateForwardChangeKind.ClosedOutToCompleted =>
+                $"closed out `{change.ExecutionUnit}` (state → completed)",
             _ => $"forward delta on `{change.ExecutionUnit}`",
         });
         return $"forward-only queue-state.json delta: {string.Join("; ", pieces)}.";
@@ -341,6 +418,18 @@ internal enum QueueStateForwardChangeKind
     AddedLinkedPr,
     AddedLinkedIssue,
     AddedLinkedIssueAndPr,
+
+    /// <summary>
+    /// G324: state transition recorded by <c>intent-cli closeout pr --write</c>
+    /// — the matched item moved from
+    /// <see cref="IntentSystem.Supervisor.Models.QueueItemState.Queued"/>
+    /// / <c>Active</c> / <c>Review</c> / <c>Fixing</c> to
+    /// <see cref="IntentSystem.Supervisor.Models.QueueItemState.Completed"/>.
+    /// All other scalar metadata for that item AND every other item is
+    /// byte-identical. Auto-commit safe because the transition is the
+    /// deterministic forward-only mutation the closeout command makes.
+    /// </summary>
+    ClosedOutToCompleted,
 }
 
 internal sealed record QueueStateForwardChange
