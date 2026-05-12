@@ -121,7 +121,31 @@ internal static class IntentNextSliceCommand
             ? context.Config.Project.Domain
             : domainOverride!;
 
-        var queueStatePath = context.GetQueueStatePath();
+        // G332: when the caller names a target repo, route the
+        // queue-state read through the runtime-scoped resolver so the
+        // WIP gate sees the scoped state for the (domain, target-repo)
+        // pair rather than unrelated root state. Pre-migration hosts
+        // with only the legacy root file fall through automatically
+        // (StateLocationKind.Legacy). When no target repo is supplied
+        // the read keeps its pre-G332 root behavior byte-identically.
+        string queueStatePath;
+        string? stateLayout = null;
+        if (!string.IsNullOrWhiteSpace(targetRepo))
+        {
+            var location = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(
+                context.RepoRoot, domain, targetRepo!);
+            queueStatePath = location.Path;
+            stateLayout = location.Kind switch
+            {
+                StateLocationKind.Scoped => "scoped",
+                StateLocationKind.Legacy => "legacy-fallback",
+                _ => "scoped"
+            };
+        }
+        else
+        {
+            queueStatePath = context.GetQueueStatePath();
+        }
         QueueState? queueState = null;
         var notes = new List<string>();
 
@@ -290,6 +314,7 @@ internal static class IntentNextSliceCommand
             Candidate = candidate,
             RecommendedOutcome = recommendedOutcome,
             RuntimeCreationAllowed = runtimeCreationAllowed,
+            StateLayout = stateLayout,
             Warnings = warnings,
             Notes = notes
         };
@@ -769,6 +794,18 @@ internal sealed record IntentNextSliceResult
     /// </summary>
     [JsonPropertyName("runtime_creation_allowed")]
     public required bool RuntimeCreationAllowed { get; init; }
+
+    /// <summary>
+    /// G332: which on-disk layout the runtime-scoped resolver chose
+    /// for the queue-state read when the caller supplied
+    /// <c>--target-repo</c>. <c>scoped</c> when
+    /// `.intent-cli/runtime/&lt;domain&gt;/&lt;owner&gt;__&lt;repo&gt;/queue-state.json`
+    /// exists, <c>legacy-fallback</c> when only the legacy root path
+    /// exists (pre-migration), null when no target repo was supplied
+    /// (the read used the pre-G332 root path byte-identically).
+    /// </summary>
+    [JsonPropertyName("state_layout")]
+    public string? StateLayout { get; init; }
 
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }

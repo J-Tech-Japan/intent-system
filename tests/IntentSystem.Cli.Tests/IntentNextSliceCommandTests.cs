@@ -453,6 +453,214 @@ public sealed class IntentNextSliceCommandTests
                 .GetProperty("created_by_role").GetString());
     }
 
+    // --- G332: runtime-scoped state preference for WIP gate ----------------
+
+    [Fact]
+    public void Execute_G332_TargetRepoWithScopedQueueState_ReadsScopedAndReportsScopedLayout()
+    {
+        // G332 acceptance: when `--target-repo` is supplied AND the
+        // scoped queue-state exists for (domain, target-repo), the
+        // WIP gate reads the scoped file rather than the legacy root.
+        // Result records `state_layout: scoped`.
+        using var workspace = new IntentNextSliceWorkspace();
+        // Legacy root has an UNRELATED active item — would falsely
+        // trigger WIP if the gate read root.
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-12T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "UNRELATED-1",
+                  "title": "unrelated",
+                  "state": "active",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {"repo": "J-Tech-Japan/SomeOther", "number": 1},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+        // Scoped state is empty (no WIP) — so the gate should NOT
+        // see WIP and the candidate should publish.
+        workspace.WriteFile(
+            ".intent-cli/runtime/intent-cli/J-Tech-Japan__intent-system/queue-state.json",
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-12T00:00:00Z",
+              "items": []
+            }
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G332/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G332/packet.yaml",
+            """
+            implementation_issue_packet:
+              source_execution_unit: G332
+              target_repo: J-Tech-Japan/intent-system
+              clarification_return_path: intents/intent-cli/clarifications/open.md
+            """);
+
+        using var writer = new StringWriter();
+        var exit = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--dry-run",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system"
+            },
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("scoped", root.GetProperty("state_layout").GetString());
+        // No WIP visible via the scope → candidate is publishable.
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+    }
+
+    [Fact]
+    public void Execute_G332_TargetRepoWithLegacyOnly_FallsBackToLegacyAndReportsFallback()
+    {
+        // G332 transition: when no scoped state exists, the gate falls
+        // back to legacy root and surfaces `state_layout: legacy-fallback`.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-12T00:00:00Z",
+              "items": []
+            }
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G332/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G332/packet.yaml",
+            """
+            implementation_issue_packet:
+              source_execution_unit: G332
+              target_repo: J-Tech-Japan/intent-system
+              clarification_return_path: intents/intent-cli/clarifications/open.md
+            """);
+
+        using var writer = new StringWriter();
+        var exit = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--dry-run",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system"
+            },
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("legacy-fallback", root.GetProperty("state_layout").GetString());
+    }
+
+    [Fact]
+    public void Execute_G332_WithoutTargetRepo_PreservesPreG332RootRead_NoStateLayoutField()
+    {
+        // G332 invariant: callers that don't pass --target-repo
+        // continue with byte-identical pre-G332 root behavior. The
+        // result does NOT carry a `state_layout` field (null →
+        // omitted by WhenWritingNull).
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-12T00:00:00Z",
+              "items": []
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exit = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            new[] { "--dry-run", "--runtime-creation-allowed" },
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.TryGetProperty("state_layout", out _),
+            "without --target-repo the result must omit state_layout (pre-G332 behavior).");
+    }
+
+    [Fact]
+    public void Execute_G332_ScopedActiveItem_BlocksWipEvenIfLegacyRootEmpty()
+    {
+        // G332 isolation: when scoped state has an Active item, the WIP
+        // gate must fire even if the legacy root file is empty.
+        // Inverse of the previous test — confirms reads come from
+        // scoped state, not legacy.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-12T00:00:00Z",
+              "items": []
+            }
+            """);
+        workspace.WriteFile(
+            ".intent-cli/runtime/intent-cli/J-Tech-Japan__intent-system/queue-state.json",
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-12T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SCOPED-WIP",
+                  "title": "scoped WIP",
+                  "state": "active",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {"repo": "J-Tech-Japan/intent-system", "number": 700},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exit = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--dry-run",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Japan/intent-system"
+            },
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("scoped", root.GetProperty("state_layout").GetString());
+        // WIP detected via scoped state.
+        Assert.Equal("skip-next-slice-due-to-wip",
+            root.GetProperty("recommended_outcome").GetString());
+    }
+
     private static string BuildCompleteContractBody()
     {
         return """
