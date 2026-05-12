@@ -503,10 +503,11 @@ internal static class CommandRouter
     /// <summary>
     /// G334: canonical one-line pointers for the six workflow phases the
     /// issue names (init / interview / packet / issue / automation /
-    /// bug repair) plus the G338 loop-setup pair (implementation-loop /
-    /// review-next-slice-loop). Tests assert each phase appears in the
-    /// top-level help output so external agents can find the workflow
-    /// entry without reading local rules.
+    /// bug repair), the G338 loop-setup pair (implementation-loop /
+    /// review-next-slice-loop), and the G339 bug-to-intent-repair
+    /// chain. Tests assert each phase appears in the top-level help
+    /// output so external agents can find the workflow entry without
+    /// reading local rules.
     /// </summary>
     internal static readonly IReadOnlyList<string> WorkflowGuidePointersHelp = new[]
     {
@@ -517,7 +518,8 @@ internal static class CommandRouter
         "automation — `intent-cli automation summary --domain <d> --format json` (label-driven capability JSON) + `intent-cli automation doctor` (CLI freshness).",
         "bug repair — `intent-cli guide worker pr-comment-fix --format json` (narrow PR-comment repair guidance).",
         "implementation-loop — `intent-cli guide workflow task implementation-loop --target-repo <r> --agent claude --frequency 5m --format markdown` (paste-ready child implementation-loop prompt with current label/claim/complete rules, G338).",
-        "review-next-slice-loop — `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` (paste-ready host review / next-slice-loop prompt with current host-sync preflight + packet/issue lifecycle rules, G338)."
+        "review-next-slice-loop — `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` (paste-ready host review / next-slice-loop prompt with current host-sync preflight + packet/issue lifecycle rules, G338).",
+        "bug-to-intent-repair — `intent-cli guide workflow task bug-to-intent-repair --format json` (report → triage → plan → intent-repair → implementation-repair chain; classifies implementation-mismatch / intent-gap / packet-gap / rule-gap / metadata-workflow-gap; recommends packet creation when the bug is in intent-cli rules/guidance, G339)."
     };
 
     /// <summary>

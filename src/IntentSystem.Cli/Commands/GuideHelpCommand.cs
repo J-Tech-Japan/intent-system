@@ -35,12 +35,14 @@ internal static class GuideHelpCommand
         "Usage: intent-cli guide help [--format markdown|json]";
 
     /// <summary>
-    /// G334 + G338: the canonical workflow-guide pointers. Each entry
-    /// names a real <c>intent-cli</c> entry point so an external agent
-    /// can follow it without rummaging through local rules or skill
-    /// files. Phase IDs are stable: <c>init</c>, <c>interview</c>,
-    /// <c>packet</c>, <c>issue</c>, <c>automation</c>, <c>bug-repair</c>,
-    /// <c>implementation-loop</c> (G338), <c>review-next-slice-loop</c> (G338).
+    /// G334 + G338 + G339: the canonical workflow-guide pointers.
+    /// Each entry names a real <c>intent-cli</c> entry point so an
+    /// external agent can follow it without rummaging through local
+    /// rules or skill files. Phase IDs are stable: <c>init</c>,
+    /// <c>interview</c>, <c>packet</c>, <c>issue</c>,
+    /// <c>automation</c>, <c>bug-repair</c>, <c>implementation-loop</c>
+    /// (G338), <c>review-next-slice-loop</c> (G338),
+    /// <c>bug-to-intent-repair</c> (G339).
     /// </summary>
     internal static readonly IReadOnlyList<WorkflowGuidePointer> WorkflowGuides = new[]
     {
@@ -99,6 +101,13 @@ internal static class GuideHelpCommand
             Command = "intent-cli guide workflow task review-next-slice-loop --domain <name> --target-repo <owner/repo> --agent claude --frequency 20m --format markdown",
             Purpose = "Generate a paste-ready host review / next-slice-loop prompt from minimal inputs (domain, target-repo, agent, frequency). Forwards to `guide prompt-matrix --mode host-loop`; the generated prompt carries the host-sync preflight gate, automation summary call, packet/issue lifecycle handoff, and label transition rules so the operator does not need them from memory (G338).",
             SeeAlso = new[] { "intent-cli guide prompt-matrix --mode host-loop --format json", "intent-cli automation host-sync-preflight --format json", "intent-cli automation summary --domain <name> --format json" }
+        },
+        new WorkflowGuidePointer
+        {
+            Phase = "bug-to-intent-repair",
+            Command = "intent-cli guide workflow task bug-to-intent-repair --format json",
+            Purpose = "Guided bug-to-intent-repair workflow (G339). Five stages (report → triage → plan → intent-repair → implementation-repair) and five gap classifications (implementation-mismatch, intent-gap, packet-gap, rule-gap, metadata-workflow-gap). Recommends packet creation when the bug is in intent-cli rules/guidance rather than child code, preserves the original instruction reference and linked issue/PR refs across every link in the chain, and pins the FORBIDDEN raw `gh issue edit --add-label intent-target` rule from G337.",
+            SeeAlso = new[] { "intent-cli guide workflow task packet-draft --format json", "intent-cli guide workflow task issue-publish --format json", "intent-cli packet draft --execution-unit <unit> --target-repo <owner/repo> --format markdown", "intent-cli intent next-slice --dry-run --domain <name> --target-repo <owner/repo> --format json" }
         }
     };
 
@@ -143,8 +152,8 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "workflow",
-            Purpose = "Workflow suggestion / scaffold plans. Subcommands: suggest (pick the right intent-cli entry for an operator goal); task <name> (bounded scaffold/init/loop plan — today: `task init-host` (G335), `task intent-interview` (G336), `task packet-draft` / `task issue-publish` (G337), `task implementation-loop` / `task review-next-slice-loop` (G338)).",
-            Example = "intent-cli guide workflow task implementation-loop --target-repo <owner/repo> --agent claude --frequency 5m --format markdown"
+            Purpose = "Workflow suggestion / scaffold plans. Subcommands: suggest (pick the right intent-cli entry for an operator goal); task <name> (bounded scaffold/init/loop/repair plan — today: `task init-host` (G335), `task intent-interview` (G336), `task packet-draft` / `task issue-publish` (G337), `task implementation-loop` / `task review-next-slice-loop` (G338), `task bug-to-intent-repair` (G339)).",
+            Example = "intent-cli guide workflow task bug-to-intent-repair --format markdown"
         },
         new GuideSubcommandEntry
         {

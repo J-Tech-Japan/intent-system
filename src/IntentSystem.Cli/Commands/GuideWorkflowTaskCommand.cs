@@ -1,9 +1,10 @@
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G335 / G336 / G337 / G338: dispatcher for the <c>guide workflow task</c>
-/// subcommand group. Peels the next token (the task name) and
-/// delegates to the per-task handler. Tasks today:
+/// G335 / G336 / G337 / G338 / G339: dispatcher for the
+/// <c>guide workflow task</c> subcommand group. Peels the next
+/// token (the task name) and delegates to the per-task handler.
+/// Tasks today:
 /// <list type="bullet">
 ///   <item><c>init-host</c> (G335) — host/child/review role
 ///         scaffold plan;</item>
@@ -18,7 +19,10 @@ namespace IntentSystem.Cli.Commands;
 ///         to <c>guide prompt-matrix --mode child-loop</c>);</item>
 ///   <item><c>review-next-slice-loop</c> (G338) — paste-ready host
 ///         review / next-slice-loop prompt from minimal inputs
-///         (forwards to <c>guide prompt-matrix --mode host-loop</c>).</item>
+///         (forwards to <c>guide prompt-matrix --mode host-loop</c>);</item>
+///   <item><c>bug-to-intent-repair</c> (G339) — guided bug-to-intent-repair
+///         workflow: report → triage → plan → intent-repair →
+///         implementation-repair, with five gap classifications.</item>
 /// </list>
 /// Future tasks (deploy-host, retire-host, migrate-host) can plug
 /// in without touching the router. Pure read-only — never mutates
@@ -40,7 +44,7 @@ internal static class GuideWorkflowTaskCommand
 
         if (args.Length == 0)
         {
-            writer.WriteLine("guide workflow task requires a task name. Supported: init-host, intent-interview, packet-draft, issue-publish, implementation-loop, review-next-slice-loop.");
+            writer.WriteLine("guide workflow task requires a task name. Supported: init-host, intent-interview, packet-draft, issue-publish, implementation-loop, review-next-slice-loop, bug-to-intent-repair.");
             WriteHelp(writer);
             return 1;
         }
@@ -68,13 +72,18 @@ internal static class GuideWorkflowTaskCommand
             // host review / next-slice-loop prompt from minimal
             // inputs; forwards to `guide prompt-matrix --mode host-loop`.
             "review-next-slice-loop" => GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(context, args[1..], writer),
+            // G339: bug-to-intent-repair explains the report → triage
+            // → plan → intent-repair → implementation-repair chain
+            // and the five gap classifications so observed bugs feed
+            // back into intent repair packets, not ad-hoc comments.
+            "bug-to-intent-repair" => GuideWorkflowTaskBugToIntentRepairCommand.Execute(context, args[1..], writer),
             _ => UnknownTask(writer, task)
         };
     }
 
     private static int UnknownTask(TextWriter writer, string task)
     {
-        writer.WriteLine($"Unknown 'guide workflow task' name '{task}'. Supported: init-host, intent-interview, packet-draft, issue-publish, implementation-loop, review-next-slice-loop.");
+        writer.WriteLine($"Unknown 'guide workflow task' name '{task}'. Supported: init-host, intent-interview, packet-draft, issue-publish, implementation-loop, review-next-slice-loop, bug-to-intent-repair.");
         WriteHelp(writer);
         return 1;
     }
@@ -91,5 +100,6 @@ internal static class GuideWorkflowTaskCommand
         writer.WriteLine("- issue-publish — draft / create / publish-flow / automation issue-publish boundary. Names the four stages, the intent-target FINAL-boundary rule, and the stop conditions that surface missing contract sections before GitHub mutation (G337).");
         writer.WriteLine("- implementation-loop — paste-ready child implementation-loop prompt from minimal inputs (target-repo, agent, frequency, base-branch-policy). Forwards to `guide prompt-matrix --mode child-loop`; carries the current label/claim/complete rules so the operator does not need them from memory (G338).");
         writer.WriteLine("- review-next-slice-loop — paste-ready host review / next-slice-loop prompt from minimal inputs (domain, target-repo, agent, frequency). Forwards to `guide prompt-matrix --mode host-loop`; carries the host-sync preflight gate, automation summary call, and packet/issue lifecycle rules (G338).");
+        writer.WriteLine("- bug-to-intent-repair — guided bug-to-intent-repair workflow: report → triage → plan → intent-repair → implementation-repair. Classifies five gap types (implementation-mismatch, intent-gap, packet-gap, rule-gap, metadata-workflow-gap), recommends packet creation when the bug is in intent-cli rules/guidance rather than child code, and preserves original instruction / linked issue / PR refs across the chain (G339).");
     }
 }
