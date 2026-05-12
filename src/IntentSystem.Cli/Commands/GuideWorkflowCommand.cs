@@ -56,6 +56,6 @@ internal static class GuideWorkflowCommand
         writer.WriteLine();
         writer.WriteLine("Subcommands:");
         writer.WriteLine("- suggest — recommend a workflow + commands + rule topics for a broad operator goal");
-        writer.WriteLine("- task — bounded scaffold/init plans; today: `task init-host` (G335), `task intent-interview` (G336), `task packet-draft` (G337: packet files + standalone issue contract), `task issue-publish` (G337: draft/create/publish-flow/automation issue-publish boundary)");
+        writer.WriteLine("- task — bounded scaffold/init/loop plans; today: `task init-host` (G335), `task intent-interview` (G336), `task packet-draft` (G337: packet files + standalone issue contract), `task issue-publish` (G337: draft/create/publish-flow/automation issue-publish boundary), `task implementation-loop` / `task review-next-slice-loop` (G338: paste-ready child / host loop prompts from minimal inputs)");
     }
 }
