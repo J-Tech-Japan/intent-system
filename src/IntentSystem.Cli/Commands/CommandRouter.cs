@@ -503,9 +503,10 @@ internal static class CommandRouter
     /// <summary>
     /// G334: canonical one-line pointers for the six workflow phases the
     /// issue names (init / interview / packet / issue / automation /
-    /// bug repair). Tests assert each phase appears in the top-level
-    /// help output so external agents can find the workflow entry
-    /// without reading local rules.
+    /// bug repair) plus the G338 loop-setup pair (implementation-loop /
+    /// review-next-slice-loop). Tests assert each phase appears in the
+    /// top-level help output so external agents can find the workflow
+    /// entry without reading local rules.
     /// </summary>
     internal static readonly IReadOnlyList<string> WorkflowGuidePointersHelp = new[]
     {
@@ -514,7 +515,9 @@ internal static class CommandRouter
         "packet — `intent-cli guide workflow task packet-draft --format json` (packet files + standalone issue contract, G337) then `intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown` to scaffold.",
         "issue — `intent-cli guide workflow task issue-publish --format json` (draft/create/publish-flow/intent-target boundary guide, G337) then `intent-cli issue publish-flow <id> --repo <r> --write --format json` and `automation issue-publish --write`.",
         "automation — `intent-cli automation summary --domain <d> --format json` (label-driven capability JSON) + `intent-cli automation doctor` (CLI freshness).",
-        "bug repair — `intent-cli guide worker pr-comment-fix --format json` (narrow PR-comment repair guidance)."
+        "bug repair — `intent-cli guide worker pr-comment-fix --format json` (narrow PR-comment repair guidance).",
+        "implementation-loop — `intent-cli guide workflow task implementation-loop --target-repo <r> --agent claude --frequency 5m --format markdown` (paste-ready child implementation-loop prompt with current label/claim/complete rules, G338).",
+        "review-next-slice-loop — `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` (paste-ready host review / next-slice-loop prompt with current host-sync preflight + packet/issue lifecycle rules, G338)."
     };
 
     /// <summary>
