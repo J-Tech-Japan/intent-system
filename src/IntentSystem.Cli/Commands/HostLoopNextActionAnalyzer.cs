@@ -67,6 +67,15 @@ internal static class HostLoopNextActionAnalyzer
     public const string ClassificationHardClarification = "hard-clarification";
     public const string ClassificationWipCapBlocked = "wip-cap-blocked";
     public const string ClassificationWaitForChild = "wait-for-child";
+    /// <summary>
+    /// G328: emitted when no actionable host signal exists AND the
+    /// next-slice probe reports `design-needed` (no prepared packet
+    /// and runtime creation is not permitted). Surfaces ABOVE
+    /// <c>true-idle</c> so the host loop can call out the missing
+    /// design work instead of reporting genuine idleness.
+    /// </summary>
+    public const string ClassificationDesignNeeded = "design-needed";
+
     public const string ClassificationTrueIdle = "true-idle";
 
     public static HostLoopNextActionResult Analyze(HostLoopNextActionInput input)
@@ -257,7 +266,24 @@ internal static class HostLoopNextActionAnalyzer
                 "Child worker holds the lease — wait, no host mutation needed.");
         }
 
-        // 9. true idle
+        // 9. G328 design-needed: next-slice probe says no prepared
+        //    packet exists and runtime creation is not permitted —
+        //    the next move is a design-side packet draft, NOT
+        //    waiting on a child or sitting idle. Surfaces ABOVE
+        //    true-idle so the host loop reports the gap explicitly.
+        if (input.DesignNeeded)
+        {
+            return Result(ClassificationDesignNeeded, mutationAllowed: false,
+                $"intent-cli intent next-slice --dry-run --domain {input.Domain ?? "<DOMAIN>"} --runtime-creation-allowed --format json",
+                new[]
+                {
+                    "intent next-slice --dry-run reports `design-needed`: no prepared packet exists and runtime creation is not permitted on this host.",
+                    "The next move is a design-side packet draft on the MyIntentHost workspace, not a host-loop wait. Re-run next-slice with `--runtime-creation-allowed` only when this workspace is a review-runtime authorized to author packets."
+                },
+                "Design-needed — no prepared packet; draft one on the design workspace.");
+        }
+
+        // 10. true idle
         return Result(ClassificationTrueIdle, mutationAllowed: false,
             recommendedCommand: null,
             new[] { "No actionable host signal across review/publish/repair/clarification lanes." },
@@ -331,6 +357,15 @@ internal sealed record HostLoopNextActionInput
 
     /// <summary>True when a Hard Clarification (open structured clarification or markdown blocker) is recorded.</summary>
     public bool HardClarificationOpen { get; init; }
+
+    /// <summary>
+    /// G328: true when the `intent next-slice --dry-run` probe
+    /// reports `design-needed` (no prepared packet AND runtime
+    /// creation not permitted). Routes the analyzer to the
+    /// `design-needed` classification before falling through to
+    /// `true-idle`.
+    /// </summary>
+    public bool DesignNeeded { get; init; }
 }
 
 internal sealed record ActionableReviewPr

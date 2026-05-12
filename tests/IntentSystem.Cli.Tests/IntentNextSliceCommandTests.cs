@@ -73,14 +73,20 @@ public sealed class IntentNextSliceCommandTests
     }
 
     [Fact]
-    public void Execute_GivenNoCandidate_RecommendsNoActionableItem()
+    public void Execute_GivenNoCandidate_AndRuntimeCreationAllowed_RecommendsNoActionableItem()
     {
+        // G328: the pre-G328 "no actionable item" semantic is now
+        // gated on the operator passing `--runtime-creation-allowed`
+        // (the review-runtime authorization that lets the runtime
+        // create packets on its own). Hosts that aren't review
+        // runtimes hit the new `design-needed` default — exercised
+        // in Execute_GivenNoCandidate_AndRuntimeCreationDisabled_RecommendsDesignNeeded.
         using var workspace = new IntentNextSliceWorkspace();
 
         using var writer = new StringWriter();
         var exitCode = IntentNextSliceCommand.Execute(
             workspace.Context,
-            ["--dry-run"],
+            ["--dry-run", "--runtime-creation-allowed"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -192,12 +198,16 @@ public sealed class IntentNextSliceCommandTests
     [Fact]
     public void Execute_GivenMarkdownFormat_EmitsHumanReadableOutput()
     {
+        // G328: pass --runtime-creation-allowed so the recommendation
+        // mirrors the pre-G328 markdown rendering for "empty workspace,
+        // truly idle". Without the flag the new default outcome is
+        // `design-needed`, which is asserted separately.
         using var workspace = new IntentNextSliceWorkspace();
         using var writer = new StringWriter();
 
         var exitCode = IntentNextSliceCommand.Execute(
             workspace.Context,
-            ["--dry-run", "--format", "markdown"],
+            ["--dry-run", "--runtime-creation-allowed", "--format", "markdown"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -254,6 +264,193 @@ public sealed class IntentNextSliceCommandTests
         var output = writer.ToString();
         Assert.Contains("intent next-slice", output, StringComparison.Ordinal);
         Assert.Contains("--dry-run", output, StringComparison.Ordinal);
+    }
+
+    // --- G328: provenance + design-needed ----------------------------------
+
+    [Fact]
+    public void Execute_GivenNoCandidate_AndRuntimeCreationDisabled_RecommendsDesignNeeded()
+    {
+        // G328 acceptance: when no prepared packet exists and the
+        // operator has NOT passed --runtime-creation-allowed, the
+        // recommendation is `design-needed` (not `no-actionable-item`).
+        // The host loop maps this onto the design-needed classification
+        // so it never reports true-idle while a design-side packet
+        // draft is the actual next move.
+        using var workspace = new IntentNextSliceWorkspace();
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("design-needed", root.GetProperty("recommended_outcome").GetString());
+        Assert.False(root.GetProperty("runtime_creation_allowed").GetBoolean());
+        Assert.False(root.TryGetProperty("candidate", out _));
+    }
+
+    [Fact]
+    public void Execute_GivenDesignProvenancePacket_CandidateExposesDesignProvenance()
+    {
+        // G328 acceptance: a packet authored on the design workspace
+        // (MyIntentHost) records `created_by_role: design` in
+        // packet.yaml. The next-slice candidate JSON surfaces it so
+        // review-runtime publish consumers can audit provenance.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G328/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G328/packet.yaml",
+            """
+            implementation_issue_packet:
+              source_execution_unit: G328
+              target_repo: J-Tech-Japan/intent-system
+              clarification_return_path: intents/intent-cli/clarifications/open.md
+            provenance:
+              created_by_role: design
+              created_by_host: MyIntentHost
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        var provenance = root.GetProperty("candidate").GetProperty("provenance");
+        Assert.Equal("design", provenance.GetProperty("created_by_role").GetString());
+        Assert.Equal("MyIntentHost", provenance.GetProperty("created_by_host").GetString());
+        Assert.Equal("packet.yaml", provenance.GetProperty("provenance_source").GetString());
+    }
+
+    [Fact]
+    public void Execute_GivenReviewRuntimeProvenancePacket_CandidateExposesRuntimeProvenance()
+    {
+        // G328 acceptance: a packet drafted by a review-runtime
+        // workspace after a closeout records the runtime role,
+        // workspace identity, and source PR. The next-slice
+        // candidate JSON surfaces all three.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G329/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G329/packet.yaml",
+            """
+            implementation_issue_packet:
+              source_execution_unit: G329
+              target_repo: J-Tech-Japan/intent-system
+              clarification_return_path: intents/intent-cli/clarifications/open.md
+            provenance:
+              created_by_role: review-runtime
+              created_by_host: review-runtime-intent-system
+              source_closeout_pr: 758
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        var provenance = root.GetProperty("candidate").GetProperty("provenance");
+        Assert.Equal("review-runtime", provenance.GetProperty("created_by_role").GetString());
+        Assert.Equal("review-runtime-intent-system",
+            provenance.GetProperty("created_by_host").GetString());
+        Assert.Equal(758, provenance.GetProperty("source_closeout_pr").GetInt32());
+        Assert.Equal("packet.yaml", provenance.GetProperty("provenance_source").GetString());
+    }
+
+    [Fact]
+    public void Execute_GivenLegacyPacketWithoutProvenance_DefaultsToDesignProvenance()
+    {
+        // G328 backward-compatibility: pre-G328 packets do not record
+        // provenance. They are treated as design-authored so they
+        // continue to be publishable; the `provenance_source` field
+        // is `default-design` so consumers know the binding is
+        // implicit, not explicitly recorded.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        var provenance = root.GetProperty("candidate").GetProperty("provenance");
+        Assert.Equal("design", provenance.GetProperty("created_by_role").GetString());
+        Assert.Equal("default-design",
+            provenance.GetProperty("provenance_source").GetString());
+        Assert.False(provenance.TryGetProperty("created_by_host", out _),
+            "default-design provenance must not invent a host string.");
+    }
+
+    [Fact]
+    public void Execute_PreparedDesignPacket_CanBePublishedByReviewRuntime()
+    {
+        // G328 acceptance: a prepared design-side packet must remain
+        // publishable from a review-runtime workspace — the
+        // `runtime-creation-allowed` flag controls whether the
+        // runtime may CREATE packets, not whether it can publish
+        // packets the design workspace already prepared. Verified
+        // by asserting `issue-cut-ready` regardless of the flag,
+        // with provenance still recorded as `design`.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G330/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G330/packet.yaml",
+            """
+            implementation_issue_packet:
+              source_execution_unit: G330
+              target_repo: J-Tech-Japan/intent-system
+              clarification_return_path: intents/intent-cli/clarifications/open.md
+            provenance:
+              created_by_role: design
+              created_by_host: MyIntentHost
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            // Review-runtime caller does NOT pass --runtime-creation-allowed
+            // because they aren't authoring; they're publishing the
+            // prepared packet.
+            ["--dry-run", "--domain", "intent-cli"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // Issue-cut-ready wins because the prepared packet has the
+        // contract; design-needed is only emitted when there is NO
+        // candidate at all.
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("design",
+            root.GetProperty("candidate")
+                .GetProperty("provenance")
+                .GetProperty("created_by_role").GetString());
     }
 
     private static string BuildCompleteContractBody()
@@ -371,13 +568,16 @@ public sealed class IntentNextSliceCommandTests
         using var writer = new StringWriter();
         var exitCode = IntentNextSliceCommand.Execute(
             workspace.Context,
-            ["--dry-run", "--domain", "intent-cli"],
+            ["--dry-run", "--domain", "intent-cli", "--runtime-creation-allowed"],
             writer);
 
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var root = document.RootElement;
-        // SKS packet was excluded, so no candidate and no-actionable-item.
+        // G328: with runtime creation allowed, the no-candidate result
+        // recommends `no-actionable-item` rather than the new default
+        // `design-needed`. This test exercises the cross-domain
+        // exclusion regardless of the G328 default flip.
         Assert.Equal("no-actionable-item", root.GetProperty("recommended_outcome").GetString());
         Assert.False(root.TryGetProperty("candidate", out _));
     }
@@ -555,13 +755,16 @@ public sealed class IntentNextSliceCommandTests
         using var writer = new StringWriter();
         var exitCode = IntentNextSliceCommand.Execute(
             workspace.Context,
-            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system",
+                "--runtime-creation-allowed"],
             writer);
 
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var root = document.RootElement;
-        // Packet excluded because target_repo doesn't match.
+        // G328: with runtime creation allowed, the no-candidate result
+        // remains `no-actionable-item`. This test exercises target-repo
+        // filtering regardless of the G328 default flip.
         Assert.Equal("no-actionable-item", root.GetProperty("recommended_outcome").GetString());
     }
 

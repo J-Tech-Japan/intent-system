@@ -179,6 +179,49 @@ public sealed class HostLoopNextActionAnalyzerTests
     }
 
     [Fact]
+    public void DesignNeeded_WhenProbeReportsDesignNeeded_AndNoOtherSignal()
+    {
+        // G328 acceptance: when the next-slice probe reports
+        // `design-needed` (no prepared packet AND runtime creation is
+        // not permitted), the analyzer surfaces `design-needed`
+        // ABOVE true-idle so the host loop calls out the missing
+        // design work explicitly.
+        var input = NewInput() with
+        {
+            DesignNeeded = true
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal("design-needed", result.Classification);
+        Assert.False(result.MutationAllowed);
+        Assert.Contains("intent next-slice", result.RecommendedCommand!, StringComparison.Ordinal);
+        Assert.Contains("--runtime-creation-allowed", result.RecommendedCommand!, StringComparison.Ordinal);
+        Assert.Contains("design-side packet draft",
+            string.Join('\n', result.Evidence),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DesignNeeded_DoesNotOverride_HigherPrioritySignals()
+    {
+        // G328: design-needed sits between wait-for-child and
+        // true-idle. Higher-priority lanes (review-pr, hard
+        // clarification, wip-cap, wait-for-child) must still win
+        // when present.
+        var input = NewInput() with
+        {
+            DesignNeeded = true,
+            HardClarificationOpen = true,
+            Domain = "intent-cli"
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal("hard-clarification", result.Classification);
+    }
+
+    [Fact]
     public void WipCapBlocked_WhenOpenIntentTargetButNoLease()
     {
         var input = NewInput() with
