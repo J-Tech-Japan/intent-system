@@ -31,6 +31,22 @@ internal sealed record AutomationSummaryResult
     [JsonPropertyName("execution_unit_regex")]
     public string? ExecutionUnitRegex { get; init; }
 
+    /// <summary>
+    /// G346: the effective base branch policy for this domain/host, sourced from
+    /// <c>.intent-cli/config.toml</c> <c>base_branch_policy</c> (defaults to
+    /// <c>direct-main</c> when the key is absent). AI threads should derive the
+    /// expected PR target branch from this field rather than relying on prompt memory.
+    /// </summary>
+    [JsonPropertyName("effective_base_branch_policy")]
+    public required string EffectiveBaseBranchPolicy { get; init; }
+
+    /// <summary>
+    /// G346: the expected GitHub PR base branch derived from the effective policy
+    /// (<c>main</c> for <c>direct-main</c>; <c>main-ai</c> for <c>main-ai</c>).
+    /// </summary>
+    [JsonPropertyName("implementation_base_branch")]
+    public required string ImplementationBaseBranch { get; init; }
+
     [JsonPropertyName("issue_workflow_labels")]
     public required IReadOnlyList<string> IssueWorkflowLabels { get; init; }
 

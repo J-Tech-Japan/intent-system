@@ -90,7 +90,7 @@ internal static class GuidePromptMatrixCommand
             return 1;
         }
 
-        var entries = BuildEntries(mode, domain, targetRepo, agent, frequency, baseBranchPolicy);
+        var entries = BuildEntries(context, mode, domain, targetRepo, agent, frequency, baseBranchPolicy);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -114,6 +114,7 @@ internal static class GuidePromptMatrixCommand
     }
 
     private static IReadOnlyList<GuidePromptMatrixEntry> BuildEntries(
+        CliContext context,
         string? mode,
         string? domain,
         string? targetRepo,
@@ -123,8 +124,10 @@ internal static class GuidePromptMatrixCommand
     {
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
         var targetRepoPlaceholder = string.IsNullOrWhiteSpace(targetRepo) ? "<TARGET-REPO>" : targetRepo;
+        // G346: when --base-branch-policy is omitted, fall back to the persisted
+        // host/domain config value (default direct-main when not configured).
         var resolvedPolicy = string.IsNullOrWhiteSpace(baseBranchPolicy)
-            ? CliRuntimeContracts.DefaultBaseBranchPolicy
+            ? context.Config.Project.BaseBranchPolicy
             : baseBranchPolicy;
 
         var resolvedAgentForDispatch = NormalizeAgent(agent);

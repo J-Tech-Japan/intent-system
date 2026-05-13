@@ -21,6 +21,12 @@ internal static class AutomationSummaryAnalyzer
         var warnings = new List<string>();
         var bindings = LoadBindings(context, domain, warnings);
 
+        // G346: resolve effective base branch policy from host config; expose
+        // as stable fields so AI threads can derive the expected PR base branch
+        // without reading prompt memory or host `.intent-cli` directly.
+        var effectivePolicy = context.Config.Project.BaseBranchPolicy;
+        var implementationBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(effectivePolicy);
+
         return new AutomationSummaryResult
         {
             Domain = domain,
@@ -30,6 +36,8 @@ internal static class AutomationSummaryAnalyzer
             RunsLogPath = bindings.RunsLogPath,
             PacketRoot = bindings.PacketRoot,
             ExecutionUnitRegex = bindings.ExecutionUnitRegex,
+            EffectiveBaseBranchPolicy = effectivePolicy,
+            ImplementationBaseBranch = implementationBaseBranch,
             IssueWorkflowLabels = AutomationSummaryConstants.IssueWorkflowLabels,
             PrWorkflowLabels = AutomationSummaryConstants.PrWorkflowLabels,
             HostLoopResponsibilities = AutomationSummaryConstants.HostLoopResponsibilities,

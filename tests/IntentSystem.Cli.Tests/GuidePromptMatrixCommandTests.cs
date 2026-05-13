@@ -1714,6 +1714,81 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("**Abort conditions (G305)**", prompt, StringComparison.Ordinal);
     }
 
+    // ── G346 persisted base branch policy ───────────────────────────────────
+    [Fact]
+    public void Execute_OmittedBaseBranchPolicy_UsesPersistedConfigPolicy_MainAi()
+    {
+        // G346: when --base-branch-policy is NOT supplied, prompt-matrix should
+        // fall back to the policy stored in the host config (here: main-ai).
+        var context = CreateContextWithPolicy("main-ai");
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            context,
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("main-ai", document.RootElement.GetProperty("base_branch_policy").GetString());
+        Assert.Equal("main-ai", document.RootElement.GetProperty("expected_base_branch").GetString());
+    }
+
+    [Fact]
+    public void Execute_OmittedBaseBranchPolicy_DefaultsToDirectMain_WhenConfigIsDirectMain()
+    {
+        // G346: when --base-branch-policy is omitted and config records direct-main
+        // (the default), prompt-matrix returns direct-main + expected base = main.
+        var context = CreateContext(); // default ProjectConfig has direct-main
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            context,
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("direct-main", document.RootElement.GetProperty("base_branch_policy").GetString());
+        Assert.Equal("main", document.RootElement.GetProperty("expected_base_branch").GetString());
+    }
+
+    [Fact]
+    public void Execute_ExplicitBaseBranchPolicy_OverridesConfigPolicy()
+    {
+        // G346: when --base-branch-policy is supplied, it wins over config even
+        // when the config records main-ai.
+        var context = CreateContextWithPolicy("main-ai");
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            context,
+            ["--mode", "child-loop", "--base-branch-policy", "direct-main", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("direct-main", document.RootElement.GetProperty("base_branch_policy").GetString());
+        Assert.Equal("main", document.RootElement.GetProperty("expected_base_branch").GetString());
+    }
+
+    [Fact]
+    public void Execute_AllFourModes_UsePersistedPolicy_WhenNotOverridden()
+    {
+        // G346: all four mode entries carry the persisted policy when flag is absent.
+        var context = CreateContextWithPolicy("main-ai");
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            context,
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        foreach (var entry in document.RootElement.EnumerateArray())
+        {
+            Assert.Equal("main-ai", entry.GetProperty("base_branch_policy").GetString());
+            Assert.Equal("main-ai", entry.GetProperty("expected_base_branch").GetString());
+        }
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
@@ -1726,6 +1801,24 @@ public sealed class GuidePromptMatrixCommandTests
                     Domain = "intent-cli",
                     ArtifactRoot = ".intent-cli",
                     WorktreeRoot = ".intent-cli/worktrees"
+                }
+            }
+        };
+    }
+
+    private static CliContext CreateContextWithPolicy(string baseBranchPolicy)
+    {
+        return new CliContext
+        {
+            RepoRoot = Path.GetTempPath(),
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "intent-cli",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    BaseBranchPolicy = baseBranchPolicy
                 }
             }
         };
