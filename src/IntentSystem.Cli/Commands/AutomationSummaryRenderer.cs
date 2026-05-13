@@ -21,6 +21,11 @@ internal static class AutomationSummaryRenderer
         writer.WriteLine($"# Automation summary for {result.Domain}");
         writer.WriteLine();
 
+        writer.WriteLine("## Base branch policy");
+        writer.WriteLine($"- effective_base_branch_policy: {result.EffectiveBaseBranchPolicy}");
+        writer.WriteLine($"- implementation_base_branch: {result.ImplementationBaseBranch}");
+        writer.WriteLine();
+
         writer.WriteLine("## Bindings");
         writer.WriteLine($"- repo: {FormatNullable(result.Repo)}");
         writer.WriteLine($"- submodule_path: {FormatNullable(result.SubmodulePath)}");

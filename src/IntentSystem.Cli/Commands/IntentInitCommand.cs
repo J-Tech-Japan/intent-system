@@ -24,7 +24,7 @@ internal static class IntentInitCommand
     private const string FormatMarkdown = "markdown";
 
     private const string UsageLine =
-        "Usage: intent-cli intent init --domain <name> [--target-repo <owner/repo>] [--host-repo <owner/repo>] [--write] [--format markdown|json]";
+        "Usage: intent-cli intent init --domain <name> [--target-repo <owner/repo>] [--host-repo <owner/repo>] [--base-branch-policy direct-main|main-ai] [--write] [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -319,11 +319,21 @@ internal static class IntentInitCommand
 
     private static string RenderConfigToml(IntentInitRequest request)
     {
+        // G346: persist base_branch_policy in the generated config so
+        // `guide prompt-matrix` and `automation summary` can resolve the
+        // effective policy without operator-supplied flags. Default to
+        // direct-main so the file is self-explaining even when the flag
+        // was not explicitly passed.
+        var policy = string.IsNullOrWhiteSpace(request.BaseBranchPolicy)
+            ? CliRuntimeContracts.DefaultBaseBranchPolicy
+            : request.BaseBranchPolicy;
+
         return $$"""
         [project]
         domain = "{{EscapeTomlString(request.Domain)}}"
         artifact_root = ".intent-cli"
         worktree_root = ".intent-cli/worktrees"
+        base_branch_policy = "{{policy}}"
         """;
     }
 
@@ -389,6 +399,7 @@ internal static class IntentInitCommand
         string? domain = null;
         string? targetRepo = null;
         string? hostRepo = null;
+        string? baseBranchPolicy = null;
         var write = false;
         var format = FormatMarkdown;
 
@@ -419,6 +430,20 @@ internal static class IntentInitCommand
                         return false;
                     }
                     hostRepo = args[++index].Trim();
+                    break;
+                case "--base-branch-policy":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "Missing value for '--base-branch-policy'.";
+                        return false;
+                    }
+                    var policyValue = args[++index].Trim();
+                    if (!BaseBranchPolicyContract.IsKnownPolicy(policyValue))
+                    {
+                        error = $"--base-branch-policy must be '{CliRuntimeContracts.DirectMainBaseBranchPolicy}' or '{CliRuntimeContracts.MainAiBaseBranchPolicy}' (got '{policyValue}').";
+                        return false;
+                    }
+                    baseBranchPolicy = policyValue;
                     break;
                 case "--write":
                     write = true;
@@ -461,6 +486,7 @@ internal static class IntentInitCommand
             Domain = domain!,
             TargetRepo = targetRepo,
             HostRepo = hostRepo,
+            BaseBranchPolicy = baseBranchPolicy,
             Write = write,
             Format = format
         };
@@ -514,6 +540,13 @@ internal static class IntentInitCommand
         public string? TargetRepo { get; init; }
 
         public string? HostRepo { get; init; }
+
+        /// <summary>
+        /// G346: optional explicit base branch policy. When supplied, written
+        /// to the generated <c>config.toml</c>; when omitted, <c>direct-main</c>
+        /// is recorded as the documented default so the file is self-explaining.
+        /// </summary>
+        public string? BaseBranchPolicy { get; init; }
 
         public required bool Write { get; init; }
 

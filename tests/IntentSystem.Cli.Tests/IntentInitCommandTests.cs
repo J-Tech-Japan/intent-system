@@ -246,6 +246,62 @@ public sealed class IntentInitCommandTests
         Assert.Contains("\"next_steps\"", json, StringComparison.Ordinal);
     }
 
+    // ── G346 base branch policy in intent init ───────────────────────────────
+    [Fact]
+    public void Execute_NoBaseBranchPolicy_WritesDirectMainAsDefault()
+    {
+        // G346: when --base-branch-policy is omitted, intent init must write
+        // base_branch_policy = "direct-main" into the generated config.toml.
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "myapp", "--write"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var configContent = File.ReadAllText(Path.Combine(hostRoot, ".intent-cli", "config.toml"));
+        Assert.Contains("base_branch_policy = \"direct-main\"", configContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_MainAiBaseBranchPolicy_WritesMainAiInConfig()
+    {
+        // G346: when --base-branch-policy main-ai is supplied, the generated
+        // config.toml must persist base_branch_policy = "main-ai".
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "myapp", "--base-branch-policy", "main-ai", "--write"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var configContent = File.ReadAllText(Path.Combine(hostRoot, ".intent-cli", "config.toml"));
+        Assert.Contains("base_branch_policy = \"main-ai\"", configContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RejectsUnknownBaseBranchPolicyInInit()
+    {
+        // G346: unknown policy values must fail before any file mutation.
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "myapp", "--base-branch-policy", "squash-main", "--write"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--base-branch-policy must be", writer.ToString(), StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
