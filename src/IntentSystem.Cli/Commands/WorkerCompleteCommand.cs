@@ -44,6 +44,14 @@ internal static class WorkerCompleteCommand
     public static Func<IGitHubPrLookup>? PrLookupFactory { get; set; }
 
     /// <summary>
+    /// G347 test seam: tests inject a fake <see cref="IGitHubIssueLookup"/>
+    /// here so the base-branch policy check on <c>--kind issue --outcome
+    /// pr-created</c> can be exercised without GitHub network access.
+    /// When null, the command shells out via <see cref="GhCliGitHubIssueLookup"/>.
+    /// </summary>
+    public static Func<IGitHubIssueLookup>? IssueLookupFactory { get; set; }
+
+    /// <summary>
     /// Test sentinel: must NEVER be invoked. Tests assert it remains
     /// uninvoked across all command paths.
     /// </summary>
@@ -183,6 +191,21 @@ internal static class WorkerCompleteCommand
                     writer.WriteLine($"- {step}");
                 }
                 return 1;
+            }
+
+            // G347: base-branch check — when the source issue body carries a
+            // `## Base Branch Policy` section and the PR has a known baseRefName,
+            // refuse if they disagree. The check is best-effort: if the issue
+            // lookup fails or the section is absent we allow the completion so
+            // older issues without the section aren't blocked.
+            if (!string.IsNullOrWhiteSpace(prLookupResult.BaseRefName))
+            {
+                var baseBranchCheckResult = TryCheckBaseBranchFromIssue(
+                    repo!, number, prLookupResult.BaseRefName, writer);
+                if (baseBranchCheckResult == BaseBranchCheckOutcome.Mismatch)
+                {
+                    return 1;
+                }
             }
         }
 
@@ -426,6 +449,125 @@ internal static class WorkerCompleteCommand
         {
             return (false, $"failed to sync linked_pr for issue #{sourceIssueNumber} in queue-state.json: {exception.Message}");
         }
+    }
+
+    /// <summary>
+    /// G347: looks up the source issue body and parses the <c>## Base Branch Policy</c>
+    /// section to extract the expected PR base branch. Compares with
+    /// <paramref name="actualBaseBranch"/> and writes a repair instruction to
+    /// <paramref name="writer"/> on mismatch. Returns <see cref="BaseBranchCheckOutcome.Mismatch"/>
+    /// when the check definitively fails (issue body found, section found, branches differ);
+    /// returns <see cref="BaseBranchCheckOutcome.Ok"/> on match or when the check is
+    /// inconclusive (lookup error, section absent).
+    /// </summary>
+    private static BaseBranchCheckOutcome TryCheckBaseBranchFromIssue(
+        string repo,
+        int issueNumber,
+        string actualBaseBranch,
+        TextWriter writer)
+    {
+        IGitHubIssueLookup issueLookup;
+        try
+        {
+            issueLookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueLookup();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            // Inconclusive — allow completion.
+            return BaseBranchCheckOutcome.Ok;
+        }
+
+        GitHubIssueLookupResult issueResult;
+        try
+        {
+            issueResult = issueLookup.Lookup(repo, issueNumber);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            // Inconclusive — allow completion.
+            _ = exception;
+            return BaseBranchCheckOutcome.Ok;
+        }
+
+        var expectedBase = ParseExpectedBaseBranchFromIssueBody(issueResult.Body);
+        if (string.IsNullOrWhiteSpace(expectedBase))
+        {
+            // No Base Branch Policy section in the issue body — allow completion.
+            return BaseBranchCheckOutcome.Ok;
+        }
+
+        if (string.Equals(expectedBase, actualBaseBranch, StringComparison.Ordinal))
+        {
+            return BaseBranchCheckOutcome.Ok;
+        }
+
+        writer.WriteLine(
+            $"refused to complete issue #{issueNumber} as `pr-created`: PR base branch mismatch (G347). "
+            + $"Issue contract requires `{expectedBase}` but PR targets `{actualBaseBranch}`.");
+        writer.WriteLine(
+            $"- Repair: update the PR base branch to `{expectedBase}` (via the GitHub UI or the gh CLI), "
+            + "then re-run `worker complete`.");
+        return BaseBranchCheckOutcome.Mismatch;
+    }
+
+    /// <summary>
+    /// G347: parses the <c>## Base Branch Policy</c> section of an issue body and
+    /// extracts the value after <c>Expected PR base branch: `</c>. Returns null when
+    /// the section or the field is not present.
+    /// </summary>
+    internal static string? ParseExpectedBaseBranchFromIssueBody(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        var lines = body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var inSection = false;
+        foreach (var rawLine in lines)
+        {
+            var trimmed = rawLine.Trim();
+            if (trimmed.StartsWith("## ", StringComparison.Ordinal))
+            {
+                var heading = trimmed[3..].Trim();
+                inSection = string.Equals(heading, "Base Branch Policy", StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            if (!inSection)
+            {
+                continue;
+            }
+
+            // Match lines like:
+            //   Expected PR base branch: `main`
+            //   Expected PR base branch: `main-ai`
+            const string prefix = "Expected PR base branch:";
+            if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var value = trimmed[prefix.Length..].Trim();
+            // Strip surrounding backticks.
+            if (value.Length >= 2 && value[0] == '`' && value[^1] == '`')
+            {
+                value = value[1..^1];
+            }
+
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private enum BaseBranchCheckOutcome
+    {
+        Ok,
+        Mismatch,
     }
 
     private static string ResolveQueueStatePath(CliContext context)

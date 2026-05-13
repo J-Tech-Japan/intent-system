@@ -683,6 +683,11 @@ public sealed class WorkerIssuePreflightCommandTests : IDisposable
 
             ## Related Links
             - https://example.com/link
+
+            ## Base Branch Policy
+            Policy: `direct-main`
+            Expected PR base branch: `main`
+            Open all child PRs against `main` directly.
             """;
     }
 

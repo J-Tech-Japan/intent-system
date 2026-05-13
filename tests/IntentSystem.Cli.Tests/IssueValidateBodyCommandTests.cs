@@ -247,6 +247,12 @@ public sealed class IssueValidateBodyCommandTests
         ## Related Links
 
         - Host runbook: intents/rules/automations/runbook.md
+
+        ## Base Branch Policy
+
+        Policy: `direct-main`
+        Expected PR base branch: `main`
+        Open all child PRs against `main` directly.
         """;
 
     private sealed class IssueValidateBodyWorkspace : IDisposable

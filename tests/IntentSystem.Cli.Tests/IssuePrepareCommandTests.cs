@@ -198,6 +198,12 @@ public sealed class IssuePrepareCommandTests : IDisposable
         ## Related Links
 
         - Host runbook: intents/rules/automations/runbook.md
+
+        ## Base Branch Policy
+
+        Policy: `direct-main`
+        Expected PR base branch: `main`
+        Open all child PRs against `main` directly.
         """;
 
     internal sealed class IssuePrepareWorkspace : IDisposable

@@ -181,6 +181,57 @@ public sealed class PacketDraftCommandTests
         Assert.Contains("--execution-unit", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // ----- G347: Base Branch Policy section in generated github-body.md -----
+
+    [Fact]
+    public void Execute_G347_GeneratedGithubBodyIncludesBaseBranchPolicySection()
+    {
+        // G347 AC: the generated github-body.md must contain a non-empty
+        // `## Base Branch Policy` section with a parseable
+        // `Expected PR base branch:` line. This locks the section shape so
+        // downstream consumers (worker complete G347 check) can always parse it.
+        using var workspace = new PacketDraftWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G347", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G347");
+        var githubBody = File.ReadAllText(Path.Combine(packetDir, "github-body.md"));
+
+        Assert.Contains("## Base Branch Policy", githubBody, StringComparison.Ordinal);
+        Assert.Contains("Expected PR base branch:", githubBody, StringComparison.Ordinal);
+
+        // The parser used by worker-complete must be able to extract the value.
+        var extracted = WorkerCompleteCommand.ParseExpectedBaseBranchFromIssueBody(githubBody);
+        Assert.NotNull(extracted);
+        Assert.False(string.IsNullOrWhiteSpace(extracted));
+    }
+
+    [Fact]
+    public void Execute_G347_GeneratedGithubBodyContainsDirectMainPolicyByDefault()
+    {
+        // G347 AC: when the project config has no BaseBranchPolicy the default
+        // (`direct-main` → `main`) is stamped into the generated body.
+        using var workspace = new PacketDraftWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G347B"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G347B");
+        var githubBody = File.ReadAllText(Path.Combine(packetDir, "github-body.md"));
+
+        Assert.Contains("Policy: `direct-main`", githubBody, StringComparison.Ordinal);
+        Assert.Contains("Expected PR base branch: `main`", githubBody, StringComparison.Ordinal);
+    }
+
     private sealed class PacketDraftWorkspace : IDisposable
     {
         public PacketDraftWorkspace()

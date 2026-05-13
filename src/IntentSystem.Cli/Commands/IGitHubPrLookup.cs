@@ -42,7 +42,7 @@ internal sealed class GhCliGitHubPrLookup : IGitHubPrLookup
     /// <see cref="DeriveMergedFromState"/>.
     /// </summary>
     internal const string PrViewJsonFields =
-        "number,state,title,body,labels,isDraft,closed,mergedAt,closedAt,closingIssuesReferences";
+        "number,state,title,body,labels,isDraft,closed,mergedAt,closedAt,closingIssuesReferences,baseRefName";
 
     /// <summary>
     /// G204 follow-up: builds the <c>gh pr view</c> argument list shared by
