@@ -44,7 +44,11 @@ internal static class PacketDraftCommand
             "Out Of Scope",
             "Acceptance Criteria",
             "Verification",
-            "Related Links"
+            "Related Links",
+            // G347: base branch policy must be explicit in the published contract so
+            // child implementation agents can choose the correct PR base branch
+            // without reading host metadata.
+            "Base Branch Policy"
         };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -107,12 +111,23 @@ internal static class PacketDraftCommand
             Directory.CreateDirectory(packetDirectory);
         }
 
+        // G347: resolve base branch policy from host config so the published
+        // contract section carries the project-specific expected base branch.
+        var baseBranchPolicy = context.Config.Project.BaseBranchPolicy;
+        if (string.IsNullOrWhiteSpace(baseBranchPolicy))
+        {
+            baseBranchPolicy = CliRuntimeContracts.DefaultBaseBranchPolicy;
+        }
+        var expectedBaseBranch = BaseBranchPolicyContract.IsKnownPolicy(baseBranchPolicy)
+            ? BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy)
+            : CliRuntimeContracts.DirectMainBaseBranch;
+
         var planned = new[]
         {
             ("packet.yaml", BuildPacketYaml(executionUnit, domain, targetRepo)),
             ("implementation.md", BuildImplementationMd(executionUnit)),
             ("review-context.md", BuildReviewContextMd(executionUnit)),
-            ("github-body.md", BuildGithubBodyMd(executionUnit))
+            ("github-body.md", BuildGithubBodyMd(executionUnit, baseBranchPolicy, expectedBaseBranch))
         };
 
         var files = new List<PacketDraftFile>();
@@ -241,8 +256,13 @@ internal static class PacketDraftCommand
             """;
     }
 
-    private static string BuildGithubBodyMd(string executionUnit)
+    private static string BuildGithubBodyMd(string executionUnit, string baseBranchPolicy, string expectedBaseBranch)
     {
+        // G347: derive policy-specific branch instruction for the mandatory contract section.
+        var branchInstruction = string.Equals(baseBranchPolicy, CliRuntimeContracts.MainAiBaseBranchPolicy, StringComparison.Ordinal)
+            ? $"Open all child PRs against `{expectedBaseBranch}`. Do NOT target `main` directly — the human operator periodically merges `{expectedBaseBranch}` → `main`."
+            : $"Open all child PRs against `{expectedBaseBranch}` directly.";
+
         return $"""
             ## Goal
 
@@ -287,6 +307,13 @@ internal static class PacketDraftCommand
             ## Related Links
 
             - TODO
+
+            ## Base Branch Policy
+
+            Policy: `{baseBranchPolicy}`
+            Expected PR base branch: `{expectedBaseBranch}`
+
+            {branchInstruction}
             """;
     }
 

@@ -25,7 +25,10 @@ internal static class IssueValidateBodyValidator
         "Out Of Scope",
         "Acceptance Criteria",
         "Verification",
-        "Related Links"
+        "Related Links",
+        // G347: child implementation agents must know the expected PR base branch
+        // from the issue body alone (no host metadata access in child-cwd mode).
+        "Base Branch Policy"
     ];
 
     private static readonly IReadOnlyDictionary<string, string[]> HeadingAliases =

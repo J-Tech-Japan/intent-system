@@ -29,6 +29,11 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         // G311-focused tests override this factory to exercise the
         // gate's failure paths.
         WorkerCompleteCommand.PrLookupFactory = () => new PermissivePrLookup();
+        // G347: permissive default — pre-existing tests don't set a baseRefName
+        // on the fake PR lookup (empty string), so the G347 check is skipped
+        // entirely for them. Set the factory to null here; G347-focused tests
+        // set it explicitly.
+        WorkerCompleteCommand.IssueLookupFactory = null;
     }
 
     public void Dispose()
@@ -36,6 +41,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         WorkerCompleteCommand.MutatorFactory = null;
         WorkerCompleteCommand.NestedProviderLauncher = null;
         WorkerCompleteCommand.PrLookupFactory = null;
+        WorkerCompleteCommand.IssueLookupFactory = null;
     }
 
     [Fact]
@@ -1101,6 +1107,208 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Empty(mutator.AppliedTransitions);
     }
 
+    // ----- G347: base-branch gate on `--kind issue --outcome pr-created` -----
+
+    [Fact]
+    public void Execute_G347_RefusesPrCreatedWhenPrTargetsWrongBaseBranch()
+    {
+        // G347 AC: when the source issue body contains `## Base Branch Policy`
+        // with `Expected PR base branch: \`main\`` and the PR targets `main-ai`,
+        // the command must refuse and emit the G347 error message.
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        // PR body has closing reference and correct base branch embedded,
+        // but targets wrong base branch.
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Closes #797",
+            ClosingIssuesReferences = new[]
+            {
+                new GitHubPrClosingIssueReference { Number = 797, Repository = null },
+            },
+            BaseRefName = "main-ai",    // WRONG — issue contract says `main`
+        };
+        WorkerCompleteCommand.IssueLookupFactory = () => new StubIssueLookup
+        {
+            Body = IssuePrepareCommandTests.CompleteValidBody,   // contains Base Branch Policy: direct-main / main
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "797",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "800",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("G347", output, StringComparison.Ordinal);
+        Assert.Contains("main-ai", output, StringComparison.Ordinal);
+        Assert.Contains("main", output, StringComparison.Ordinal);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_G347_AllowsPrCreatedWhenPrTargetsCorrectBaseBranch()
+    {
+        // G347 AC: when PR targets the same branch the issue contract mandates,
+        // the completion must proceed normally.
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Closes #797",
+            ClosingIssuesReferences = new[]
+            {
+                new GitHubPrClosingIssueReference { Number = 797, Repository = null },
+            },
+            BaseRefName = "main",    // CORRECT — issue contract says `main`
+        };
+        WorkerCompleteCommand.IssueLookupFactory = () => new StubIssueLookup
+        {
+            Body = IssuePrepareCommandTests.CompleteValidBody,
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "797",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "800",
+                "--format", "json",
+            },
+            writer);
+
+        // Dry-run succeeds (proceeds), no mutations.
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+    }
+
+    [Fact]
+    public void Execute_G347_AllowsPrCreatedWhenIssueBodyHasNoBaseBranchSection()
+    {
+        // G347 AC: when the issue body lacks the `## Base Branch Policy` section
+        // the check is inconclusive and completion must be allowed (best-effort).
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Closes #797",
+            ClosingIssuesReferences = new[]
+            {
+                new GitHubPrClosingIssueReference { Number = 797, Repository = null },
+            },
+            BaseRefName = "any-branch",
+        };
+        // Issue body without a Base Branch Policy section.
+        WorkerCompleteCommand.IssueLookupFactory = () => new StubIssueLookup
+        {
+            Body = "## Goal\n\nSomething.\n\n## Verification\n\nRun tests.",
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "797",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "800",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+    }
+
+    [Fact]
+    public void Execute_G347_AllowsPrCreatedWhenIssueLookupThrows()
+    {
+        // G347 AC: best-effort — when the issue lookup throws (network error,
+        // auth issue, etc.) the command treats the check as inconclusive and
+        // allows the completion.
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Closes #797",
+            ClosingIssuesReferences = new[]
+            {
+                new GitHubPrClosingIssueReference { Number = 797, Repository = null },
+            },
+            BaseRefName = "wrong-base",
+        };
+        WorkerCompleteCommand.IssueLookupFactory = () => new ThrowingIssueLookup();
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "797",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "800",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+    }
+
+    // G347 unit tests for the standalone body-parser helper.
+
+    [Theory]
+    [InlineData("## Base Branch Policy\nPolicy: `direct-main`\nExpected PR base branch: `main`\n", "main")]
+    [InlineData("## Base Branch Policy\nPolicy: `main-ai`\nExpected PR base branch: `main-ai`\n", "main-ai")]
+    [InlineData("## Base Branch Policy\nExpected PR base branch: `main`\nPolicy: `direct-main`\n", "main")]
+    [InlineData("## Other Heading\nExpected PR base branch: `main`\n", null)]  // not inside section
+    [InlineData("", null)]
+    [InlineData("  ", null)]
+    public void ParseExpectedBaseBranchFromIssueBody_ParsesCorrectly(string body, string? expected)
+    {
+        var result = WorkerCompleteCommand.ParseExpectedBaseBranchFromIssueBody(body);
+        Assert.Equal(expected, result);
+    }
+
     private static string StripCsharpComments(string source)
     {
         var noBlockComments = System.Text.RegularExpressions.Regex.Replace(
@@ -1166,6 +1374,9 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         public IReadOnlyList<GitHubPrClosingIssueReference> ClosingIssuesReferences { get; init; }
             = Array.Empty<GitHubPrClosingIssueReference>();
 
+        /// <summary>G347: actual base branch reported by the PR (empty = G347 check skipped).</summary>
+        public string BaseRefName { get; init; } = string.Empty;
+
         public GitHubPrLookupResult Lookup(string repo, int prNumber) => new()
         {
             Number = prNumber,
@@ -1173,7 +1384,35 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             Title = "stub",
             Body = Body,
             ClosingIssuesReferences = ClosingIssuesReferences,
+            BaseRefName = BaseRefName,
         };
+    }
+
+    /// <summary>
+    /// G347: parametric <see cref="IGitHubIssueLookup"/> fake for testing the
+    /// base-branch policy section parser without shelling out to <c>gh</c>.
+    /// </summary>
+    internal sealed class StubIssueLookup : IGitHubIssueLookup
+    {
+        public string Body { get; init; } = string.Empty;
+
+        public GitHubIssueLookupResult Lookup(string repo, int issueNumber) => new()
+        {
+            Number = issueNumber,
+            State = "OPEN",
+            Title = "stub issue",
+            Body = Body,
+        };
+    }
+
+    /// <summary>
+    /// G347: fake <see cref="IGitHubIssueLookup"/> that always throws so tests
+    /// can verify the best-effort (inconclusive) path lets the completion proceed.
+    /// </summary>
+    internal sealed class ThrowingIssueLookup : IGitHubIssueLookup
+    {
+        public GitHubIssueLookupResult Lookup(string repo, int issueNumber) =>
+            throw new InvalidOperationException("simulated gh issue view failure");
     }
 
     internal sealed class FakeMutator : IGitHubLabelMutator

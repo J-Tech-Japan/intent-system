@@ -747,7 +747,8 @@ public sealed class TaskingPublishReviewedBridgeCommandTests : IDisposable
         + "## Out Of Scope\n\n- Adjacent refactors.\n\n"
         + "## Acceptance Criteria\n\n- Deterministic behaviour described here.\n\n"
         + "## Verification\n\nRun the focused suite.\n\n"
-        + "## Related Links\n\n- Host runbook: intents/rules/automations/runbook.md\n";
+        + "## Related Links\n\n- Host runbook: intents/rules/automations/runbook.md\n\n"
+        + "## Base Branch Policy\n\nPolicy: `direct-main`\nExpected PR base branch: `main`\nOpen all child PRs against `main` directly.\n";
 
     private sealed class BridgeWorkspace : IDisposable
     {

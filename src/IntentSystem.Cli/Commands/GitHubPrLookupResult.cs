@@ -52,6 +52,13 @@ internal sealed record GitHubPrLookupResult
     [JsonPropertyName("closingIssuesReferences")]
     public IReadOnlyList<GitHubPrClosingIssueReference> ClosingIssuesReferences { get; init; }
         = Array.Empty<GitHubPrClosingIssueReference>();
+
+    /// <summary>
+    /// G347: the PR's base branch name as returned by <c>gh pr view --json baseRefName</c>.
+    /// Used by <c>worker complete</c> to validate the PR targets the expected branch.
+    /// </summary>
+    [JsonPropertyName("baseRefName")]
+    public string BaseRefName { get; init; } = string.Empty;
 }
 
 /// <summary>

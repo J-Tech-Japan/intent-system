@@ -773,6 +773,11 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
 
             ## Related Links
             - x
+
+            ## Base Branch Policy
+            Policy: `direct-main`
+            Expected PR base branch: `main`
+            Open all child PRs against `main` directly.
             """;
     }
 
@@ -812,6 +817,11 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
 
             ## Related Links
             - x
+
+            ## Base Branch Policy
+            Policy: `direct-main`
+            Expected PR base branch: `main`
+            Open all child PRs against `main` directly.
             """;
     }
 
