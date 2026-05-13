@@ -142,10 +142,13 @@ public sealed class DurableStatePreflightAnalyzerTests
     }
 
     [Fact]
-    public void Analyze_DirtyPublishYaml_ReturnsUnsafe()
+    public void Analyze_DirtyPublishYaml_WithoutDelta_ReturnsUnsafe()
     {
-        // .intent-cli/issues/<unit>/publish.yaml is operator-owned and
-        // must not be auto-committed by the host loop.
+        // G343: when the caller supplies no canonical-content delta we
+        // cannot prove the publish.yaml write is a deterministic
+        // host-loop write, so the path stays unsafe. The unsafe-stop
+        // message names the recovery command so host-loop guidance can
+        // route the operator to a structured repair (G343 AC5).
         var input = new DurableStatePreflightInput
         {
             DirtyPaths = new[]
@@ -161,6 +164,122 @@ public sealed class DurableStatePreflightAnalyzerTests
         var result = DurableStatePreflightAnalyzer.Analyze(input);
 
         Assert.Equal(DurableStatePreflightAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Single(result.UnsafePaths);
+        Assert.Contains("automation publish-lifecycle-repair", result.UnsafePaths[0].Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Analyze_DirtyPublishYaml_CanonicalContent_ReturnsVerified()
+    {
+        // G343 AC1: canonical publish.yaml — the durable host-loop
+        // write produced by the publish-flow command — is accepted as
+        // a forward-only durable-state path and routed into the
+        // verified-commit-ready lane. Without this, the issue-publish
+        // boundary stalls before applying `intent-target`.
+        var input = new DurableStatePreflightInput
+        {
+            DirtyPaths = new[]
+            {
+                new DurableStateDirtyPath
+                {
+                    Path = ".intent-cli/issues/SKS-G343/publish.yaml",
+                    IsDeleted = false,
+                    PublishYamlDelta = new PublishYamlCanonicalResult
+                    {
+                        Classification = PublishYamlCanonicalAnalyzer.ClassificationCanonical,
+                        Summary = "publish.yaml for `SKS-G343` parses as canonical.",
+                    },
+                },
+            },
+        };
+
+        var result = DurableStatePreflightAnalyzer.Analyze(input);
+
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationVerifiedCommitReady, result.Classification);
+        Assert.Single(result.VerifiedPaths);
+        Assert.Equal(".intent-cli/issues/SKS-G343/publish.yaml", result.VerifiedPaths[0].Path);
+        Assert.Empty(result.UnsafePaths);
+    }
+
+    [Fact]
+    public void Analyze_DirtyPublishYaml_NonCanonicalContent_ReturnsUnsafe()
+    {
+        // G343 AC4: non-canonical publish.yaml content (operator-edited
+        // execution-unit drift) stays a hard structured stop with the
+        // recovery command surfaced.
+        var input = new DurableStatePreflightInput
+        {
+            DirtyPaths = new[]
+            {
+                new DurableStateDirtyPath
+                {
+                    Path = ".intent-cli/issues/SKS-G343/publish.yaml",
+                    IsDeleted = false,
+                    PublishYamlDelta = new PublishYamlCanonicalResult
+                    {
+                        Classification = PublishYamlCanonicalAnalyzer.ClassificationNonCanonical,
+                        Summary = "execution_unit drift detected. Run "
+                            + "intent-cli automation publish-lifecycle-repair --write to regenerate.",
+                    },
+                },
+            },
+        };
+
+        var result = DurableStatePreflightAnalyzer.Analyze(input);
+
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Single(result.UnsafePaths);
+        Assert.Contains("execution_unit drift", result.UnsafePaths[0].Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Analyze_DirtyPublishYaml_InvalidContent_ReturnsUnsafe()
+    {
+        var input = new DurableStatePreflightInput
+        {
+            DirtyPaths = new[]
+            {
+                new DurableStateDirtyPath
+                {
+                    Path = ".intent-cli/issues/SKS-G343/publish.yaml",
+                    IsDeleted = false,
+                    PublishYamlDelta = new PublishYamlCanonicalResult
+                    {
+                        Classification = PublishYamlCanonicalAnalyzer.ClassificationInvalid,
+                        Summary = "unparseable YAML; regenerate via repair lane.",
+                    },
+                },
+            },
+        };
+
+        var result = DurableStatePreflightAnalyzer.Analyze(input);
+
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationUnsafe, result.Classification);
+    }
+
+    [Fact]
+    public void Analyze_DirtyNonPublishYamlUnderIssuesDir_ReturnsUnsafe()
+    {
+        // G343: operator-owned files alongside publish.yaml (issue
+        // body markdown, clarifications, ad-hoc notes) MUST stay
+        // unsafe even though publish.yaml itself is now liftable.
+        var input = new DurableStatePreflightInput
+        {
+            DirtyPaths = new[]
+            {
+                new DurableStateDirtyPath
+                {
+                    Path = ".intent-cli/issues/SKS-G343/issue-body.md",
+                    IsDeleted = false,
+                },
+            },
+        };
+
+        var result = DurableStatePreflightAnalyzer.Analyze(input);
+
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Single(result.UnsafePaths);
+        Assert.Contains("operator-owned", result.UnsafePaths[0].Reason, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -132,6 +132,7 @@ internal static class AutomationDurableStatePreflightCommand
 
             QueueStateForwardDeltaResult? queueDelta = null;
             RunsJsonlAppendOnlyResult? runsDelta = null;
+            PublishYamlCanonicalResult? publishYamlDelta = null;
 
             if (!isDeleted)
             {
@@ -143,6 +144,15 @@ internal static class AutomationDurableStatePreflightCommand
                 {
                     runsDelta = TryRunsJsonlDelta(repoRoot, path);
                 }
+                else if (IsPublishYamlPath(path, out var executionUnit))
+                {
+                    // G343: read working-tree publish.yaml and classify
+                    // its content as canonical / non-canonical /
+                    // invalid. The analyzer downstream uses this delta
+                    // to route the path through the verified lane
+                    // instead of the legacy blanket-unsafe rule.
+                    publishYamlDelta = TryPublishYamlDelta(repoRoot, path, executionUnit);
+                }
             }
 
             dirtyPaths.Add(new DurableStateDirtyPath
@@ -151,6 +161,7 @@ internal static class AutomationDurableStatePreflightCommand
                 IsDeleted = isDeleted,
                 QueueStateDelta = queueDelta,
                 RunsJsonlDelta = runsDelta,
+                PublishYamlDelta = publishYamlDelta,
             });
         }
 
@@ -252,6 +263,67 @@ internal static class AutomationDurableStatePreflightCommand
         }
 
         return RunsJsonlAppendOnlyAnalyzer.Analyze(headBlob, workingBlob);
+    }
+
+    /// <summary>
+    /// G343: detect <c>.intent-cli/issues/&lt;execution-unit&gt;/publish.yaml</c>
+    /// paths and extract the directory-derived execution-unit so the
+    /// caller can build the canonical-content delta.
+    /// </summary>
+    private static bool IsPublishYamlPath(string path, out string executionUnit)
+    {
+        executionUnit = string.Empty;
+        if (string.IsNullOrEmpty(path)) return false;
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        if (!normalized.StartsWith(DurableStatePreflightAnalyzer.IssuesDirectorySegment, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        var remainder = normalized[DurableStatePreflightAnalyzer.IssuesDirectorySegment.Length..];
+        var slashIndex = remainder.IndexOf('/');
+        if (slashIndex <= 0)
+        {
+            return false;
+        }
+        var fileSegment = remainder[(slashIndex + 1)..];
+        if (!fileSegment.Equals(DurableStatePreflightAnalyzer.PublishYamlFileName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        executionUnit = remainder[..slashIndex];
+        return !string.IsNullOrWhiteSpace(executionUnit);
+    }
+
+    private static PublishYamlCanonicalResult TryPublishYamlDelta(
+        string repoRoot,
+        string path,
+        string executionUnit)
+    {
+        var workingPath = Path.Combine(repoRoot, path);
+        if (!File.Exists(workingPath))
+        {
+            return new PublishYamlCanonicalResult
+            {
+                Classification = PublishYamlCanonicalAnalyzer.ClassificationInvalid,
+                Summary = $"working-tree path `{path}` does not exist on disk; cannot validate canonical publish.yaml content. Run `{PublishYamlCanonicalAnalyzer.RecoveryCommand}` to regenerate.",
+            };
+        }
+
+        string content;
+        try
+        {
+            content = File.ReadAllText(workingPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new PublishYamlCanonicalResult
+            {
+                Classification = PublishYamlCanonicalAnalyzer.ClassificationInvalid,
+                Summary = $"could not read working-tree `{path}`: {exception.Message}. Run `{PublishYamlCanonicalAnalyzer.RecoveryCommand}` to regenerate.",
+            };
+        }
+
+        return PublishYamlCanonicalAnalyzer.Analyze(content, executionUnit);
     }
 
     private static bool IsDurableStatePath(string path)
