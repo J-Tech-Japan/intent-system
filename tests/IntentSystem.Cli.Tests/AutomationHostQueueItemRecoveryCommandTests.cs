@@ -306,6 +306,84 @@ public sealed class AutomationHostQueueItemRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_FailedIssueLookup_SurfacesUnsafeStop_NoFabricatedIssue()
+    {
+        // G344 second-round repair: when the GitHub issue lookup fails
+        // (PR closes #N but we cannot retrieve that issue) the command
+        // MUST emit a structured unsafe stop with reason
+        // `issue-lookup-failed`. Previously it fabricated an open issue
+        // with empty labels, which silently bypassed the published-issue
+        // label contract.
+        using var workspace = new RecoveryWorkspace();
+        workspace.WritePublishArtifact(Unit, IssueNumber, Repo);
+        workspace.WritePacketYaml(Unit, Repo);
+
+        AutomationHostQueueItemRecoveryCommand.PrLookupFactory = () =>
+            FakePrLookup.WithIssueClosure(PrNumber, IssueNumber, Repo);
+        // FakeIssueLookup with no map entry → GetIssue throws → command
+        // sees lookup failure.
+        AutomationHostQueueItemRecoveryCommand.IssueLookupFactory = () => new FakeIssueLookup();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostQueueItemRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--pr", PrNumber.ToString(), "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("safe_repair_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("applied_count").GetInt32());
+        Assert.True(doc.RootElement.GetProperty("unsafe_stop_count").GetInt32() >= 1);
+        var records = doc.RootElement.GetProperty("records").EnumerateArray().ToArray();
+        Assert.Single(records);
+        Assert.Equal("unsafe-stop", records[0].GetProperty("result").GetString());
+        Assert.Equal(
+            AutomationHostQueueItemRecoveryCommand.ReasonIssueLookupFailed,
+            records[0].GetProperty("reason_code").GetString());
+        Assert.Equal("issue-lookup-failed", records[0].GetProperty("reason_code").GetString());
+        // No proposed queue item — the command must not advance toward
+        // recovery without verified issue evidence.
+        Assert.False(records[0].TryGetProperty("proposed_queue_item", out var proposed)
+            && proposed.ValueKind != JsonValueKind.Null);
+    }
+
+    [Fact]
+    public void Execute_ParsesImplementationIssueSchema_DetectsRepoMismatch()
+    {
+        // G344 second-round repair: real published packets use the
+        // canonical `implementation_issue:` section (not
+        // `implementation_issue_packet:`). The recovery command must
+        // parse that section so an explicit target_repo mismatch is
+        // surfaced as `repo-mismatch`.
+        using var workspace = new RecoveryWorkspace();
+        workspace.WritePublishArtifact(Unit, IssueNumber, Repo);
+        workspace.WritePacketYamlImplementationIssueSchema(Unit, targetRepo: "other-org/other-repo");
+
+        AutomationHostQueueItemRecoveryCommand.PrLookupFactory = () =>
+            FakePrLookup.WithIssueClosure(PrNumber, IssueNumber, Repo);
+        AutomationHostQueueItemRecoveryCommand.IssueLookupFactory = () =>
+            FakeIssueLookup.Open(IssueNumber, labels: new[] { "intent-target", "intent-pr-created" }, repo: Repo);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostQueueItemRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--pr", PrNumber.ToString(), "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("safe_repair_count").GetInt32());
+        Assert.True(doc.RootElement.GetProperty("unsafe_stop_count").GetInt32() >= 1);
+        var record = doc.RootElement.GetProperty("records").EnumerateArray()
+            .First(r => string.Equals(r.GetProperty("result").GetString(), "unsafe-stop", StringComparison.Ordinal));
+        Assert.Equal(
+            HostQueueItemRecoveryAnalyzer.ReasonRepoMismatch,
+            record.GetProperty("reason_code").GetString());
+        Assert.Contains("other-org/other-repo", record.GetProperty("explanation").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CommandRouter_HelpListsHostQueueItemRecovery()
     {
         var router = typeof(CommandRouter);
@@ -475,6 +553,29 @@ public sealed class AutomationHostQueueItemRecoveryCommandTests : IDisposable
                   intent_references: []
                   acceptance_criteria:
                     - "AC1"
+                """;
+            File.WriteAllText(Path.Combine(dir, "packet.yaml"), yaml);
+        }
+
+        /// <summary>
+        /// G344 second-round repair fixture: writes a packet.yaml using
+        /// the canonical <c>implementation_issue:</c> section (the schema
+        /// actually used by published packets — see
+        /// <c>IssuePublishCommandTests</c>), not the legacy
+        /// <c>implementation_issue_packet:</c> alias.
+        /// </summary>
+        public void WritePacketYamlImplementationIssueSchema(string executionUnit, string targetRepo)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(dir);
+            var yaml = $$"""
+                execution_unit: {{executionUnit}}
+                implementation_issue:
+                  issue_title: "[{{executionUnit}}] TODO"
+                  target_repo: {{targetRepo}}
+                  target_path: <paths>
+                  target_part: "one-line"
+                  dependencies: []
                 """;
             File.WriteAllText(Path.Combine(dir, "packet.yaml"), yaml);
         }

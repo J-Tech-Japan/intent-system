@@ -37,6 +37,17 @@ internal static class HostQueueItemRecoveryAnalyzer
     public const string ReasonPrIsDraft = "pr-is-draft";
 
     /// <summary>
+    /// G344 second-round repair: emitted when the GitHub issue the PR
+    /// closes does NOT carry both <c>intent-target</c> and
+    /// <c>intent-pr-created</c>. The recovery contract requires evidence
+    /// that the issue was published through the intent workflow (a
+    /// properly-published child issue) before we reconstruct queue state
+    /// against it — otherwise the analyzer could fabricate queue state
+    /// from a PR that closes an unrelated, unpublished GitHub issue.
+    /// </summary>
+    public const string ReasonMissingPublishedIssueLabels = "missing-published-issue-labels";
+
+    /// <summary>
     /// Analyze one candidate recovery: a single execution unit identified
     /// by packet + publish artifact + GitHub issue + GitHub PR facts,
     /// against the host queue-state items. Returns <c>recoverable</c>
@@ -151,6 +162,9 @@ internal static class HostQueueItemRecoveryAnalyzer
         // intent-pr-created is an explicit operator close — refuse.
         var issueClosed = string.Equals(candidate.ClosingIssue.State, "CLOSED", StringComparison.OrdinalIgnoreCase)
             || string.Equals(candidate.ClosingIssue.State, "closed", StringComparison.OrdinalIgnoreCase);
+        var issueHasIntentTarget = candidate.ClosingIssue.Labels.Contains(
+            WorkerNextActionConstants.Labels.IntentTarget,
+            StringComparer.Ordinal);
         var issueHasIntentPrCreated = candidate.ClosingIssue.Labels.Contains(
             WorkerNextActionConstants.Labels.IntentPrCreated,
             StringComparer.Ordinal);
@@ -160,6 +174,29 @@ internal static class HostQueueItemRecoveryAnalyzer
                 ReasonClosedIssue,
                 $"GitHub issue #{publishIssueNumber} in '{repo}' is closed without 'intent-pr-created'; "
                 + "refusing to reconstruct queue item against an explicitly-closed issue.");
+        }
+
+        // G344 second-round repair: require BOTH intent-target and
+        // intent-pr-created on the closing issue regardless of state.
+        // Together these labels identify a properly-published child
+        // issue. Without both, the recovery lane cannot prove the issue
+        // came from the intent workflow, and we refuse to reconstruct
+        // queue state against an unverified GitHub issue.
+        if (!issueHasIntentTarget || !issueHasIntentPrCreated)
+        {
+            var missing = (!issueHasIntentTarget, !issueHasIntentPrCreated) switch
+            {
+                (true, true) => "'intent-target' and 'intent-pr-created'",
+                (true, false) => "'intent-target'",
+                (false, true) => "'intent-pr-created'",
+                _ => string.Empty,
+            };
+            return UnsafeStop(
+                ReasonMissingPublishedIssueLabels,
+                $"GitHub issue #{publishIssueNumber} in '{repo}' is missing required published-issue label(s) {missing}; "
+                + "labels = [" + string.Join(", ", candidate.ClosingIssue.Labels) + "]. "
+                + "Host queue-item recovery requires evidence of a published child issue "
+                + "(both 'intent-target' and 'intent-pr-created') before reconstructing queue state.");
         }
 
         // PR must be open and non-draft. A merged / closed PR is not a

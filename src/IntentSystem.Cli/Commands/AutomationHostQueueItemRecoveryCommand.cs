@@ -28,6 +28,24 @@ internal static class AutomationHostQueueItemRecoveryCommand
     private const string ModeDryRun = "dry-run";
     private const string ModeWrite = "write";
 
+    /// <summary>
+    /// G344 second-round repair: emitted by the command (not the
+    /// analyzer) when the GitHub issue lookup fails — the PR's closing
+    /// reference points at issue #N but we cannot retrieve that issue
+    /// from GitHub. Previously we silently fabricated an open issue with
+    /// empty labels; the recovery contract now requires real label
+    /// evidence, so a lookup failure becomes a structured unsafe stop.
+    /// </summary>
+    public const string ReasonIssueLookupFailed = "issue-lookup-failed";
+
+    /// <summary>
+    /// G344 second-round repair: emitted when packet.yaml carries
+    /// conflicting <c>implementation_issue</c> and
+    /// <c>implementation_issue_packet</c> sections that disagree on
+    /// <c>target_repo</c>.
+    /// </summary>
+    public const string ReasonPacketTargetRepoConflict = "packet-target-repo-conflict";
+
     /// <summary>Test seam — replaces the gh-backed PR lookup.</summary>
     public static Func<IGitHubPrLookup>? PrLookupFactory { get; set; }
 
@@ -204,7 +222,27 @@ internal static class AutomationHostQueueItemRecoveryCommand
                 continue;
             }
 
-            var closingIssue = ResolveClosingIssue(prView, issueLookup, issueCache, repo!, issueNumber);
+            var resolution = ResolveClosingIssue(prView, issueLookup, issueCache, repo!, issueNumber);
+            if (resolution.Kind == ClosingIssueResolutionKind.LookupFailed)
+            {
+                // G344 second-round repair: issue lookup failed. Do NOT
+                // fabricate empty-label issue evidence. Surface as a
+                // structured unsafe stop so the operator sees the real
+                // blocker (and cannot accidentally recover queue state
+                // from an unverified GitHub issue).
+                perCandidate.Add(new HostQueueItemRecoveryRecord
+                {
+                    Unit = u,
+                    PublishArtifactPath = ToRepoRelative(context.RepoRoot, artifactPath),
+                    Result = HostQueueItemRecoveryAnalyzer.ResultUnsafeStop,
+                    ReasonCode = ReasonIssueLookupFailed,
+                    Explanation = $"PR #{prNumber.Value} in '{repo}' closes issue #{resolution.FailedIssueNumber} "
+                        + "but the issue lookup failed (HTTP error, parse failure, or not found); "
+                        + "refusing to recover queue state without verifying the issue's labels.",
+                });
+                continue;
+            }
+            var closingIssue = resolution.Issue;
 
             // Other units (post repo-filter) claiming the same issue.
             var otherUnits = issueToUnits.TryGetValue(issueNumber, out var us)
@@ -222,8 +260,23 @@ internal static class AutomationHostQueueItemRecoveryCommand
                 .Cast<HostQueueItemRecoveryExistingItem>()
                 .ToArray();
 
-            var packetTargetRepo = TryReadPacketTargetRepo(Path.Combine(issuesDir, u, "packet.yaml"));
-            var packetExists = File.Exists(Path.Combine(issuesDir, u, "packet.yaml"));
+            var packetPath = Path.Combine(issuesDir, u, "packet.yaml");
+            var packetTargetRepo = TryReadPacketTargetRepo(packetPath, out var packetTargetRepoConflict);
+            var packetExists = File.Exists(packetPath);
+            if (packetTargetRepoConflict is { Length: > 0 })
+            {
+                // G344 second-round repair: conflicting target_repo
+                // across packet schemas — refuse to silently pick one.
+                perCandidate.Add(new HostQueueItemRecoveryRecord
+                {
+                    Unit = u,
+                    PublishArtifactPath = ToRepoRelative(context.RepoRoot, artifactPath),
+                    Result = HostQueueItemRecoveryAnalyzer.ResultUnsafeStop,
+                    ReasonCode = ReasonPacketTargetRepoConflict,
+                    Explanation = packetTargetRepoConflict,
+                });
+                continue;
+            }
 
             var candidate = new HostQueueItemRecoveryCandidate
             {
@@ -447,7 +500,24 @@ internal static class AutomationHostQueueItemRecoveryCommand
         }
     }
 
-    private static HostQueueItemRecoveryClosingIssue? ResolveClosingIssue(
+    /// <summary>
+    /// G344 second-round repair: resolves the GitHub closing issue for
+    /// a recovery candidate, distinguishing three outcomes:
+    /// <list type="bullet">
+    /// <item><description><c>PrDoesNotCloseIssue</c>: PR has no closing
+    /// reference for the requested issue number — analyzer will report
+    /// <c>pr-does-not-close-issue</c>.</description></item>
+    /// <item><description><c>LookupFailed</c>: PR closes the issue but
+    /// the issue itself could not be fetched (HTTP error, parse failure,
+    /// not found). Command surfaces a structured unsafe stop with
+    /// <c>issue-lookup-failed</c>; the analyzer is not consulted.
+    /// Previously this path fabricated an open issue with empty labels —
+    /// that fabricated evidence is unsafe under the published-issue
+    /// label contract.</description></item>
+    /// <item><description><c>Resolved</c>: full <see cref="HostQueueItemRecoveryClosingIssue"/>.</description></item>
+    /// </list>
+    /// </summary>
+    private static ClosingIssueResolution ResolveClosingIssue(
         GitHubPrLookupResult? prView,
         IGitHubAutomationIssueLookup issueLookup,
         Dictionary<int, GitHubAutomationIssueCandidate?> issueCache,
@@ -461,7 +531,7 @@ internal static class AutomationHostQueueItemRecoveryCommand
         var closesIssue = prView?.ClosingIssuesReferences?.Any(r => r.Number == issueNumber) == true;
         if (prView is null || !closesIssue)
         {
-            return null;
+            return ClosingIssueResolution.PrDoesNotCloseIssue();
         }
 
         if (!issueCache.TryGetValue(issueNumber, out var issueCandidate))
@@ -480,28 +550,41 @@ internal static class AutomationHostQueueItemRecoveryCommand
         if (issueCandidate is null)
         {
             // GitHub knows the PR closes this issue but we couldn't
-            // fetch the issue itself. Still report enough to let the
-            // analyzer continue with the closing-issue evidence; assume
-            // open with no labels (the analyzer will then trust the
-            // PR-side closing reference, which is the strongest evidence).
-            return new HostQueueItemRecoveryClosingIssue
-            {
-                Number = issueNumber,
-                Repo = null,
-                State = "OPEN",
-                Labels = Array.Empty<string>(),
-                Url = $"https://github.com/{repo}/issues/{issueNumber}",
-            };
+            // fetch the issue itself. Do NOT fabricate label evidence —
+            // the recovery contract requires real labels (intent-target
+            // + intent-pr-created). Surface a structured lookup failure.
+            return ClosingIssueResolution.LookupFailed(issueNumber, repo);
         }
 
-        return new HostQueueItemRecoveryClosingIssue
+        return ClosingIssueResolution.Resolved(new HostQueueItemRecoveryClosingIssue
         {
             Number = issueCandidate.Number,
             Repo = null,
             State = string.IsNullOrEmpty(issueCandidate.State) ? "OPEN" : issueCandidate.State,
             Labels = issueCandidate.Labels.Select(l => l.Name).ToArray(),
             Url = issueCandidate.Url,
-        };
+        });
+    }
+
+    private readonly record struct ClosingIssueResolution(
+        ClosingIssueResolutionKind Kind,
+        HostQueueItemRecoveryClosingIssue? Issue,
+        int FailedIssueNumber,
+        string? FailedIssueRepo)
+    {
+        public static ClosingIssueResolution PrDoesNotCloseIssue() =>
+            new(ClosingIssueResolutionKind.PrDoesNotCloseIssue, null, 0, null);
+        public static ClosingIssueResolution LookupFailed(int issueNumber, string repo) =>
+            new(ClosingIssueResolutionKind.LookupFailed, null, issueNumber, repo);
+        public static ClosingIssueResolution Resolved(HostQueueItemRecoveryClosingIssue issue) =>
+            new(ClosingIssueResolutionKind.Resolved, issue, 0, null);
+    }
+
+    private enum ClosingIssueResolutionKind
+    {
+        PrDoesNotCloseIssue,
+        LookupFailed,
+        Resolved,
     }
 
     private static HostQueueItemRecoveryExistingItem? ToExisting(QueueItem item)
@@ -571,23 +654,37 @@ internal static class AutomationHostQueueItemRecoveryCommand
     }
 
     /// <summary>
-    /// G344: lightweight scanner for the <c>target_repo</c> scalar in
-    /// packet.yaml so the analyzer can detect repo mismatches. Mirrors
-    /// the helper in <see cref="NextSliceClassifyAnalyzer"/> but kept
-    /// local so the command surface doesn't reach into another file's
-    /// private helper.
+    /// G344 second-round repair: lightweight scanner for the
+    /// <c>target_repo</c> scalar in packet.yaml. Parses BOTH the
+    /// canonical <c>implementation_issue:</c> schema section (used by
+    /// real published packets — see <c>IssuePublishCommandTests</c>) AND
+    /// the legacy <c>implementation_issue_packet:</c> section, so a
+    /// packet whose <c>target_repo</c> disagrees with the requested
+    /// repo is detected regardless of which key the packet author used.
     /// </summary>
+    /// <remarks>
+    /// If both sections are present and disagree on <c>target_repo</c>,
+    /// the conflict is surfaced via <paramref name="conflict"/> so the
+    /// caller can emit a structured unsafe stop
+    /// (<see cref="ReasonPacketTargetRepoConflict"/>).
+    /// </remarks>
     private static string? TryReadPacketTargetRepo(string packetYamlPath)
+        => TryReadPacketTargetRepo(packetYamlPath, out _);
+
+    private static string? TryReadPacketTargetRepo(string packetYamlPath, out string? conflict)
     {
+        conflict = null;
         if (!File.Exists(packetYamlPath))
         {
             return null;
         }
+        string? implementationIssueTargetRepo = null;
+        string? implementationIssuePacketTargetRepo = null;
         try
         {
             using var reader = new StringReader(File.ReadAllText(packetYamlPath));
             string? line;
-            var inImplementationSection = false;
+            string currentSection = string.Empty;
             while ((line = reader.ReadLine()) is not null)
             {
                 var trimmed = line.TrimEnd();
@@ -595,11 +692,11 @@ internal static class AutomationHostQueueItemRecoveryCommand
                     && !char.IsWhiteSpace(trimmed[0])
                     && trimmed.EndsWith(":", StringComparison.Ordinal))
                 {
-                    var sectionName = trimmed[..^1];
-                    inImplementationSection = string.Equals(sectionName, "implementation_issue_packet", StringComparison.OrdinalIgnoreCase);
+                    currentSection = trimmed[..^1];
                     continue;
                 }
-                if (!inImplementationSection)
+                if (!string.Equals(currentSection, "implementation_issue", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(currentSection, "implementation_issue_packet", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -612,14 +709,40 @@ internal static class AutomationHostQueueItemRecoveryCommand
                 {
                     value = value[1..^1];
                 }
-                return string.IsNullOrWhiteSpace(value) ? null : value;
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    continue;
+                }
+                if (string.Equals(currentSection, "implementation_issue", StringComparison.OrdinalIgnoreCase))
+                {
+                    implementationIssueTargetRepo ??= value;
+                }
+                else
+                {
+                    implementationIssuePacketTargetRepo ??= value;
+                }
             }
         }
         catch (IOException)
         {
             return null;
         }
-        return null;
+
+        // Both sections present with disagreeing target_repo → conflict.
+        if (implementationIssueTargetRepo is { Length: > 0 }
+            && implementationIssuePacketTargetRepo is { Length: > 0 }
+            && !string.Equals(implementationIssueTargetRepo, implementationIssuePacketTargetRepo, StringComparison.OrdinalIgnoreCase))
+        {
+            conflict = $"packet.yaml has conflicting target_repo: implementation_issue.target_repo='{implementationIssueTargetRepo}' "
+                + $"vs implementation_issue_packet.target_repo='{implementationIssuePacketTargetRepo}'.";
+            // Still return the canonical (implementation_issue) value so
+            // downstream repo-mismatch checks can run; the caller will
+            // surface the conflict separately.
+            return implementationIssueTargetRepo;
+        }
+
+        // Canonical schema wins when present; otherwise legacy.
+        return implementationIssueTargetRepo ?? implementationIssuePacketTargetRepo;
     }
 
     private static string ToRepoRelative(string repoRoot, string fullPath)

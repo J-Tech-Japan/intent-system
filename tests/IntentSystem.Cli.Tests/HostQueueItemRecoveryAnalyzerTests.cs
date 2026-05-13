@@ -248,6 +248,69 @@ public sealed class HostQueueItemRecoveryAnalyzerTests
     }
 
     [Fact]
+    public void Analyze_RejectsOpenIssueMissingIntentTargetLabel_AsUnsafeStop()
+    {
+        // G344 second-round repair: the recovery contract requires the
+        // closing issue to carry both 'intent-target' and
+        // 'intent-pr-created' regardless of state. An open issue lacking
+        // 'intent-target' (no evidence the issue was a published intent
+        // child) must NOT yield `recoverable`.
+        var candidate = BuildCandidate() with
+        {
+            ClosingIssue = BuildClosingIssue(
+                state: "OPEN",
+                labels: new[] { "intent-pr-created" }),
+        };
+
+        var result = HostQueueItemRecoveryAnalyzer.Analyze(candidate);
+
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ResultUnsafeStop, result.Result);
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ReasonMissingPublishedIssueLabels, result.ReasonCode);
+        Assert.Equal("missing-published-issue-labels", result.ReasonCode);
+        Assert.Null(result.ProposedQueueItem);
+    }
+
+    [Fact]
+    public void Analyze_RejectsOpenIssueMissingIntentPrCreatedLabel_AsUnsafeStop()
+    {
+        // G344 second-round repair: open issue with intent-target but
+        // without intent-pr-created is not yet a properly-published
+        // child issue — the publish boundary has not been crossed.
+        var candidate = BuildCandidate() with
+        {
+            ClosingIssue = BuildClosingIssue(
+                state: "OPEN",
+                labels: new[] { "intent-target" }),
+        };
+
+        var result = HostQueueItemRecoveryAnalyzer.Analyze(candidate);
+
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ResultUnsafeStop, result.Result);
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ReasonMissingPublishedIssueLabels, result.ReasonCode);
+        Assert.Null(result.ProposedQueueItem);
+    }
+
+    [Fact]
+    public void Analyze_RejectsOpenIssueWithNoLabels_AsUnsafeStop()
+    {
+        // G344 second-round repair: an empty-label open issue (the exact
+        // shape previously fabricated by ResolveClosingIssue on lookup
+        // failure) MUST surface as unsafe-stop, not recoverable.
+        var candidate = BuildCandidate() with
+        {
+            ClosingIssue = BuildClosingIssue(
+                state: "OPEN",
+                labels: Array.Empty<string>()),
+        };
+
+        var result = HostQueueItemRecoveryAnalyzer.Analyze(candidate);
+
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ResultUnsafeStop, result.Result);
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ReasonMissingPublishedIssueLabels, result.ReasonCode);
+        Assert.Null(result.ProposedQueueItem);
+    }
+
+    [Fact]
     public void Analyze_ClosedPr_UnsafeStop()
     {
         var candidate = BuildCandidate() with { PrState = "MERGED" };
