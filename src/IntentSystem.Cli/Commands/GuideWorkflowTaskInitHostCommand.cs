@@ -26,7 +26,7 @@ internal static class GuideWorkflowTaskInitHostCommand
     private const string FormatMarkdown = "markdown";
 
     private const string UsageLine =
-        "Usage: intent-cli guide workflow task init-host [--role design|review-runtime|child-implementation] [--force-host] [--format markdown|json]";
+        "Usage: intent-cli guide workflow task init-host [--role design|review-runtime|child-implementation] [--topology same-repo] [--force-host] [--format markdown|json]";
 
     /// <summary>
     /// G335: canonical role definitions for a new project. Mirrors the
@@ -104,6 +104,36 @@ internal static class GuideWorkflowTaskInitHostCommand
     };
 
     /// <summary>
+    /// G348: same-repo topology guidance emitted when
+    /// <c>--topology same-repo</c> is passed. Documents the branch
+    /// strategy, the forbidden paths for implementation agents, and
+    /// the warning when no base-branch policy is configured.
+    /// </summary>
+    internal static readonly SameRepoTopologyGuidance SameRepoTopology = new()
+    {
+        Summary = "Same-repository topology: host intent metadata (`.intent-cli/`, `intents/`) and application code live in the same GitHub repository. Implementation PRs target an integration branch (e.g. `main-ai`); a human periodically merges the integration branch to `main`. This topology is useful for small or early projects but requires strict path discipline to prevent implementation agents from corrupting host metadata.",
+        BranchStrategy = new[]
+        {
+            "Implementation PRs MUST target the integration branch (e.g. `main-ai`), NOT `main`. Configure `base_branch_policy: main-ai` in `.intent-cli/config.yaml`.",
+            "Host metadata changes (queue-state, runs.jsonl, packets, intent tree) are committed directly to the integration branch by the host loop via intent-cli command surfaces only — never by implementation agents.",
+            "A human (or a dedicated automation) periodically opens a `main-ai → main` PR to batch-merge accepted implementation work into the stable branch.",
+            "Implementation PRs never target `main` directly; the integration branch is the gate."
+        },
+        ForbiddenPathsForImplementation = new[]
+        {
+            ".intent-cli/** — host queue-state, runs.jsonl, packet artifacts, config. Visible in the same-repo checkout but FORBIDDEN for implementation agents. Never read, write, or commit these paths from an implementation PR branch.",
+            "intents/** — intent tree, specs, rules, clarifications. Visible in the same-repo checkout but FORBIDDEN for implementation work. Intent authoring and clarification recording are host-design tasks, not implementation tasks.",
+        },
+        HostConstraints = new[]
+        {
+            "All host metadata mutations (queue-state, runs.jsonl, publish artifacts, workflow labels) MUST go through the installed intent-cli command surfaces (`intent-cli automation ...`, `intent-cli worker ...`, `intent-cli intent ...`, `intent-cli packet ...`, `intent-cli issue ...`). Never hand-edit these files directly.",
+            "Host metadata changes committed to the integration branch are automatically visible to the next implementation PR; no separate host repo checkout is required in same-repo topology.",
+            "The design host and review-runtime roles BOTH run from the same local checkout of this one repository. The `.intent-cli/` directory is present and REQUIRED for host operations; it is FORBIDDEN for implementation agents working on feature branches."
+        },
+        Warning = "SAME-REPO TOPOLOGY WARNING: when `base_branch_policy` is not configured (or is `direct-main`), child implementation agents will default to targeting `main` directly. In a same-repo project this is almost certainly wrong. Set `base_branch_policy: main-ai` in `.intent-cli/config.yaml` and ensure every published child issue includes a `Base Branch Policy` section pointing at the integration branch."
+    };
+
+    /// <summary>
     /// G335: explicit invariants the workflow guide must surface so
     /// external agents do not mis-initialize a project. Tests pin
     /// each invariant verbatim.
@@ -123,7 +153,7 @@ internal static class GuideWorkflowTaskInitHostCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var focusRole, out var forceHost, out var format, out var error))
+        if (!TryParseArguments(args, out var focusRole, out var forceHost, out var topology, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -152,6 +182,19 @@ internal static class GuideWorkflowTaskInitHostCommand
             refusalReasons.Add("The current cwd already contains `.intent-cli/`, but --role child-implementation was selected. Re-run with --force-host to explicitly upgrade this repo to a host role, or cd to a directory without `.intent-cli/` if you intended to scaffold a child-implementation checkout.");
         }
 
+        // G348: resolve same-repo topology, including any policy-absent warning.
+        var isSameRepo = string.Equals(topology, "same-repo", StringComparison.Ordinal);
+        var sameRepoGuidance = isSameRepo ? SameRepoTopology : null;
+
+        // G348: when same-repo but no non-default base-branch policy configured,
+        // warn — direct-main means PRs target `main`, which is wrong for same-repo.
+        var baseBranchPolicy = context.Config.Project.BaseBranchPolicy;
+        var sameRepoPolicyWarning = isSameRepo &&
+            (string.IsNullOrWhiteSpace(baseBranchPolicy) ||
+             string.Equals(baseBranchPolicy, CliRuntimeContracts.DirectMainBaseBranchPolicy, StringComparison.Ordinal))
+            ? SameRepoTopology.Warning
+            : null;
+
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             var payload = new InitHostGuidance
@@ -160,16 +203,19 @@ internal static class GuideWorkflowTaskInitHostCommand
                 Roles = visibleRoles,
                 Invariants = Invariants,
                 FocusRole = string.IsNullOrEmpty(focusRole) ? null : focusRole,
+                Topology = string.IsNullOrEmpty(topology) ? null : topology,
                 CwdHasDotIntentCli = hasDotIntentCli,
                 ForceHost = forceHost,
-                Refusals = refusalReasons.Count == 0 ? null : refusalReasons
+                Refusals = refusalReasons.Count == 0 ? null : refusalReasons,
+                SameRepoTopology = sameRepoGuidance,
+                SameRepoPolicyWarning = sameRepoPolicyWarning
             };
             writer.Write(JsonSerializer.Serialize(payload, JsonOptions));
             writer.WriteLine();
         }
         else
         {
-            WriteMarkdown(visibleRoles, hasDotIntentCli, forceHost, refusalReasons, writer);
+            WriteMarkdown(visibleRoles, hasDotIntentCli, forceHost, refusalReasons, sameRepoGuidance, sameRepoPolicyWarning, writer);
         }
 
         return refusalReasons.Count == 0 ? 0 : 1;
@@ -200,6 +246,8 @@ internal static class GuideWorkflowTaskInitHostCommand
         bool hasDotIntentCli,
         bool forceHost,
         IReadOnlyList<string> refusals,
+        SameRepoTopologyGuidance? sameRepoGuidance,
+        string? sameRepoPolicyWarning,
         TextWriter writer)
     {
         writer.WriteLine("# intent-cli — init-host workflow guide");
@@ -250,17 +298,52 @@ internal static class GuideWorkflowTaskInitHostCommand
         {
             writer.WriteLine($"- {line}");
         }
+
+        // G348: emit same-repo topology section when --topology same-repo is set.
+        if (sameRepoGuidance is not null)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Same-Repo Topology (--topology same-repo)");
+            writer.WriteLine();
+            writer.WriteLine(sameRepoGuidance.Summary);
+            writer.WriteLine();
+            writer.WriteLine("### Branch strategy");
+            foreach (var item in sameRepoGuidance.BranchStrategy)
+            {
+                writer.WriteLine($"- {item}");
+            }
+            writer.WriteLine();
+            writer.WriteLine("### Forbidden paths for implementation agents");
+            foreach (var item in sameRepoGuidance.ForbiddenPathsForImplementation)
+            {
+                writer.WriteLine($"- {item}");
+            }
+            writer.WriteLine();
+            writer.WriteLine("### Host constraints");
+            foreach (var item in sameRepoGuidance.HostConstraints)
+            {
+                writer.WriteLine($"- {item}");
+            }
+
+            if (sameRepoPolicyWarning is not null)
+            {
+                writer.WriteLine();
+                writer.WriteLine($"⚠ {sameRepoPolicyWarning}");
+            }
+        }
     }
 
     private static bool TryParseArguments(
         string[] args,
         out string focusRole,
         out bool forceHost,
+        out string topology,
         out string format,
         out string error)
     {
         focusRole = string.Empty;
         forceHost = false;
+        topology = string.Empty;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -291,6 +374,22 @@ internal static class GuideWorkflowTaskInitHostCommand
                     break;
                 case "--force-host":
                     forceHost = true;
+                    break;
+                case "--topology":
+                    // G348: only 'same-repo' is a recognized topology option.
+                    if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[i + 1]))
+                    {
+                        error = "--topology requires a value (same-repo).";
+                        return false;
+                    }
+                    var requestedTopology = args[i + 1];
+                    if (!string.Equals(requestedTopology, "same-repo", StringComparison.Ordinal))
+                    {
+                        error = $"--topology must be 'same-repo' (got '{requestedTopology}').";
+                        return false;
+                    }
+                    topology = requestedTopology;
+                    i++;
                     break;
                 case "--format":
                     if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[i + 1]))
@@ -385,6 +484,9 @@ internal sealed record InitHostGuidance
     [JsonPropertyName("focus_role")]
     public string? FocusRole { get; init; }
 
+    [JsonPropertyName("topology")]
+    public string? Topology { get; init; }
+
     [JsonPropertyName("cwd_has_dot_intent_cli")]
     public required bool CwdHasDotIntentCli { get; init; }
 
@@ -399,4 +501,34 @@ internal sealed record InitHostGuidance
 
     [JsonPropertyName("refusals")]
     public IReadOnlyList<string>? Refusals { get; init; }
+
+    /// <summary>G348: same-repo topology guidance; null when <c>--topology</c> is not set.</summary>
+    [JsonPropertyName("same_repo_topology")]
+    public SameRepoTopologyGuidance? SameRepoTopology { get; init; }
+
+    /// <summary>G348: warning string when same-repo topology is active but no non-default base-branch policy is configured; null otherwise.</summary>
+    [JsonPropertyName("same_repo_policy_warning")]
+    public string? SameRepoPolicyWarning { get; init; }
+}
+
+/// <summary>
+/// G348: same-repo topology guidance emitted when
+/// <c>--topology same-repo</c> is passed to <c>guide workflow task init-host</c>.
+/// </summary>
+internal sealed record SameRepoTopologyGuidance
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("branch_strategy")]
+    public required IReadOnlyList<string> BranchStrategy { get; init; }
+
+    [JsonPropertyName("forbidden_paths_for_implementation")]
+    public required IReadOnlyList<string> ForbiddenPathsForImplementation { get; init; }
+
+    [JsonPropertyName("host_constraints")]
+    public required IReadOnlyList<string> HostConstraints { get; init; }
+
+    [JsonPropertyName("warning")]
+    public required string Warning { get; init; }
 }
