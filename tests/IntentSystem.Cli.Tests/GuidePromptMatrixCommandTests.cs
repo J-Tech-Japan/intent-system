@@ -1360,7 +1360,7 @@ public sealed class GuidePromptMatrixCommandTests
             writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("--agent must be 'claude', 'codex', or 'generic'", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--agent must be 'claude', 'codex', 'generic', or 'copilot'", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

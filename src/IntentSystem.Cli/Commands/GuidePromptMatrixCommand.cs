@@ -39,6 +39,17 @@ internal static class GuidePromptMatrixCommand
     private const string AgentGeneric = "generic";
 
     /// <summary>
+    /// G345: GitHub Copilot is recognized as an assignment-oriented agent.
+    /// It does NOT participate in the local 5-minute heartbeat/loop model
+    /// that Claude / Codex / generic local agents use. Copilot is acceptable
+    /// for child-oneshot (assign an issue / mention on a PR / Copilot CLI
+    /// one-shot) but NOT for child-loop (returns structured unsupported
+    /// guidance) and NOT for host modes (host review/closeout/next-slice
+    /// remain with intent-cli host automation).
+    /// </summary>
+    private const string AgentCopilot = "copilot";
+
+    /// <summary>
     /// G279 follow-up (PR #662): the rendered prompts only contain meaningful
     /// scheduler instructions when <c>--frequency</c> matches the documented
     /// shape. Accept positive integers followed by the unit token: <c>m</c>
@@ -51,7 +62,7 @@ internal static class GuidePromptMatrixCommand
         RegexOptions.Compiled);
 
     private const string UsageLine =
-        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--format markdown|json]";
+        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic|copilot] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--format markdown|json]";
 
     private static readonly string[] ForbiddenSources =
     [
@@ -116,12 +127,21 @@ internal static class GuidePromptMatrixCommand
             ? CliRuntimeContracts.DefaultBaseBranchPolicy
             : baseBranchPolicy;
 
+        var resolvedAgentForDispatch = NormalizeAgent(agent);
         var all = new[]
         {
-            BuildChildLoop(domainPlaceholder, agent, frequency, resolvedPolicy),
-            BuildHostLoop(domainPlaceholder, targetRepoPlaceholder, agent, frequency, resolvedPolicy),
-            BuildChildOneshot(domainPlaceholder, resolvedPolicy),
-            BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
+            string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
+                ? BuildCopilotChildLoop(resolvedPolicy)
+                : BuildChildLoop(domainPlaceholder, agent, frequency, resolvedPolicy),
+            string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
+                ? BuildCopilotUnsupportedHostMode(ModeHostLoop, KindLoop, TargetHost, resolvedPolicy)
+                : BuildHostLoop(domainPlaceholder, targetRepoPlaceholder, agent, frequency, resolvedPolicy),
+            string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
+                ? BuildCopilotChildOneshot(resolvedPolicy)
+                : BuildChildOneshot(domainPlaceholder, resolvedPolicy),
+            string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
+                ? BuildCopilotUnsupportedHostMode(ModeHostOneshot, KindOneshot, TargetHost, resolvedPolicy)
+                : BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
         };
 
         if (mode is null)
@@ -562,6 +582,205 @@ Hard rules:
         };
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // G345: GitHub Copilot guidance blocks.
+    //
+    // Copilot is assignment-oriented: it works from a published GitHub issue
+    // or a mention on a PR; it can create a branch / open a PR; it can
+    // respond to PR review comments; and Copilot CLI supports a one-shot
+    // `--prompt` mode when explicitly installed. Copilot does NOT map to
+    // the local 5-minute heartbeat / `/loop` model that Claude / Codex run
+    // and must NOT touch host `.intent-cli/` metadata.
+    //
+    // The three rendered blocks are:
+    //   1. BuildCopilotChildOneshot — supported: assignment / PR mention /
+    //      Copilot CLI one-shot, plus the GitHub-only contract.
+    //   2. BuildCopilotChildLoop    — unsupported local loop: returns
+    //      structured "unsupported_local_loop" guidance pointing at an
+    //      assignment-oriented controller.
+    //   3. BuildCopilotUnsupportedHostMode — host-loop / host-oneshot are
+    //      not Copilot's job; host review/closeout/next-slice stays with
+    //      intent-cli host automation.
+    // ─────────────────────────────────────────────────────────────────────
+
+    private const string CopilotChildContractParagraph =
+        "GitHub-only Copilot child contract (G345): Copilot must work from GitHub issue / PR / comment facts only. The implementation repo MUST NOT contain `.intent-cli/` and Copilot MUST NOT read, write, or mutate host queue-state (`.intent-cli/queue-state.json`), append to `runs.jsonl`, edit packet artifacts (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`), or apply workflow labels (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, `intent-pr-update-in-progress`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.). Workflow labels are applied by the host via installed `intent-cli automation` / `intent-cli worker` commands, never from the implementation side. Host review, closeout, and next-slice publish remain with intent-cli host automation; Copilot's job ends at opening / updating the PR.";
+
+    private const string CopilotMinimalPromptAssignIssue =
+        "Assign a published GitHub issue to the Copilot cloud agent — copy/paste the following minimal human prompt to the operator (replace `<owner>/<repo>` and `<N>` with the published issue's repo and number):\n\n```\ngh issue edit <N> --repo <owner>/<repo> --add-assignee copilot\n```\n\nCopilot cloud agent picks the issue up from the GitHub assignment event, creates its own branch, and opens a PR that includes `Closes #<N>`. The operator does not run Copilot CLI for this path; no local install is required. The host intent-cli loop still owns review, approval, merge, and next-slice publish.";
+
+    private const string CopilotMinimalPromptPrComment =
+        "Ask Copilot to update an existing PR from the latest review comments — copy/paste the following minimal human prompt to the operator (replace `<owner>/<repo>` and `<PR>` with the PR's repo and number). Use `gh pr comment` or the GitHub UI to post the mention so Copilot cloud agent picks it up:\n\n```\ngh pr comment <PR> --repo <owner>/<repo> --body \"@copilot please address the latest review comments on this PR.\"\n```\n\nCopilot reads the PR review comments, pushes a follow-up commit to the same PR branch, and posts a reply summarizing the changes. The operator does not run Copilot CLI for this path. The host intent-cli loop still owns the next review/approval cycle and label transitions.";
+
+    private const string CopilotMinimalPromptCli =
+        "Use Copilot CLI one-shot if available — only if the operator has GitHub Copilot CLI installed AND has explicitly chosen this path (no installation is required for the assignment / PR-mention workflows above). The CLI's programmatic prompt entry point runs in non-interactive mode against a single contract:\n\n```\ngh copilot suggest -t shell \"<contract text describing one self-contained change>\"\n```\n\nor, when the standalone `copilot` CLI is available:\n\n```\ncopilot --prompt \"<contract text describing one self-contained change>\"\n```\n\nThis is a one-shot invocation. Do NOT wrap it in a local cron, scheduler, monitor, or recurring wakeup, and do NOT use it to mutate host `.intent-cli/` metadata.";
+
+    private const string CopilotAllowedDoBullets =
+        "Copilot is ALLOWED to:\n- read the published GitHub issue body, labels, and `Closes #<n>` reference;\n- read the existing PR diff, PR review comments, and PR body;\n- open a branch and a PR that includes the deterministic closing reference (`Closes #<issue>`);\n- push follow-up commits to the same PR branch in response to a `@copilot` mention from a reviewer;\n- post a PR reply summarizing what changed.";
+
+    private const string CopilotForbiddenDoBullets =
+        "Copilot is NOT ALLOWED to:\n- write or commit `.intent-cli/` in the implementation repo (the implementation repo's steady state is no `.intent-cli/` at all — G300 / G330 / G333);\n- read or mutate parent host queue-state (`.intent-cli/queue-state.json`), append to `runs.jsonl`, edit packet artifacts (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`), or change submodule pointers from the implementation side;\n- apply or remove workflow labels (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, `intent-pr-update-in-progress`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.) — those are host-owned through installed `intent-cli automation` / `intent-cli worker` commands;\n- run host review / closeout / next-slice / publish steps;\n- run local cron, heartbeats, schedulers, or Claude/Codex `/loop`-style recurring wakeups (Copilot has no local heartbeat thread).";
+
+    private static GuidePromptMatrixEntry BuildCopilotChildOneshot(string baseBranchPolicy)
+    {
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
+        var prompt =
+$@"GitHub Copilot one-shot child guidance (G345). Copilot is an assignment-oriented agent — it works from a published GitHub issue or a mention on a PR, opens / updates a PR, and stops. It does NOT run a local 5-minute heartbeat loop, does NOT exec the host's `intent-cli`, and does NOT touch host `.intent-cli/` metadata.
+
+Do not create or update any automation, loop, cron, monitor, reminder, or recurring wakeup. This is a one-shot execution. Frequency is forbidden.
+
+{basePolicyBlock}
+
+{CopilotChildContractParagraph}
+
+Minimal human prompts for the operator (pick exactly one path per wake):
+
+1. {CopilotMinimalPromptAssignIssue}
+
+2. {CopilotMinimalPromptPrComment}
+
+3. {CopilotMinimalPromptCli}
+
+{CopilotAllowedDoBullets}
+
+{CopilotForbiddenDoBullets}
+
+Hard rules:
+- The implementation repo (the repo Copilot pushes commits to) MUST NOT contain `.intent-cli/`. Absence of `.intent-cli/` is the expected steady state for child work (G300 / G330 / G333) and Copilot must not introduce it.
+- Copilot MUST NOT call `intent-cli` at all from the implementation side. Workflow label transitions (`intent-target` apply, `intent-issue-in-progress`, `intent-pr-created`, `intent-pr-update-in-progress`, etc.) are host-owned via installed `intent-cli automation` / `intent-cli worker` commands; the host intent-cli loop applies them when it reviews the PR.
+- Copilot MUST NOT edit `.intent-cli/queue-state.json`, `runs.jsonl`, packet `packet.yaml` / `implementation.md` / `review-context.md` / `github-body.md`, or submodule pointers from the implementation side.
+- Copilot MUST NOT post review/approval comments that claim host-side label transitions; only the host intent-cli review loop applies approval / merge / closeout.
+- The PR body MUST include a deterministic GitHub closing reference to the source issue — `Closes #<issue>`, `Fixes #<issue>`, or `Resolves #<issue>` (G311). Copilot's PR template / generated body already meets this when the assignment was made via `gh issue edit <N> --add-assignee copilot`; verify before merge.
+- Create the PR as ready-for-review (non-draft) by default. Do not mark a Copilot PR as draft unless the operator explicitly asks for one.
+- Process at most one assignment / PR-mention / CLI one-shot per wake.
+- Do NOT create a cron, monitor, scheduler, reminder, or new thread after completing this wake.
+- Host review / closeout / next-slice publish remains with intent-cli host automation; the host loop will pick up the Copilot-opened PR via `automation host-review-preflight` on its own cadence.";
+
+        return new GuidePromptMatrixEntry
+        {
+            Mode = ModeChildOneshot,
+            Kind = KindOneshot,
+            Target = TargetChild,
+            FrequencyGuidance = FrequencyGuidanceOneshot,
+            ForbiddenSources = ForbiddenSources,
+            FirstCalls =
+            [
+                "gh auth status",
+                "gh issue view <N> --repo <owner>/<repo> --json number,title,body,labels,assignees",
+                "gh pr view <PR> --repo <owner>/<repo> --json number,isDraft,body,reviews,comments"
+            ],
+            Prompt = prompt,
+            Agent = AgentCopilot,
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+        };
+    }
+
+    private static GuidePromptMatrixEntry BuildCopilotChildLoop(string baseBranchPolicy)
+    {
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
+        var prompt =
+$@"GitHub Copilot does NOT map to the local heartbeat / `/loop` child implementation loop (G345). This entry returns structured `unsupported_local_loop` guidance and an assignment-oriented controller recommendation; it is intentionally NOT a Claude/Codex-style recurring loop body.
+
+Why this combination is unsupported:
+- Copilot is assignment-oriented (cloud agent triggered by GitHub events: issue assignment to `copilot`, `@copilot` PR mention, or one-shot Copilot CLI `--prompt`). It does not host a local 5-minute heartbeat thread, cannot exec the operator's local `intent-cli` against the host repo, and cannot reach local `.intent-cli/` paths.
+- The Claude same-thread `/loop` primitive and the Codex current-thread heartbeat are LOCAL same-session primitives that reuse the active thread's filesystem paths; Copilot has no equivalent primitive. The operator cannot point Copilot at a local cron either, because Copilot will not run host commands from the implementation side.
+- Workflow label transitions (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, etc.) are host-owned through installed `intent-cli automation` / `intent-cli worker` commands. They are not Copilot's job; running a recurring Copilot loop would either no-op on those transitions or, worse, push raw `gh label` edits that bypass the host's invariants.
+
+Assignment-oriented controller recommendation (replaces the local heartbeat loop):
+- The host intent-cli loop continues to drive queue selection, review, closeout, and next-slice publish on its own cadence. That host loop runs with `--agent claude` or `--agent codex` (or `--agent generic`), NOT `--agent copilot`. See `intent-cli guide prompt-matrix --mode host-loop --agent <claude|codex|generic>` for the host body.
+- For each child issue the host publishes (or each PR that needs a follow-up commit), an external assigner — the operator clicking, or a small assignment script triggered by a GitHub Action / webhook — performs ONE of the three minimal prompts below per ready item. Each is a single GitHub event; none is a recurring local heartbeat.
+
+{basePolicyBlock}
+
+{CopilotChildContractParagraph}
+
+Three minimal human prompts (reused from `child-oneshot`; pick exactly one per ready item):
+
+1. {CopilotMinimalPromptAssignIssue}
+
+2. {CopilotMinimalPromptPrComment}
+
+3. {CopilotMinimalPromptCli}
+
+{CopilotAllowedDoBullets}
+
+{CopilotForbiddenDoBullets}
+
+Hard rules:
+- Do NOT substitute the Claude same-thread `/loop` body or the Codex current-thread heartbeat body for Copilot. The local heartbeat / `next-action` / `claim` / `complete` worker sequence is host- and local-agent-only.
+- Do NOT create a local cron, monitor, scheduler, reminder, or new thread that wraps Copilot. Copilot has no local heartbeat surface to wrap.
+- Do NOT touch host `.intent-cli/` metadata from the implementation side. The host loop reconciles workflow labels and queue-state on its own cadence.
+- If the operator insists on a recurring Copilot cadence, surface this `unsupported_local_loop` classification and the assignment-oriented controller recommendation instead of inventing one.";
+
+        return new GuidePromptMatrixEntry
+        {
+            Mode = ModeChildLoop,
+            Kind = KindLoop,
+            Target = TargetChild,
+            FrequencyGuidance = "N/A — GitHub Copilot has no local heartbeat / recurring loop primitive; the local 5-minute / 20-minute guidance does not apply (G345).",
+            ForbiddenSources = ForbiddenSources,
+            FirstCalls =
+            [
+                "gh auth status",
+                "gh issue view <N> --repo <owner>/<repo> --json number,title,body,labels,assignees",
+                "gh pr view <PR> --repo <owner>/<repo> --json number,isDraft,body,reviews,comments"
+            ],
+            Prompt = prompt,
+            Agent = AgentCopilot,
+            AgentClassification = "unsupported_local_loop",
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+        };
+    }
+
+    private static GuidePromptMatrixEntry BuildCopilotUnsupportedHostMode(string mode, string kind, string target, string baseBranchPolicy)
+    {
+        var prompt =
+$@"GitHub Copilot is NOT a host-side agent (G345). Mode `{mode}` covers host review / closeout / next-slice publish and remains with intent-cli host automation. Copilot is implementation-side only — it works from a published GitHub issue or a `@copilot` PR mention and stops at opening / updating a PR. This entry returns structured `unsupported_mode_agent_combination` guidance.
+
+Why this combination is unsupported:
+- The host review / closeout / next-slice loops read parent durable state (`.intent-cli/queue-state.json`, `.intent-cli/runs.jsonl`, packet artifacts under `.intent-cli/issues/<execution-unit>/`) and mutate workflow labels through installed `intent-cli automation pr-transition` / `automation issue-publish` / `automation reconcile` commands. None of that is Copilot's job; the implementation side (where Copilot operates) does not own host metadata or workflow labels.
+- Host review approval is gated by `intent-cli guide review` (packet/intent conformance evidence, Acceptance Criteria check, Out-of-Scope honored, etc.) and by intent-cli's draft-aware approval, host-sync preflight, publish-recovery, reconcile, and host-review-diagnostics lanes. Copilot cannot exec those commands and cannot supply structured approval-summary evidence in the form the host loop requires.
+- Workflow labels (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, `intent-pr-update-in-progress`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.) are host-owned. A recurring Copilot host loop would either no-op on these transitions or push raw `gh label` mutations that bypass the host's invariants.
+
+Available agents for the host modes (`host-loop`, `host-oneshot`):
+- `claude` — Claude Code same-thread `/loop` for recurring host review/next-slice;
+- `codex` — Codex current-thread heartbeat for recurring host review/next-slice;
+- `generic` — generic same-thread/current-thread agent (no Claude/Codex-specific scheduling primitive);
+- `copilot` — NOT supported for host modes.
+
+Recommended next call: `intent-cli guide prompt-matrix --mode {mode} --agent claude` (or `--agent codex` / `--agent generic`) for the canonical host body. For Copilot child work, use `intent-cli guide prompt-matrix --mode child-oneshot --agent copilot`.
+
+Hard rules:
+- Do NOT run the host review / closeout / next-slice body under `--agent copilot`. Host loops require local exec of `intent-cli automation` / `intent-cli review closeout-plan` / `intent-cli intent next-slice` / `intent-cli packet draft` / `intent-cli issue publish-flow` against the parent host repo's local `.intent-cli/` directory; Copilot has no surface for that.
+- Do NOT have Copilot mutate workflow labels, queue-state, runs.jsonl, packet artifacts, or submodule pointers under the guise of ""hosting"" review. Those mutations are reserved for the host intent-cli loop running under `claude` / `codex` / `generic`.
+- Do NOT replace the host review / next-slice loop with a Copilot assignment cadence. The host loop's responsibilities (draft-aware approval, host-sync preflight, publish-recovery, reconcile, intent-and-packet-aware review, structured clarification) cannot be delegated to an external assignment workflow.";
+
+        return new GuidePromptMatrixEntry
+        {
+            Mode = mode,
+            Kind = kind,
+            Target = target,
+            FrequencyGuidance =
+                string.Equals(kind, KindOneshot, StringComparison.Ordinal)
+                    ? FrequencyGuidanceOneshot
+                    : "N/A — GitHub Copilot is not a host-side agent; host review/closeout/next-slice remains with intent-cli host automation under --agent claude|codex|generic (G345).",
+            ForbiddenSources = ForbiddenSources,
+            FirstCalls =
+            [
+                "intent-cli guide prompt-matrix --mode " + mode + " --agent claude",
+                "intent-cli guide prompt-matrix --mode " + mode + " --agent codex",
+                "intent-cli guide prompt-matrix --mode " + mode + " --agent generic"
+            ],
+            Prompt = prompt,
+            Agent = AgentCopilot,
+            AgentClassification = "unsupported_mode_agent_combination",
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+        };
+    }
+
     private static void WriteMarkdown(TextWriter writer, IReadOnlyList<GuidePromptMatrixEntry> entries)
     {
         writer.WriteLine("# Guide prompt matrix");
@@ -691,15 +910,16 @@ Hard rules:
                 case "--agent":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
-                        error = "--agent requires a value (claude, codex, or generic).";
+                        error = "--agent requires a value (claude, codex, generic, or copilot).";
                         return false;
                     }
                     var requestedAgent = args[index + 1].Trim().ToLowerInvariant();
                     if (!string.Equals(requestedAgent, AgentClaude, StringComparison.Ordinal)
                         && !string.Equals(requestedAgent, AgentCodex, StringComparison.Ordinal)
-                        && !string.Equals(requestedAgent, AgentGeneric, StringComparison.Ordinal))
+                        && !string.Equals(requestedAgent, AgentGeneric, StringComparison.Ordinal)
+                        && !string.Equals(requestedAgent, AgentCopilot, StringComparison.Ordinal))
                     {
-                        error = $"--agent must be 'claude', 'codex', or 'generic' (got '{requestedAgent}').";
+                        error = $"--agent must be 'claude', 'codex', 'generic', or 'copilot' (got '{requestedAgent}').";
                         return false;
                     }
                     agent = requestedAgent;
@@ -761,7 +981,7 @@ Hard rules:
         writer.WriteLine();
         writer.WriteLine("Omit --mode to get all four entries.");
         writer.WriteLine("--domain, --target-repo, --agent, and --frequency are optional; provide them to render a concrete paste-ready prompt instead of one with placeholders.");
-        writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic.");
+        writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic, copilot (G345 — assignment-oriented; supported only for child-oneshot, returns structured unsupported-loop guidance for child-loop and structured unsupported-mode-agent-combination for host modes).");
         writer.WriteLine("--frequency examples: 5m, 20m, 1h. Omit to keep the rendered prompt's ask-the-operator instruction.");
         writer.WriteLine($"--base-branch-policy values: {CliRuntimeContracts.DirectMainBaseBranchPolicy} (default; child PRs target `{CliRuntimeContracts.DirectMainBaseBranch}`), {CliRuntimeContracts.MainAiBaseBranchPolicy} (child PRs target `{CliRuntimeContracts.MainAiIntegrationBaseBranch}`).");
     }
@@ -808,4 +1028,18 @@ internal sealed record GuidePromptMatrixEntry
 
     [JsonPropertyName("expected_base_branch")]
     public string? ExpectedBaseBranch { get; init; }
+
+    /// <summary>
+    /// G345: structured classification when the requested agent does not
+    /// map cleanly to the requested mode. Possible values:
+    /// <c>"unsupported_local_loop"</c> (copilot + child-loop — Copilot does
+    /// not provide the local 5-minute heartbeat loop; assignment-oriented
+    /// controller is recommended instead) and
+    /// <c>"unsupported_mode_agent_combination"</c> (copilot + host-loop /
+    /// host-oneshot — host review/closeout/next-slice stays with intent-cli
+    /// host automation and must use claude / codex / generic). Null when
+    /// the requested combination is supported.
+    /// </summary>
+    [JsonPropertyName("agent_classification")]
+    public string? AgentClassification { get; init; }
 }
