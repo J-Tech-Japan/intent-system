@@ -140,7 +140,7 @@ internal static class GuidePromptMatrixCommand
                 ? BuildCopilotChildOneshot(resolvedPolicy)
                 : BuildChildOneshot(domainPlaceholder, resolvedPolicy),
             string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
-                ? BuildCopilotUnsupportedHostMode(ModeHostOneshot, KindOneshot, TargetHost, resolvedPolicy)
+                ? BuildCopilotHostOneshot(targetRepoPlaceholder, resolvedPolicy)
                 : BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
         };
 
@@ -256,6 +256,22 @@ $@"**Local scheduling contract (G314)**: this loop runs in the **agent's current
 $@"Base branch policy: `{baseBranchPolicy}` (expected base branch: `{expected}`).
 - {description}
 - {targetRoleVerb} this policy mechanically: derive the PR base branch from `intent-cli` config (`base_branch_policy`), never from prompt memory. Use `intent-cli automation base-branch-check --repo <r> --pr <n> --policy {baseBranchPolicy} --actual-base $(gh pr view <n> --repo <r> --json baseRefName --jq .baseRefName) --format json` to flag mismatches.";
+    }
+
+    // G345: Copilot-specific base-branch block. Copilot MUST NOT invoke
+    // `intent-cli` from the implementation side, so the policy is expressed
+    // as a GitHub-facts-only check (`gh pr view ... --json baseRefName`) and
+    // the canonical `intent-cli automation base-branch-check` mismatch flag
+    // is explicitly marked host/operator-owned.
+    private static string RenderCopilotBaseBranchPolicyBlock(string baseBranchPolicy)
+    {
+        var expected = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy);
+        var description = BaseBranchPolicyContract.DescribePolicy(baseBranchPolicy);
+        return
+$@"Base branch policy: `{baseBranchPolicy}` (expected base branch: `{expected}`).
+- {description}
+- Verify the PR base branch via GitHub facts only: `gh pr view <n> --repo <owner>/<repo> --json baseRefName --jq .baseRefName` must equal `{expected}`. If it does not, do NOT mutate the PR or labels from the implementation side — surface the mismatch in a PR reply so the host operator can reconcile.
+- Base-branch policy enforcement is HOST / operator-owned. Copilot does NOT invoke any `intent-cli` command from the implementation side; the host's intent review loop runs the mismatch check on its own cadence.";
     }
 
     private static GuidePromptMatrixEntry BuildChildLoop(string domainPlaceholder, string? agent, string? frequency, string baseBranchPolicy)
@@ -604,7 +620,7 @@ Hard rules:
     // ─────────────────────────────────────────────────────────────────────
 
     private const string CopilotChildContractParagraph =
-        "GitHub-only Copilot child contract (G345): Copilot must work from GitHub issue / PR / comment facts only. The implementation repo MUST NOT contain `.intent-cli/` and Copilot MUST NOT read, write, or mutate host queue-state (`.intent-cli/queue-state.json`), append to `runs.jsonl`, edit packet artifacts (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`), or apply workflow labels (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, `intent-pr-update-in-progress`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.). Workflow labels are applied by the host via installed `intent-cli automation` / `intent-cli worker` commands, never from the implementation side. Host review, closeout, and next-slice publish remain with intent-cli host automation; Copilot's job ends at opening / updating the PR.";
+        "GitHub-only Copilot child contract (G345): Copilot must work from GitHub issue / PR / comment facts only. The implementation repo MUST NOT contain `.intent-cli/` and Copilot MUST NOT read, write, or mutate host queue-state (`.intent-cli/queue-state.json`), append to `runs.jsonl`, edit packet artifacts (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`), or apply workflow labels (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, `intent-pr-update-in-progress`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.). Workflow labels are applied by the host via the installed host CLI (intent-cli's `automation` / `worker` surfaces), never from the implementation side. Host review, closeout, and next-slice publish remain with the intent-cli host loop; Copilot's job ends at opening / updating the PR.";
 
     private const string CopilotMinimalPromptAssignIssue =
         "Assign a published GitHub issue to the Copilot cloud agent — copy/paste the following minimal human prompt to the operator (replace `<owner>/<repo>` and `<N>` with the published issue's repo and number):\n\n```\ngh issue edit <N> --repo <owner>/<repo> --add-assignee copilot\n```\n\nCopilot cloud agent picks the issue up from the GitHub assignment event, creates its own branch, and opens a PR that includes `Closes #<N>`. The operator does not run Copilot CLI for this path; no local install is required. The host intent-cli loop still owns review, approval, merge, and next-slice publish.";
@@ -619,11 +635,11 @@ Hard rules:
         "Copilot is ALLOWED to:\n- read the published GitHub issue body, labels, and `Closes #<n>` reference;\n- read the existing PR diff, PR review comments, and PR body;\n- open a branch and a PR that includes the deterministic closing reference (`Closes #<issue>`);\n- push follow-up commits to the same PR branch in response to a `@copilot` mention from a reviewer;\n- post a PR reply summarizing what changed.";
 
     private const string CopilotForbiddenDoBullets =
-        "Copilot is NOT ALLOWED to:\n- write or commit `.intent-cli/` in the implementation repo (the implementation repo's steady state is no `.intent-cli/` at all — G300 / G330 / G333);\n- read or mutate parent host queue-state (`.intent-cli/queue-state.json`), append to `runs.jsonl`, edit packet artifacts (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`), or change submodule pointers from the implementation side;\n- apply or remove workflow labels (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, `intent-pr-update-in-progress`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.) — those are host-owned through installed `intent-cli automation` / `intent-cli worker` commands;\n- run host review / closeout / next-slice / publish steps;\n- run local cron, heartbeats, schedulers, or Claude/Codex `/loop`-style recurring wakeups (Copilot has no local heartbeat thread).";
+        "Copilot is NOT ALLOWED to:\n- write or commit `.intent-cli/` in the implementation repo (the implementation repo's steady state is no `.intent-cli/` at all — G300 / G330 / G333);\n- read or mutate parent host queue-state (`.intent-cli/queue-state.json`), append to `runs.jsonl`, edit packet artifacts (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`), or change submodule pointers from the implementation side;\n- apply or remove workflow labels (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, `intent-pr-update-in-progress`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.) — those are host-owned through the installed host CLI (intent-cli's `automation` / `worker` surfaces);\n- run host review / closeout / next-slice / publish steps;\n- run local cron, heartbeats, schedulers, or Claude/Codex `/loop`-style recurring wakeups (Copilot has no local heartbeat thread).";
 
     private static GuidePromptMatrixEntry BuildCopilotChildOneshot(string baseBranchPolicy)
     {
-        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
+        var basePolicyBlock = RenderCopilotBaseBranchPolicyBlock(baseBranchPolicy);
         var prompt =
 $@"GitHub Copilot one-shot child guidance (G345). Copilot is an assignment-oriented agent — it works from a published GitHub issue or a mention on a PR, opens / updates a PR, and stops. It does NOT run a local 5-minute heartbeat loop, does NOT exec the host's `intent-cli`, and does NOT touch host `.intent-cli/` metadata.
 
@@ -647,14 +663,14 @@ Minimal human prompts for the operator (pick exactly one path per wake):
 
 Hard rules:
 - The implementation repo (the repo Copilot pushes commits to) MUST NOT contain `.intent-cli/`. Absence of `.intent-cli/` is the expected steady state for child work (G300 / G330 / G333) and Copilot must not introduce it.
-- Copilot MUST NOT call `intent-cli` at all from the implementation side. Workflow label transitions (`intent-target` apply, `intent-issue-in-progress`, `intent-pr-created`, `intent-pr-update-in-progress`, etc.) are host-owned via installed `intent-cli automation` / `intent-cli worker` commands; the host intent-cli loop applies them when it reviews the PR.
+- Copilot MUST NOT call `intent-cli` at all from the implementation side. Workflow label transitions (`intent-target` apply, `intent-issue-in-progress`, `intent-pr-created`, `intent-pr-update-in-progress`, etc.) are host-owned via the installed host CLI (intent-cli's `automation` / `worker` surfaces); the host intent-cli loop applies them when it reviews the PR.
 - Copilot MUST NOT edit `.intent-cli/queue-state.json`, `runs.jsonl`, packet `packet.yaml` / `implementation.md` / `review-context.md` / `github-body.md`, or submodule pointers from the implementation side.
 - Copilot MUST NOT post review/approval comments that claim host-side label transitions; only the host intent-cli review loop applies approval / merge / closeout.
 - The PR body MUST include a deterministic GitHub closing reference to the source issue — `Closes #<issue>`, `Fixes #<issue>`, or `Resolves #<issue>` (G311). Copilot's PR template / generated body already meets this when the assignment was made via `gh issue edit <N> --add-assignee copilot`; verify before merge.
 - Create the PR as ready-for-review (non-draft) by default. Do not mark a Copilot PR as draft unless the operator explicitly asks for one.
 - Process at most one assignment / PR-mention / CLI one-shot per wake.
 - Do NOT create a cron, monitor, scheduler, reminder, or new thread after completing this wake.
-- Host review / closeout / next-slice publish remains with intent-cli host automation; the host loop will pick up the Copilot-opened PR via `automation host-review-preflight` on its own cadence.";
+- Host review / closeout / next-slice publish remains with the intent-cli host loop; the host loop will pick up the Copilot-opened PR via its host-review preflight on its own cadence.";
 
         return new GuidePromptMatrixEntry
         {
@@ -671,6 +687,81 @@ Hard rules:
             ],
             Prompt = prompt,
             Agent = AgentCopilot,
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+        };
+    }
+
+    // G345: limited safe host-oneshot guidance for Copilot. The host
+    // operator runs ONE safe intent-cli host-side action — publishing one
+    // already-prepared issue — and then assigns that newly-published issue
+    // to the Copilot cloud agent for implementation. Copilot itself never
+    // executes intent-cli, never enters a host loop, and never mutates host
+    // metadata. Host review / closeout / next-slice remain with the
+    // intent-cli host loop running under --agent claude|codex|generic.
+    private static GuidePromptMatrixEntry BuildCopilotHostOneshot(string targetRepoPlaceholder, string baseBranchPolicy)
+    {
+        var prompt =
+$@"GitHub Copilot host one-shot guidance (G345). This is a one-shot, human / operator-driven host action — NOT a host loop, NOT a recurring same-thread wakeup, and NOT something Copilot executes. The operator runs a single safe intent-cli host-side step on the HOST, then delegates the implementation work to the Copilot cloud agent via GitHub issue assignment. Process at most one issue per wake.
+
+Limited safe scope:
+- Publish exactly one prepared issue on the HOST side using `intent-cli automation issue-publish`.
+- Assign that newly-published issue to the Copilot cloud agent.
+- Stop. Do NOT enter a host review / closeout / next-slice loop here. Host review, approval, merge, and next-slice publish remain with the intent-cli host loop running under `--agent claude` / `--agent codex` / `--agent generic` on its own cadence (see `intent-cli guide prompt-matrix --mode host-loop --agent claude`).
+
+Base branch policy: `{baseBranchPolicy}` (expected base branch: `{BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy)}`).
+- {BaseBranchPolicyContract.DescribePolicy(baseBranchPolicy)}
+- Base-branch enforcement is HOST / operator-owned. The host intent-cli loop runs `intent-cli automation base-branch-check` on its own cadence; this host-oneshot wake only publishes one issue and hands it off.
+
+Operator, on the HOST (these commands run from the parent intent host repo, NOT from the implementation side; NOT from Copilot):
+
+1. Publish one prepared issue:
+
+```
+intent-cli automation issue-publish --repo {targetRepoPlaceholder} --issue <N> --write --format json
+```
+
+Replace `<N>` with the prepared issue number. This applies the `intent-target` host-owned publish boundary label only after parent durable state is committed and pushed. Do NOT use raw `gh issue edit --add-label intent-target` to bypass the gate.
+
+2. After step 1 succeeds, assign the published issue to the Copilot cloud agent so Copilot picks it up via the GitHub assignment event:
+
+```
+gh issue edit <N> --repo {targetRepoPlaceholder} --add-assignee copilot
+```
+
+Copilot cloud agent then creates its own branch and opens a PR that includes `Closes #<N>`. The operator does NOT run Copilot CLI for this path; no local Copilot install is required.
+
+{CopilotChildContractParagraph}
+
+Copilot is NOT ALLOWED to:
+- write or commit `.intent-cli/` in the implementation repo (the implementation repo's steady state is no `.intent-cli/` at all — G300 / G330 / G333);
+- read or mutate parent host queue-state (`.intent-cli/queue-state.json`), append to `runs.jsonl`, edit packet artifacts (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`), or change submodule pointers from the implementation side;
+- apply or remove workflow labels (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, `intent-pr-update-in-progress`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.) — those are host-owned through installed `intent-cli automation` / `intent-cli worker` commands;
+- run host review / closeout / next-slice / publish steps;
+- run local cron, schedulers, or recurring same-thread wakeups (Copilot has no local recurring primitive).
+
+Hard rules:
+- This wake is a SINGLE safe operator host action followed by one GitHub assignment. Do NOT schedule a recurring wakeup, do NOT wrap this in a cron, monitor, scheduler, reminder, or new thread.
+- Copilot itself does NOT invoke `intent-cli`, does NOT mutate `.intent-cli/`, and does NOT run host loops. The single `intent-cli automation issue-publish` call is the HOST operator's responsibility — it runs from the host intent repo, not from Copilot's implementation side.
+- Host review, approval, merge, closeout, and next-slice publish stay with the intent-cli host loop running under `--agent claude` / `--agent codex` / `--agent generic`. Use `intent-cli guide prompt-matrix --mode host-loop --agent claude` (or `--agent codex` / `--agent generic`) for the canonical recurring host body.
+- For recurring host modes (`host-loop`), Copilot remains unsupported: `intent-cli guide prompt-matrix --mode host-loop --agent copilot` returns structured `unsupported_mode_agent_combination` guidance.";
+
+        return new GuidePromptMatrixEntry
+        {
+            Mode = ModeHostOneshot,
+            Kind = KindOneshot,
+            Target = TargetHost,
+            FrequencyGuidance = FrequencyGuidanceOneshot,
+            ForbiddenSources = ForbiddenSources,
+            FirstCalls =
+            [
+                "gh auth status",
+                $"intent-cli automation issue-publish --repo {targetRepoPlaceholder} --issue <N> --write --format json",
+                $"gh issue edit <N> --repo {targetRepoPlaceholder} --add-assignee copilot"
+            ],
+            Prompt = prompt,
+            Agent = AgentCopilot,
+            AgentClassification = "host_oneshot_human_driven",
             BaseBranchPolicy = baseBranchPolicy,
             ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
         };
@@ -744,13 +835,13 @@ Why this combination is unsupported:
 - Host review approval is gated by `intent-cli guide review` (packet/intent conformance evidence, Acceptance Criteria check, Out-of-Scope honored, etc.) and by intent-cli's draft-aware approval, host-sync preflight, publish-recovery, reconcile, and host-review-diagnostics lanes. Copilot cannot exec those commands and cannot supply structured approval-summary evidence in the form the host loop requires.
 - Workflow labels (`intent-target`, `intent-pr-created`, `intent-issue-in-progress`, `intent-pr-update-in-progress`, `intent-pr-reviewing`, `intent-pr-request-update`, etc.) are host-owned. A recurring Copilot host loop would either no-op on these transitions or push raw `gh label` mutations that bypass the host's invariants.
 
-Available agents for the host modes (`host-loop`, `host-oneshot`):
+Available agents for the recurring host mode (`host-loop`):
 - `claude` — Claude Code same-thread `/loop` for recurring host review/next-slice;
 - `codex` — Codex current-thread heartbeat for recurring host review/next-slice;
 - `generic` — generic same-thread/current-thread agent (no Claude/Codex-specific scheduling primitive);
-- `copilot` — NOT supported for host modes.
+- `copilot` — NOT supported for `host-loop` (the recurring host body).
 
-Recommended next call: `intent-cli guide prompt-matrix --mode {mode} --agent claude` (or `--agent codex` / `--agent generic`) for the canonical host body. For Copilot child work, use `intent-cli guide prompt-matrix --mode child-oneshot --agent copilot`.
+Recommended next call: `intent-cli guide prompt-matrix --mode {mode} --agent claude` (or `--agent codex` / `--agent generic`) for the canonical host body. For Copilot child work, use `intent-cli guide prompt-matrix --mode child-oneshot --agent copilot`. For a limited safe one-shot host action (publish one prepared issue and assign it to Copilot cloud), use `intent-cli guide prompt-matrix --mode host-oneshot --agent copilot`.
 
 Hard rules:
 - Do NOT run the host review / closeout / next-slice body under `--agent copilot`. Host loops require local exec of `intent-cli automation` / `intent-cli review closeout-plan` / `intent-cli intent next-slice` / `intent-cli packet draft` / `intent-cli issue publish-flow` against the parent host repo's local `.intent-cli/` directory; Copilot has no surface for that.
@@ -981,7 +1072,7 @@ Hard rules:
         writer.WriteLine();
         writer.WriteLine("Omit --mode to get all four entries.");
         writer.WriteLine("--domain, --target-repo, --agent, and --frequency are optional; provide them to render a concrete paste-ready prompt instead of one with placeholders.");
-        writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic, copilot (G345 — assignment-oriented; supported only for child-oneshot, returns structured unsupported-loop guidance for child-loop and structured unsupported-mode-agent-combination for host modes).");
+        writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic, copilot (G345 — assignment-oriented; supported for child-oneshot, returns structured unsupported-loop guidance for child-loop, structured host-oneshot-human-driven guidance for host-oneshot, and structured unsupported-mode-agent-combination for host-loop).");
         writer.WriteLine("--frequency examples: 5m, 20m, 1h. Omit to keep the rendered prompt's ask-the-operator instruction.");
         writer.WriteLine($"--base-branch-policy values: {CliRuntimeContracts.DirectMainBaseBranchPolicy} (default; child PRs target `{CliRuntimeContracts.DirectMainBaseBranch}`), {CliRuntimeContracts.MainAiBaseBranchPolicy} (child PRs target `{CliRuntimeContracts.MainAiIntegrationBaseBranch}`).");
     }
@@ -1034,11 +1125,15 @@ internal sealed record GuidePromptMatrixEntry
     /// map cleanly to the requested mode. Possible values:
     /// <c>"unsupported_local_loop"</c> (copilot + child-loop — Copilot does
     /// not provide the local 5-minute heartbeat loop; assignment-oriented
-    /// controller is recommended instead) and
-    /// <c>"unsupported_mode_agent_combination"</c> (copilot + host-loop /
-    /// host-oneshot — host review/closeout/next-slice stays with intent-cli
-    /// host automation and must use claude / codex / generic). Null when
-    /// the requested combination is supported.
+    /// controller is recommended instead),
+    /// <c>"host_oneshot_human_driven"</c> (copilot + host-oneshot — limited
+    /// safe human / operator-driven host action: one `intent-cli automation
+    /// issue-publish` plus one `gh issue edit --add-assignee copilot`, no
+    /// host loop), and
+    /// <c>"unsupported_mode_agent_combination"</c> (copilot + host-loop —
+    /// recurring host review/closeout/next-slice stays with intent-cli host
+    /// automation and must use claude / codex / generic). Null when the
+    /// requested combination is supported.
     /// </summary>
     [JsonPropertyName("agent_classification")]
     public string? AgentClassification { get; init; }

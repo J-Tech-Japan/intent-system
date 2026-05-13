@@ -122,9 +122,14 @@ public sealed class GuidePromptMatrixCopilotTests
         Assert.Contains("packet", prompt, StringComparison.Ordinal);
         Assert.Contains("workflow labels", prompt, StringComparison.Ordinal);
 
-        // Host review/closeout/next-slice remains with intent-cli host automation.
+        // Host review/closeout/next-slice remains with the intent-cli host
+        // loop (NOT with Copilot). G345 review repair (Finding 1) removed
+        // the literal "intent-cli automation" substring from the
+        // child-oneshot Copilot prompt because Copilot must not invoke
+        // intent-cli — verify the host-owned framing without naming the
+        // command surface.
         Assert.Contains("host review", prompt, StringComparison.Ordinal);
-        Assert.Contains("intent-cli host automation", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-cli host loop", prompt, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -143,6 +148,50 @@ public sealed class GuidePromptMatrixCopilotTests
         Assert.Contains("intent-target", prompt, StringComparison.Ordinal);
         Assert.Contains("intent-pr-created", prompt, StringComparison.Ordinal);
         Assert.Contains("host-owned", prompt, StringComparison.Ordinal);
+    }
+
+    // ── child-oneshot — Copilot must NOT invoke intent-cli at all ────────
+
+    // G345 (host review repair, Finding 1): the child-oneshot Copilot prompt
+    // forbids Copilot from calling `intent-cli`. It used to render the
+    // generic `RenderBaseBranchPolicyBlock`, which recommended running
+    // `intent-cli automation base-branch-check` — internally contradictory.
+    // Replaced with a Copilot-specific GitHub-facts-only base-branch block
+    // that marks intent-cli enforcement as host/operator-owned.
+    [Fact]
+    public void ChildOneshot_Copilot_DoesNotInstructCopilotToInvokeIntentCli()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--agent", "copilot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // Smoking gun: an instruction telling Copilot to run any
+        // `intent-cli automation ...` command would violate the host-state
+        // -free Copilot child contract. Must not appear anywhere.
+        Assert.DoesNotContain("intent-cli automation", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChildOneshot_Copilot_UsesGithubFactsBaseBranchCheck()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--agent", "copilot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // The Copilot-specific base-branch block expresses the policy as a
+        // GitHub-facts-only check (gh pr view ... baseRefName).
+        Assert.Contains("gh pr view", prompt, StringComparison.Ordinal);
+        Assert.Contains("baseRefName", prompt, StringComparison.Ordinal);
     }
 
     // ── child-loop — structured unsupported_local_loop ───────────────────
@@ -248,8 +297,12 @@ public sealed class GuidePromptMatrixCopilotTests
         Assert.Contains("--agent generic", prompt, StringComparison.Ordinal);
     }
 
+    // G345 (host review repair): host-oneshot is now supported with limited
+    // safe human / operator-driven guidance. host-loop remains structurally
+    // unsupported. The host-oneshot classification is therefore
+    // `host_oneshot_human_driven`, NOT `unsupported_mode_agent_combination`.
     [Fact]
-    public void Execute_HostOneshotCopilot_ReportsUnsupportedModeAgentCombination()
+    public void HostOneshot_Copilot_ReturnsHumanDrivenGuidance()
     {
         using var writer = new StringWriter();
         GuidePromptMatrixCommand.Execute(
@@ -258,9 +311,61 @@ public sealed class GuidePromptMatrixCopilotTests
             writer);
 
         using var document = JsonDocument.Parse(writer.ToString());
-        Assert.Equal(
-            "unsupported_mode_agent_combination",
-            document.RootElement.GetProperty("agent_classification").GetString());
+        var classification = document.RootElement.GetProperty("agent_classification").GetString();
+        Assert.NotEqual("unsupported_mode_agent_combination", classification);
+        Assert.Equal("host_oneshot_human_driven", classification);
+
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // One safe host operator action — publishing a single prepared issue.
+        Assert.Contains("automation issue-publish", prompt, StringComparison.Ordinal);
+        // Followed by assigning that issue to the Copilot cloud agent.
+        Assert.Contains("assign", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("--add-assignee copilot", prompt, StringComparison.Ordinal);
+        // Host-state-free child contract reminder remains in place.
+        Assert.Contains("MUST NOT", prompt, StringComparison.Ordinal);
+        Assert.Contains(".intent-cli", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostOneshot_Copilot_DoesNotEmitLoopBody()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--agent", "copilot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // host-oneshot is a single safe operator action, not a loop body.
+        Assert.DoesNotContain("/loop", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("worker next-action", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("worker claim", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("worker complete", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("heartbeat", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HostOneshot_Copilot_DoesNotInstructCopilotToInvokeIntentCli()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--agent", "copilot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // The single intent-cli command in this prompt is the HOST operator's
+        // responsibility, not Copilot's. Make sure the actor is unambiguous:
+        // the operator-on-host framing is present and Copilot itself is
+        // explicitly told NOT to invoke intent-cli.
+        Assert.Contains("Operator", prompt, StringComparison.Ordinal);
+        Assert.Contains("HOST", prompt, StringComparison.Ordinal);
+        Assert.Contains("Copilot itself does NOT invoke `intent-cli`", prompt, StringComparison.Ordinal);
     }
 
     // ── negative tests — Copilot must NOT recommend host metadata edits ──
@@ -401,9 +506,12 @@ public sealed class GuidePromptMatrixCopilotTests
                     Assert.Equal("unsupported_local_loop", classElement.GetString());
                     break;
                 case "host-loop":
-                case "host-oneshot":
                     Assert.True(hasClass);
                     Assert.Equal("unsupported_mode_agent_combination", classElement.GetString());
+                    break;
+                case "host-oneshot":
+                    Assert.True(hasClass);
+                    Assert.Equal("host_oneshot_human_driven", classElement.GetString());
                     break;
                 default:
                     Assert.Fail($"unexpected mode {mode}");
