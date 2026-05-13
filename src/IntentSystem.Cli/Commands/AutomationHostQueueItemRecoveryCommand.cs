@@ -212,7 +212,11 @@ internal static class AutomationHostQueueItemRecoveryCommand
                 : Array.Empty<string>();
 
             // Project existing queue items down to the analyzer shape.
-            var existingProjected = (queueState?.Items ?? Array.Empty<QueueItem>())
+            // Repo-scoped: only items already linked to the requested
+            // repo are passed to the analyzer, so a same-issue or same-PR
+            // number on an unrelated repo cannot trigger
+            // `conflicting-existing-queue-item`.
+            var existingProjected = existingItemsForRepo
                 .Select(ToExisting)
                 .Where(i => i is not null)
                 .Cast<HostQueueItemRecoveryExistingItem>()

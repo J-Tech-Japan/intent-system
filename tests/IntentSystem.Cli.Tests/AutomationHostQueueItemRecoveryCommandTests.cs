@@ -244,6 +244,68 @@ public sealed class AutomationHostQueueItemRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_IgnoresUnrelatedRepoQueueItemsWithSameIssueOrPrNumber()
+    {
+        // Regression for G344 review finding 1: queue-state has an item
+        // for an unrelated repo with the SAME issue/PR numbers as the
+        // recovery request. The unrelated-repo item must be filtered out
+        // before reaching the analyzer's ExistingQueueItems, so it cannot
+        // trigger `conflicting-existing-queue-item`.
+        using var workspace = new RecoveryWorkspace();
+        workspace.WritePublishArtifact(Unit, IssueNumber, Repo);
+        workspace.WritePacketYaml(Unit, Repo);
+        const string otherRepo = "other-org/other-repo";
+        workspace.WriteQueueStateLegacy($$"""
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-13T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "OTHER-G001",
+                  "title": "unrelated repo, same numbers",
+                  "state": "review",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/sekiban-as-a-service/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {"repo": "{{otherRepo}}", "number": {{IssueNumber}}, "url": "https://github.com/{{otherRepo}}/issues/{{IssueNumber}}"},
+                  "linked_pr": "https://github.com/{{otherRepo}}/pull/{{PrNumber}}",
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        AutomationHostQueueItemRecoveryCommand.PrLookupFactory = () =>
+            FakePrLookup.WithIssueClosure(PrNumber, IssueNumber, Repo);
+        AutomationHostQueueItemRecoveryCommand.IssueLookupFactory = () =>
+            FakeIssueLookup.Open(IssueNumber, labels: new[] { "intent-target", "intent-pr-created" }, repo: Repo);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostQueueItemRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--pr", PrNumber.ToString(), "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(1, doc.RootElement.GetProperty("safe_repair_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("unsafe_stop_count").GetInt32());
+        var records = doc.RootElement.GetProperty("records").EnumerateArray().ToArray();
+        Assert.Single(records);
+        var record = records[0];
+        Assert.Equal("recoverable", record.GetProperty("result").GetString());
+        Assert.Equal(Unit, record.GetProperty("unit_id").GetString());
+        Assert.Equal(Repo, record.GetProperty("proposed_queue_item").GetProperty("target_repo").GetString());
+        var recommended = record.GetProperty("recommended_command").GetString();
+        Assert.NotNull(recommended);
+        Assert.Contains("--repo " + Repo, recommended!, StringComparison.Ordinal);
+        Assert.DoesNotContain("conflicting-existing-queue-item", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CommandRouter_HelpListsHostQueueItemRecovery()
     {
         var router = typeof(CommandRouter);

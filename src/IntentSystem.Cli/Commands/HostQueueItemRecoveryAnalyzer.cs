@@ -34,6 +34,7 @@ internal static class HostQueueItemRecoveryAnalyzer
     public const string ReasonMissingPacketArtifact = "missing-packet-artifact";
     public const string ReasonClosedIssue = "closed-issue";
     public const string ReasonClosedPr = "closed-pr";
+    public const string ReasonPrIsDraft = "pr-is-draft";
 
     /// <summary>
     /// Analyze one candidate recovery: a single execution unit identified
@@ -173,6 +174,16 @@ internal static class HostQueueItemRecoveryAnalyzer
                 ReasonClosedPr,
                 $"PR #{candidate.PrNumber} in '{repo}' is in state '{candidate.PrState}'; "
                 + "host queue-item recovery only applies while the PR is open for review.");
+        }
+
+        // Draft PRs are not recoverable review wakes — the host loop
+        // must not advance a draft into approval/closeout paths.
+        if (candidate.PrIsDraft)
+        {
+            return UnsafeStop(
+                ReasonPrIsDraft,
+                $"PR #{candidate.PrNumber} in '{repo}' is a draft; "
+                + "review-safe recovery requires a non-draft PR.");
         }
 
         // No more than one packet/publish pair may claim this unit.

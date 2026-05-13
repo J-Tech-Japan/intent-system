@@ -259,6 +259,23 @@ public sealed class HostQueueItemRecoveryAnalyzerTests
     }
 
     [Fact]
+    public void Analyze_RejectsDraftPrAsUnsafeStop()
+    {
+        // Every other field is the happy path, but PrIsDraft = true must
+        // prevent the analyzer from advancing into a recoverable result —
+        // host queue-item recovery is review-safe only when the PR is
+        // non-draft.
+        var candidate = BuildCandidate() with { PrIsDraft = true };
+
+        var result = HostQueueItemRecoveryAnalyzer.Analyze(candidate);
+
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ResultUnsafeStop, result.Result);
+        Assert.Equal(HostQueueItemRecoveryAnalyzer.ReasonPrIsDraft, result.ReasonCode);
+        Assert.Equal("pr-is-draft", result.ReasonCode);
+        Assert.Null(result.ProposedQueueItem);
+    }
+
+    [Fact]
     public void Analyze_BlankRepo_Throws()
     {
         var candidate = BuildCandidate() with { TargetRepo = "   " };
