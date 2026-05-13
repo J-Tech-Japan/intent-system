@@ -324,6 +324,152 @@ public sealed class GuideWorkflowTaskInitHostCommandTests : IDisposable
         Assert.Contains("intent init", string.Join(" ", initPointer.SeeAlso ?? Array.Empty<string>()), StringComparison.Ordinal);
     }
 
+    // ----- G348: same-repo topology guidance -----
+
+    [Fact]
+    public void Execute_G348_TopologySameRepo_MarkdownIncludesSameRepoSection()
+    {
+        // G348 AC: `guide workflow task init-host --topology same-repo` must
+        // describe same-repo topology with branch strategy and forbidden paths.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            ["--topology", "same-repo"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Same-Repo Topology", output, StringComparison.Ordinal);
+        Assert.Contains(".intent-cli/**", output, StringComparison.Ordinal);
+        Assert.Contains("intents/**", output, StringComparison.Ordinal);
+        Assert.Contains("FORBIDDEN", output, StringComparison.Ordinal);
+        Assert.Contains("main-ai", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G348_TopologySameRepo_JsonIncludesSameRepoTopologyNode()
+    {
+        // G348 AC: JSON shape must include same_repo_topology with
+        // branch_strategy, forbidden_paths_for_implementation, host_constraints.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            ["--topology", "same-repo", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("same-repo", root.GetProperty("topology").GetString());
+        Assert.True(root.TryGetProperty("same_repo_topology", out var topology));
+        Assert.True(topology.TryGetProperty("summary", out _));
+        Assert.True(topology.TryGetProperty("branch_strategy", out var branchStrategy));
+        Assert.True(branchStrategy.GetArrayLength() >= 1);
+        Assert.True(topology.TryGetProperty("forbidden_paths_for_implementation", out var forbidden));
+        Assert.True(forbidden.GetArrayLength() >= 2);
+        Assert.True(topology.TryGetProperty("host_constraints", out var hostConstraints));
+        Assert.True(hostConstraints.GetArrayLength() >= 1);
+        Assert.True(topology.TryGetProperty("warning", out _));
+    }
+
+    [Fact]
+    public void Execute_G348_TopologySameRepoNoPolicy_EmitsPolicyWarning()
+    {
+        // G348 AC: when same-repo topology is selected but no base-branch
+        // policy is configured (default direct-main), a warning must appear.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            ["--topology", "same-repo", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.TryGetProperty("same_repo_policy_warning", out var warningProp));
+        Assert.NotNull(warningProp.GetString());
+        Assert.False(string.IsNullOrWhiteSpace(warningProp.GetString()));
+        Assert.Contains("main-ai", warningProp.GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G348_TopologySameRepoWithMainAiPolicy_NoPolicyWarning()
+    {
+        // G348 AC: when same-repo topology + main-ai policy is configured,
+        // the same_repo_policy_warning must be null (no warning needed).
+        using var writer = new StringWriter();
+        var context = CreateContextWithPolicy(emptyCwd, "main-ai");
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            context,
+            ["--topology", "same-repo", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // When policy is main-ai, same_repo_policy_warning should be absent or null.
+        if (root.TryGetProperty("same_repo_policy_warning", out var warningProp))
+        {
+            Assert.True(warningProp.ValueKind == JsonValueKind.Null,
+                $"Expected same_repo_policy_warning to be null but got: {warningProp.GetString()}");
+        }
+    }
+
+    [Fact]
+    public void Execute_G348_NoTopology_SameRepoNodeAbsent()
+    {
+        // G348: when --topology is not passed, same_repo_topology must be absent.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // topology and same_repo_topology should be absent (WhenWritingNull).
+        if (root.TryGetProperty("topology", out var topologyProp))
+        {
+            Assert.Equal(JsonValueKind.Null, topologyProp.ValueKind);
+        }
+        if (root.TryGetProperty("same_repo_topology", out var sameRepoProp))
+        {
+            Assert.Equal(JsonValueKind.Null, sameRepoProp.ValueKind);
+        }
+    }
+
+    [Fact]
+    public void Execute_G348_UnknownTopology_ExitsOneWithError()
+    {
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            ["--topology", "cross-repo"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("must be 'same-repo'", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G348_SameRepoTopologyGuidance_ForbiddenPathsNamesBothHostPaths()
+    {
+        // G348 AC: same-repo guidance must explicitly name both host-metadata
+        // path groups as forbidden for implementation agents.
+        var forbidden = GuideWorkflowTaskInitHostCommand.SameRepoTopology.ForbiddenPathsForImplementation;
+        var combined = string.Join(" ", forbidden);
+        Assert.Contains(".intent-cli/**", combined, StringComparison.Ordinal);
+        Assert.Contains("intents/**", combined, StringComparison.Ordinal);
+        Assert.Contains("FORBIDDEN", combined, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string repoRoot)
     {
         return new CliContext
@@ -336,6 +482,24 @@ public sealed class GuideWorkflowTaskInitHostCommandTests : IDisposable
                     Domain = "intent-cli",
                     ArtifactRoot = ".intent-cli",
                     WorktreeRoot = ".intent-cli/worktrees"
+                }
+            }
+        };
+    }
+
+    private static CliContext CreateContextWithPolicy(string repoRoot, string baseBranchPolicy)
+    {
+        return new CliContext
+        {
+            RepoRoot = repoRoot,
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "intent-cli",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    BaseBranchPolicy = baseBranchPolicy
                 }
             }
         };

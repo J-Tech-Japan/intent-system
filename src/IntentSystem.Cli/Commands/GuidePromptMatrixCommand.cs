@@ -61,14 +61,28 @@ internal static class GuidePromptMatrixCommand
         @"^[1-9][0-9]*[mh]$",
         RegexOptions.Compiled);
 
+    private const string TopologySameRepo = "same-repo";
+
     private const string UsageLine =
-        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic|copilot] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--format markdown|json]";
+        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--topology same-repo] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic|copilot] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--format markdown|json]";
 
     private static readonly string[] ForbiddenSources =
     [
         "intents/rules/**",
         "local skill files (gh-issue-to-pr, gh-fix-pr-comment, etc.)",
         "copied prompt files"
+    ];
+
+    /// <summary>
+    /// G348: additional forbidden sources added to child prompts when
+    /// <c>--topology same-repo</c> is set. In same-repo topology the
+    /// host metadata paths are visible in the child checkout but MUST
+    /// NOT be read or mutated by implementation agents.
+    /// </summary>
+    private static readonly string[] SameRepoAdditionalForbiddenSources =
+    [
+        ".intent-cli/** (visible in same-repo checkout but FORBIDDEN for implementation agents — do not read, write, or commit host queue-state, runs.jsonl, packet artifacts, or config from an implementation PR branch)",
+        "intents/** (visible in same-repo checkout but FORBIDDEN for implementation work — intent authoring, clarification recording, and spec updates are host-design tasks, not implementation tasks)"
     ];
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -83,14 +97,14 @@ internal static class GuidePromptMatrixCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var targetRepo, out var agent, out var frequency, out var baseBranchPolicy, out var error))
+        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var targetRepo, out var agent, out var frequency, out var baseBranchPolicy, out var topology, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var entries = BuildEntries(context, mode, domain, targetRepo, agent, frequency, baseBranchPolicy);
+        var entries = BuildEntries(context, mode, domain, targetRepo, agent, frequency, baseBranchPolicy, topology);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -120,7 +134,8 @@ internal static class GuidePromptMatrixCommand
         string? targetRepo,
         string? agent,
         string? frequency,
-        string? baseBranchPolicy)
+        string? baseBranchPolicy,
+        string? topology)
     {
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
         var targetRepoPlaceholder = string.IsNullOrWhiteSpace(targetRepo) ? "<TARGET-REPO>" : targetRepo;
@@ -130,18 +145,20 @@ internal static class GuidePromptMatrixCommand
             ? context.Config.Project.BaseBranchPolicy
             : baseBranchPolicy;
 
+        var isSameRepo = string.Equals(topology, TopologySameRepo, StringComparison.Ordinal);
+
         var resolvedAgentForDispatch = NormalizeAgent(agent);
         var all = new[]
         {
             string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
                 ? BuildCopilotChildLoop(resolvedPolicy)
-                : BuildChildLoop(domainPlaceholder, agent, frequency, resolvedPolicy),
+                : BuildChildLoop(domainPlaceholder, agent, frequency, resolvedPolicy, isSameRepo),
             string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
                 ? BuildCopilotUnsupportedHostMode(ModeHostLoop, KindLoop, TargetHost, resolvedPolicy)
                 : BuildHostLoop(domainPlaceholder, targetRepoPlaceholder, agent, frequency, resolvedPolicy),
             string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
                 ? BuildCopilotChildOneshot(resolvedPolicy)
-                : BuildChildOneshot(domainPlaceholder, resolvedPolicy),
+                : BuildChildOneshot(domainPlaceholder, resolvedPolicy, isSameRepo),
             string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
                 ? BuildCopilotHostOneshot(targetRepoPlaceholder, resolvedPolicy)
                 : BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
@@ -261,6 +278,18 @@ $@"Base branch policy: `{baseBranchPolicy}` (expected base branch: `{expected}`)
 - {targetRoleVerb} this policy mechanically: derive the PR base branch from `intent-cli` config (`base_branch_policy`), never from prompt memory. Use `intent-cli automation base-branch-check --repo <r> --pr <n> --policy {baseBranchPolicy} --actual-base $(gh pr view <n> --repo <r> --json baseRefName --jq .baseRefName) --format json` to flag mismatches.";
     }
 
+    /// <summary>
+    /// G348: same-repo topology block inserted into child prompts when
+    /// <c>--topology same-repo</c> is set. The block names the two
+    /// forbidden host-metadata path groups that are visible in a same-repo
+    /// checkout but must NOT be read or mutated by implementation agents.
+    /// </summary>
+    private static string RenderSameRepoTopologyBlock() =>
+$@"Same-repo topology (G348): the implementation repo and host intent metadata (`.intent-cli/`, `intents/`) are in the SAME repository. Both paths are visible in this checkout, but they are FORBIDDEN for implementation agents:
+- `.intent-cli/**` — FORBIDDEN: do not read, write, or commit host queue-state, runs.jsonl, packet artifacts, or config from an implementation PR branch. Host metadata mutations go through `intent-cli automation` / `intent-cli worker` command surfaces only.
+- `intents/**` — FORBIDDEN: intent authoring, clarification recording, and spec updates are host-design tasks. Do not edit intent tree files from an implementation PR branch.
+- Implementation PRs MUST target the integration branch (e.g. `main-ai`), NOT `main`. Verify with: `gh pr view <n> --repo <r> --json baseRefName --jq .baseRefName` must equal the integration branch configured in `base_branch_policy`.";
+
     // G345: Copilot-specific base-branch block. Copilot MUST NOT invoke
     // `intent-cli` from the implementation side, so the policy is expressed
     // as a GitHub-facts-only check (`gh pr view ... --json baseRefName`) and
@@ -277,17 +306,18 @@ $@"Base branch policy: `{baseBranchPolicy}` (expected base branch: `{expected}`)
 - Base-branch policy enforcement is HOST / operator-owned. Copilot does NOT invoke any `intent-cli` command from the implementation side; the host's intent review loop runs the mismatch check on its own cadence.";
     }
 
-    private static GuidePromptMatrixEntry BuildChildLoop(string domainPlaceholder, string? agent, string? frequency, string baseBranchPolicy)
+    private static GuidePromptMatrixEntry BuildChildLoop(string domainPlaceholder, string? agent, string? frequency, string baseBranchPolicy, bool isSameRepo = false)
     {
         var resolvedAgent = NormalizeAgent(agent);
         var frequencyBlock = RenderFrequencyBlock(agent, frequency);
         var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
+        var sameRepoBlock = isSameRepo ? $"\n{RenderSameRepoTopologyBlock()}" : string.Empty;
         var prompt =
 $@"Set up the child implementation loop for the repo in the current worktree. Run the loop body exactly once per wake; the operator or scheduler drives subsequent wakes.
 
 {frequencyBlock}
 
-{basePolicyBlock}
+{basePolicyBlock}{sameRepoBlock}
 
 If the installed CLI surface is stale or any required automation command is missing, abort the wake before any mutation: `intent-cli automation doctor --format json` (or `automation host-review-preflight` reporting `stale-host-cli`) is the canonical signal — refresh the installed CLI; never fall back to raw `gh` label mutation. The installed CLI may come from a global dotnet tool install on `PATH` (e.g. `$HOME/.dotnet/tools/intent-cli`); that is the default local-testing route and the doctor reports `binary_source: path-global-tool` in that case. A cwd-local `.intent-cli/bin/intent-cli` shim still wins when present (`binary_source: cwd-local-shim`) and `INTENT_CLI_INSTALLED_PATH` pins a specific binary for version-specific tests (`binary_source: explicit-override`).
 
@@ -328,13 +358,17 @@ Hard rules:
   - `worker complete --write` returns errors that are not the expected `linked_pr_synced: false` queue-state warning.
 - Process at most one action per wake.";
 
+        var forbiddenSources = isSameRepo
+            ? [.. ForbiddenSources, .. SameRepoAdditionalForbiddenSources]
+            : (IReadOnlyList<string>)ForbiddenSources;
+
         return new GuidePromptMatrixEntry
         {
             Mode = ModeChildLoop,
             Kind = KindLoop,
             Target = TargetChild,
             FrequencyGuidance = ResolvedFrequencyGuidance(frequency),
-            ForbiddenSources = ForbiddenSources,
+            ForbiddenSources = forbiddenSources,
             FirstCalls =
             [
                 "intent-cli guide model --format json",
@@ -347,6 +381,7 @@ Hard rules:
             Frequency = string.IsNullOrWhiteSpace(frequency) ? null : frequency,
             BaseBranchPolicy = baseBranchPolicy,
             ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+            Topology = isSameRepo ? TopologySameRepo : null,
         };
     }
 
@@ -448,15 +483,16 @@ Hard rules:
         };
     }
 
-    private static GuidePromptMatrixEntry BuildChildOneshot(string domainPlaceholder, string baseBranchPolicy)
+    private static GuidePromptMatrixEntry BuildChildOneshot(string domainPlaceholder, string baseBranchPolicy, bool isSameRepo = false)
     {
         var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
+        var sameRepoBlock = isSameRepo ? $"\n{RenderSameRepoTopologyBlock()}" : string.Empty;
         var prompt =
 $@"Run one child implementation/update wake exactly once.
 
 Do not create or update any automation, loop, cron, monitor, reminder, or recurring wakeup. This is a one-shot execution. Frequency is forbidden.
 
-{basePolicyBlock}
+{basePolicyBlock}{sameRepoBlock}
 
 First-call sequence (read-only; required before any mutation):
 1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
@@ -496,13 +532,17 @@ Hard rules:
 - Process at most one action per wake.
 - Do not create a cron, monitor, scheduler, reminder, or new thread after completing this wake.";
 
+        var forbiddenSourcesOneshot = isSameRepo
+            ? [.. ForbiddenSources, .. SameRepoAdditionalForbiddenSources]
+            : (IReadOnlyList<string>)ForbiddenSources;
+
         return new GuidePromptMatrixEntry
         {
             Mode = ModeChildOneshot,
             Kind = KindOneshot,
             Target = TargetChild,
             FrequencyGuidance = FrequencyGuidanceOneshot,
-            ForbiddenSources = ForbiddenSources,
+            ForbiddenSources = forbiddenSourcesOneshot,
             FirstCalls =
             [
                 "intent-cli guide model --format json",
@@ -513,6 +553,7 @@ Hard rules:
             Prompt = prompt,
             BaseBranchPolicy = baseBranchPolicy,
             ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+            Topology = isSameRepo ? TopologySameRepo : null,
         };
     }
 
@@ -923,6 +964,7 @@ Hard rules:
         out string? agent,
         out string? frequency,
         out string? baseBranchPolicy,
+        out string? topology,
         out string error)
     {
         mode = null;
@@ -932,6 +974,7 @@ Hard rules:
         agent = null;
         frequency = null;
         baseBranchPolicy = null;
+        topology = null;
         error = string.Empty;
 
         for (var index = 0; index < args.Length; index++)
@@ -1052,6 +1095,23 @@ Hard rules:
                     index++;
                     break;
 
+                case "--topology":
+                    // G348: only 'same-repo' is a recognized topology value.
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = $"--topology requires a value ({TopologySameRepo}).";
+                        return false;
+                    }
+                    var requestedTopology = args[index + 1].Trim();
+                    if (!string.Equals(requestedTopology, TopologySameRepo, StringComparison.Ordinal))
+                    {
+                        error = $"--topology must be '{TopologySameRepo}' (got '{requestedTopology}').";
+                        return false;
+                    }
+                    topology = requestedTopology;
+                    index++;
+                    break;
+
                 default:
                     error = $"Unknown argument '{argument}'.";
                     return false;
@@ -1074,10 +1134,11 @@ Hard rules:
         writer.WriteLine($"- {ModeHostOneshot}  one-shot host review/next-slice");
         writer.WriteLine();
         writer.WriteLine("Omit --mode to get all four entries.");
-        writer.WriteLine("--domain, --target-repo, --agent, and --frequency are optional; provide them to render a concrete paste-ready prompt instead of one with placeholders.");
+        writer.WriteLine("--domain, --target-repo, --agent, --frequency, and --topology are optional; provide them to render a concrete paste-ready prompt instead of one with placeholders.");
         writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic, copilot (G345 — assignment-oriented; supported for child-oneshot, returns structured unsupported-loop guidance for child-loop, structured host-oneshot-human-driven guidance for host-oneshot, and structured unsupported-mode-agent-combination for host-loop).");
         writer.WriteLine("--frequency examples: 5m, 20m, 1h. Omit to keep the rendered prompt's ask-the-operator instruction.");
         writer.WriteLine($"--base-branch-policy values: {CliRuntimeContracts.DirectMainBaseBranchPolicy} (default; child PRs target `{CliRuntimeContracts.DirectMainBaseBranch}`), {CliRuntimeContracts.MainAiBaseBranchPolicy} (child PRs target `{CliRuntimeContracts.MainAiIntegrationBaseBranch}`).");
+        writer.WriteLine($"--topology values: {TopologySameRepo} (G348 — adds same-repo forbidden-path guidance to child prompts; host intent metadata paths `.intent-cli/**` and `intents/**` are visible but forbidden for implementation agents).");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -1122,6 +1183,13 @@ internal sealed record GuidePromptMatrixEntry
 
     [JsonPropertyName("expected_base_branch")]
     public string? ExpectedBaseBranch { get; init; }
+
+    /// <summary>
+    /// G348: topology hint; <c>"same-repo"</c> when <c>--topology same-repo</c>
+    /// was passed, null otherwise.
+    /// </summary>
+    [JsonPropertyName("topology")]
+    public string? Topology { get; init; }
 
     /// <summary>
     /// G345: structured classification when the requested agent does not

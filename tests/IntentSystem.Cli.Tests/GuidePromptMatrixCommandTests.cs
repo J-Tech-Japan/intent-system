@@ -1823,4 +1823,125 @@ public sealed class GuidePromptMatrixCommandTests
             }
         };
     }
+
+    // ----- G348: same-repo topology tests -----
+
+    [Fact]
+    public void Execute_G348_TopologySameRepo_ChildLoopIncludesSameRepoForbiddenSources()
+    {
+        // G348 AC: child-loop with --topology same-repo must include
+        // `.intent-cli/**` and `intents/**` in forbidden_sources.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--topology", "same-repo", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var sources = document.RootElement.GetProperty("forbidden_sources")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(sources, s => s!.Contains(".intent-cli/**", StringComparison.Ordinal));
+        Assert.Contains(sources, s => s!.Contains("intents/**", StringComparison.Ordinal));
+        // Standard sources must still be present.
+        Assert.Contains(sources, s => s!.Contains("intents/rules/**", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G348_TopologySameRepo_ChildLoopPromptDescribesForbiddenPaths()
+    {
+        // G348 AC: same-repo child-loop prompt must explain that
+        // .intent-cli/** and intents/** are visible but forbidden.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--topology", "same-repo", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains(".intent-cli/**", prompt, StringComparison.Ordinal);
+        Assert.Contains("intents/**", prompt, StringComparison.Ordinal);
+        Assert.Contains("FORBIDDEN", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G348_TopologySameRepo_ChildLoopEntryRecordsTopology()
+    {
+        // G348: topology field must be "same-repo" in the JSON entry.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--topology", "same-repo", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("same-repo", document.RootElement.GetProperty("topology").GetString());
+    }
+
+    [Fact]
+    public void Execute_G348_TopologySameRepo_ChildOneshotAlsoIncludesSameRepoForbiddenSources()
+    {
+        // G348 AC: child-oneshot with --topology same-repo must also include
+        // same-repo forbidden sources.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--topology", "same-repo", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var sources = document.RootElement.GetProperty("forbidden_sources")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(sources, s => s!.Contains(".intent-cli/**", StringComparison.Ordinal));
+        Assert.Contains(sources, s => s!.Contains("intents/**", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G348_NoTopology_ForbiddenSourcesDoNotIncludeSameRepoPaths()
+    {
+        // G348: without --topology, .intent-cli/** must NOT appear in
+        // forbidden_sources (it is only added for same-repo topology).
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var sources = document.RootElement.GetProperty("forbidden_sources")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.DoesNotContain(sources, s => s!.Contains(".intent-cli/**", StringComparison.Ordinal));
+        // topology field must be absent/null.
+        if (document.RootElement.TryGetProperty("topology", out var topProp))
+        {
+            Assert.Equal(JsonValueKind.Null, topProp.ValueKind);
+        }
+    }
+
+    [Fact]
+    public void Execute_G348_UnknownTopology_ReturnsUsageError()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--topology", "cross-repo", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("must be 'same-repo'", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G348_Help_MentionsTopologyOption()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--help"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("--topology", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("same-repo", writer.ToString(), StringComparison.Ordinal);
+    }
 }
