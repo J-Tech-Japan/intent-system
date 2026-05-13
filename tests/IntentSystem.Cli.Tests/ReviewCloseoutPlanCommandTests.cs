@@ -197,6 +197,96 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G344_MissingQueueItem_WithMatchingPacketAndPublishAndClosingIssue_SurfacesHostQueueItemRecoveryLane()
+    {
+        // G344 fixture: PR closes a published intent-target issue and
+        // .intent-cli/issues/<UNIT>/{packet.yaml, publish.yaml} both
+        // exist for the execution unit, but queue-state has no item
+        // matching --pr. closeout-plan must (a) still report
+        // host-metadata-blocked, (b) include a recovery_lane block
+        // recommending the deterministic
+        // `automation host-queue-item-recovery` command.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        // queue-state is missing the SKS-G263 item entirely.
+        workspace.WriteQueueState(BuildQueueState("OTHER-UNIT", "review", linkedPr: "1", linkedIssue: null));
+        var publishArtifact = new IssuePublishArtifact
+        {
+            ExecutionUnit = "SKS-G263",
+            PublishStatus = "issue-created",
+            PacketPath = ".intent-cli/issues/SKS-G263/packet.yaml",
+            IssueBodyPath = ".intent-cli/issues/SKS-G263/github-body.md",
+            CreatedIssueNumber = 646,
+            CreatedIssueUrl = "https://github.com/J-Tech-Japan/SekibanAsAService/issues/646",
+            PublishedLabelName = "intent-target",
+        };
+        workspace.WriteFile(".intent-cli/issues/SKS-G263/publish.yaml", IssuePublishArtifactYaml.Serialize(publishArtifact));
+        workspace.WriteFile(".intent-cli/issues/SKS-G263/packet.yaml", "implementation_issue_packet:\n  target_repo: J-Tech-Japan/SekibanAsAService\n");
+
+        // Inject the closing-issues fetcher so the planner sees PR #647 → issue #646.
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(new[] { 646 });
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--pr", "647", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.False(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("host-metadata-blocked", root.GetProperty("blocker_classification").GetString());
+        Assert.True(root.TryGetProperty("recovery_lane", out var recoveryLane), "expected recovery_lane block");
+        Assert.Equal("host-queue-item-recovery", recoveryLane.GetProperty("lane").GetString());
+        Assert.Equal("SKS-G263", recoveryLane.GetProperty("execution_unit").GetString());
+        Assert.Equal(646, recoveryLane.GetProperty("linked_issue").GetInt32());
+        Assert.Equal(647, recoveryLane.GetProperty("linked_pr").GetInt32());
+        var cmd = recoveryLane.GetProperty("recommended_command").GetString()!;
+        Assert.Contains("automation host-queue-item-recovery", cmd, StringComparison.Ordinal);
+        Assert.Contains("--unit SKS-G263", cmd, StringComparison.Ordinal);
+        Assert.Contains("--issue 646", cmd, StringComparison.Ordinal);
+        Assert.Contains("--pr 647", cmd, StringComparison.Ordinal);
+        Assert.Contains("--write", cmd, StringComparison.Ordinal);
+        Assert.Equal(cmd, root.GetProperty("recommended_recovery_command").GetString());
+    }
+
+    [Fact]
+    public void Execute_G344_NoMatchingPacket_DoesNotSurfaceRecoveryLane()
+    {
+        // Regression: when the publish.yaml does not match the PR's
+        // closing-issue number, the recovery_lane must NOT appear.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("OTHER-UNIT", "review", linkedPr: "1", linkedIssue: null));
+        var publishArtifact = new IssuePublishArtifact
+        {
+            ExecutionUnit = "SKS-G263",
+            PublishStatus = "issue-created",
+            PacketPath = ".intent-cli/issues/SKS-G263/packet.yaml",
+            IssueBodyPath = ".intent-cli/issues/SKS-G263/github-body.md",
+            CreatedIssueNumber = 999,  // does not match PR's closing-issue #646.
+            CreatedIssueUrl = "https://github.com/J-Tech-Japan/SekibanAsAService/issues/999",
+            PublishedLabelName = "intent-target",
+        };
+        workspace.WriteFile(".intent-cli/issues/SKS-G263/publish.yaml", IssuePublishArtifactYaml.Serialize(publishArtifact));
+        workspace.WriteFile(".intent-cli/issues/SKS-G263/packet.yaml", "implementation_issue_packet:\n  target_repo: J-Tech-Japan/SekibanAsAService\n");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(new[] { 646 });
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--pr", "647", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.TryGetProperty("recovery_lane", out _),
+            "recovery_lane must be absent when no packet/publish matches the PR's closing issue");
+    }
+
+    [Fact]
     public void Execute_G313_NoMatchingLinkedPrAndNoPublishArtifact_RecommendsReconcile()
     {
         // G313: when no publish artifact exists, generic reconcile remains the

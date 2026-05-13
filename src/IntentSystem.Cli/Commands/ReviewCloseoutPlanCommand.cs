@@ -368,6 +368,31 @@ internal static class ReviewCloseoutPlanCommand
             recommendedRecoveryCommand = null;
         }
 
+        // G344: when the host-metadata blocker is the missing-linked_pr
+        // gap AND packet + publish + GitHub closing-issue evidence
+        // deterministically identifies the missing queue item, surface
+        // a `recovery_lane` block recommending the exact
+        // `automation host-queue-item-recovery` command. This does NOT
+        // change closeout-plan's `ready: false` semantics; the host
+        // loop runs the recovery command first, then re-invokes
+        // closeout-plan.
+        ReviewCloseoutPlanRecoveryLane? recoveryLane = null;
+        if (matchedItem is null
+            && gaps.Any(g => string.Equals(g.Classification, GapClassificationHostMetadata, StringComparison.Ordinal)
+                && g.Description.Contains("no queue item found with linked_pr", StringComparison.Ordinal)))
+        {
+            recoveryLane = TryBuildHostQueueItemRecoveryLane(
+                context.RepoRoot,
+                repo!,
+                pr!.Value,
+                closingIssues,
+                queueState);
+            if (recoveryLane is not null)
+            {
+                recommendedRecoveryCommand = recoveryLane.RecommendedCommand;
+            }
+        }
+
         var result = new ReviewCloseoutPlanResult
         {
             Domain = domain,
@@ -392,7 +417,8 @@ internal static class ReviewCloseoutPlanCommand
             AmbiguousLinkage = ambiguousLinkage,
             ClosingIssuesSource = closingIssuesSource,
             LinkageRecoveryApplied = false,
-            StateLayout = stateLayout
+            StateLayout = stateLayout,
+            RecoveryLane = recoveryLane,
         };
 
         // G329 review fix: when --write-recovered-linkage is supplied
@@ -442,6 +468,156 @@ internal static class ReviewCloseoutPlanCommand
         }
 
         return result.Ready ? 0 : 1;
+    }
+
+    /// <summary>
+    /// G344: dry-run helper that walks
+    /// <c>.intent-cli/issues/&lt;unit&gt;/publish.yaml</c> entries, finds
+    /// the one (if any) whose <c>created_issue_number</c> matches a
+    /// closing-issue reference for the selected PR, and returns the
+    /// proposed <c>automation host-queue-item-recovery</c> command when
+    /// the evidence is deterministic. Returns null when the evidence is
+    /// missing, ambiguous, or unrelated to the selected repo. Pure with
+    /// respect to GitHub — relies only on the closing-issue numbers the
+    /// caller already fetched.
+    /// </summary>
+    internal static ReviewCloseoutPlanRecoveryLane? TryBuildHostQueueItemRecoveryLane(
+        string repoRoot,
+        string repo,
+        int prNumber,
+        IReadOnlyList<int> closingIssues,
+        QueueState? queueState)
+    {
+        if (closingIssues.Count == 0)
+        {
+            return null;
+        }
+        var issuesDir = Path.Combine(repoRoot, ".intent-cli", "issues");
+        if (!Directory.Exists(issuesDir))
+        {
+            return null;
+        }
+
+        var matches = new List<(string Unit, int IssueNumber)>();
+        foreach (var unitDir in Directory.EnumerateDirectories(issuesDir).OrderBy(p => p, StringComparer.Ordinal))
+        {
+            var unit = Path.GetFileName(unitDir)!;
+            var publishPath = Path.Combine(unitDir, "publish.yaml");
+            var packetPath = Path.Combine(unitDir, "packet.yaml");
+            if (!File.Exists(publishPath) || !File.Exists(packetPath))
+            {
+                continue;
+            }
+            IssuePublishArtifact? artifact;
+            try
+            {
+                artifact = IssuePublishArtifactYaml.Deserialize(File.ReadAllText(publishPath));
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                continue;
+            }
+            if (artifact.CreatedIssueNumber is not int n || n <= 0)
+            {
+                continue;
+            }
+            // Repo scoping: publish.yaml created_issue_url must point at
+            // the selected repo (when present).
+            if (!string.IsNullOrEmpty(artifact.CreatedIssueUrl)
+                && artifact.CreatedIssueUrl!.IndexOf($"github.com/{repo}/issues/", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+            if (closingIssues.Contains(n))
+            {
+                matches.Add((unit, n));
+            }
+        }
+
+        if (matches.Count != 1)
+        {
+            // Zero or >1 matches → not deterministic; let the existing
+            // host-metadata-blocked recovery path remain.
+            return null;
+        }
+
+        var (matchedUnit, matchedIssue) = matches[0];
+
+        // If queue-state already binds the matched unit to a *different*
+        // PR or issue, the host-queue-item-recovery analyzer would emit
+        // a conflicting-existing-queue-item stop. We pre-filter here so
+        // closeout-plan only surfaces the recovery_lane when the
+        // recovery would actually succeed.
+        if (queueState is not null)
+        {
+            var existing = queueState.Items.FirstOrDefault(i =>
+                string.Equals(i.ExecutionUnit, matchedUnit, StringComparison.Ordinal));
+            if (existing is not null)
+            {
+                if (existing.LinkedIssue is { Number: int existingIssue } && existingIssue != matchedIssue)
+                {
+                    return null;
+                }
+                var existingPr = TryParsePrNumberFromLinkedPr(existing.LinkedPr);
+                if (existingPr is int otherPr && otherPr != prNumber)
+                {
+                    return null;
+                }
+            }
+            // If a different unit already binds this PR or issue, do
+            // not surface this recovery_lane.
+            foreach (var item in queueState.Items)
+            {
+                if (string.Equals(item.ExecutionUnit, matchedUnit, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (item.LinkedIssue is { Number: int otherIssue } && otherIssue == matchedIssue)
+                {
+                    return null;
+                }
+                if (TryParsePrNumberFromLinkedPr(item.LinkedPr) == prNumber)
+                {
+                    return null;
+                }
+            }
+        }
+
+        var command = $"intent-cli automation host-queue-item-recovery --repo {repo} "
+            + $"--unit {matchedUnit} --issue {matchedIssue} --pr {prNumber} --write";
+        return new ReviewCloseoutPlanRecoveryLane
+        {
+            Lane = "host-queue-item-recovery",
+            ExecutionUnit = matchedUnit,
+            LinkedIssue = matchedIssue,
+            LinkedPr = prNumber,
+            RecommendedCommand = command,
+            Reason = $"packet.yaml and publish.yaml for '{matchedUnit}' identify issue #{matchedIssue}, "
+                + $"which is the closing-issue for PR #{prNumber} in '{repo}'; host-queue-item-recovery can "
+                + "deterministically reconstruct the missing queue item.",
+        };
+    }
+
+    private static int? TryParsePrNumberFromLinkedPr(string? linkedPr)
+    {
+        if (string.IsNullOrWhiteSpace(linkedPr))
+        {
+            return null;
+        }
+        if (int.TryParse(linkedPr, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var direct))
+        {
+            return direct;
+        }
+        var idx = linkedPr.LastIndexOf('/');
+        if (idx >= 0 && idx + 1 < linkedPr.Length)
+        {
+            var tail = linkedPr[(idx + 1)..];
+            if (int.TryParse(tail, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n))
+            {
+                return n;
+            }
+        }
+        return null;
     }
 
     /// <summary>
@@ -987,6 +1163,45 @@ internal sealed record ReviewCloseoutPlanResult
     /// </summary>
     [JsonPropertyName("state_layout")]
     public string? StateLayout { get; init; }
+
+    /// <summary>
+    /// G344: emitted when the missing-linked_pr host-metadata gap can
+    /// be deterministically recovered from packet + publish + GitHub
+    /// closing-issue facts. Surfaces the exact
+    /// <c>automation host-queue-item-recovery</c> command for the
+    /// matching execution unit. Null when no deterministic recovery is
+    /// available (no matching packet/publish, ambiguous matches, or
+    /// queue state already in a conflicting state).
+    /// </summary>
+    [JsonPropertyName("recovery_lane")]
+    public ReviewCloseoutPlanRecoveryLane? RecoveryLane { get; init; }
+}
+
+/// <summary>
+/// G344: structured recovery_lane payload surfaced on the closeout-plan
+/// result when packet + publish + GitHub closing-issue facts identify a
+/// missing queue item that can be deterministically recovered via the
+/// <c>automation host-queue-item-recovery</c> surface.
+/// </summary>
+internal sealed record ReviewCloseoutPlanRecoveryLane
+{
+    [JsonPropertyName("lane")]
+    public required string Lane { get; init; }
+
+    [JsonPropertyName("execution_unit")]
+    public required string ExecutionUnit { get; init; }
+
+    [JsonPropertyName("linked_issue")]
+    public required int LinkedIssue { get; init; }
+
+    [JsonPropertyName("linked_pr")]
+    public required int LinkedPr { get; init; }
+
+    [JsonPropertyName("recommended_command")]
+    public required string RecommendedCommand { get; init; }
+
+    [JsonPropertyName("reason")]
+    public required string Reason { get; init; }
 }
 
 /// <summary>
