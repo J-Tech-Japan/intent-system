@@ -369,6 +369,136 @@ public sealed class PublishRecoveryAnalyzerTests
         Assert.Empty(result.UnsafeStops);
     }
 
+    // ----- G351: AnalyzeScopedToPr -----
+
+    [Fact]
+    public void AnalyzeScopedToPr_G351_G346Fixture_LinkedIssuePresent_ProducesSingleRepair()
+    {
+        // G351 AC fixture: queue item G346 has linked_issue=#795, linked_pr=null.
+        // PR #796 closes #795. Scoped recovery must return exactly one
+        // high-confidence repair and no unrelated unsafe stops.
+        var candidate = NewLinkedIssueCandidate("G346", "J-Tech-Japan/intent-system", 795,
+            "https://github.com/J-Tech-Japan/intent-system/issues/795");
+        var unrelated = NewLinkedIssueCandidate("G999", "J-Tech-Japan/intent-system", 888,
+            "https://github.com/J-Tech-Japan/intent-system/issues/888");
+        var pr796 = BuildPr(796, "G346 base branch", "Closes #795");
+        var pr900 = BuildPr(900, "G999 unrelated", "Closes #888");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate, unrelated },
+            new[] { pr796, pr900 },
+            prNumber: 796);
+
+        Assert.Single(result.SafeRepairs);
+        Assert.Empty(result.UnsafeStops);
+        var repair = result.SafeRepairs[0];
+        Assert.Equal("G346", repair.ExecutionUnit);
+        Assert.Equal(795, repair.LinkedIssueNumber);
+        Assert.Equal(796, repair.LinkedPrNumber);
+        Assert.Equal(PublishRecoveryAnalyzer.RepairTypeLinkedIssueClosingPr, repair.Type);
+        Assert.Equal("high", repair.Confidence);
+    }
+
+    [Fact]
+    public void AnalyzeScopedToPr_G351_PrNotInOpenList_ReturnsEmpty()
+    {
+        // G351: when the selected PR is not in the open PR list (already
+        // merged/closed), the scoped analysis returns empty — no-op.
+        var candidate = NewLinkedIssueCandidate("G346", "J-Tech-Japan/intent-system", 795, null);
+        var pr797 = BuildPr(797, "other PR", "Closes #799");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate },
+            new[] { pr797 },
+            prNumber: 796);
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Empty(result.UnsafeStops);
+    }
+
+    [Fact]
+    public void AnalyzeScopedToPr_G351_PrHasNoClosingReference_ProducesScopedUnsafeStop()
+    {
+        // G351: when the selected PR has no Closes/Fixes/Resolves reference,
+        // the scoped analysis produces a single concise unsafe stop — not a
+        // flood of unrelated stops.
+        var candidate = NewLinkedIssueCandidate("G346", "J-Tech-Japan/intent-system", 795, null);
+        var pr796 = BuildPr(796, "G346 PR", "no closing reference here");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate },
+            new[] { pr796 },
+            prNumber: 796);
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Single(result.UnsafeStops);
+        Assert.Equal(PublishRecoveryAnalyzer.UnsafeNoClosingPrForLinkedIssue, result.UnsafeStops[0].Kind);
+        Assert.Contains("796", result.UnsafeStops[0].Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnalyzeScopedToPr_G351_NoCandidateMatchesClosingIssue_ReturnsEmpty()
+    {
+        // G351: when the selected PR closes an issue that no queue candidate
+        // has as its linked_issue, the scoped analysis returns empty — the PR
+        // may be for an untracked issue.
+        var candidate = NewLinkedIssueCandidate("G346", "J-Tech-Japan/intent-system", 795, null);
+        var pr796 = BuildPr(796, "untracked issue PR", "Closes #999");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate },
+            new[] { pr796 },
+            prNumber: 796);
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Empty(result.UnsafeStops);
+    }
+
+    [Fact]
+    public void AnalyzeScopedToPr_G351_UnrelatedQueueItemsNotIncluded()
+    {
+        // G351 verification: when multiple queue items have missing linked_pr,
+        // a scoped call for PR #796 / issue #795 only surfaces that one item —
+        // G999/888 is untouched even though it also has missing linked_pr.
+        var g346 = NewLinkedIssueCandidate("G346", "J-Tech-Japan/intent-system", 795, null);
+        var g999 = NewLinkedIssueCandidate("G999", "J-Tech-Japan/intent-system", 888, null);
+        var pr796 = BuildPr(796, "G346", "Closes #795");
+        var pr900 = BuildPr(900, "G999", "Closes #888");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { g346, g999 },
+            new[] { pr796, pr900 },
+            prNumber: 796);
+
+        // Only G346 is in scope; G999 must not appear in repairs or stops.
+        Assert.All(result.SafeRepairs, r => Assert.Equal("G346", r.ExecutionUnit));
+        Assert.All(result.UnsafeStops, s => Assert.NotEqual("G999", s.ExecutionUnit));
+    }
+
+    [Fact]
+    public void AnalyzeScopedToPr_G351_IssueMismatch_DoesNotRepair()
+    {
+        // G351 negative test: queue item G346 has linked_issue=#795 but
+        // PR #796 closes #888 (wrong issue). No candidate matches, result is empty.
+        var candidate = NewLinkedIssueCandidate("G346", "J-Tech-Japan/intent-system", 795, null);
+        var pr796 = BuildPr(796, "mismatch", "Closes #888");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate },
+            new[] { pr796 },
+            prNumber: 796);
+
+        Assert.Empty(result.SafeRepairs);
+        // No stop either — the PR just doesn't match any in-scope candidate.
+        Assert.Empty(result.UnsafeStops);
+    }
+
     private static PublishRecoveryCandidate NewLinkedIssueCandidate(
         string executionUnit,
         string linkedIssueRepo,

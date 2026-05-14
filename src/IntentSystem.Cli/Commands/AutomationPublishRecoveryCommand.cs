@@ -6,7 +6,7 @@ using IntentSystem.Supervisor.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G303: <c>intent-cli automation publish-recovery</c> — host-only safe
+/// G303 / G351: <c>intent-cli automation publish-recovery</c> — host-only safe
 /// recovery lane that consults
 /// <c>.intent-cli/issues/&lt;execution-unit&gt;/publish.yaml</c> together with the
 /// open PR list to repair queue-state items whose <c>linked_issue</c> AND
@@ -21,6 +21,13 @@ namespace IntentSystem.Cli.Commands;
 /// (which handles items that already have a <c>linked_issue</c>): G303
 /// covers the both-null variant that <c>reconcile</c> currently treats as
 /// advisory only.
+///
+/// G351: <c>--pr &lt;n&gt;</c> scopes the analysis to only the queue item
+/// that is relevant to the selected PR — the candidate whose
+/// <c>linked_issue</c> matches the closing-issue reference of PR #N.
+/// Without scoping the broad scan may flood the operator with unrelated
+/// unsafe stops. The scoped path returns at most one repair or one unsafe
+/// stop and never touches unrelated queue items.
 /// </summary>
 internal static class AutomationPublishRecoveryCommand
 {
@@ -44,7 +51,7 @@ internal static class AutomationPublishRecoveryCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var repo, out var write, out var format, out var error))
+        if (!TryParseArguments(args, out var repo, out var selectedPr, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
             return 1;
@@ -83,7 +90,18 @@ internal static class AutomationPublishRecoveryCommand
             return 1;
         }
 
-        var analysis = PublishRecoveryAnalyzer.Analyze(repo!, candidates, openPrs);
+        // G351: when --pr is given, scope the analysis to only the queue
+        // item relevant to the selected PR. This avoids flooding the
+        // operator with unrelated unsafe stops from a broad scan.
+        PublishRecoveryAnalysis analysis;
+        if (selectedPr is int prNumber)
+        {
+            analysis = PublishRecoveryAnalyzer.AnalyzeScopedToPr(repo!, candidates, openPrs, prNumber);
+        }
+        else
+        {
+            analysis = PublishRecoveryAnalyzer.Analyze(repo!, candidates, openPrs);
+        }
 
         var applied = new List<PublishRecoveryRepair>();
         var failures = new List<string>();
@@ -104,6 +122,7 @@ internal static class AutomationPublishRecoveryCommand
         {
             Repo = repo!,
             Mode = write ? ModeWrite : ModeDryRun,
+            SelectedPr = selectedPr,
             QueueStatePath = queueStatePath,
             SafeRepairs = analysis.SafeRepairs,
             UnsafeStops = analysis.UnsafeStops,
@@ -270,11 +289,13 @@ internal static class AutomationPublishRecoveryCommand
     private static bool TryParseArguments(
         string[] args,
         out string? repo,
+        out int? selectedPr,
         out bool write,
         out string format,
         out string error)
     {
         repo = null;
+        selectedPr = null;
         write = false;
         format = FormatMarkdown;
         error = string.Empty;
@@ -291,6 +312,23 @@ internal static class AutomationPublishRecoveryCommand
                         return false;
                     }
                     repo = args[++index].Trim();
+                    break;
+                case "--pr":
+                    // G351: optional PR scoping — scope analysis to the queue
+                    // item relevant to the selected PR's closing-issue reference.
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--pr requires a PR number.";
+                        return false;
+                    }
+                    var prRaw = args[++index].Trim().TrimStart('#');
+                    if (!int.TryParse(prRaw, System.Globalization.NumberStyles.Integer,
+                            System.Globalization.CultureInfo.InvariantCulture, out var prParsed) || prParsed <= 0)
+                    {
+                        error = $"--pr must be a positive integer PR number (got '{args[index]}').";
+                        return false;
+                    }
+                    selectedPr = prParsed;
                     break;
                 case "--write":
                     if (dryRun)
@@ -345,6 +383,10 @@ internal sealed record AutomationPublishRecoveryResult
 
     [JsonPropertyName("mode")]
     public required string Mode { get; init; }
+
+    /// <summary>G351: when --pr was supplied, the selected PR number. Null for a broad scan.</summary>
+    [JsonPropertyName("selected_pr")]
+    public int? SelectedPr { get; init; }
 
     [JsonPropertyName("queue_state_path")]
     public required string QueueStatePath { get; init; }

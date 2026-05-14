@@ -46,6 +46,79 @@ internal static class PublishRecoveryAnalyzer
         @"(?i)\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+(?:(?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?<number>\d+)\b",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// G351: PR-scoped analysis. Finds the selected PR from
+    /// <paramref name="openPrs"/>, extracts its closing-issue references, and
+    /// then runs the standard analysis only on the candidates whose
+    /// <c>linked_issue</c> number matches one of those closing issues. At most
+    /// one queue item is in scope, so the result contains at most one repair or
+    /// one unsafe stop — unrelated G* items are never included.
+    ///
+    /// If the selected PR is not found in <paramref name="openPrs"/>, or if
+    /// none of its closing issues match any candidate, the analysis returns
+    /// empty repairs and empty unsafe stops (no-op; the PR may already be
+    /// linked or closed).
+    /// </summary>
+    public static PublishRecoveryAnalysis AnalyzeScopedToPr(
+        string repo,
+        IReadOnlyList<PublishRecoveryCandidate> candidates,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        int prNumber)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(openPrs);
+
+        var selectedPr = openPrs.FirstOrDefault(pr => pr.Number == prNumber);
+        if (selectedPr is null)
+        {
+            // PR not found in the open list; nothing to scope to.
+            return new PublishRecoveryAnalysis { Repo = repo, SafeRepairs = [], UnsafeStops = [] };
+        }
+
+        var closingIssues = new HashSet<int>(ExtractLinkedIssueNumbers(repo, selectedPr));
+        if (closingIssues.Count == 0)
+        {
+            // PR has no closing-issue references — cannot determine which queue
+            // item to scope to. Surface as a single scoped unsafe stop so the
+            // operator knows the PR body needs a Closes/Fixes/Resolves reference.
+            return new PublishRecoveryAnalysis
+            {
+                Repo = repo,
+                SafeRepairs = [],
+                UnsafeStops = new[]
+                {
+                    new PublishRecoveryUnsafeStop
+                    {
+                        Kind = UnsafeNoClosingPrForLinkedIssue,
+                        ExecutionUnit = $"<selected-pr-{prNumber}>",
+                        Reason = $"PR #{prNumber} has no Closes/Fixes/Resolves reference. Cannot scope recovery to a queue item without a deterministic closing-issue link (G311).",
+                        PublishArtifactPath = string.Empty
+                    }
+                }
+            };
+        }
+
+        // Filter candidates to only those whose linked_issue matches a
+        // closing-issue reference of the selected PR.
+        var scopedCandidates = candidates
+            .Where(c => c.LinkedIssueNumber is int n && closingIssues.Contains(n))
+            .ToArray();
+
+        if (scopedCandidates.Length == 0)
+        {
+            // No queue item has a linked_issue that matches this PR's closing
+            // references. The PR may be for an untracked issue; no-op.
+            return new PublishRecoveryAnalysis { Repo = repo, SafeRepairs = [], UnsafeStops = [] };
+        }
+
+        // Run the standard analysis restricted to the scoped candidates. The
+        // normal ambiguity checks in AnalyzeLinkedIssueLane still apply within
+        // the scoped set (multiple queue items for the same linked_issue would
+        // produce an unsafe stop rather than a repair).
+        return Analyze(repo, scopedCandidates, openPrs);
+    }
+
     public static PublishRecoveryAnalysis Analyze(
         string repo,
         IReadOnlyList<PublishRecoveryCandidate> candidates,
