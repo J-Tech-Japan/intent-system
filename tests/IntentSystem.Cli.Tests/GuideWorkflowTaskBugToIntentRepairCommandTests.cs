@@ -493,4 +493,53 @@ public sealed class GuideWorkflowTaskBugToIntentRepairCommandTests
             }
         };
     }
+
+    // ----- G349: copilot-local host agent can ask bug-to-intent-repair guide -----
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostCwd_CanAskBugToIntentRepairGuide_ExitZero()
+    {
+        // G349 Verification: a local Copilot host agent running in a host cwd
+        // can call `guide workflow task bug-to-intent-repair` and receive the
+        // full guided bug-to-intent repair workflow guidance (exit 0, all five
+        // stages: report → triage → plan → intent-repair → implementation-repair).
+        // This surface is accessible to any host-cwd agent including copilot-local.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskBugToIntentRepairCommand.Execute(
+            CreateContext(),
+            Array.Empty<string>(),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        // All five bug-to-intent repair stages must appear.
+        Assert.Contains("report", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("triage", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-repair", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("implementation-repair", output, StringComparison.OrdinalIgnoreCase);
+        // Gap classifications surface.
+        Assert.Contains("implementation-mismatch", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-gap", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostCwd_BugToIntentRepairJsonFormat_ExitZero()
+    {
+        // G349 Verification: local Copilot host agent can request JSON format from
+        // the bug-to-intent-repair guide and gets a parsable payload.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskBugToIntentRepairCommand.Execute(
+            CreateContext(),
+            new[] { "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("stages", out _), "stages key must be present.");
+        Assert.True(root.TryGetProperty("classifications", out _), "classifications key must be present.");
+    }
 }

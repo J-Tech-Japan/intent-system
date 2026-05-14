@@ -26,7 +26,7 @@ internal static class GuideWorkflowTaskInitHostCommand
     private const string FormatMarkdown = "markdown";
 
     private const string UsageLine =
-        "Usage: intent-cli guide workflow task init-host [--role design|review-runtime|child-implementation] [--topology same-repo] [--force-host] [--format markdown|json]";
+        "Usage: intent-cli guide workflow task init-host [--role design|review-runtime|child-implementation] [--topology same-repo] [--agent copilot-local] [--force-host] [--format markdown|json]";
 
     /// <summary>
     /// G335: canonical role definitions for a new project. Mirrors the
@@ -134,6 +134,35 @@ internal static class GuideWorkflowTaskInitHostCommand
     };
 
     /// <summary>
+    /// G349: copilot-local agent guidance emitted when
+    /// <c>--agent copilot-local</c> is passed. Documents the host-cwd
+    /// permitted surfaces (intent-interview, packet-draft, issue-publish,
+    /// bug-to-intent-repair, and the underlying intent-cli commands) and
+    /// the child-cwd restriction (host-state-free, same as any child agent).
+    /// </summary>
+    internal static readonly CopilotLocalAgentGuidance CopilotLocalAgent = new()
+    {
+        HostCwdSummary = "A local Copilot coding agent running in a host cwd (design or review-runtime role) MAY run intent-cli host surfaces to organize intents, record clarifications, draft packets, and publish GitHub issues. It is NOT restricted to child-cwd / GitHub-contract-only mode when the cwd is a host — pass --agent copilot-local to confirm this runtime shape.",
+        PermittedWorkflowTaskSurfaces = new[]
+        {
+            "intent-cli guide workflow task intent-interview — ask for intent/clarification workflow guidance (interview new concepts, repair Hard Clarification blockers).",
+            "intent-cli guide workflow task packet-draft — ask for packet directory layout and contract completeness guidance.",
+            "intent-cli guide workflow task issue-publish — ask for issue draft/create/publish-flow boundary guidance.",
+            "intent-cli guide workflow task bug-to-intent-repair — ask for the guided bug-to-intent repair workflow (report → triage → plan → intent-repair → implementation-repair).",
+            "intent-cli interview next-question / record-answer / compile — host-owned interview workflow commands.",
+            "intent-cli clarification next / answer — host-owned clarification repair commands.",
+            "intent-cli packet draft / validate / issue publish-flow — host-owned packet and issue lifecycle."
+        },
+        ChildCwdRestriction = "When the local Copilot agent is in a child implementation cwd (no .intent-cli/ present), it follows the same host-state-free rules as any other child agent. It MUST NOT inspect or mutate parent host queue-state, intent tree, packet artifacts, or .intent-cli/** paths. Use `intent-cli guide prompt-matrix --mode child-loop --agent copilot-local` for child-cwd guidance.",
+        HostStateFreeSurfaces = new[]
+        {
+            "intent-cli worker next-action / claim / result-summary / complete — GitHub-label transitions only (child-cwd).",
+            "intent-cli guide prompt-matrix --mode child-loop --agent copilot-local — paste-ready child-loop guidance.",
+            "intent-cli automation base-branch-check — validate PR base branch from GitHub metadata only."
+        }
+    };
+
+    /// <summary>
     /// G335: explicit invariants the workflow guide must surface so
     /// external agents do not mis-initialize a project. Tests pin
     /// each invariant verbatim.
@@ -153,7 +182,7 @@ internal static class GuideWorkflowTaskInitHostCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var focusRole, out var forceHost, out var topology, out var format, out var error))
+        if (!TryParseArguments(args, out var focusRole, out var forceHost, out var topology, out var agent, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -195,6 +224,10 @@ internal static class GuideWorkflowTaskInitHostCommand
             ? SameRepoTopology.Warning
             : null;
 
+        // G349: copilot-local agent guidance when --agent copilot-local is set.
+        var isCopilotLocal = string.Equals(agent, "copilot-local", StringComparison.Ordinal);
+        var copilotLocalGuidance = isCopilotLocal ? CopilotLocalAgent : null;
+
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             var payload = new InitHostGuidance
@@ -204,18 +237,20 @@ internal static class GuideWorkflowTaskInitHostCommand
                 Invariants = Invariants,
                 FocusRole = string.IsNullOrEmpty(focusRole) ? null : focusRole,
                 Topology = string.IsNullOrEmpty(topology) ? null : topology,
+                Agent = string.IsNullOrEmpty(agent) ? null : agent,
                 CwdHasDotIntentCli = hasDotIntentCli,
                 ForceHost = forceHost,
                 Refusals = refusalReasons.Count == 0 ? null : refusalReasons,
                 SameRepoTopology = sameRepoGuidance,
-                SameRepoPolicyWarning = sameRepoPolicyWarning
+                SameRepoPolicyWarning = sameRepoPolicyWarning,
+                CopilotLocalAgent = copilotLocalGuidance
             };
             writer.Write(JsonSerializer.Serialize(payload, JsonOptions));
             writer.WriteLine();
         }
         else
         {
-            WriteMarkdown(visibleRoles, hasDotIntentCli, forceHost, refusalReasons, sameRepoGuidance, sameRepoPolicyWarning, writer);
+            WriteMarkdown(visibleRoles, hasDotIntentCli, forceHost, refusalReasons, sameRepoGuidance, sameRepoPolicyWarning, copilotLocalGuidance, writer);
         }
 
         return refusalReasons.Count == 0 ? 0 : 1;
@@ -248,6 +283,7 @@ internal static class GuideWorkflowTaskInitHostCommand
         IReadOnlyList<string> refusals,
         SameRepoTopologyGuidance? sameRepoGuidance,
         string? sameRepoPolicyWarning,
+        CopilotLocalAgentGuidance? copilotLocalGuidance,
         TextWriter writer)
     {
         writer.WriteLine("# intent-cli — init-host workflow guide");
@@ -331,6 +367,30 @@ internal static class GuideWorkflowTaskInitHostCommand
                 writer.WriteLine($"⚠ {sameRepoPolicyWarning}");
             }
         }
+
+        // G349: emit copilot-local agent section when --agent copilot-local is set.
+        if (copilotLocalGuidance is not null)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Copilot Local Agent (--agent copilot-local)");
+            writer.WriteLine();
+            writer.WriteLine(copilotLocalGuidance.HostCwdSummary);
+            writer.WriteLine();
+            writer.WriteLine("### Permitted workflow task surfaces (host cwd)");
+            foreach (var item in copilotLocalGuidance.PermittedWorkflowTaskSurfaces)
+            {
+                writer.WriteLine($"- {item}");
+            }
+            writer.WriteLine();
+            writer.WriteLine("### Child cwd restriction");
+            writer.WriteLine($"- {copilotLocalGuidance.ChildCwdRestriction}");
+            writer.WriteLine();
+            writer.WriteLine("### Host-state-free surfaces (child cwd)");
+            foreach (var item in copilotLocalGuidance.HostStateFreeSurfaces)
+            {
+                writer.WriteLine($"- {item}");
+            }
+        }
     }
 
     private static bool TryParseArguments(
@@ -338,12 +398,14 @@ internal static class GuideWorkflowTaskInitHostCommand
         out string focusRole,
         out bool forceHost,
         out string topology,
+        out string agent,
         out string format,
         out string error)
     {
         focusRole = string.Empty;
         forceHost = false;
         topology = string.Empty;
+        agent = string.Empty;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -389,6 +451,22 @@ internal static class GuideWorkflowTaskInitHostCommand
                         return false;
                     }
                     topology = requestedTopology;
+                    i++;
+                    break;
+                case "--agent":
+                    // G349: only 'copilot-local' is a recognized agent option.
+                    if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[i + 1]))
+                    {
+                        error = "--agent requires a value (copilot-local).";
+                        return false;
+                    }
+                    var requestedAgent = args[i + 1];
+                    if (!string.Equals(requestedAgent, "copilot-local", StringComparison.Ordinal))
+                    {
+                        error = $"--agent must be 'copilot-local' (got '{requestedAgent}').";
+                        return false;
+                    }
+                    agent = requestedAgent;
                     i++;
                     break;
                 case "--format":
@@ -509,6 +587,14 @@ internal sealed record InitHostGuidance
     /// <summary>G348: warning string when same-repo topology is active but no non-default base-branch policy is configured; null otherwise.</summary>
     [JsonPropertyName("same_repo_policy_warning")]
     public string? SameRepoPolicyWarning { get; init; }
+
+    /// <summary>G349: agent filter passed via <c>--agent</c>; null when not set.</summary>
+    [JsonPropertyName("agent")]
+    public string? Agent { get; init; }
+
+    /// <summary>G349: copilot-local agent guidance; null when <c>--agent copilot-local</c> is not set.</summary>
+    [JsonPropertyName("copilot_local_agent")]
+    public CopilotLocalAgentGuidance? CopilotLocalAgent { get; init; }
 }
 
 /// <summary>
@@ -531,4 +617,27 @@ internal sealed record SameRepoTopologyGuidance
 
     [JsonPropertyName("warning")]
     public required string Warning { get; init; }
+}
+
+/// <summary>
+/// G349: copilot-local agent guidance emitted when
+/// <c>--agent copilot-local</c> is passed to <c>guide workflow task init-host</c>.
+/// Documents what a local Copilot coding agent can do in a host cwd
+/// (design/review-runtime: full intent-cli host surfaces including
+/// intent-interview, packet-draft, issue-publish, bug-to-intent-repair)
+/// vs a child implementation cwd (host-state-free, same as any child agent).
+/// </summary>
+internal sealed record CopilotLocalAgentGuidance
+{
+    [JsonPropertyName("host_cwd_summary")]
+    public required string HostCwdSummary { get; init; }
+
+    [JsonPropertyName("permitted_workflow_task_surfaces")]
+    public required IReadOnlyList<string> PermittedWorkflowTaskSurfaces { get; init; }
+
+    [JsonPropertyName("child_cwd_restriction")]
+    public required string ChildCwdRestriction { get; init; }
+
+    [JsonPropertyName("host_state_free_surfaces")]
+    public required IReadOnlyList<string> HostStateFreeSurfaces { get; init; }
 }
