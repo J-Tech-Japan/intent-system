@@ -1360,7 +1360,7 @@ public sealed class GuidePromptMatrixCommandTests
             writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("--agent must be 'claude', 'codex', 'generic', or 'copilot'", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--agent must be 'claude', 'codex', 'generic', 'copilot', 'copilot-cloud', or 'copilot-local'", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1943,5 +1943,170 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Equal(0, exitCode);
         Assert.Contains("--topology", writer.ToString(), StringComparison.Ordinal);
         Assert.Contains("same-repo", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    // ----- G349: copilot-local vs copilot-cloud tests -----
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostLoop_ReturnsLocalHostAgentClassification()
+    {
+        // G349 AC: copilot-local host-loop must return agent_classification
+        // "local_host_agent", not "unsupported_mode_agent_combination".
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--agent", "copilot-local", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("local_host_agent", root.GetProperty("agent_classification").GetString());
+        Assert.Equal("host-loop", root.GetProperty("mode").GetString());
+        Assert.Equal("copilot-local", root.GetProperty("agent").GetString());
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostLoop_PromptMentionsIntentCliHostSurfaces()
+    {
+        // G349 AC: local Copilot host agent can ask intent-cli for
+        // intent/clarification/packet/issue-publish workflow guidance.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--agent", "copilot-local", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("intent-cli", prompt, StringComparison.Ordinal);
+        Assert.Contains("packet draft", prompt, StringComparison.Ordinal);
+        Assert.Contains("issue publish", prompt, StringComparison.Ordinal);
+        Assert.Contains("clarification", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-interview", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostOneshot_ReturnsLocalHostAgentClassification()
+    {
+        // G349 AC: host-oneshot with copilot-local returns local_host_agent.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--agent", "copilot-local", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("local_host_agent", document.RootElement.GetProperty("agent_classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalChildLoop_ReturnsLocalChildAgentHostStateFree()
+    {
+        // G349 AC: copilot-local in child-loop must return
+        // "local_child_agent_host_state_free" — NOT local_host_agent.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--agent", "copilot-local", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("local_child_agent_host_state_free", document.RootElement.GetProperty("agent_classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalChildOneshot_ReturnsLocalChildAgentHostStateFree()
+    {
+        // G349 AC: copilot-local in child-oneshot is also host-state-free.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-oneshot", "--agent", "copilot-local", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("local_child_agent_host_state_free", document.RootElement.GetProperty("agent_classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalChildLoop_PromptForbidsHostMetadataMutation()
+    {
+        // G349 AC: negative test — child cwd copilot-local guidance must
+        // explicitly state .intent-cli/ and host metadata are forbidden.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--agent", "copilot-local", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains(".intent-cli/", prompt, StringComparison.Ordinal);
+        Assert.Contains("host metadata", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("must NOT", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotCloud_BackwardCompatAlias_BehavesLikeCopilot()
+    {
+        // G349: copilot-cloud is an alias for copilot — produces
+        // "unsupported_local_loop" for child-loop (cloud/assignment path).
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--agent", "copilot-cloud", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        // copilot-cloud normalises to copilot → same cloud-assignment classification.
+        Assert.Equal("unsupported_local_loop", document.RootElement.GetProperty("agent_classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotCloud_HostLoop_UnsupportedModeAgentCombination()
+    {
+        // G349: copilot-cloud + host-loop still returns
+        // "unsupported_mode_agent_combination" (cloud Copilot never drives host loops).
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--agent", "copilot-cloud", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("unsupported_mode_agent_combination", document.RootElement.GetProperty("agent_classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_G349_Help_MentionsCopilotLocalAndCopilotCloud()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--help"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("copilot-local", output, StringComparison.Ordinal);
+        Assert.Contains("copilot-cloud", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostLoop_FirstCallsIncludeIntentCliSurfaces()
+    {
+        // G349: first_calls for local Copilot host mode must include
+        // intent-cli automation summary (same as claude/codex host loops).
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--agent", "copilot-local", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var firstCalls = document.RootElement.GetProperty("first_calls")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(firstCalls, c => c!.Contains("automation summary", StringComparison.Ordinal));
+        Assert.Contains(firstCalls, c => c!.Contains("intent status", StringComparison.Ordinal));
     }
 }
