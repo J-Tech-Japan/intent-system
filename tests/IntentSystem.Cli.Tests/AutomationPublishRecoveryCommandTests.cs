@@ -254,6 +254,186 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         Assert.Contains("--repo", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // --- G351: --pr scoped recovery ----
+
+    [Fact]
+    public void Execute_G351_ScopedToPr_G346Fixture_ProducesSingleRepair_DryRun()
+    {
+        // G351 AC fixture: queue item G346 has linked_issue=#795, linked_pr=null.
+        // An unrelated G999 item also has missing linked_pr. --pr 796 scopes
+        // the result to only G346 — G999 must not appear.
+        using var workspace = new RecoveryWorkspace();
+        var li795 = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        var li888 = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 888,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/888" };
+        var qs = BuildQueueStateMulti(
+            ("G346", li795, null),
+            ("G999", li888, null));
+        workspace.WriteQueueState(qs);
+
+        // PR #796 closes #795; PR #900 closes #888.
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(796, "Closes #795"), BuildPr(900, "Closes #888") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("dry-run", root.GetProperty("mode").GetString());
+        Assert.Equal(796, root.GetProperty("selected_pr").GetInt32());
+        Assert.Equal(1, root.GetProperty("safe_repairs").GetArrayLength());
+        Assert.Equal(0, root.GetProperty("unsafe_stops").GetArrayLength());
+        var repair = root.GetProperty("safe_repairs")[0];
+        Assert.Equal("G346", repair.GetProperty("execution_unit").GetString());
+        Assert.Equal(795, repair.GetProperty("linked_issue_number").GetInt32());
+        Assert.Equal(796, repair.GetProperty("linked_pr_number").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_G351_ScopedToPr_Write_AppliesRepairForSelectedPrOnly()
+    {
+        // G351 AC: --pr --write applies the repair for the selected PR's
+        // linked queue item and does NOT mutate unrelated G999 item.
+        using var workspace = new RecoveryWorkspace();
+        var li795 = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        var li888 = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 888,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/888" };
+        workspace.WriteQueueState(BuildQueueStateMulti(("G346", li795, null), ("G999", li888, null)));
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(796, "Closes #795"), BuildPr(900, "Closes #888") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(1, doc.RootElement.GetProperty("applied_count").GetInt32());
+
+        var queueAfter = QueueStateSerializer.Deserialize(
+            File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        var g346 = queueAfter.Items.First(i => i.ExecutionUnit == "G346");
+        var g999 = queueAfter.Items.First(i => i.ExecutionUnit == "G999");
+        // G346 got the repair.
+        Assert.Contains("/pull/796", g346.LinkedPr!, StringComparison.Ordinal);
+        // G999 was NOT mutated.
+        Assert.Null(g999.LinkedPr);
+    }
+
+    [Fact]
+    public void Execute_G351_ScopedToPr_InvalidPrNumber_ReturnsError()
+    {
+        using var workspace = new RecoveryWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G346", linkedIssue: null, linkedPr: null));
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "not-a-number"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--pr", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G351_ScopedToPr_NoPrInOpenList_ReturnsEmptyNoOp()
+    {
+        // G351: when the selected PR is not in the open list (already merged),
+        // the scoped result is empty — no repairs and no unsafe stops.
+        using var workspace = new RecoveryWorkspace();
+        var li = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        workspace.WriteQueueState(BuildQueueState("G346", linkedIssue: li, linkedPr: null));
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(900, "Closes #900") }); // PR #796 is NOT in the list
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("safe_repairs").GetArrayLength());
+        Assert.Equal(0, doc.RootElement.GetProperty("unsafe_stops").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_G351_ScopedToPr_PrHasNoClosingRef_ProducesConciseScopedUnsafeStop()
+    {
+        // G351 snapshot verification: with --pr, when the selected PR has no
+        // closing reference, the output contains exactly one unsafe stop (scoped)
+        // and does NOT include stops from unrelated queue items.
+        using var workspace = new RecoveryWorkspace();
+        var li795 = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        var li888 = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 888,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/888" };
+        workspace.WriteQueueState(BuildQueueStateMulti(("G346", li795, null), ("G999", li888, null)));
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(796, "PR without closing reference") }); // no Closes #N
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        // Exactly one concise unsafe stop, not a flood of two stops.
+        Assert.Equal(0, doc.RootElement.GetProperty("safe_repairs").GetArrayLength());
+        Assert.Equal(1, doc.RootElement.GetProperty("unsafe_stops").GetArrayLength());
+        var stop = doc.RootElement.GetProperty("unsafe_stops")[0];
+        // The stop must mention the selected PR number.
+        Assert.Contains("796", stop.GetProperty("reason").GetString()!, StringComparison.Ordinal);
+    }
+
+    private static string BuildQueueStateMulti(params (string ExecutionUnit, LinkedIssue? LinkedIssue, string? LinkedPr)[] items)
+    {
+        var queueItems = items.Select(i => new QueueItem
+        {
+            ExecutionUnit = i.ExecutionUnit,
+            Title = $"{i.ExecutionUnit} title",
+            State = QueueItemState.Queued,
+            Dependencies = Array.Empty<string>(),
+            BlockedBy = Array.Empty<string>(),
+            ClarificationReturnPath = string.Empty,
+            PacketPaths = new PacketPaths
+            {
+                Yaml = $".intent-cli/issues/{i.ExecutionUnit}/packet.yaml",
+                Implementation = $".intent-cli/issues/{i.ExecutionUnit}/implementation.md",
+                ReviewContext = $".intent-cli/issues/{i.ExecutionUnit}/review-context.md"
+            },
+            LinkedIssue = i.LinkedIssue,
+            LinkedPr = i.LinkedPr,
+            WorkerRole = "Claude",
+            ReviewRole = "Codex",
+            Priority = "normal"
+        }).ToArray();
+        var state = new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = new DateTimeOffset(2026, 5, 14, 0, 0, 0, TimeSpan.Zero),
+            Items = queueItems
+        };
+        return QueueStateSerializer.Serialize(state);
+    }
+
     private static string BuildQueueState(string executionUnit, LinkedIssue? linkedIssue, string? linkedPr)
     {
         var state = new QueueState

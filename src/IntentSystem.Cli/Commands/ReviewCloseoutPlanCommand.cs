@@ -358,8 +358,11 @@ internal static class ReviewCloseoutPlanCommand
             var missingLinkedPrGap = matchedItem is null
                 && gaps.Any(g => string.Equals(g.Classification, GapClassificationHostMetadata, StringComparison.Ordinal)
                     && g.Description.Contains("no queue item found with linked_pr", StringComparison.Ordinal));
+            // G351: include --pr <n> in the publish-recovery recommendation so
+            // the operator gets a scoped single-item recovery rather than a
+            // broad scan that floods with unrelated unsafe stops.
             recommendedRecoveryCommand = missingLinkedPrGap && PublishArtifactsExist(context.RepoRoot)
-                ? $"intent-cli automation publish-recovery --repo {repo} --format json"
+                ? $"intent-cli automation publish-recovery --repo {repo} --pr {pr} --format json"
                 : $"intent-cli automation reconcile --lane host-review --repo {repo} --format json";
         }
         else
@@ -393,6 +396,17 @@ internal static class ReviewCloseoutPlanCommand
             }
         }
 
+        // G351: when blockerClassification is host-metadata-blocked, surface
+        // explicit review-release guidance. If recovery cannot proceed (e.g.,
+        // no publish artifacts, no closing-issue reference, ambiguous match),
+        // the host loop must release the intent-pr-reviewing lease before
+        // stopping — otherwise the PR stays stuck in reviewing state.
+        string? reviewReleaseCommand = null;
+        if (string.Equals(blockerClassification, BlockerClassificationHostMetadataBlocked, StringComparison.Ordinal))
+        {
+            reviewReleaseCommand = $"intent-cli automation pr-transition --repo {repo} --pr {pr} --transition review-release --write";
+        }
+
         var result = new ReviewCloseoutPlanResult
         {
             Domain = domain,
@@ -412,6 +426,7 @@ internal static class ReviewCloseoutPlanCommand
             ClassifiedGaps = gaps,
             BlockerClassification = blockerClassification,
             RecommendedRecoveryCommand = recommendedRecoveryCommand,
+            ReviewReleaseCommand = reviewReleaseCommand,
             Ready = ready,
             RecoveredLinkage = recoveredLinkage,
             AmbiguousLinkage = ambiguousLinkage,
@@ -806,6 +821,12 @@ internal static class ReviewCloseoutPlanCommand
         {
             writer.WriteLine($"- recommended recovery command: {result.RecommendedRecoveryCommand}");
         }
+        // G351: surface review-release command when host-metadata-blocked so
+        // the host loop knows to release intent-pr-reviewing before stopping.
+        if (!string.IsNullOrWhiteSpace(result.ReviewReleaseCommand))
+        {
+            writer.WriteLine($"- review release required: {result.ReviewReleaseCommand}");
+        }
 
         writer.WriteLine();
 
@@ -1105,6 +1126,18 @@ internal sealed record ReviewCloseoutPlanResult
     /// </summary>
     [JsonPropertyName("recommended_recovery_command")]
     public required string? RecommendedRecoveryCommand { get; init; }
+
+    /// <summary>
+    /// G351: when <c>blocker_classification</c> is
+    /// <c>host-metadata-blocked</c>, this field surfaces the exact
+    /// <c>pr-transition --transition review-release</c> command the host
+    /// loop must run before stopping. Releasing <c>intent-pr-reviewing</c>
+    /// prevents the PR from staying stuck in the reviewing state when the
+    /// only blocker is a recoverable host-metadata gap.
+    /// Null for ready or implementation-review-finding wakes.
+    /// </summary>
+    [JsonPropertyName("review_release_command")]
+    public string? ReviewReleaseCommand { get; init; }
 
     [JsonPropertyName("ready")]
     public required bool Ready { get; init; }

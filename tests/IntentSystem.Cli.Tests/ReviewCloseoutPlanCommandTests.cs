@@ -1198,6 +1198,127 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             """;
     }
 
+    // ----- G351: review-release guidance and --pr scoped publish-recovery -----
+
+    [Fact]
+    public void Execute_G351_HostMetadataBlocked_EmitsReviewReleaseCommand()
+    {
+        // G351 AC: when blocker_classification is host-metadata-blocked, the
+        // result must include a review_release_command surfacing the exact
+        // pr-transition --transition review-release command so the host loop
+        // can release intent-pr-reviewing before stopping.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G346", "review", linkedPr: "999", linkedIssue: null));
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("host-metadata-blocked", root.GetProperty("blocker_classification").GetString());
+        Assert.True(root.TryGetProperty("review_release_command", out var rrCmd),
+            "review_release_command must be present when host-metadata-blocked.");
+        var rrCmdStr = rrCmd.GetString()!;
+        Assert.Contains("pr-transition", rrCmdStr, StringComparison.Ordinal);
+        Assert.Contains("review-release", rrCmdStr, StringComparison.Ordinal);
+        Assert.Contains("796", rrCmdStr, StringComparison.Ordinal);
+        Assert.Contains("J-Tech-Japan/intent-system", rrCmdStr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G351_Ready_ReviewReleaseCommandIsNull()
+    {
+        // G351: when the closeout plan is ready, review_release_command must
+        // be null — no lease release is needed for a clean wake.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/796",
+            linkedIssue: ("J-Tech-Japan/intent-system", 795, "https://github.com/J-Tech-Japan/intent-system/issues/795")));
+        WriteCompliantPacketFiles(workspace, "G247");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        if (root.TryGetProperty("review_release_command", out var rrCmd))
+        {
+            // Must be null when ready.
+            Assert.Equal(JsonValueKind.Null, rrCmd.ValueKind);
+        }
+    }
+
+    [Fact]
+    public void Execute_G351_HostMetadataBlocked_PublishRecoveryRecommendationIncludesPrFlag()
+    {
+        // G351 AC: when the recommended recovery command is automation
+        // publish-recovery, it must include --pr <n> so the operator gets
+        // a scoped single-item recovery rather than a broad scan.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G346", "review", linkedPr: "999", linkedIssue: null));
+        // Publish artifact exists to trigger the publish-recovery recommendation.
+        workspace.WriteFile(".intent-cli/issues/G346/publish.yaml", "execution_unit: G346\n");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var recoveryCmd = doc.RootElement.GetProperty("recommended_recovery_command").GetString()!;
+        Assert.Contains("automation publish-recovery", recoveryCmd, StringComparison.Ordinal);
+        // G351: must include --pr <n> to scope the recovery to this PR.
+        Assert.Contains("--pr 796", recoveryCmd, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G351_HostMetadataBlocked_MarkdownIncludesReviewReleaseGuidance()
+    {
+        // G351 verification: markdown output must include the review-release
+        // command when host-metadata-blocked, so the host operator sees it.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G346", "review", linkedPr: "999", linkedIssue: null));
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796"],
+            writer);
+
+        var output = writer.ToString();
+        Assert.Contains("review-release", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("pr-transition", output, StringComparison.Ordinal);
+    }
+
+    private static void WriteCompliantPacketFiles(ReviewCloseoutPlanWorkspace workspace, string executionUnit)
+    {
+        workspace.WriteFile(
+            $".intent-cli/issues/{executionUnit}/github-body.md",
+            BuildCompleteContractBody());
+    }
+
     private sealed class ReviewCloseoutPlanWorkspace : IDisposable
     {
         private readonly string rootPath = Directory
