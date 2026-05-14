@@ -1350,6 +1350,410 @@ public sealed class IntentNextSliceCommandTests
         Assert.Equal(0, root.GetProperty("warnings").GetArrayLength());
     }
 
+    // ─── G354: packet contract gap classification ──────────────────────────────
+
+    [Fact]
+    public void Execute_G354_OnlyMechanicalSectionsMissing_RecommendsPacketGapMechanicalRepairable()
+    {
+        // G348-like regression: a packet missing only Verification and
+        // Related Links must return packet-gap-mechanical-repairable (not
+        // clarification-required). The host agent can append the sections
+        // from the supplied repair_guidance without operator input.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G348/github-body.md",
+            """
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+            """);
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-13T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G348",
+                  "title": "G348 test",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("packet-gap-mechanical-repairable", root.GetProperty("recommended_outcome").GetString());
+
+        var candidate = root.GetProperty("candidate");
+        Assert.Equal("G348", candidate.GetProperty("execution_unit").GetString());
+
+        // missing_contract_sections must still list the gaps
+        var missing = candidate.GetProperty("missing_contract_sections")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("Verification", missing);
+        Assert.Contains("Related Links", missing);
+
+        // gap_analysis must be present
+        var gapAnalysis = candidate.GetProperty("gap_analysis");
+        Assert.Equal("mechanical-repairable", gapAnalysis.GetProperty("overall_classification").GetString());
+        Assert.True(gapAnalysis.GetProperty("has_mechanical_gaps").GetBoolean());
+        Assert.False(gapAnalysis.GetProperty("has_product_gaps").GetBoolean());
+
+        // repair_guidance must have entries for each mechanical gap
+        var repairGuidance = gapAnalysis.GetProperty("repair_guidance");
+        Assert.Equal(2, repairGuidance.GetArrayLength());
+
+        // gaps array must classify each section
+        var gaps = gapAnalysis.GetProperty("gaps").EnumerateArray().ToArray();
+        Assert.Contains(gaps, g => g.GetProperty("section").GetString() == "Verification"
+            && g.GetProperty("classification").GetString() == "mechanical-repairable");
+        Assert.Contains(gaps, g => g.GetProperty("section").GetString() == "Related Links"
+            && g.GetProperty("classification").GetString() == "mechanical-repairable");
+    }
+
+    [Fact]
+    public void Execute_G354_ApplyingMechanicalRepairMakesPacketIssueCutReady()
+    {
+        // After appending Verification and Related Links, re-running
+        // intent next-slice --dry-run must return issue-cut-ready.
+        using var workspace = new IntentNextSliceWorkspace();
+        var githubBodyRelPath = ".intent-cli/issues/G348b/github-body.md";
+        workspace.WriteFile(
+            githubBodyRelPath,
+            """
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+            """);
+
+        // First pass: confirm mechanical-repairable
+        using var firstWriter = new StringWriter();
+        IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], firstWriter);
+        using var firstDoc = JsonDocument.Parse(firstWriter.ToString());
+        Assert.Equal("packet-gap-mechanical-repairable",
+            firstDoc.RootElement.GetProperty("recommended_outcome").GetString());
+
+        // Apply the repair: add Verification and Related Links
+        workspace.WriteFile(
+            githubBodyRelPath,
+            """
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Verification
+
+            - Run `dotnet test` and confirm all tests pass.
+
+            ## Related Links
+
+            - (none)
+            """);
+
+        // Second pass: must return issue-cut-ready
+        using var secondWriter = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            secondWriter);
+
+        Assert.Equal(0, exitCode);
+        using var secondDoc = JsonDocument.Parse(secondWriter.ToString());
+        Assert.Equal("issue-cut-ready",
+            secondDoc.RootElement.GetProperty("recommended_outcome").GetString());
+    }
+
+    [Fact]
+    public void Execute_G354_ProductSectionMissing_StillReturnsClarificationRequired()
+    {
+        // A packet missing Goal (product section) must still return
+        // clarification-required, not mechanical-repairable.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G354a/github-body.md",
+            """
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Verification
+
+            - Run `dotnet test`.
+
+            ## Related Links
+
+            - (none)
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("clarification-required", root.GetProperty("recommended_outcome").GetString());
+
+        // gap_analysis must classify Goal as product-clarification-required
+        var gapAnalysis = root.GetProperty("candidate").GetProperty("gap_analysis");
+        Assert.Equal("product-clarification-required", gapAnalysis.GetProperty("overall_classification").GetString());
+        Assert.False(gapAnalysis.GetProperty("has_mechanical_gaps").GetBoolean());
+        Assert.True(gapAnalysis.GetProperty("has_product_gaps").GetBoolean());
+        var goalGap = gapAnalysis.GetProperty("gaps").EnumerateArray()
+            .First(g => g.GetProperty("section").GetString() == "Goal");
+        Assert.Equal("product-clarification-required", goalGap.GetProperty("classification").GetString());
+        Assert.False(goalGap.TryGetProperty("repair_guidance", out _));
+    }
+
+    [Fact]
+    public void Execute_G354_MixedGaps_ReturnsClarificationRequired()
+    {
+        // A packet missing both a product section (Goal) AND a
+        // mechanical section (Verification) must return
+        // clarification-required (not packet-gap-mechanical-repairable)
+        // because the product gap still requires operator input.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G354b/github-body.md",
+            """
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Related Links
+
+            - (none)
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // Product gap (Goal) dominates — must remain clarification-required
+        Assert.Equal("clarification-required", root.GetProperty("recommended_outcome").GetString());
+
+        var gapAnalysis = root.GetProperty("candidate").GetProperty("gap_analysis");
+        Assert.Equal("mixed", gapAnalysis.GetProperty("overall_classification").GetString());
+        Assert.True(gapAnalysis.GetProperty("has_mechanical_gaps").GetBoolean());
+        Assert.True(gapAnalysis.GetProperty("has_product_gaps").GetBoolean());
+    }
+
+    [Fact]
+    public void Execute_G354_CompletePacket_HasNoGapAnalysis()
+    {
+        // A complete packet must NOT expose a gap_analysis field
+        // (null → omitted by JsonSerializer).
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G354c/github-body.md",
+            BuildCompleteContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var candidate = document.RootElement.GetProperty("candidate");
+        Assert.Equal("issue-cut-ready", document.RootElement.GetProperty("recommended_outcome").GetString());
+        // gap_analysis must be absent (null serialized as omitted)
+        Assert.False(candidate.TryGetProperty("gap_analysis", out _));
+    }
+
+    // ─── G354 pure unit tests for PacketContractGapAnalyzer ───────────────────
+
+    [Fact]
+    public void PacketContractGapAnalyzer_EmptyMissing_ReturnsNone()
+    {
+        var result = PacketContractGapAnalyzer.Analyze(Array.Empty<string>());
+
+        Assert.Equal(PacketContractGapAnalyzer.ClassificationNone, result.OverallClassification);
+        Assert.False(result.HasMechanicalGaps);
+        Assert.False(result.HasProductGaps);
+        Assert.Empty(result.Gaps);
+        Assert.Empty(result.RepairGuidance);
+    }
+
+    [Fact]
+    public void PacketContractGapAnalyzer_VerificationMissing_IsMechanicalRepairable()
+    {
+        var result = PacketContractGapAnalyzer.Analyze(new[] { "Verification" });
+
+        Assert.Equal(PacketContractGapAnalyzer.ClassificationMechanicalRepairable, result.OverallClassification);
+        Assert.True(result.HasMechanicalGaps);
+        Assert.False(result.HasProductGaps);
+        Assert.Single(result.Gaps);
+        Assert.Equal(PacketContractGapAnalyzer.ClassificationMechanicalRepairable, result.Gaps[0].Classification);
+        Assert.NotNull(result.Gaps[0].RepairGuidance);
+        Assert.Contains("## Verification", result.Gaps[0].RepairGuidance!, StringComparison.Ordinal);
+        Assert.Single(result.RepairGuidance);
+    }
+
+    [Fact]
+    public void PacketContractGapAnalyzer_RelatedLinksMissing_IsMechanicalRepairable()
+    {
+        var result = PacketContractGapAnalyzer.Analyze(new[] { "Related Links" });
+
+        Assert.Equal(PacketContractGapAnalyzer.ClassificationMechanicalRepairable, result.OverallClassification);
+        Assert.True(result.HasMechanicalGaps);
+        Assert.NotNull(result.Gaps[0].RepairGuidance);
+        Assert.Contains("## Related Links", result.Gaps[0].RepairGuidance!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PacketContractGapAnalyzer_GoalMissing_IsProductClarificationRequired()
+    {
+        var result = PacketContractGapAnalyzer.Analyze(new[] { "Goal" });
+
+        Assert.Equal(PacketContractGapAnalyzer.ClassificationProductClarificationRequired, result.OverallClassification);
+        Assert.False(result.HasMechanicalGaps);
+        Assert.True(result.HasProductGaps);
+        Assert.Null(result.Gaps[0].RepairGuidance);
+        Assert.Empty(result.RepairGuidance);
+    }
+
+    [Fact]
+    public void PacketContractGapAnalyzer_MixedGaps_ClassifiesMixed()
+    {
+        var result = PacketContractGapAnalyzer.Analyze(new[] { "Goal", "Verification", "Related Links" });
+
+        Assert.Equal(PacketContractGapAnalyzer.ClassificationMixed, result.OverallClassification);
+        Assert.True(result.HasMechanicalGaps);
+        Assert.True(result.HasProductGaps);
+        // 2 repair guidance entries (Verification + Related Links)
+        Assert.Equal(2, result.RepairGuidance.Count);
+        Assert.Equal(3, result.Gaps.Count);
+    }
+
+    [Fact]
+    public void PacketContractGapAnalyzer_WithPacketDirectory_EmbedsFull_PathInGuidance()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "G354-test-" + Guid.NewGuid().ToString("N")[..8]);
+        var result = PacketContractGapAnalyzer.Analyze(new[] { "Verification" }, packetDirectory: dir);
+
+        var expectedPath = Path.Combine(dir, "github-body.md");
+        Assert.Contains(expectedPath, result.Gaps[0].RepairGuidance!, StringComparison.Ordinal);
+    }
+
     private sealed class IntentNextSliceWorkspace : IDisposable
     {
         private readonly string rootPath = Directory
