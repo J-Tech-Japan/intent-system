@@ -313,6 +313,94 @@ public sealed class GuideWorkerPrCommentFixCommandTests
         Assert.Contains("worker next-action", prompt, StringComparison.Ordinal);
     }
 
+    // ── G353: host-artifact-repair-required stop condition ───────────
+
+    [Fact]
+    public void Execute_Json_G353_PromptStopsOnHostMetadataCommentPaths()
+    {
+        // G353 AC: "Child worker guidance refuses to edit .intent-cli/**
+        // or intents/** during pr-comment-fix and reports
+        // host-artifact-repair-required."
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // The prompt must name the forbidden host metadata path patterns.
+        Assert.Contains(".intent-cli/**", prompt, StringComparison.Ordinal);
+        Assert.Contains("intents/**", prompt, StringComparison.Ordinal);
+
+        // The prompt must surface the stop outcome name.
+        Assert.Contains("host-artifact-repair-required", prompt, StringComparison.Ordinal);
+
+        // The prompt must explicitly instruct the worker to stop (not repair) on host paths.
+        Assert.Contains("host metadata", prompt, StringComparison.OrdinalIgnoreCase);
+
+        // The outcome_classification map must include the new outcome.
+        var outcomes = document.RootElement.GetProperty("outcome_classification")
+            .EnumerateObject().Select(p => p.Name).ToArray();
+        Assert.Contains("host-artifact-repair-required", outcomes, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_G353_PromptMentionsPrCommentPreflightAsHostMetadataDetector()
+    {
+        // G353: the guide prompt should direct the worker to use
+        // pr-comment-preflight to detect host-artifact-repair-required
+        // automatically, rather than parsing comment bodies manually.
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // The prompt should mention pr-comment-preflight as a triage helper.
+        Assert.Contains("pr-comment-preflight", prompt, StringComparison.Ordinal);
+        // And link the classification field to the stop condition.
+        Assert.Contains("classification", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_Json_G353_HardRulesForbidHostMetadataEdits()
+    {
+        // The "Hard rules" section of the prompt must explicitly prohibit
+        // editing .intent-cli/** or intents/** paths during a pr-comment-fix.
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // Hard-rules prohibition must reference both path families.
+        Assert.Contains("Do not edit `.intent-cli/**`", prompt, StringComparison.Ordinal);
+        Assert.Contains("intents/**`", prompt, StringComparison.Ordinal);
+        // And name the stop outcome.
+        // (The outcome name appears in both the triage section and the hard rules.)
+        var occurrences = 0;
+        var search = "host-artifact-repair-required";
+        var idx = 0;
+        while ((idx = prompt.IndexOf(search, idx, StringComparison.Ordinal)) >= 0)
+        {
+            occurrences++;
+            idx += search.Length;
+        }
+        // Must appear at least twice: once in comment-triage, once in hard-rules.
+        Assert.True(occurrences >= 2, $"Expected ≥2 occurrences of '{search}' in prompt, found {occurrences}.");
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

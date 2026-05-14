@@ -1070,6 +1070,174 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
         Assert.Contains("actionable=false", output, StringComparison.Ordinal);
     }
 
+    // -----------------------------------------------------------------------
+    // G353: host-artifact-repair-required classification
+    // Comments that reference .intent-cli/** or intents/** must be escalated
+    // to the host repair agent; the child worker must not attempt to fix them.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_G353_AllCommentsTargetHostMetadata_ClassifiesAsHostArtifactRepairRequired()
+    {
+        // G353 regression: a comment asking to fix
+        // `.intent-cli/issues/G347/github-body.md` (the host packet artifact)
+        // must not be classified as `repair-required` for the child worker.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        SetTargetedPrAndIssue(prNumber: 630);
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            reviewThreads: new[]
+            {
+                BuildThread(id: "t1", isResolved: false, comments: new[]
+                {
+                    BuildThreadComment(id: "c1", author: "tomohisa",
+                        body: "The Related Links section is missing from `.intent-cli/issues/G347/github-body.md`. Please add it.")
+                })
+            }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "630", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.HostArtifactRepairRequired, result.Classification);
+        Assert.False(result.Actionable, "host artifact repair must not be forwarded to child worker");
+        Assert.Equal(WorkerPrCommentPreflightConstants.RecommendedActions.EscalateToHostRepair, result.RecommendedAction);
+        // The comment appears in actionable_comments so the host agent knows what to repair.
+        Assert.Single(result.ActionableComments);
+        Assert.Contains(result.Reasons, r => r.Contains(".intent-cli/**", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G353_CommentsTargetIntentsPath_ClassifiesAsHostArtifactRepairRequired()
+    {
+        // intents/** paths (clarifications, intent bodies) are also host metadata.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        SetTargetedPrAndIssue(prNumber: 631);
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            comments: new[]
+            {
+                BuildIssueComment(id: "ic1", author: "alice",
+                    body: "Please update intents/intent-cli/clarifications/open.md with the resolution.")
+            }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "631", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.HostArtifactRepairRequired, result.Classification);
+        Assert.False(result.Actionable);
+        Assert.Equal(WorkerPrCommentPreflightConstants.RecommendedActions.EscalateToHostRepair, result.RecommendedAction);
+    }
+
+    [Fact]
+    public void Execute_G353_MixedComments_HostAndImpl_StillRepairRequired()
+    {
+        // When SOME comments target host metadata and SOME target implementation
+        // code, the standard repair-required path applies — the child must still
+        // address the implementation comments.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        SetTargetedPrAndIssue(prNumber: 632);
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            reviewThreads: new[]
+            {
+                BuildThread(id: "t1", isResolved: false, comments: new[]
+                {
+                    BuildThreadComment(id: "c1", author: "alice",
+                        body: "The test coverage for the adapter is missing. Please add a unit test.")
+                }),
+                BuildThread(id: "t2", isResolved: false, comments: new[]
+                {
+                    BuildThreadComment(id: "c2", author: "alice",
+                        body: "Also update .intent-cli/issues/G347/github-body.md with the Related Links section.")
+                })
+            }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "632", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        // Mixed: some impl, some host → repair-required so child handles impl comments.
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.RepairRequired, result.Classification);
+        Assert.True(result.Actionable);
+        Assert.Equal(WorkerPrCommentPreflightConstants.RecommendedActions.RepairPr, result.RecommendedAction);
+        Assert.Equal(2, result.ActionableComments.Count);
+    }
+
+    [Fact]
+    public void Execute_G353_PureImplComment_NotAffectedByG353()
+    {
+        // A comment about implementation code must still route to repair-required.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        SetTargetedPrAndIssue(prNumber: 633);
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            reviewThreads: new[]
+            {
+                BuildThread(id: "t1", isResolved: false, comments: new[]
+                {
+                    BuildThreadComment(id: "c1", author: "alice",
+                        body: "The adapter factory is not disposed in the test. Please add a using statement.")
+                })
+            }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "633", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.RepairRequired, result.Classification);
+        Assert.True(result.Actionable);
+        Assert.NotEqual(
+            WorkerPrCommentPreflightConstants.Classifications.HostArtifactRepairRequired,
+            result.Classification);
+    }
+
+    [Fact]
+    public void Execute_G353_HostArtifactRepairRequired_PrecedenceAfterStep8_BeforeStep9()
+    {
+        // G353 step is inserted between step 8 (source-issue-not-target) and
+        // step 9 (repair-required). A PR that passes all guards 1–8 with ONLY
+        // host metadata comments must land on host-artifact-repair-required,
+        // not repair-required.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        SetTargetedPrAndIssue(prNumber: 634);
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            comments: new[]
+            {
+                BuildIssueComment(id: "ic1", author: "alice",
+                    body: "Fix the publish artifact at .intent-cli/issues/G353/publish.yaml.")
+            }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "634", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.HostArtifactRepairRequired, result.Classification);
+        Assert.False(result.Actionable);
+        // Step-8 guards (closed, approved, update-in-progress, missing-target, etc.)
+        // must still dominate over step 8.5.
+        Assert.NotEqual(
+            WorkerPrCommentPreflightConstants.Classifications.NonActionable,
+            result.Classification);
+    }
+
     private static void SetTargetedPrAndIssue(int prNumber)
     {
         WorkerPrCommentPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(

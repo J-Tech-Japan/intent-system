@@ -74,7 +74,9 @@ First-call sequence (read-only; required before any code work):
 
 Comment triage (required before checkout or code changes):
 Read review comments with `gh pr view <n> --repo <OWNER>/<REPO> --comments` and `gh api repos/<OWNER>/<REPO>/pulls/<n>/reviews`. Identify all unresolved, actionable review comments.
+Alternatively, run `intent-cli worker pr-comment-preflight --repo <OWNER>/<REPO> --pr <n> --format json` and check the `classification` field — it performs the full ten-step triage and surfaces the stop condition automatically.
 - If there are no unresolved actionable comments, stop. Set outcome to `no-actionable-comments`.
+- If ALL actionable comments target host metadata paths (`.intent-cli/**` or `intents/**`), stop. Set outcome to `host-artifact-repair-required`. These paths are host-owned durable artifacts that child implementation workers must not edit; the host repair agent must handle them. (The `pr-comment-preflight` result will show `classification: host-artifact-repair-required` in this case.)
 - If a comment is ambiguous and cannot be resolved without guessing, stop. Set outcome to `clarification-required`. Report which comment and why.
 - If the requested change is already applied in the existing branch, stop. Set outcome to `already-resolved`.
 
@@ -91,6 +93,7 @@ Outcome classification:
 - `no-actionable-comments` — no unresolved actionable review comments; nothing to fix.
 - `already-resolved` — the requested change is already applied in the branch.
 - `clarification-required` — ambiguous comment or blocker found; cannot proceed without operator input.
+- `host-artifact-repair-required` — all actionable comments target host metadata paths (`.intent-cli/**` or `intents/**`); child worker must not attempt to repair them.
 - `failed` — fix failed (build/test failure, unresolvable conflict).
 - `label-cleanup-required` — stale labels prevent clean claim/complete flow.
 
@@ -106,6 +109,7 @@ Hard rules:
 - Do not add `intent-target` to the PR; it is host-owned.
 - Do not add `intent-pr-created` to the PR; it is an issue-side completion marker.
 - Do not edit `queue-state.json`, `linked_issue`, or `linked_pr`; those are host-owned durable bookkeeping and must not be touched during a PR comment fix turn.
+- Do not edit `.intent-cli/**` or `intents/**` paths. These are host-owned metadata artifacts (packet files, publish artifacts, clarifications, queue state, runs). If a comment requests such changes, stop with outcome `host-artifact-repair-required` — the host repair agent must handle them, not the child implementation worker.
 - Do not run `intent-cli automation issue-publish`; that command is for publishing child issues, not for resolving PR comment repairs.";
 
         return new GuideWorkerPrCommentFixResult
@@ -127,6 +131,7 @@ Hard rules:
                 ["no-actionable-comments"] = "No unresolved actionable review comments; nothing to fix.",
                 ["already-resolved"] = "The requested change is already applied in the branch.",
                 ["clarification-required"] = "Ambiguous comment or blocker found; cannot proceed without operator input.",
+                ["host-artifact-repair-required"] = "All actionable comments target host metadata paths (.intent-cli/** or intents/**); child worker must not attempt to repair them.",
                 ["failed"] = "Fix failed (build/test failure, unresolvable conflict).",
                 ["label-cleanup-required"] = "Stale labels prevent clean claim/complete flow."
             },

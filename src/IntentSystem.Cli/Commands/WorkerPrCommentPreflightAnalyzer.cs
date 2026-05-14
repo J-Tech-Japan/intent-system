@@ -310,6 +310,37 @@ internal static class WorkerPrCommentPreflightAnalyzer
             }
         }
 
+        // Step 8.5 (G353): host-artifact-repair-required — when EVERY
+        // actionable comment targets a host metadata path (.intent-cli/**
+        // or intents/**), the child worker must not attempt to repair them.
+        // The host agent must commit/push the artifact fix and re-run review
+        // readiness. If even one comment targets implementation code the
+        // standard repair-required path takes over so the child can still
+        // address it.
+        if (actionableComments.Count > 0
+            && actionableComments.All(c => CommentTargetsHostMetadata(c.Excerpt)))
+        {
+            var reasons = new List<string>
+            {
+                $"all {actionableComments.Count} actionable comment(s) target host metadata paths " +
+                "(.intent-cli/** or intents/**); child worker must not edit host artifacts"
+            };
+            return Build(
+                pr,
+                repo,
+                prNumber,
+                title,
+                displayState,
+                labels,
+                sourceIssueCandidate?.Number,
+                sourceIssueLabels,
+                actionableComments,
+                WorkerPrCommentPreflightConstants.Classifications.HostArtifactRepairRequired,
+                reasons,
+                actionable: false,
+                WorkerPrCommentPreflightConstants.RecommendedActions.EscalateToHostRepair);
+        }
+
         // Step 9: repair-required.
         if (actionableComments.Count > 0)
         {
@@ -459,6 +490,24 @@ internal static class WorkerPrCommentPreflightAnalyzer
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// G353: Returns true when a comment excerpt explicitly references a host
+    /// metadata path (<c>.intent-cli/</c> or <c>intents/</c>), indicating the
+    /// reviewer is asking to repair a host artifact rather than an
+    /// implementation file. The check is ordinal because path separators are
+    /// case-sensitive on Linux file systems and these path prefixes are always
+    /// lowercase in the intent-system layout.
+    /// </summary>
+    private static bool CommentTargetsHostMetadata(string excerpt)
+    {
+        if (string.IsNullOrEmpty(excerpt))
+        {
+            return false;
+        }
+        return excerpt.Contains(".intent-cli/", StringComparison.Ordinal)
+            || excerpt.Contains("intents/", StringComparison.Ordinal);
     }
 
     private static string TruncateExcerpt(string? body)
