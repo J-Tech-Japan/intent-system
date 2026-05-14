@@ -57,6 +57,12 @@ internal static class CliConfigLoader
         var parentIntentRepoRoot = TryGetOptionalString(rootTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
         var baseBranchPolicy = ReadBaseBranchPolicy(rootTable, "CLI config root");
+        var stableBranch = TryGetOptionalString(rootTable, CliRuntimeContracts.StableBranchKey)
+            ?? string.Empty;
+        var implementationBaseBranch = TryGetOptionalString(rootTable, CliRuntimeContracts.ImplementationBaseBranchKey)
+            ?? string.Empty;
+        var metadataBranch = TryGetOptionalString(rootTable, CliRuntimeContracts.MetadataBranchKey)
+            ?? string.Empty;
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
         var run = ReadRun(rootTable);
@@ -69,6 +75,9 @@ internal static class CliConfigLoader
             workRepoPath,
             parentIntentRepoRoot,
             baseBranchPolicy,
+            stableBranch,
+            implementationBaseBranch,
+            metadataBranch,
             roles,
             supervision,
             run,
@@ -103,6 +112,12 @@ internal static class CliConfigLoader
         var parentIntentRepoRoot = TryGetOptionalString(projectTable, CliRuntimeContracts.ParentIntentRepoRootKey)
             ?? string.Empty;
         var baseBranchPolicy = ReadBaseBranchPolicy(projectTable, "CLI config [project] section");
+        var stableBranch = TryGetOptionalString(projectTable, CliRuntimeContracts.StableBranchKey)
+            ?? string.Empty;
+        var implementationBaseBranch = TryGetOptionalString(projectTable, CliRuntimeContracts.ImplementationBaseBranchKey)
+            ?? string.Empty;
+        var metadataBranch = TryGetOptionalString(projectTable, CliRuntimeContracts.MetadataBranchKey)
+            ?? string.Empty;
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
         var run = ReadRun(rootTable);
@@ -115,6 +130,9 @@ internal static class CliConfigLoader
             workRepoPath,
             parentIntentRepoRoot,
             baseBranchPolicy,
+            stableBranch,
+            implementationBaseBranch,
+            metadataBranch,
             roles,
             supervision,
             run,
@@ -129,6 +147,9 @@ internal static class CliConfigLoader
         string workRepoPath,
         string parentIntentRepoRoot,
         string baseBranchPolicy,
+        string stableBranch,
+        string implementationBaseBranch,
+        string metadataBranch,
         RoleMappings roles,
         SupervisionConfig supervision,
         RunConfig run,
@@ -143,7 +164,10 @@ internal static class CliConfigLoader
                 WorktreeRoot = worktreeRoot,
                 WorkRepoPath = workRepoPath,
                 ParentIntentRepoRoot = parentIntentRepoRoot,
-                BaseBranchPolicy = baseBranchPolicy
+                BaseBranchPolicy = baseBranchPolicy,
+                StableBranch = stableBranch,
+                ImplementationBaseBranch = implementationBaseBranch,
+                MetadataBranch = metadataBranch
             },
             Roles = roles,
             Supervision = supervision,

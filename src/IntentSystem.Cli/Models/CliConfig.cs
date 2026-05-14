@@ -26,6 +26,15 @@ internal sealed record ProjectConfig
     public string ParentIntentRepoRoot { get; init; } = string.Empty;
 
     public string BaseBranchPolicy { get; init; } = CliRuntimeContracts.DefaultBaseBranchPolicy;
+
+    /// <summary>G350: final stable branch in same-repo topology (e.g. "main"). Empty = not configured.</summary>
+    public string StableBranch { get; init; } = string.Empty;
+
+    /// <summary>G350: branch implementation PRs target in same-repo topology (e.g. "main" or "main-ai"). Empty = derive from BaseBranchPolicy.</summary>
+    public string ImplementationBaseBranch { get; init; } = string.Empty;
+
+    /// <summary>G350: dedicated metadata direct-push branch in same-repo topology (e.g. "main-metadata"). Empty = not configured.</summary>
+    public string MetadataBranch { get; init; } = string.Empty;
 }
 
 internal sealed record RoleMappings
