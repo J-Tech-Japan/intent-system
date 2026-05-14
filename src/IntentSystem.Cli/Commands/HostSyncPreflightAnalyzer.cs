@@ -166,10 +166,12 @@ internal static class HostSyncPreflightAnalyzer
             ClassificationDirtyDurableState => BuildDirtyDurableSteps(dirtyDurable),
             ClassificationDirtyUnrelatedSubmodule => new[]
             {
-                "Run `intent-cli automation workspace-guard --mode begin --write` to stash the unrelated paths into a recoverable safe-stash ref (G306). Stashed paths: " + string.Join(", ", dirtyOther.Select(e => "`" + e.Path + "`")),
+                "Run `intent-cli automation workspace-guard --mode begin --write` to preserve the unrelated path(s) (G306). " +
+                "Regular files are placed into a git stash; submodule gitlink-only changes are preserved via the checkout lane (records the current submodule HEAD and checks out the parent-recorded commit). Unrelated paths: " + string.Join(", ", dirtyOther.Select(e => "`" + e.Path + "`")),
                 "Run the host wake (review/closeout/next-slice). Durable host-state stays untouched throughout.",
-                "After durable host-state is committed/pushed, run `intent-cli automation workspace-guard --mode end --write` to restore the unrelated changes.",
-                "If `--mode end` reports a stash-pop conflict, do NOT claim the wake completed; surface the structured recovery instruction to the operator."
+                "After durable host-state is committed/pushed, run `intent-cli automation workspace-guard --mode end --write` to restore the unrelated changes (stash pop for regular files, submodule HEAD restore for gitlinks).",
+                "If `--mode end` reports a conflict, do NOT claim the wake completed; surface the structured recovery instruction to the operator.",
+                "If workspace-guard begin returns `proceed_allowed: false` (e.g. submodule has internal uncommitted changes), follow the manual recovery instructions in the output before re-running."
             },
             ClassificationDirtyMixed => BuildDirtyDurableSteps(dirtyDurable).Concat(new[]
             {

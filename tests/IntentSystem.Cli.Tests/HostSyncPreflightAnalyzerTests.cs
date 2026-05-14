@@ -72,7 +72,8 @@ public sealed class HostSyncPreflightAnalyzerTests
         Assert.Single(result.DirtyUnrelatedPaths);
         Assert.Contains(result.NextSteps, s => s.Contains("automation workspace-guard --mode begin --write", StringComparison.Ordinal));
         Assert.Contains(result.NextSteps, s => s.Contains("--mode end --write", StringComparison.Ordinal));
-        Assert.Contains(result.NextSteps, s => s.Contains("stash-pop conflict", StringComparison.Ordinal));
+        // G352: updated wording covers both stash-pop and gitlink restore conflicts.
+        Assert.Contains(result.NextSteps, s => s.Contains("conflict", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -122,6 +123,28 @@ public sealed class HostSyncPreflightAnalyzerTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             HostSyncPreflightAnalyzer.Analyze("main", -1, Array.Empty<HostSyncWorkingTreeEntry>()));
+    }
+
+    // G352: next-steps guidance alignment with updated workspace-guard capabilities.
+
+    [Fact]
+    public void Analyze_G352_DirtyUnrelatedSubmodule_NextSteps_MentionCheckoutLaneAndManualFallback()
+    {
+        // host-sync-preflight should surface guidance that workspace-guard now
+        // handles gitlink-only submodule paths via the checkout lane (G352),
+        // and that a proceed_allowed:false result means manual intervention is needed.
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 0,
+            workingTreeEntries: new[] { Entry("submodules/SekibanAsAService", " m") });
+
+        Assert.Equal("dirty-unrelated-submodule", result.Classification);
+        Assert.True(result.ProceedAllowed);
+        // Guidance must mention checkout lane (G352) and the stash lane.
+        Assert.Contains(result.NextSteps, s => s.Contains("checkout lane", StringComparison.Ordinal));
+        // Guidance must mention the fallback for submodule internal changes.
+        Assert.Contains(result.NextSteps, s => s.Contains("proceed_allowed: false", StringComparison.Ordinal));
+        Assert.Contains(result.NextSteps, s => s.Contains("manual recovery", StringComparison.OrdinalIgnoreCase));
     }
 
     private static HostSyncWorkingTreeEntry Entry(string path, string status) =>

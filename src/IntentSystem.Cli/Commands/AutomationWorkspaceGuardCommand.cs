@@ -84,35 +84,52 @@ internal static class AutomationWorkspaceGuardCommand
     private static int ExecutePlan(IGitRunner runner, CliContext context, string format, TextWriter writer)
     {
         var entries = ScanWorkingTree(runner);
-        var safeStash = entries.Where(e => !IsDurableStatePath(e.Path)).ToArray();
+        var nonDurable = entries.Where(e => !IsDurableStatePath(e.Path)).ToArray();
         var durable = entries.Where(e => IsDurableStatePath(e.Path)).ToArray();
-        var stashMessage = BuildStashMessage();
+
+        // G352: classify non-durable entries to surface gitlink vs regular paths in the plan.
+        var (gitlinkOnly, submoduleInternalDirty, regular) = ClassifyNonDurableEntries(runner, nonDurable);
+
+        var stashMessage = regular.Count > 0 ? BuildStashMessage() : null;
+        var totalNonDurable = nonDurable.Length;
+
+        var proceedAllowed = durable.Length == 0 && submoduleInternalDirty.Count == 0;
+        string summary;
+        if (durable.Length > 0)
+            summary = $"workspace-guard plan: {durable.Length} dirty durable-state path(s) present; safe-stash refused. Reconcile durable host-state through the G304 fail-closed path before re-running.";
+        else if (submoduleInternalDirty.Count > 0)
+            summary = $"workspace-guard plan: {submoduleInternalDirty.Count} submodule(s) have internal uncommitted changes ({string.Join(", ", submoduleInternalDirty.Select(e => e.Path))}); checkout-lane refused. Manually reconcile submodule internal changes before re-running.";
+        else if (gitlinkOnly.Count > 0 && regular.Count > 0)
+            summary = $"workspace-guard plan: {gitlinkOnly.Count} gitlink-only path(s) (checkout lane) + {regular.Count} regular path(s) (stash lane) on `--mode begin --write`.";
+        else if (gitlinkOnly.Count > 0)
+            summary = $"workspace-guard plan: {gitlinkOnly.Count} gitlink-only path(s) would be preserved via checkout lane on `--mode begin --write`.";
+        else if (regular.Count > 0)
+            summary = $"workspace-guard plan: {regular.Count} unrelated dirty path(s) would be stashed under message '{stashMessage}' on `--mode begin --write`.";
+        else
+            summary = "workspace-guard plan: working tree is clean; no stash required.";
 
         var result = new WorkspaceGuardResult
         {
             Mode = ModePlan,
-            ProceedAllowed = durable.Length == 0,
-            SafeStashPaths = safeStash,
+            ProceedAllowed = proceedAllowed,
+            SafeStashPaths = regular.ToArray(),
+            GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
             DirtyDurableStatePaths = durable,
             StashMessage = stashMessage,
             StashRef = null,
             ConflictPaths = Array.Empty<string>(),
             StateFilePath = Path.Combine(context.RepoRoot, StateFileRelativePath.Replace('/', Path.DirectorySeparatorChar)),
-            Summary = durable.Length > 0
-                ? $"workspace-guard plan: {durable.Length} dirty durable-state path(s) present; safe-stash refused. Reconcile durable host-state through the G304 fail-closed path before re-running."
-                : safeStash.Length > 0
-                    ? $"workspace-guard plan: {safeStash.Length} unrelated dirty path(s) would be stashed under message '{stashMessage}' on `--mode begin --write`."
-                    : "workspace-guard plan: working tree is clean; no stash required."
+            Summary = summary
         };
 
         EmitResult(writer, format, result);
-        return durable.Length > 0 ? 1 : 0;
+        return (durable.Length > 0 || submoduleInternalDirty.Count > 0) ? 1 : 0;
     }
 
     private static int ExecuteBegin(IGitRunner runner, CliContext context, string statePath, bool write, string format, TextWriter writer)
     {
         var entries = ScanWorkingTree(runner);
-        var safeStash = entries.Where(e => !IsDurableStatePath(e.Path)).ToArray();
+        var nonDurable = entries.Where(e => !IsDurableStatePath(e.Path)).ToArray();
         var durable = entries.Where(e => IsDurableStatePath(e.Path)).ToArray();
 
         if (durable.Length > 0)
@@ -121,7 +138,7 @@ internal static class AutomationWorkspaceGuardCommand
             {
                 Mode = ModeBegin,
                 ProceedAllowed = false,
-                SafeStashPaths = safeStash,
+                SafeStashPaths = nonDurable,
                 DirtyDurableStatePaths = durable,
                 StashMessage = null,
                 StashRef = null,
@@ -133,7 +150,32 @@ internal static class AutomationWorkspaceGuardCommand
             return 1;
         }
 
-        if (safeStash.Length == 0)
+        // G352: classify non-durable entries: gitlink-only, submodule-internal-dirty, regular.
+        var (gitlinkOnly, submoduleInternalDirty, regularStash) = ClassifyNonDurableEntries(runner, nonDurable);
+
+        // G352: refuse if any submodule has internal uncommitted changes — we cannot safely auto-reset those.
+        if (submoduleInternalDirty.Count > 0)
+        {
+            var paths = string.Join(", ", submoduleInternalDirty.Select(e => e.Path));
+            var refusal = new WorkspaceGuardResult
+            {
+                Mode = ModeBegin,
+                ProceedAllowed = false,
+                SafeStashPaths = regularStash.ToArray(),
+                GitlinkPaths = submoduleInternalDirty.ToArray(),
+                DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
+                StashMessage = null,
+                StashRef = null,
+                ConflictPaths = Array.Empty<string>(),
+                StateFilePath = statePath,
+                Summary = $"workspace-guard begin refused: {submoduleInternalDirty.Count} submodule(s) have internal uncommitted changes ({paths}). " +
+                          "Cannot auto-handle; commit or stash the changes inside each submodule manually before re-running. Do NOT claim the wake can continue."
+            };
+            EmitResult(writer, format, refusal);
+            return 1;
+        }
+
+        if (gitlinkOnly.Count == 0 && regularStash.Count == 0)
         {
             var noop = new WorkspaceGuardResult
             {
@@ -151,93 +193,205 @@ internal static class AutomationWorkspaceGuardCommand
             return 0;
         }
 
-        var message = BuildStashMessage();
+        var message = regularStash.Count > 0 ? BuildStashMessage() : null;
         if (!write)
         {
             var dryRun = new WorkspaceGuardResult
             {
                 Mode = ModeBegin,
                 ProceedAllowed = true,
-                SafeStashPaths = safeStash,
+                SafeStashPaths = regularStash.ToArray(),
+                GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
                 DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
                 StashMessage = message,
                 StashRef = null,
                 ConflictPaths = Array.Empty<string>(),
                 StateFilePath = statePath,
-                Summary = $"workspace-guard begin (dry-run): would stash {safeStash.Length} path(s) under '{message}'. Re-run with --write to apply."
+                Summary = BuildBeginDryRunSummary(gitlinkOnly.Count, regularStash.Count, message)
             };
             EmitResult(writer, format, dryRun);
             return 0;
         }
 
-        var pushArgs = new List<string> { "stash", "push", "--include-untracked", "-m", message, "--" };
-        pushArgs.AddRange(safeStash.Select(e => e.Path));
-        var pushResult = runner.Run(pushArgs);
-        if (pushResult.ExitCode != 0)
+        // --- Write mode ---
+
+        // G352: Step 1 — collect original submodule HEADs (read-only, no mutations yet).
+        // Separating this from the checkout loop makes the preliminary state write below safe.
+        var gitlinkRestoreEntries = new List<GitlinkRestoreEntry>();
+        foreach (var (entry, _) in gitlinkOnly)
         {
-            var failure = new WorkspaceGuardResult
+            var originalHead = GetCurrentSubmoduleHead(runner, entry.Path);
+            if (originalHead is null)
             {
-                Mode = ModeBegin,
-                ProceedAllowed = false,
-                SafeStashPaths = safeStash,
-                DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
-                StashMessage = message,
-                StashRef = null,
-                ConflictPaths = Array.Empty<string>(),
-                StateFilePath = statePath,
-                Summary = $"workspace-guard begin failed: `git stash push` exited {pushResult.ExitCode}: {pushResult.StandardError.Trim()}"
-            };
-            EmitResult(writer, format, failure);
-            return 1;
+                var failure = new WorkspaceGuardResult
+                {
+                    Mode = ModeBegin,
+                    ProceedAllowed = false,
+                    SafeStashPaths = regularStash.ToArray(),
+                    GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
+                    DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
+                    StashMessage = message,
+                    StashRef = null,
+                    ConflictPaths = Array.Empty<string>(),
+                    StateFilePath = statePath,
+                    Summary = $"workspace-guard begin failed: could not read HEAD of submodule `{entry.Path}`. Inspect the submodule and retry."
+                };
+                EmitResult(writer, format, failure);
+                return 1;
+            }
+            gitlinkRestoreEntries.Add(new GitlinkRestoreEntry { Path = entry.Path, OriginalHead = originalHead });
         }
 
-        // Stash list lookup: find the most recent stash matching our message.
-        var listResult = runner.Run(new[] { "stash", "list", "--format=%gd %s" });
-        var stashRef = ParseStashRef(listResult.StandardOutput, message);
-        if (listResult.ExitCode != 0 || stashRef is null)
+        // G352: Step 2 — for mixed lanes (gitlink + stash), write a preliminary state file
+        // with the gitlink restore entries BEFORE any repo mutation. If the stash lane fails
+        // after gitlinks are checked out, this guarantees the operator has a durable restore
+        // instruction and can run `workspace-guard --mode end --write` to recover.
+        bool hasMixedLanes = gitlinkOnly.Count > 0 && regularStash.Count > 0;
+        if (hasMixedLanes)
         {
-            var failure = new WorkspaceGuardResult
+            var prelimState = new WorkspaceGuardState
             {
-                Mode = ModeBegin,
-                ProceedAllowed = false,
-                SafeStashPaths = safeStash,
-                DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
-                StashMessage = message,
                 StashRef = null,
-                ConflictPaths = Array.Empty<string>(),
-                StateFilePath = statePath,
-                Summary = listResult.ExitCode != 0
-                    ? $"workspace-guard begin failed after stash push: `git stash list` exited {listResult.ExitCode}: {listResult.StandardError.Trim()}. Inspect `git stash list` and restore the stash with message '{message}' before continuing."
-                    : $"workspace-guard begin failed after stash push: could not identify a stash entry with message '{message}'. Inspect `git stash list` and restore that stash before continuing."
+                StashMessage = null,
+                CreatedAt = ResolveNow(),
+                StashedPaths = Array.Empty<string>(),
+                GitlinkRestorePaths = gitlinkRestoreEntries
             };
-            EmitResult(writer, format, failure);
-            return 1;
+            Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
+            File.WriteAllText(statePath, JsonSerializer.Serialize(prelimState, JsonOptions));
         }
 
+        // G352: Step 3 — checkout each gitlink to the parent-recorded commit.
+        // The preliminary state file (step 2) ensures any failure here is recoverable via `end`.
+        for (var i = 0; i < gitlinkOnly.Count; i++)
+        {
+            var (entry, parentCommit) = gitlinkOnly[i];
+            var checkoutResult = runner.Run(new[] { "-C", entry.Path, "checkout", parentCommit });
+            if (checkoutResult.ExitCode != 0)
+            {
+                var recoverySuffix = hasMixedLanes
+                    ? $" Gitlink restore state is at `{statePath}`; run `automation workspace-guard --mode end --write` to restore already-checked-out gitlinks."
+                    : $" Original submodule HEAD: {gitlinkRestoreEntries[i].OriginalHead}. No state file was written; retry after resolving the submodule.";
+                var failure = new WorkspaceGuardResult
+                {
+                    Mode = ModeBegin,
+                    ProceedAllowed = false,
+                    SafeStashPaths = regularStash.ToArray(),
+                    GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
+                    DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
+                    StashMessage = message,
+                    StashRef = null,
+                    ConflictPaths = Array.Empty<string>(),
+                    StateFilePath = statePath,
+                    Summary = $"workspace-guard begin failed: `git -C {entry.Path} checkout {parentCommit}` exited {checkoutResult.ExitCode}: {checkoutResult.StandardError.Trim()}.{recoverySuffix}"
+                };
+                EmitResult(writer, format, failure);
+                return 1;
+            }
+        }
+
+        // Step 4 — stash regular dirty files.
+        string? stashRef = null;
+        if (regularStash.Count > 0)
+        {
+            var pushArgs = new List<string> { "stash", "push", "--include-untracked", "-m", message!, "--" };
+            pushArgs.AddRange(regularStash.Select(e => e.Path));
+            var pushResult = runner.Run(pushArgs);
+            if (pushResult.ExitCode != 0)
+            {
+                var recoverySuffix = hasMixedLanes
+                    ? $" Gitlink restore state is at `{statePath}`; run `automation workspace-guard --mode end --write` to restore the checked-out gitlinks."
+                    : string.Empty;
+                var failure = new WorkspaceGuardResult
+                {
+                    Mode = ModeBegin,
+                    ProceedAllowed = false,
+                    SafeStashPaths = regularStash.ToArray(),
+                    GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
+                    DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
+                    StashMessage = message,
+                    StashRef = null,
+                    ConflictPaths = Array.Empty<string>(),
+                    StateFilePath = statePath,
+                    Summary = $"workspace-guard begin failed: `git stash push` exited {pushResult.ExitCode}: {pushResult.StandardError.Trim()}.{recoverySuffix}"
+                };
+                EmitResult(writer, format, failure);
+                return 1;
+            }
+
+            // Stash list lookup: find the most recent stash matching our message.
+            var listResult = runner.Run(new[] { "stash", "list", "--format=%gd %s" });
+            stashRef = ParseStashRef(listResult.StandardOutput, message!);
+            if (listResult.ExitCode != 0 || stashRef is null)
+            {
+                var recoverySuffix = hasMixedLanes
+                    ? $" Gitlink restore state is at `{statePath}`; run `automation workspace-guard --mode end --write` to restore gitlinks."
+                    : string.Empty;
+                var failure = new WorkspaceGuardResult
+                {
+                    Mode = ModeBegin,
+                    ProceedAllowed = false,
+                    SafeStashPaths = regularStash.ToArray(),
+                    GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
+                    DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
+                    StashMessage = message,
+                    StashRef = null,
+                    ConflictPaths = Array.Empty<string>(),
+                    StateFilePath = statePath,
+                    Summary = (listResult.ExitCode != 0
+                        ? $"workspace-guard begin failed after stash push: `git stash list` exited {listResult.ExitCode}: {listResult.StandardError.Trim()}. Inspect `git stash list` and restore the stash with message '{message}' before continuing."
+                        : $"workspace-guard begin failed after stash push: could not identify a stash entry with message '{message}'. Inspect `git stash list` and restore that stash before continuing.") + recoverySuffix
+                };
+                EmitResult(writer, format, failure);
+                return 1;
+            }
+        }
+
+        // Step 5 — write final state file (overwrites preliminary if hasMixedLanes).
         var state = new WorkspaceGuardState
         {
             StashRef = stashRef,
             StashMessage = message,
             CreatedAt = ResolveNow(),
-            StashedPaths = safeStash.Select(e => e.Path).ToArray()
+            StashedPaths = regularStash.Select(e => e.Path).ToArray(),
+            GitlinkRestorePaths = gitlinkRestoreEntries
         };
         Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
         File.WriteAllText(statePath, JsonSerializer.Serialize(state, JsonOptions));
 
-        var result = new WorkspaceGuardResult
+        var successResult = new WorkspaceGuardResult
         {
             Mode = ModeBegin,
             ProceedAllowed = true,
-            SafeStashPaths = safeStash,
+            SafeStashPaths = regularStash.ToArray(),
+            GitlinkPaths = gitlinkOnly.Select(t => t.Entry).ToArray(),
             DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
             StashMessage = message,
             StashRef = stashRef,
             ConflictPaths = Array.Empty<string>(),
             StateFilePath = statePath,
-            Summary = $"workspace-guard begin: stashed {safeStash.Length} path(s) at `{stashRef}` (state file: `{statePath}`). Run `automation workspace-guard --mode end --write` after the wake commits/pushes durable host-state."
+            Summary = BuildBeginSuccessSummary(gitlinkRestoreEntries.Count, regularStash.Count, stashRef, statePath)
         };
-        EmitResult(writer, format, result);
+        EmitResult(writer, format, successResult);
         return 0;
+    }
+
+    private static string BuildBeginDryRunSummary(int gitlinkCount, int regularCount, string? message)
+    {
+        if (gitlinkCount > 0 && regularCount > 0)
+            return $"workspace-guard begin (dry-run): would preserve {gitlinkCount} gitlink path(s) via checkout lane and stash {regularCount} regular path(s) under '{message}'. Re-run with --write to apply.";
+        if (gitlinkCount > 0)
+            return $"workspace-guard begin (dry-run): would preserve {gitlinkCount} gitlink-only path(s) via checkout lane. Re-run with --write to apply.";
+        return $"workspace-guard begin (dry-run): would stash {regularCount} path(s) under '{message}'. Re-run with --write to apply.";
+    }
+
+    private static string BuildBeginSuccessSummary(int gitlinkCount, int regularCount, string? stashRef, string statePath)
+    {
+        if (gitlinkCount > 0 && regularCount > 0)
+            return $"workspace-guard begin: preserved {gitlinkCount} gitlink path(s) via checkout lane and stashed {regularCount} regular path(s) at `{stashRef}` (state file: `{statePath}`). Run `automation workspace-guard --mode end --write` after the wake commits/pushes durable host-state.";
+        if (gitlinkCount > 0)
+            return $"workspace-guard begin: preserved {gitlinkCount} gitlink-only path(s) via checkout lane (state file: `{statePath}`). Run `automation workspace-guard --mode end --write` after the wake commits/pushes durable host-state.";
+        return $"workspace-guard begin: stashed {regularCount} path(s) at `{stashRef}` (state file: `{statePath}`). Run `automation workspace-guard --mode end --write` after the wake commits/pushes durable host-state.";
     }
 
     private static int ExecuteEnd(IGitRunner runner, string statePath, bool write, string format, TextWriter writer)
@@ -274,39 +428,72 @@ internal static class AutomationWorkspaceGuardCommand
 
         if (!write)
         {
+            var dryRunSummary = BuildEndDryRunSummary(state);
             var dryRun = new WorkspaceGuardResult
             {
                 Mode = ModeEnd,
                 ProceedAllowed = true,
                 SafeStashPaths = state.StashedPaths.Select(p => new HostSyncWorkingTreeEntry { Path = p, Status = "  " }).ToArray(),
+                GitlinkPaths = state.GitlinkRestorePaths.Select(e => new HostSyncWorkingTreeEntry { Path = e.Path, Status = "  " }).ToArray(),
                 DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
                 StashMessage = state.StashMessage,
                 StashRef = state.StashRef,
                 ConflictPaths = Array.Empty<string>(),
                 StateFilePath = statePath,
-                Summary = $"workspace-guard end (dry-run): would restore stash `{state.StashRef}` ({state.StashedPaths.Count} path(s)). Re-run with --write to apply."
+                Summary = dryRunSummary
             };
             EmitResult(writer, format, dryRun);
             return 0;
         }
 
-        var popResult = runner.Run(new[] { "stash", "pop", state.StashRef });
-        if (popResult.ExitCode != 0)
+        // --- Write mode ---
+
+        // Stash lane: pop the stash if one was created.
+        if (state.StashRef is not null)
         {
-            var conflict = new WorkspaceGuardResult
+            var popResult = runner.Run(new[] { "stash", "pop", state.StashRef });
+            if (popResult.ExitCode != 0)
             {
-                Mode = ModeEnd,
-                ProceedAllowed = false,
-                SafeStashPaths = state.StashedPaths.Select(p => new HostSyncWorkingTreeEntry { Path = p, Status = "  " }).ToArray(),
-                DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
-                StashMessage = state.StashMessage,
-                StashRef = state.StashRef,
-                ConflictPaths = ParseConflictPaths(popResult.StandardOutput + "\n" + popResult.StandardError),
-                StateFilePath = statePath,
-                Summary = $"workspace-guard end CONFLICT: `git stash pop {state.StashRef}` exited {popResult.ExitCode}. Resolve conflicts manually then `git stash drop {state.StashRef}`. State file preserved at `{statePath}`. Do NOT claim the wake completed cleanly."
-            };
-            EmitResult(writer, format, conflict);
-            return 1;
+                var conflict = new WorkspaceGuardResult
+                {
+                    Mode = ModeEnd,
+                    ProceedAllowed = false,
+                    SafeStashPaths = state.StashedPaths.Select(p => new HostSyncWorkingTreeEntry { Path = p, Status = "  " }).ToArray(),
+                    GitlinkPaths = state.GitlinkRestorePaths.Select(e => new HostSyncWorkingTreeEntry { Path = e.Path, Status = "  " }).ToArray(),
+                    DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
+                    StashMessage = state.StashMessage,
+                    StashRef = state.StashRef,
+                    ConflictPaths = ParseConflictPaths(popResult.StandardOutput + "\n" + popResult.StandardError),
+                    StateFilePath = statePath,
+                    Summary = $"workspace-guard end CONFLICT: `git stash pop {state.StashRef}` exited {popResult.ExitCode}. Resolve conflicts manually then `git stash drop {state.StashRef}`. State file preserved at `{statePath}`. Do NOT claim the wake completed cleanly."
+                };
+                EmitResult(writer, format, conflict);
+                return 1;
+            }
+        }
+
+        // G352: gitlink restore lane — return each submodule to its original HEAD.
+        foreach (var gitlinkEntry in state.GitlinkRestorePaths)
+        {
+            var restoreResult = runner.Run(new[] { "-C", gitlinkEntry.Path, "checkout", gitlinkEntry.OriginalHead });
+            if (restoreResult.ExitCode != 0)
+            {
+                var failure = new WorkspaceGuardResult
+                {
+                    Mode = ModeEnd,
+                    ProceedAllowed = false,
+                    SafeStashPaths = state.StashedPaths.Select(p => new HostSyncWorkingTreeEntry { Path = p, Status = "  " }).ToArray(),
+                    GitlinkPaths = state.GitlinkRestorePaths.Select(e => new HostSyncWorkingTreeEntry { Path = e.Path, Status = "  " }).ToArray(),
+                    DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
+                    StashMessage = state.StashMessage,
+                    StashRef = state.StashRef,
+                    ConflictPaths = new[] { $"git -C {gitlinkEntry.Path} checkout {gitlinkEntry.OriginalHead}: exit {restoreResult.ExitCode}" },
+                    StateFilePath = statePath,
+                    Summary = $"workspace-guard end CONFLICT: `git -C {gitlinkEntry.Path} checkout {gitlinkEntry.OriginalHead}` exited {restoreResult.ExitCode}. Restore the submodule manually to commit `{gitlinkEntry.OriginalHead}`. State file preserved at `{statePath}`. Do NOT claim the wake completed cleanly."
+                };
+                EmitResult(writer, format, failure);
+                return 1;
+            }
         }
 
         File.Delete(statePath);
@@ -315,15 +502,39 @@ internal static class AutomationWorkspaceGuardCommand
             Mode = ModeEnd,
             ProceedAllowed = true,
             SafeStashPaths = state.StashedPaths.Select(p => new HostSyncWorkingTreeEntry { Path = p, Status = "  " }).ToArray(),
+            GitlinkPaths = state.GitlinkRestorePaths.Select(e => new HostSyncWorkingTreeEntry { Path = e.Path, Status = "  " }).ToArray(),
             DirtyDurableStatePaths = Array.Empty<HostSyncWorkingTreeEntry>(),
             StashMessage = state.StashMessage,
             StashRef = state.StashRef,
             ConflictPaths = Array.Empty<string>(),
             StateFilePath = statePath,
-            Summary = $"workspace-guard end: restored {state.StashedPaths.Count} path(s) from `{state.StashRef}` and removed the state file."
+            Summary = BuildEndSuccessSummary(state)
         };
         EmitResult(writer, format, result);
         return 0;
+    }
+
+    private static string BuildEndDryRunSummary(WorkspaceGuardState state)
+    {
+        var parts = new List<string>();
+        if (state.StashRef is not null)
+            parts.Add($"restore stash `{state.StashRef}` ({state.StashedPaths.Count} path(s))");
+        if (state.GitlinkRestorePaths.Count > 0)
+            parts.Add($"restore {state.GitlinkRestorePaths.Count} gitlink path(s) to original HEAD(s)");
+        return parts.Count == 0
+            ? "workspace-guard end (dry-run): state file present but nothing recorded to restore. Re-run with --write to apply."
+            : $"workspace-guard end (dry-run): would {string.Join(" and ", parts)}. Re-run with --write to apply.";
+    }
+
+    private static string BuildEndSuccessSummary(WorkspaceGuardState state)
+    {
+        var parts = new List<string>();
+        if (state.StashedPaths.Count > 0)
+            parts.Add($"restored {state.StashedPaths.Count} path(s) from `{state.StashRef}`");
+        if (state.GitlinkRestorePaths.Count > 0)
+            parts.Add($"restored {state.GitlinkRestorePaths.Count} gitlink path(s) to original HEAD(s)");
+        var body = parts.Count > 0 ? string.Join(" and ", parts) : "nothing to restore";
+        return $"workspace-guard end: {body} and removed the state file.";
     }
 
     private static IReadOnlyList<HostSyncWorkingTreeEntry> ScanWorkingTree(IGitRunner runner)
@@ -422,6 +633,7 @@ internal static class AutomationWorkspaceGuardCommand
             writer.WriteLine($"- stash_message: `{result.StashMessage}`");
         }
         writer.WriteLine($"- safe_stash_paths: {result.SafeStashPaths.Count}");
+        writer.WriteLine($"- gitlink_paths: {result.GitlinkPaths.Count}");
         writer.WriteLine($"- dirty_durable_state_paths: {result.DirtyDurableStatePaths.Count}");
         if (result.ConflictPaths.Count > 0)
         {
@@ -434,6 +646,15 @@ internal static class AutomationWorkspaceGuardCommand
             writer.WriteLine();
             writer.WriteLine("## Safe-stash paths");
             foreach (var entry in result.SafeStashPaths)
+            {
+                writer.WriteLine($"- `{entry.Status}` `{entry.Path}`");
+            }
+        }
+        if (result.GitlinkPaths.Count > 0)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Gitlink paths (checkout lane)");
+            foreach (var entry in result.GitlinkPaths)
             {
                 writer.WriteLine($"- `{entry.Status}` `{entry.Path}`");
             }
@@ -457,6 +678,82 @@ internal static class AutomationWorkspaceGuardCommand
             }
         }
     }
+
+    // ------------------------------------------------------------------ G352 helpers
+
+    /// <summary>
+    /// G352: checks whether <paramref name="path"/> is a submodule gitlink (mode 160000)
+    /// in the git index, and returns the parent-recorded commit sha.
+    /// </summary>
+    private static bool TryGetGitlinkCommit(IGitRunner runner, string path, out string parentCommit)
+    {
+        var result = runner.Run(new[] { "ls-files", "--stage", "--", path });
+        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.StandardOutput))
+        {
+            parentCommit = string.Empty;
+            return false;
+        }
+        // Format: "<mode> <sha> <stage>\t<path>"
+        var firstLine = result.StandardOutput.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries)[0];
+        var parts = firstLine.Split(' ', 3);
+        if (parts.Length < 2 || !string.Equals(parts[0], "160000", StringComparison.Ordinal))
+        {
+            parentCommit = string.Empty;
+            return false;
+        }
+        parentCommit = parts[1].Trim();
+        return true;
+    }
+
+    /// <summary>
+    /// G352: returns true when the submodule at <paramref name="submodulePath"/>
+    /// has no internal uncommitted changes (clean working tree inside the submodule).
+    /// </summary>
+    private static bool IsSubmoduleInternallyClean(IGitRunner runner, string submodulePath)
+    {
+        var result = runner.Run(new[] { "-C", submodulePath, "status", "--short" });
+        return result.ExitCode == 0 && string.IsNullOrWhiteSpace(result.StandardOutput);
+    }
+
+    /// <summary>G352: returns the current HEAD sha of the submodule, or null on failure.</summary>
+    private static string? GetCurrentSubmoduleHead(IGitRunner runner, string submodulePath)
+    {
+        var result = runner.Run(new[] { "-C", submodulePath, "rev-parse", "HEAD" });
+        return result.ExitCode == 0 ? result.StandardOutput.Trim() : null;
+    }
+
+    /// <summary>
+    /// G352: classifies non-durable dirty entries into gitlink-only,
+    /// submodule-internal-dirty, and regular buckets.
+    /// </summary>
+    private static (
+        IReadOnlyList<(HostSyncWorkingTreeEntry Entry, string ParentCommit)> GitlinkOnly,
+        IReadOnlyList<HostSyncWorkingTreeEntry> SubmoduleInternalDirty,
+        IReadOnlyList<HostSyncWorkingTreeEntry> Regular)
+    ClassifyNonDurableEntries(IGitRunner runner, IReadOnlyList<HostSyncWorkingTreeEntry> nonDurableEntries)
+    {
+        var gitlinkOnly = new List<(HostSyncWorkingTreeEntry, string)>();
+        var submoduleInternalDirty = new List<HostSyncWorkingTreeEntry>();
+        var regular = new List<HostSyncWorkingTreeEntry>();
+
+        foreach (var entry in nonDurableEntries)
+        {
+            if (TryGetGitlinkCommit(runner, entry.Path, out var parentCommit))
+            {
+                if (IsSubmoduleInternallyClean(runner, entry.Path))
+                    gitlinkOnly.Add((entry, parentCommit));
+                else
+                    submoduleInternalDirty.Add(entry);
+            }
+            else
+            {
+                regular.Add(entry);
+            }
+        }
+        return (gitlinkOnly, submoduleInternalDirty, regular);
+    }
+
+    // ------------------------------------------------------------------ arg parse
 
     private static bool TryParseArguments(string[] args, out string mode, out bool write, out string format, out string error)
     {
@@ -572,12 +869,33 @@ internal sealed record WorkspaceGuardResult
     [JsonPropertyName("conflict_paths")] public required IReadOnlyList<string> ConflictPaths { get; init; }
     [JsonPropertyName("state_file_path")] public required string StateFilePath { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+
+    /// <summary>
+    /// G352: gitlink-only submodule paths that the workspace-guard handles
+    /// via the checkout-based preservation lane (not git stash).
+    /// </summary>
+    [JsonPropertyName("gitlink_paths")]
+    public IReadOnlyList<HostSyncWorkingTreeEntry> GitlinkPaths { get; init; } = Array.Empty<HostSyncWorkingTreeEntry>();
+}
+
+/// <summary>G352: gitlink restore entry recording the original submodule HEAD so
+/// <c>workspace-guard end</c> can return the submodule to the operator's commit.</summary>
+internal sealed record GitlinkRestoreEntry
+{
+    [JsonPropertyName("path")] public required string Path { get; init; }
+    [JsonPropertyName("original_head")] public required string OriginalHead { get; init; }
 }
 
 internal sealed record WorkspaceGuardState
 {
-    [JsonPropertyName("stash_ref")] public required string StashRef { get; init; }
-    [JsonPropertyName("stash_message")] public required string StashMessage { get; init; }
+    /// <summary>Stash ref created by <c>git stash push</c>; null when only gitlink paths were preserved.</summary>
+    [JsonPropertyName("stash_ref")] public string? StashRef { get; init; }
+    /// <summary>Stash message used during <c>git stash push</c>; null when only gitlink paths were preserved.</summary>
+    [JsonPropertyName("stash_message")] public string? StashMessage { get; init; }
     [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }
-    [JsonPropertyName("stashed_paths")] public required IReadOnlyList<string> StashedPaths { get; init; }
+    /// <summary>Paths that were placed into the git stash (regular files / untracked).</summary>
+    [JsonPropertyName("stashed_paths")] public IReadOnlyList<string> StashedPaths { get; init; } = Array.Empty<string>();
+    /// <summary>G352: submodule gitlink paths preserved via checkout lane; restored on <c>end</c>.</summary>
+    [JsonPropertyName("gitlink_restore_paths")]
+    public IReadOnlyList<GitlinkRestoreEntry> GitlinkRestorePaths { get; init; } = Array.Empty<GitlinkRestoreEntry>();
 }
