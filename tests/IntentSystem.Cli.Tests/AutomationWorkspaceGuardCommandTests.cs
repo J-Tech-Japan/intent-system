@@ -529,6 +529,104 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         Assert.Equal(1, stateDoc.RootElement.GetProperty("gitlink_restore_paths").GetArrayLength());
     }
 
+    // ======================================================================
+    // G352 pr-comment-fix — transactional begin for mixed gitlink+regular lanes
+    // ======================================================================
+
+    [Fact]
+    public void Begin_G352_MixedLanes_StashPushFails_StateFilePreservesGitlinkRestoreEntries()
+    {
+        // Regression test: when stash push fails AFTER gitlinks are checked out,
+        // the preliminary state file must have been written so the operator can
+        // run `workspace-guard end --write` to restore the gitlinks.
+        using var workspace = new GuardWorkspace();
+        AutomationWorkspaceGuardCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 13, 12, 0, 0, TimeSpan.Zero);
+
+        var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n M scratch.txt\n");
+        // Classification: gitlink + internal clean
+        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
+            stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        // scratch.txt is regular
+        fake.QueueResponse("ls-files --stage -- scratch.txt",
+            stdout: "100644 abc456 0\tscratch.txt\n");
+        // Collect original HEAD (read-only, before any mutation)
+        fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
+            stdout: "originalhead5678\n");
+        // Gitlink checkout succeeds
+        fake.QueueResponse("-C submodules/SekibanAsAService checkout parentcommit1234", stdout: "");
+        // Stash push FAILS (simulates transient git error)
+        fake.QueueResponse("stash push", stdout: "", stderr: "error: cannot stash\n", exitCode: 1);
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "begin", "--write", "--format", "json"],
+            writer);
+
+        // Begin must fail (stash push failed)
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("proceed_allowed").GetBoolean());
+
+        // State file MUST exist with the gitlink restore entry so `end` can restore it.
+        var statePath = Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json");
+        Assert.True(File.Exists(statePath),
+            "Preliminary state file must be written before any checkout mutation.");
+        using var stateDoc = JsonDocument.Parse(File.ReadAllText(statePath));
+        var restorePaths = stateDoc.RootElement.GetProperty("gitlink_restore_paths");
+        Assert.Equal(1, restorePaths.GetArrayLength());
+        Assert.Equal("submodules/SekibanAsAService", restorePaths[0].GetProperty("path").GetString());
+        Assert.Equal("originalhead5678", restorePaths[0].GetProperty("original_head").GetString());
+
+        // Summary must reference the state file so operator knows recovery path.
+        var summary = doc.RootElement.GetProperty("summary").GetString()!;
+        Assert.Contains(statePath, summary, StringComparison.Ordinal);
+        Assert.Contains("end --write", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Begin_G352_MixedLanes_StashListFails_StateFilePreservesGitlinkRestoreEntries()
+    {
+        // Regression test: stash push succeeded but stash list cannot find the ref.
+        // Gitlinks are already checked out; preliminary state file must survive.
+        using var workspace = new GuardWorkspace();
+        AutomationWorkspaceGuardCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 13, 12, 0, 0, TimeSpan.Zero);
+
+        var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n M scratch.txt\n");
+        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
+            stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        fake.QueueResponse("ls-files --stage -- scratch.txt",
+            stdout: "100644 abc456 0\tscratch.txt\n");
+        fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
+            stdout: "originalhead5678\n");
+        fake.QueueResponse("-C submodules/SekibanAsAService checkout parentcommit1234", stdout: "");
+        // Stash push succeeds, but stash list returns unrelated entry (ref not found)
+        fake.QueueResponse("stash list --format=%gd %s",
+            stdout: "stash@{0} On main: operator-personal-stash\n");
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "begin", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("proceed_allowed").GetBoolean());
+
+        // Preliminary state file must persist for gitlink recovery.
+        var statePath = Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json");
+        Assert.True(File.Exists(statePath));
+        using var stateDoc = JsonDocument.Parse(File.ReadAllText(statePath));
+        Assert.Equal(1, stateDoc.RootElement.GetProperty("gitlink_restore_paths").GetArrayLength());
+        Assert.Equal("originalhead5678",
+            stateDoc.RootElement.GetProperty("gitlink_restore_paths")[0].GetProperty("original_head").GetString());
+    }
+
     private sealed class FakeGitRunner : IGitRunner
     {
         private readonly string defaultStatusOutput;

@@ -215,9 +215,10 @@ internal static class AutomationWorkspaceGuardCommand
 
         // --- Write mode ---
 
-        // G352: checkout lane — preserve each gitlink-only submodule.
+        // G352: Step 1 — collect original submodule HEADs (read-only, no mutations yet).
+        // Separating this from the checkout loop makes the preliminary state write below safe.
         var gitlinkRestoreEntries = new List<GitlinkRestoreEntry>();
-        foreach (var (entry, parentCommit) in gitlinkOnly)
+        foreach (var (entry, _) in gitlinkOnly)
         {
             var originalHead = GetCurrentSubmoduleHead(runner, entry.Path);
             if (originalHead is null)
@@ -238,10 +239,39 @@ internal static class AutomationWorkspaceGuardCommand
                 EmitResult(writer, format, failure);
                 return 1;
             }
+            gitlinkRestoreEntries.Add(new GitlinkRestoreEntry { Path = entry.Path, OriginalHead = originalHead });
+        }
 
+        // G352: Step 2 — for mixed lanes (gitlink + stash), write a preliminary state file
+        // with the gitlink restore entries BEFORE any repo mutation. If the stash lane fails
+        // after gitlinks are checked out, this guarantees the operator has a durable restore
+        // instruction and can run `workspace-guard --mode end --write` to recover.
+        bool hasMixedLanes = gitlinkOnly.Count > 0 && regularStash.Count > 0;
+        if (hasMixedLanes)
+        {
+            var prelimState = new WorkspaceGuardState
+            {
+                StashRef = null,
+                StashMessage = null,
+                CreatedAt = ResolveNow(),
+                StashedPaths = Array.Empty<string>(),
+                GitlinkRestorePaths = gitlinkRestoreEntries
+            };
+            Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
+            File.WriteAllText(statePath, JsonSerializer.Serialize(prelimState, JsonOptions));
+        }
+
+        // G352: Step 3 — checkout each gitlink to the parent-recorded commit.
+        // The preliminary state file (step 2) ensures any failure here is recoverable via `end`.
+        for (var i = 0; i < gitlinkOnly.Count; i++)
+        {
+            var (entry, parentCommit) = gitlinkOnly[i];
             var checkoutResult = runner.Run(new[] { "-C", entry.Path, "checkout", parentCommit });
             if (checkoutResult.ExitCode != 0)
             {
+                var recoverySuffix = hasMixedLanes
+                    ? $" Gitlink restore state is at `{statePath}`; run `automation workspace-guard --mode end --write` to restore already-checked-out gitlinks."
+                    : $" Original submodule HEAD: {gitlinkRestoreEntries[i].OriginalHead}. No state file was written; retry after resolving the submodule.";
                 var failure = new WorkspaceGuardResult
                 {
                     Mode = ModeBegin,
@@ -253,16 +283,14 @@ internal static class AutomationWorkspaceGuardCommand
                     StashRef = null,
                     ConflictPaths = Array.Empty<string>(),
                     StateFilePath = statePath,
-                    Summary = $"workspace-guard begin failed: `git -C {entry.Path} checkout {parentCommit}` exited {checkoutResult.ExitCode}: {checkoutResult.StandardError.Trim()}. Original submodule HEAD: {originalHead}."
+                    Summary = $"workspace-guard begin failed: `git -C {entry.Path} checkout {parentCommit}` exited {checkoutResult.ExitCode}: {checkoutResult.StandardError.Trim()}.{recoverySuffix}"
                 };
                 EmitResult(writer, format, failure);
                 return 1;
             }
-
-            gitlinkRestoreEntries.Add(new GitlinkRestoreEntry { Path = entry.Path, OriginalHead = originalHead });
         }
 
-        // Stash lane — handle regular dirty files.
+        // Step 4 — stash regular dirty files.
         string? stashRef = null;
         if (regularStash.Count > 0)
         {
@@ -271,6 +299,9 @@ internal static class AutomationWorkspaceGuardCommand
             var pushResult = runner.Run(pushArgs);
             if (pushResult.ExitCode != 0)
             {
+                var recoverySuffix = hasMixedLanes
+                    ? $" Gitlink restore state is at `{statePath}`; run `automation workspace-guard --mode end --write` to restore the checked-out gitlinks."
+                    : string.Empty;
                 var failure = new WorkspaceGuardResult
                 {
                     Mode = ModeBegin,
@@ -282,7 +313,7 @@ internal static class AutomationWorkspaceGuardCommand
                     StashRef = null,
                     ConflictPaths = Array.Empty<string>(),
                     StateFilePath = statePath,
-                    Summary = $"workspace-guard begin failed: `git stash push` exited {pushResult.ExitCode}: {pushResult.StandardError.Trim()}"
+                    Summary = $"workspace-guard begin failed: `git stash push` exited {pushResult.ExitCode}: {pushResult.StandardError.Trim()}.{recoverySuffix}"
                 };
                 EmitResult(writer, format, failure);
                 return 1;
@@ -293,6 +324,9 @@ internal static class AutomationWorkspaceGuardCommand
             stashRef = ParseStashRef(listResult.StandardOutput, message!);
             if (listResult.ExitCode != 0 || stashRef is null)
             {
+                var recoverySuffix = hasMixedLanes
+                    ? $" Gitlink restore state is at `{statePath}`; run `automation workspace-guard --mode end --write` to restore gitlinks."
+                    : string.Empty;
                 var failure = new WorkspaceGuardResult
                 {
                     Mode = ModeBegin,
@@ -304,15 +338,16 @@ internal static class AutomationWorkspaceGuardCommand
                     StashRef = null,
                     ConflictPaths = Array.Empty<string>(),
                     StateFilePath = statePath,
-                    Summary = listResult.ExitCode != 0
+                    Summary = (listResult.ExitCode != 0
                         ? $"workspace-guard begin failed after stash push: `git stash list` exited {listResult.ExitCode}: {listResult.StandardError.Trim()}. Inspect `git stash list` and restore the stash with message '{message}' before continuing."
-                        : $"workspace-guard begin failed after stash push: could not identify a stash entry with message '{message}'. Inspect `git stash list` and restore that stash before continuing."
+                        : $"workspace-guard begin failed after stash push: could not identify a stash entry with message '{message}'. Inspect `git stash list` and restore that stash before continuing.") + recoverySuffix
                 };
                 EmitResult(writer, format, failure);
                 return 1;
             }
         }
 
+        // Step 5 — write final state file (overwrites preliminary if hasMixedLanes).
         var state = new WorkspaceGuardState
         {
             StashRef = stashRef,
