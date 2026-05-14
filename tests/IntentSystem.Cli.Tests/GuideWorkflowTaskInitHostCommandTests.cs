@@ -1,6 +1,7 @@
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
+using IntentSystem.Cli.Infrastructure;
 using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
@@ -841,6 +842,102 @@ public sealed class GuideWorkflowTaskInitHostCommandTests : IDisposable
         Assert.Equal("main", config.StableBranch);
         Assert.Equal("main-ai", config.ImplementationBaseBranch);
         Assert.Equal("main-metadata", config.MetadataBranch);
+    }
+
+    // ----- G350: end-to-end TOML loader → init-host command output -----
+
+    [Fact]
+    public void Execute_G350_LoaderToCommand_RootKeysTOML_EffectiveBranchesInJson()
+    {
+        // G350 loader AC: values declared in root-keys TOML config must flow through
+        // CliConfigLoader into guide workflow task init-host --topology same-repo
+        // JSON output as effective_metadata_branch / effective_implementation_base_branch
+        // / effective_stable_branch.
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        stable_branch = "main"
+        implementation_base_branch = "main-ai"
+        metadata_branch = "main-metadata"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+        var context = new CliContext { RepoRoot = emptyCwd, Config = config };
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            context,
+            new[] { "--topology", "same-repo", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("effective_metadata_branch", out var emb));
+        Assert.Equal("main-metadata", emb.GetString());
+        Assert.True(root.TryGetProperty("effective_implementation_base_branch", out var eibb));
+        Assert.Equal("main-ai", eibb.GetString());
+        Assert.True(root.TryGetProperty("effective_stable_branch", out var esb));
+        Assert.Equal("main", esb.GetString());
+    }
+
+    [Fact]
+    public void Execute_G350_LoaderToCommand_ProjectSectionTOML_EffectiveBranchesInMarkdown()
+    {
+        // G350 loader AC: values declared in [project]-section TOML config must flow
+        // through CliConfigLoader into guide workflow task init-host --topology same-repo
+        // markdown output as effective branch references.
+        var toml = """
+        [project]
+        domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        stable_branch = "main"
+        implementation_base_branch = "main-ai"
+        metadata_branch = "main-metadata"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+        var context = new CliContext { RepoRoot = emptyCwd, Config = config };
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            context,
+            new[] { "--topology", "same-repo" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        // Effective branch values from TOML must appear in the markdown output.
+        Assert.Contains("main-metadata", output, StringComparison.Ordinal);
+        Assert.Contains("main-ai", output, StringComparison.Ordinal);
+        // No advisory warning because metadata_branch is configured.
+        Assert.DoesNotContain("METADATA LANE NOT CONFIGURED", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G350_LoaderToCommand_NoMetadataBranchInTOML_EmitsAdvisory()
+    {
+        // G350 loader AC: when TOML config does not declare metadata_branch, the loaded
+        // config produces an empty MetadataBranch and the command must emit the advisory
+        // about single-lane fallback.
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+        var context = new CliContext { RepoRoot = emptyCwd, Config = config };
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            context,
+            new[] { "--topology", "same-repo" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("METADATA LANE NOT CONFIGURED", output, StringComparison.Ordinal);
     }
 
     private static CliContext CreateContextWithBranchLane(

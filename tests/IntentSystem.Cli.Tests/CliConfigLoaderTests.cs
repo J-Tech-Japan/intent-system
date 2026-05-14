@@ -307,6 +307,85 @@ public sealed class CliConfigLoaderTests
         Assert.Contains("trunk", exception.Message, StringComparison.Ordinal);
     }
 
+    // ----- G350: three branch-lane fields loaded from root-keys TOML -----
+
+    [Fact]
+    public void Load_G350_RootKeys_ParsesThreeBranchLaneFields()
+    {
+        // G350 loader AC: root-keys config with stable_branch, implementation_base_branch,
+        // and metadata_branch must populate ProjectConfig with the declared values.
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        stable_branch = "main"
+        implementation_base_branch = "main-ai"
+        metadata_branch = "main-metadata"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal("main", config.Project.StableBranch);
+        Assert.Equal("main-ai", config.Project.ImplementationBaseBranch);
+        Assert.Equal("main-metadata", config.Project.MetadataBranch);
+    }
+
+    [Fact]
+    public void Load_G350_RootKeys_DefaultsThreeBranchLaneFieldsToEmpty()
+    {
+        // G350 loader AC: when the three branch-lane keys are absent from a root-keys
+        // config, all three fields default to empty string (not configured).
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal(string.Empty, config.Project.StableBranch);
+        Assert.Equal(string.Empty, config.Project.ImplementationBaseBranch);
+        Assert.Equal(string.Empty, config.Project.MetadataBranch);
+    }
+
+    [Fact]
+    public void Load_G350_ProjectSection_ParsesThreeBranchLaneFields()
+    {
+        // G350 loader AC: [project]-section config with stable_branch,
+        // implementation_base_branch, and metadata_branch must populate ProjectConfig
+        // with the declared values.
+        var toml = """
+        [project]
+        domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        stable_branch = "main"
+        implementation_base_branch = "main-ai"
+        metadata_branch = "main-metadata"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal("main", config.Project.StableBranch);
+        Assert.Equal("main-ai", config.Project.ImplementationBaseBranch);
+        Assert.Equal("main-metadata", config.Project.MetadataBranch);
+    }
+
+    [Fact]
+    public void Load_G350_ProjectSection_DefaultsThreeBranchLaneFieldsToEmpty()
+    {
+        // G350 loader AC: when the three branch-lane keys are absent from a [project]
+        // section config, all three fields default to empty string (not configured).
+        var toml = """
+        [project]
+        domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.Equal(string.Empty, config.Project.StableBranch);
+        Assert.Equal(string.Empty, config.Project.ImplementationBaseBranch);
+        Assert.Equal(string.Empty, config.Project.MetadataBranch);
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         private readonly string rootPath = Directory.CreateTempSubdirectory("intent-cli-tests-").FullName;
