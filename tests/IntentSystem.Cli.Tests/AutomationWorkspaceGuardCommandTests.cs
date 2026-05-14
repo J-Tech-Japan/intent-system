@@ -255,6 +255,280 @@ public sealed class AutomationWorkspaceGuardCommandTests : IDisposable
         Assert.Contains("must be 'plan', 'begin', or 'end'", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // ======================================================================
+    // G352 — gitlink-only submodule safe lane
+    // ======================================================================
+
+    [Fact]
+    public void Plan_G352_GitlinkOnly_ExposesGitlinkPaths_NotSafeStashPaths()
+    {
+        // A submodule with a gitlink-only dirty state (no internal changes)
+        // should appear in gitlink_paths, not safe_stash_paths.
+        using var workspace = new GuardWorkspace();
+        var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
+        // ls-files returns mode 160000 → gitlink
+        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
+            stdout: "160000 abc1234567890abcdef 0\tsubmodules/SekibanAsAService\n");
+        // Internal status → empty (clean)
+        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "plan", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Equal(0, root.GetProperty("safe_stash_paths").GetArrayLength());
+        Assert.Equal(1, root.GetProperty("gitlink_paths").GetArrayLength());
+        Assert.Equal("submodules/SekibanAsAService",
+            root.GetProperty("gitlink_paths")[0].GetProperty("path").GetString());
+        Assert.Contains("checkout lane", root.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Plan_G352_SubmoduleInternalDirty_RefusesAndExitsOne()
+    {
+        // A submodule that has internal uncommitted changes must be refused.
+        using var workspace = new GuardWorkspace();
+        var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
+        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
+            stdout: "160000 abc1234567890abcdef 0\tsubmodules/SekibanAsAService\n");
+        // Internal status → non-empty (dirty inside submodule)
+        fake.QueueResponse("-C submodules/SekibanAsAService status --short",
+            stdout: " M src/SomeFile.cs\n");
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "plan", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Contains("internal uncommitted changes", doc.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Begin_G352_GitlinkOnly_Write_RecordsOriginalHeadAndCheckoutsParentCommit()
+    {
+        // begin --write for a gitlink-only dirty submodule should:
+        // 1. Read the original submodule HEAD.
+        // 2. Checkout the parent-recorded commit in the submodule.
+        // 3. Write a state file with gitlink_restore_paths (no stash).
+        using var workspace = new GuardWorkspace();
+        AutomationWorkspaceGuardCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 13, 0, 0, 0, TimeSpan.Zero);
+
+        var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
+        // Classification: ls-files → 160000 (gitlink), internal status → clean
+        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
+            stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        // Begin write: get current submodule HEAD
+        fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
+            stdout: "originalhead5678\n");
+        // Checkout to parent commit
+        fake.QueueResponse("-C submodules/SekibanAsAService checkout parentcommit1234", stdout: "");
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "begin", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("stash_ref").ValueKind);
+        Assert.Equal(1, root.GetProperty("gitlink_paths").GetArrayLength());
+        Assert.Contains("checkout lane", root.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+
+        // State file should have gitlink_restore_paths with original HEAD.
+        var statePath = Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json");
+        Assert.True(File.Exists(statePath));
+        using var stateDoc = JsonDocument.Parse(File.ReadAllText(statePath));
+        var restorePaths = stateDoc.RootElement.GetProperty("gitlink_restore_paths");
+        Assert.Equal(1, restorePaths.GetArrayLength());
+        Assert.Equal("submodules/SekibanAsAService", restorePaths[0].GetProperty("path").GetString());
+        Assert.Equal("originalhead5678", restorePaths[0].GetProperty("original_head").GetString());
+        // No stash ref in state file.
+        Assert.True(
+            stateDoc.RootElement.GetProperty("stash_ref").ValueKind == JsonValueKind.Null ||
+            !stateDoc.RootElement.TryGetProperty("stash_ref", out _) ||
+            string.IsNullOrEmpty(stateDoc.RootElement.GetProperty("stash_ref").GetString()));
+
+        // Verify checkout command was invoked.
+        Assert.Contains(fake.Invocations, args =>
+            args.Contains("-C") &&
+            args.Contains("submodules/SekibanAsAService") &&
+            args.Contains("checkout") &&
+            args.Contains("parentcommit1234"));
+    }
+
+    [Fact]
+    public void Begin_G352_SubmoduleInternalDirty_RefusesProceedAllowed()
+    {
+        // A submodule with internal uncommitted changes must refuse begin.
+        using var workspace = new GuardWorkspace();
+        var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n");
+        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
+            stdout: "160000 abc1234567890 0\tsubmodules/SekibanAsAService\n");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --short",
+            stdout: " M src/SomeFile.cs\n");
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "begin", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Contains("internal uncommitted changes", doc.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("manually", doc.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json")));
+    }
+
+    [Fact]
+    public void End_G352_GitlinkOnly_RestoresOriginalSubmoduleHead()
+    {
+        // end --write for a gitlink-only state should restore the submodule HEAD.
+        using var workspace = new GuardWorkspace();
+        var stateFile = Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(stateFile)!);
+        File.WriteAllText(stateFile, """
+        {
+          "stash_ref": null,
+          "stash_message": null,
+          "created_at": "2026-05-13T00:00:00+00:00",
+          "stashed_paths": [],
+          "gitlink_restore_paths": [
+            { "path": "submodules/SekibanAsAService", "original_head": "originalhead5678" }
+          ]
+        }
+        """);
+
+        var fake = new FakeGitRunner(porcelain: string.Empty);
+        // Restore: checkout the original HEAD inside the submodule
+        fake.QueueResponse("-C submodules/SekibanAsAService checkout originalhead5678", stdout: "HEAD is now at originalhead5678\n");
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "end", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.False(File.Exists(stateFile));
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Contains("restored 1 gitlink", doc.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        Assert.Equal(1, doc.RootElement.GetProperty("gitlink_paths").GetArrayLength());
+
+        // Verify the checkout restoration call was made.
+        Assert.Contains(fake.Invocations, args =>
+            args.Contains("-C") &&
+            args.Contains("submodules/SekibanAsAService") &&
+            args.Contains("checkout") &&
+            args.Contains("originalhead5678"));
+    }
+
+    [Fact]
+    public void End_G352_GitlinkRestoreFailure_PreservesStateFile_AndReportsFail()
+    {
+        using var workspace = new GuardWorkspace();
+        var stateFile = Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(stateFile)!);
+        File.WriteAllText(stateFile, """
+        {
+          "stash_ref": null,
+          "stash_message": null,
+          "created_at": "2026-05-13T00:00:00+00:00",
+          "stashed_paths": [],
+          "gitlink_restore_paths": [
+            { "path": "submodules/SekibanAsAService", "original_head": "originalhead5678" }
+          ]
+        }
+        """);
+
+        var fake = new FakeGitRunner(porcelain: string.Empty);
+        fake.QueueResponse("-C submodules/SekibanAsAService checkout originalhead5678",
+            stdout: "error: something bad\n",
+            exitCode: 1);
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "end", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Contains("CONFLICT", doc.RootElement.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+        // State file preserved for operator recovery.
+        Assert.True(File.Exists(stateFile));
+    }
+
+    [Fact]
+    public void Begin_G352_MixedGitlinkAndRegular_HandlesBothLanes()
+    {
+        // When both a gitlink-only path and a regular dirty file are present,
+        // begin --write should handle them independently: checkout for gitlink,
+        // stash for regular files.
+        using var workspace = new GuardWorkspace();
+        AutomationWorkspaceGuardCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 13, 0, 0, 0, TimeSpan.Zero);
+
+        var fake = new FakeGitRunner(porcelain: " m submodules/SekibanAsAService\n M scratch.txt\n");
+        // For submodules/SekibanAsAService: ls-files → gitlink, internal → clean
+        fake.QueueResponse("ls-files --stage -- submodules/SekibanAsAService",
+            stdout: "160000 parentcommit1234 0\tsubmodules/SekibanAsAService\n");
+        fake.QueueResponse("-C submodules/SekibanAsAService status --short", stdout: "");
+        // For scratch.txt: ls-files → regular file (not 160000)
+        fake.QueueResponse("ls-files --stage -- scratch.txt",
+            stdout: "100644 abc123 0\tscratch.txt\n");
+        // Gitlink begin: rev-parse HEAD and checkout
+        fake.QueueResponse("-C submodules/SekibanAsAService rev-parse HEAD",
+            stdout: "originalhead5678\n");
+        fake.QueueResponse("-C submodules/SekibanAsAService checkout parentcommit1234", stdout: "");
+        // Stash lane for scratch.txt
+        fake.QueueResponse("stash list --format=%gd %s",
+            stdout: "stash@{0} On main: intent-cli/G306 workspace-guard 2026-05-13T00:00:00Z\n");
+        AutomationWorkspaceGuardCommand.GitRunnerFactory = _ => fake;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationWorkspaceGuardCommand.Execute(
+            workspace.Context,
+            ["--mode", "begin", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("proceed_allowed").GetBoolean());
+        Assert.Equal(1, doc.RootElement.GetProperty("safe_stash_paths").GetArrayLength());
+        Assert.Equal(1, doc.RootElement.GetProperty("gitlink_paths").GetArrayLength());
+        Assert.Equal("stash@{0}", doc.RootElement.GetProperty("stash_ref").GetString());
+
+        // State file should have both stashed_paths and gitlink_restore_paths.
+        var statePath = Path.Combine(workspace.RepoRoot, ".intent-cli", "workspace-guard.json");
+        Assert.True(File.Exists(statePath));
+        using var stateDoc = JsonDocument.Parse(File.ReadAllText(statePath));
+        Assert.Equal(1, stateDoc.RootElement.GetProperty("stashed_paths").GetArrayLength());
+        Assert.Equal(1, stateDoc.RootElement.GetProperty("gitlink_restore_paths").GetArrayLength());
+    }
+
     private sealed class FakeGitRunner : IGitRunner
     {
         private readonly string defaultStatusOutput;
