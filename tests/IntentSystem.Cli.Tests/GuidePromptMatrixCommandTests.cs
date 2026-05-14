@@ -2109,4 +2109,113 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains(firstCalls, c => c!.Contains("automation summary", StringComparison.Ordinal));
         Assert.Contains(firstCalls, c => c!.Contains("intent status", StringComparison.Ordinal));
     }
+
+    // ── G355: self-healing preflight policy ───────────────────────────────
+
+    [Fact]
+    public void Execute_G355_HostLoopPrompt_ContainsSelfHealingWakePolicy()
+    {
+        // G355 AC: Prompt-matrix host-loop text includes the self-healing
+        // sequence in concise form.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // The host-loop must surface safe_repair_available as the gate.
+        Assert.Contains("safe_repair_available", prompt, StringComparison.Ordinal);
+        // And name the repair categories.
+        Assert.Contains("issue-publish-gap", prompt, StringComparison.Ordinal);
+        Assert.Contains("review-linkage-gap", prompt, StringComparison.Ordinal);
+        Assert.Contains("host-artifact-repair", prompt, StringComparison.Ordinal);
+        Assert.Contains("drafted-packet-mechanical-gap", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G355_HostLoopPrompt_EnforcesRetryOnceAndNoInfiniteLoop()
+    {
+        // G355 AC: After applying a repair, retry the same action exactly once;
+        // never loop further on failure (no infinite repair loops).
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // Retry-once rule must be explicit.
+        Assert.Contains("EXACTLY ONCE", prompt, StringComparison.OrdinalIgnoreCase);
+        // No-infinite-loop must be explicit.
+        Assert.Contains("no infinite", prompt, StringComparison.OrdinalIgnoreCase);
+        // Commit-before-retry must be mentioned.
+        Assert.Contains("commit and push", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_G355_HostLoopPrompt_UnsafeMetadataDoesNotRepair()
+    {
+        // G355 AC: When safe_repair_available is false (unsafe-metadata,
+        // clarification-required), the host loop must stop with structured
+        // clarification — never attempt a repair.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("safe_repair_available: false", prompt, StringComparison.Ordinal);
+        Assert.Contains("unsafe-metadata", prompt, StringComparison.Ordinal);
+        Assert.Contains("clarification-required", prompt, StringComparison.Ordinal);
+        Assert.Contains("do NOT repair", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_G355_ChildLoopPrompt_ContainsSelfHealingGuidance()
+    {
+        // G355 AC: Child-loop guidance says to ask intent-cli for safe repair.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // Child-loop self-healing must reference the preflight commands.
+        Assert.Contains("safe_repair_available", prompt, StringComparison.Ordinal);
+        Assert.Contains("worker issue-preflight", prompt, StringComparison.Ordinal);
+        Assert.Contains("worker pr-comment-preflight", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G355_ChildLoopPrompt_RefusesHostMetadataRepairsFromChildCwd()
+    {
+        // G355 AC: Child-loop guidance refuses host metadata repairs from
+        // child cwd and routes them to host-artifact-repair-required.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // Child loop must NOT repair host metadata paths.
+        Assert.Contains(".intent-cli/**", prompt, StringComparison.Ordinal);
+        Assert.Contains("intents/**", prompt, StringComparison.Ordinal);
+        Assert.Contains("host-artifact-repair-required", prompt, StringComparison.Ordinal);
+        // And the child loop must say: return to host loop for handling.
+        Assert.Contains("host loop", prompt, StringComparison.OrdinalIgnoreCase);
+    }
 }

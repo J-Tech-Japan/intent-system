@@ -941,6 +941,96 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         }
     }
 
+    // ── G355: safe_repair_available field ────────────────────────────────
+
+    [Fact]
+    public void Execute_G355_RepairedAndRetry_SetsSafeRepairAvailableTrue()
+    {
+        // G355 AC: When diagnostics classifies repaired-and-retry,
+        // safe_repair_available must be true and safe_repair_category must
+        // be host-artifact-repair.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--reconcile-repairs-available", "1", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("repaired-and-retry", result.Classification);
+        Assert.True(result.SafeRepairAvailable);
+        Assert.Equal("host-artifact-repair", result.SafeRepairCategory);
+    }
+
+    [Fact]
+    public void Execute_G355_PublishRecoveryReady_SetsSafeRepairAvailableTrueWithReviewLinkageGap()
+    {
+        // G355 AC: When diagnostics classifies publish-recovery-ready,
+        // safe_repair_available must be true and safe_repair_category must
+        // be review-linkage-gap.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--publish-recovery-repairs-available", "1", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("publish-recovery-ready", result.Classification);
+        Assert.True(result.SafeRepairAvailable);
+        Assert.Equal("review-linkage-gap", result.SafeRepairCategory);
+    }
+
+    [Fact]
+    public void Execute_G355_TrueIdle_SetsSafeRepairAvailableFalse()
+    {
+        // G355 AC: When diagnostics classifies true-idle,
+        // safe_repair_available must be false — the loop should stop.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("true-idle", result.Classification);
+        Assert.False(result.SafeRepairAvailable);
+        Assert.Null(result.SafeRepairCategory);
+    }
+
+    [Fact]
+    public void Execute_G355_UnsafeMetadata_SetsSafeRepairAvailableFalse()
+    {
+        // G355 AC: When diagnostics classifies unsafe-metadata,
+        // safe_repair_available must be false — do NOT attempt a repair.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system",
+             "--reconcile-unsafe-stop", "ambiguous-queue-linkage",
+             "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("unsafe-metadata", result.Classification);
+        Assert.False(result.SafeRepairAvailable);
+        Assert.Null(result.SafeRepairCategory);
+    }
+
     /// <summary>
     /// G342: deterministic stand-in for the publish-recovery probe.
     /// </summary>

@@ -45,6 +45,32 @@ internal sealed record AutomationHostReviewDiagnosticsResult
 
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }
+
+    /// <summary>
+    /// G355: <c>true</c> when the diagnostic result indicates a high-confidence
+    /// deterministic repair is available that the host loop can apply before
+    /// reporting blocked or idle. The exact repair command is in
+    /// <see cref="RecommendedNextCommand"/>; the category is in
+    /// <see cref="SafeRepairCategory"/>. <c>false</c> for
+    /// <c>unsafe-metadata</c>, <c>clarification-required</c>, and
+    /// <c>true-idle</c> — those must NOT be auto-repaired.
+    /// </summary>
+    [JsonPropertyName("safe_repair_available")]
+    public required bool SafeRepairAvailable { get; init; }
+
+    [JsonPropertyName("safeRepairAvailable")]
+    public bool SafeRepairAvailableCamel => SafeRepairAvailable;
+
+    /// <summary>
+    /// G355: repair category when <see cref="SafeRepairAvailable"/> is
+    /// <c>true</c>; <c>null</c> otherwise. One of the constants in
+    /// <see cref="SafeRepairCategories"/>.
+    /// </summary>
+    [JsonPropertyName("safe_repair_category")]
+    public required string? SafeRepairCategory { get; init; }
+
+    [JsonPropertyName("safeRepairCategory")]
+    public string? SafeRepairCategoryCamel => SafeRepairCategory;
 }
 
 internal sealed record AutomationHostReviewDiagnosticsDetail
@@ -147,4 +173,39 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     /// implementer rather than mutate parent durable state.
     /// </summary>
     public const string DraftMergeBlocked = "draft-merge-blocked";
+}
+
+/// <summary>
+/// G355: Repair category constants for <see cref="AutomationHostReviewDiagnosticsResult.SafeRepairCategory"/>.
+/// Each value names the class of deterministic host-side repair that a wake
+/// can apply before reporting blocked or idle. Categories are declared by
+/// intent-cli diagnostics — never guessed by the AI agent.
+/// </summary>
+internal static class SafeRepairCategories
+{
+    /// <summary>
+    /// The next publish is blocked because a drafted packet is missing only
+    /// mechanical sections (<c>Verification</c>, <c>Related Links</c>). These
+    /// can be appended from a standard template without operator input (G354).
+    /// </summary>
+    public const string DraftedPacketMechanicalGap = "drafted-packet-mechanical-gap";
+
+    /// <summary>
+    /// A PR's <c>linked_pr</c> or queue-item linkage is missing but can be
+    /// deterministically recovered from publish-artifact evidence (G313 / G351).
+    /// </summary>
+    public const string ReviewLinkageGap = "review-linkage-gap";
+
+    /// <summary>
+    /// A generic host-side label-drift or queue-state drift that the reconcile
+    /// command classifies as high-confidence and safe to apply (G342 / G344).
+    /// </summary>
+    public const string HostArtifactRepair = "host-artifact-repair";
+
+    /// <summary>
+    /// An issue-publish gap: the issue is not yet published but the host has
+    /// everything needed to publish deterministically (G343 / G286
+    /// <c>issue-publish-ready</c>).
+    /// </summary>
+    public const string IssuePublishGap = "issue-publish-gap";
 }

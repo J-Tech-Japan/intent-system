@@ -319,7 +319,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                         + $" && intent-cli automation issue-publish --repo {repo} --issue <new-issue-number> --write --format json",
                     clarification: null,
                     details,
-                    warnings);
+                    warnings,
+                    safeRepairCategory: SafeRepairCategories.IssuePublishGap);
             }
 
             details.Add(new AutomationHostReviewDiagnosticsDetail
@@ -365,7 +366,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                     + $" && intent-cli automation issue-publish --repo {repo} --issue <new-issue-number> --write --format json",
                 clarification: null,
                 details,
-                warnings);
+                warnings,
+                safeRepairCategory: SafeRepairCategories.IssuePublishGap);
         }
 
         // G313: when publish-recovery reports an unapplied high-confidence
@@ -393,7 +395,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 recommendedNextCommand: $"intent-cli automation publish-recovery --repo {repo} --write --format json",
                 clarification: null,
                 details,
-                warnings);
+                warnings,
+                safeRepairCategory: SafeRepairCategories.ReviewLinkageGap);
         }
 
         // G286: when reconcile has unapplied high-confidence repairs and no
@@ -417,7 +420,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 recommendedNextCommand: $"intent-cli automation reconcile --lane host-review --repo {repo} --write --format json",
                 clarification: null,
                 details,
-                warnings);
+                warnings,
+                safeRepairCategory: SafeRepairCategories.HostArtifactRepair);
         }
 
         return Build(
@@ -437,7 +441,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         string? recommendedNextCommand,
         AutomationHostReviewDiagnosticsClarification? clarification,
         IReadOnlyList<AutomationHostReviewDiagnosticsDetail> details,
-        IReadOnlyList<string> warnings) =>
+        IReadOnlyList<string> warnings,
+        string? safeRepairCategory = null) =>
         new()
         {
             Repo = repo,
@@ -448,6 +453,11 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
             StructuredClarification = clarification,
             Details = details,
             Warnings = warnings,
+            // G355: safe_repair_available is true only when a high-confidence
+            // deterministic repair is declared by diagnostics — never for
+            // unsafe-metadata, clarification-required, or true-idle paths.
+            SafeRepairAvailable = safeRepairCategory is not null,
+            SafeRepairCategory = safeRepairCategory,
         };
 
     private static IReadOnlyList<int> ExtractLinkedIssueNumbers(string repo, GitHubAutomationPrCandidate pr)

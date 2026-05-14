@@ -113,6 +113,8 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 Warnings = staleClarificationMetadata
                     ? new[] { "stale-clarification-metadata" }
                     : Array.Empty<string>(),
+                SafeRepairAvailable = false,
+                SafeRepairCategory = null,
             };
             Emit(writer, stale, format);
             return 1;
