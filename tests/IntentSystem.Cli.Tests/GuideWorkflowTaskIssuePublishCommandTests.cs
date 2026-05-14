@@ -307,4 +307,47 @@ public sealed class GuideWorkflowTaskIssuePublishCommandTests
             }
         };
     }
+
+    // ----- G349: copilot-local host agent can ask issue-publish guide -----
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostCwd_CanAskIssuePublishGuide_ExitZero()
+    {
+        // G349 Verification: a local Copilot host agent running in a host cwd
+        // can call `guide workflow task issue-publish` and receive the full
+        // draft/create/publish-flow boundary guidance (exit 0, four stages).
+        // This surface is accessible to any host-cwd agent including copilot-local.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskIssuePublishCommand.Execute(
+            CreateContext(),
+            Array.Empty<string>(),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        // All four issue-publish stages must be surfaced.
+        Assert.Contains("draft", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("publish-flow", output, StringComparison.OrdinalIgnoreCase);
+        // The canonical issue-publish command is surfaced.
+        Assert.Contains("intent-cli issue publish-flow", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostCwd_IssuePublishJsonFormat_ExitZero()
+    {
+        // G349 Verification: local Copilot host agent can request JSON format from
+        // the issue-publish guide and gets a parsable payload.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskIssuePublishCommand.Execute(
+            CreateContext(),
+            new[] { "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        Assert.True(doc.RootElement.TryGetProperty("stages", out _), "stages key must be present.");
+    }
 }

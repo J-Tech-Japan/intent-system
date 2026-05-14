@@ -369,4 +369,59 @@ public sealed class GuideWorkflowTaskIntentInterviewCommandTests
             }
         };
     }
+
+    // ----- G349: copilot-local host agent can ask intent-interview guide -----
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostCwd_CanAskIntentInterviewGuide_ExitZero()
+    {
+        // G349 Verification: a local Copilot host agent running in a host cwd
+        // can call `guide workflow task intent-interview` and receive the full
+        // intent/clarification workflow guidance (exit 0, both modes, canonical
+        // commands). This surface is not restricted to non-Copilot agents.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskIntentInterviewCommand.Execute(
+            CreateContext(),
+            Array.Empty<string>(),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        // Both modes available — copilot-local host agent can pick either.
+        Assert.Contains("Mode: interview", output, StringComparison.Ordinal);
+        Assert.Contains("Mode: clarification", output, StringComparison.Ordinal);
+        // Canonical intent-cli host surface commands are surfaced.
+        Assert.Contains("intent-cli interview next-question", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli interview record-answer", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli interview compile", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli clarification next", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli clarification answer", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostCwd_IntentInterviewJsonFormat_ExitZero()
+    {
+        // G349 Verification: local Copilot host agent can request JSON format from
+        // intent-interview guide and receives a parsable payload with both modes.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskIntentInterviewCommand.Execute(
+            CreateContext(),
+            new[] { "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("modes", out var modes), "modes key must be present.");
+        Assert.True(root.TryGetProperty("question_structure", out _), "question_structure must be present.");
+        // Both interview and clarification modes present.
+        var modeNames = modes.EnumerateArray()
+            .Select(m => m.GetProperty("mode").GetString())
+            .ToArray();
+        Assert.Contains(GuideWorkflowTaskIntentInterviewCommand.ModeInterview, modeNames);
+        Assert.Contains(GuideWorkflowTaskIntentInterviewCommand.ModeClarification, modeNames);
+    }
 }

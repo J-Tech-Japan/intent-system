@@ -504,4 +504,128 @@ public sealed class GuideWorkflowTaskInitHostCommandTests : IDisposable
             }
         };
     }
+
+    // ----- G349: copilot-local agent guidance -----
+
+    [Fact]
+    public void Execute_G349_AgentCopilotLocal_MarkdownIncludesCopilotLocalSection()
+    {
+        // G349 AC: `guide workflow task init-host --agent copilot-local` must
+        // emit a Copilot Local Agent section explaining host-cwd permissions.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--agent", "copilot-local" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Copilot Local Agent", output, StringComparison.Ordinal);
+        Assert.Contains("copilot-local", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G349_AgentCopilotLocal_JsonIncludesCopilotLocalAgentNode()
+    {
+        // G349 AC: JSON shape must include `copilot_local_agent` with
+        // `permitted_workflow_task_surfaces` and `child_cwd_restriction`.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--agent", "copilot-local", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("copilot_local_agent", out var agentNode),
+            "copilot_local_agent key must be present when --agent copilot-local is passed.");
+        Assert.True(agentNode.TryGetProperty("permitted_workflow_task_surfaces", out _),
+            "copilot_local_agent must include permitted_workflow_task_surfaces.");
+        Assert.True(agentNode.TryGetProperty("child_cwd_restriction", out _),
+            "copilot_local_agent must include child_cwd_restriction.");
+        Assert.True(agentNode.TryGetProperty("host_state_free_surfaces", out _),
+            "copilot_local_agent must include host_state_free_surfaces.");
+        // agent filter is echoed back in the top-level payload
+        Assert.True(root.TryGetProperty("agent", out var agentProp),
+            "agent key must be present at the root when --agent is passed.");
+        Assert.Equal("copilot-local", agentProp.GetString());
+    }
+
+    [Fact]
+    public void Execute_G349_AgentCopilotLocal_PermittedSurfacesIncludeAllFourWorkflowGuides()
+    {
+        // G349 Verification: permitted_workflow_task_surfaces must name all four
+        // workflow task guide commands that a local Copilot host agent can call.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--agent", "copilot-local" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+
+        // All four permitted workflow task surface commands must appear.
+        Assert.Contains("guide workflow task intent-interview", output, StringComparison.Ordinal);
+        Assert.Contains("guide workflow task packet-draft", output, StringComparison.Ordinal);
+        Assert.Contains("guide workflow task issue-publish", output, StringComparison.Ordinal);
+        Assert.Contains("guide workflow task bug-to-intent-repair", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G349_AgentCopilotLocal_ChildCwdRestrictionMentionsHostStateFree()
+    {
+        // G349 Verification: child-cwd restriction for copilot-local must mention
+        // host-state-free so the agent knows it follows the same rules as any
+        // other child agent when running from an implementation cwd.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--agent", "copilot-local" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("host-state-free", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G349_AgentCopilotLocal_NoAgentFlag_CopilotLocalSectionAbsent()
+    {
+        // G349: when --agent is not passed, copilot_local_agent must be absent.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        Assert.False(doc.RootElement.TryGetProperty("copilot_local_agent", out _),
+            "copilot_local_agent must be absent when --agent is not set.");
+    }
+
+    [Fact]
+    public void Execute_G349_UnknownAgent_ExitsOneWithError()
+    {
+        // G349: an unrecognized --agent value must exit 1 with a clear error.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--agent", "unknown-agent" },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("--agent must be 'copilot-local'", output, StringComparison.Ordinal);
+    }
 }

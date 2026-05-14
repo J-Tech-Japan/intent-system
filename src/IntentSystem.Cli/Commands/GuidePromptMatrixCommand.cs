@@ -39,15 +39,30 @@ internal static class GuidePromptMatrixCommand
     private const string AgentGeneric = "generic";
 
     /// <summary>
-    /// G345: GitHub Copilot is recognized as an assignment-oriented agent.
-    /// It does NOT participate in the local 5-minute heartbeat/loop model
-    /// that Claude / Codex / generic local agents use. Copilot is acceptable
-    /// for child-oneshot (assign an issue / mention on a PR / Copilot CLI
-    /// one-shot) but NOT for child-loop (returns structured unsupported
-    /// guidance) and NOT for host modes (host review/closeout/next-slice
-    /// remain with intent-cli host automation).
+    /// G345: GitHub Copilot cloud/assignment agent. Assignment-oriented:
+    /// triggered by GitHub issue assignment or PR mention. Does NOT
+    /// participate in the local 5-minute heartbeat loop, does NOT exec
+    /// host <c>intent-cli</c>, and does NOT touch host <c>.intent-cli/</c>
+    /// metadata. <c>"copilot"</c> is kept as the canonical spelling;
+    /// <c>"copilot-cloud"</c> is accepted as an alias (G349).
     /// </summary>
     private const string AgentCopilot = "copilot";
+
+    /// <summary>
+    /// G349: alias for the cloud/assignment Copilot path. Accepted on input;
+    /// normalised to <c>"copilot"</c> internally so existing downstream logic
+    /// is unchanged.
+    /// </summary>
+    private const string AgentCopilotCloud = "copilot-cloud";
+
+    /// <summary>
+    /// G349: local Copilot coding-agent running in a host cwd. Unlike the
+    /// cloud/assignment path, a local Copilot agent CAN exec <c>intent-cli</c>
+    /// in the host repo and perform host-owned intent/clarification/packet/
+    /// publish workflows. In a child implementation cwd it remains
+    /// host-state-free (same restrictions as cloud Copilot child work).
+    /// </summary>
+    private const string AgentCopilotLocal = "copilot-local";
 
     /// <summary>
     /// G279 follow-up (PR #662): the rendered prompts only contain meaningful
@@ -64,7 +79,7 @@ internal static class GuidePromptMatrixCommand
     private const string TopologySameRepo = "same-repo";
 
     private const string UsageLine =
-        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--topology same-repo] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic|copilot] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--format markdown|json]";
+        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--topology same-repo] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic|copilot|copilot-cloud|copilot-local] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--format markdown|json]";
 
     private static readonly string[] ForbiddenSources =
     [
@@ -147,21 +162,42 @@ internal static class GuidePromptMatrixCommand
 
         var isSameRepo = string.Equals(topology, TopologySameRepo, StringComparison.Ordinal);
 
+        // G349: normalise once for dispatch. copilot-cloud → copilot.
+        // copilot-local keeps its own string so the per-mode dispatch below
+        // can route to the new local-host builders.
         var resolvedAgentForDispatch = NormalizeAgent(agent);
+        var isCopilotLocal = string.Equals(resolvedAgentForDispatch, AgentCopilotLocal, StringComparison.Ordinal);
+        var isCopilotCloud = string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal);
+
         var all = new[]
         {
-            string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
+            // child-loop: copilot-local child cwd stays host-state-free.
+            isCopilotCloud
                 ? BuildCopilotChildLoop(resolvedPolicy)
-                : BuildChildLoop(domainPlaceholder, agent, frequency, resolvedPolicy, isSameRepo),
-            string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
+                : isCopilotLocal
+                    ? BuildCopilotLocalChildLoop(resolvedPolicy, isSameRepo)
+                    : BuildChildLoop(domainPlaceholder, agent, frequency, resolvedPolicy, isSameRepo),
+
+            // host-loop: copilot-local CAN run intent-cli in host cwd.
+            isCopilotCloud
                 ? BuildCopilotUnsupportedHostMode(ModeHostLoop, KindLoop, TargetHost, resolvedPolicy)
-                : BuildHostLoop(domainPlaceholder, targetRepoPlaceholder, agent, frequency, resolvedPolicy),
-            string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
+                : isCopilotLocal
+                    ? BuildCopilotLocalHostLoop(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
+                    : BuildHostLoop(domainPlaceholder, targetRepoPlaceholder, agent, frequency, resolvedPolicy),
+
+            // child-oneshot: copilot-local child cwd stays host-state-free.
+            isCopilotCloud
                 ? BuildCopilotChildOneshot(resolvedPolicy)
-                : BuildChildOneshot(domainPlaceholder, resolvedPolicy, isSameRepo),
-            string.Equals(resolvedAgentForDispatch, AgentCopilot, StringComparison.Ordinal)
+                : isCopilotLocal
+                    ? BuildCopilotLocalChildOneshot(resolvedPolicy, isSameRepo)
+                    : BuildChildOneshot(domainPlaceholder, resolvedPolicy, isSameRepo),
+
+            // host-oneshot: copilot-local CAN run intent-cli host steps.
+            isCopilotCloud
                 ? BuildCopilotHostOneshot(targetRepoPlaceholder, resolvedPolicy)
-                : BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
+                : isCopilotLocal
+                    ? BuildCopilotLocalHostOneshot(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
+                    : BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
         };
 
         if (mode is null)
@@ -260,7 +296,14 @@ $@"**Local scheduling contract (G314)**: this loop runs in the **agent's current
         {
             return AgentGeneric;
         }
-        return agent.Trim().ToLowerInvariant();
+        var normalized = agent.Trim().ToLowerInvariant();
+        // G349: copilot-cloud is an alias for copilot (cloud/assignment path).
+        // copilot-local retains its own identity for dispatch.
+        if (string.Equals(normalized, AgentCopilotCloud, StringComparison.Ordinal))
+        {
+            return AgentCopilot;
+        }
+        return normalized;
     }
 
     private static string ResolvedFrequencyGuidance(string? frequency) =>
@@ -639,6 +682,260 @@ Hard rules:
             Prompt = prompt,
             BaseBranchPolicy = baseBranchPolicy,
             ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+        };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // G349: local Copilot coding-agent guidance blocks.
+    //
+    // copilot-local differs from the cloud/assignment path (G345) in one
+    // key way: when running in a HOST cwd the local Copilot agent CAN exec
+    // `intent-cli` commands for host-owned metadata mutation — intent
+    // interview, clarification question generation/recording, packet draft,
+    // issue publish, and bug-to-intent repair. When running in a CHILD
+    // implementation cwd it remains host-state-free (same restrictions as
+    // cloud Copilot child work).
+    //
+    // The four rendered blocks are:
+    //   1. BuildCopilotLocalHostLoop   — host recurring loop with full host
+    //      intent-cli surfaces available.
+    //   2. BuildCopilotLocalHostOneshot — one-shot host action (same surfaces,
+    //      no recurring wake).
+    //   3. BuildCopilotLocalChildLoop   — child cwd stays host-state-free;
+    //      returns structured child guidance matching the cloud path.
+    //   4. BuildCopilotLocalChildOneshot — child cwd one-shot; host-state-free.
+    // ─────────────────────────────────────────────────────────────────────
+
+    private static GuidePromptMatrixEntry BuildCopilotLocalHostLoop(
+        string domainPlaceholder,
+        string targetRepoPlaceholder,
+        string baseBranchPolicy)
+    {
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Closeout / merge expectation honors");
+        var prompt =
+$@"Local Copilot coding-agent host-loop guidance (G349). This is a local Copilot agent running in the HOST repo cwd. Unlike the cloud/assignment Copilot path, a local Copilot agent CAN exec `intent-cli` to perform host-owned intent/clarification/packet/issue-publish workflows. This is a RECURRING loop — the operator or scheduler drives subsequent wakes. Run the loop body exactly once per wake.
+
+{basePolicyBlock}
+
+If the installed CLI surface is stale or any required automation command is missing, abort the wake before any mutation: `intent-cli automation doctor --format json` (or `automation host-review-preflight` reporting `stale-host-cli`) is the canonical signal — refresh the installed CLI before continuing.
+
+First-call sequence (read-only; required before any mutation):
+1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
+2. `intent-cli guide onboarding --format json` — first-call sequence for a fresh agent.
+3. `intent-cli guide commands list --format json` — surface `primary` / `support` / `advanced` / `experimental` buckets.
+4. `intent-cli automation summary --domain {domainPlaceholder} --format json` — canonical label-driven contract and capability JSON.
+5. `intent-cli intent status --domain {domainPlaceholder} --format json` — current baseline / WIP / queued / clarifications.
+
+Host-cwd workflow surfaces available to local Copilot (pick the relevant one per wake):
+
+**Intent interview / design**:
+- `intent-cli guide workflow task intent-interview --format json` — structured intent-interview guidance.
+- `intent-cli intent next-slice --dry-run --domain {domainPlaceholder} --target-repo {targetRepoPlaceholder} --format json` — verify WIP cap and clarification gates.
+
+**Clarification**:
+- `intent-cli clarification next --domain {domainPlaceholder} --format markdown` — fetch the next open structured clarification question.
+- `intent-cli clarification answer --domain {domainPlaceholder} --id <id> --choice <option-id> [--note ""<text>""] --write` — record clarification durably (G302).
+
+**Packet draft**:
+- `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --dry-run --format markdown` — preview packet.
+- `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --format json` — create packet artifacts.
+
+**Issue publish**:
+- `intent-cli issue publish-flow <id> --repo {targetRepoPlaceholder} --write --format json` — publish issue.
+- `intent-cli automation issue-publish --repo {targetRepoPlaceholder} --issue <n> --write --format json` — apply `intent-target` label after durable state is pushed.
+
+**Bug-to-intent repair**:
+- `intent-cli guide workflow task bug-to-intent-repair --format json` — structured bug-to-intent repair guidance.
+
+**Host review / closeout / next-slice** (full host loop surface):
+- `intent-cli automation host-review-preflight --repo {targetRepoPlaceholder} --format json`
+- `intent-cli review closeout-plan --pr <n> --repo {targetRepoPlaceholder} --domain {domainPlaceholder} --format json`
+- `intent-cli guide review --pr <n> --repo {targetRepoPlaceholder} --domain {domainPlaceholder} --format json`
+
+Hard rules:
+- Local Copilot MUST NOT launch AI providers from intent-cli (`never call intent-cli run`).
+- All host metadata mutations go through installed `intent-cli` command surfaces; never hand-edit queue-state, runs.jsonl, packet artifacts, or submodule pointers.
+- Do NOT read `intents/rules/**`, local skill files, or copied prompt files for routine work. Use `intent-cli guide ...` instead.
+- Process at most one action per wake. Do NOT create a new thread, remote scheduler, or external cron.";
+
+        return new GuidePromptMatrixEntry
+        {
+            Mode = ModeHostLoop,
+            Kind = KindLoop,
+            Target = TargetHost,
+            FrequencyGuidance = FrequencyGuidanceRecurring,
+            ForbiddenSources = ForbiddenSources,
+            FirstCalls =
+            [
+                "intent-cli guide model --format json",
+                "intent-cli guide onboarding --format json",
+                "intent-cli guide commands list --format json",
+                $"intent-cli automation summary --domain {domainPlaceholder} --format json",
+                $"intent-cli intent status --domain {domainPlaceholder} --format json"
+            ],
+            Prompt = prompt,
+            Agent = AgentCopilotLocal,
+            AgentClassification = "local_host_agent",
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+        };
+    }
+
+    private static GuidePromptMatrixEntry BuildCopilotLocalHostOneshot(
+        string domainPlaceholder,
+        string targetRepoPlaceholder,
+        string baseBranchPolicy)
+    {
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Closeout / merge expectation honors");
+        var prompt =
+$@"Local Copilot coding-agent host one-shot guidance (G349). This is a local Copilot agent running in the HOST repo cwd, executing exactly ONE host-side action. Unlike the cloud/assignment Copilot path, a local Copilot agent CAN exec `intent-cli` for host-owned metadata mutation. Do not create or update any automation, loop, cron, monitor, reminder, or recurring wakeup.
+
+{basePolicyBlock}
+
+First-call sequence (read-only; required before any mutation):
+1. `intent-cli guide model --format json`
+2. `intent-cli guide onboarding --format json`
+3. `intent-cli guide commands list --format json`
+4. `intent-cli automation summary --domain {domainPlaceholder} --format json`
+5. `intent-cli intent status --domain {domainPlaceholder} --format json`
+
+Pick exactly one host action per invocation:
+- Intent interview: `intent-cli guide workflow task intent-interview --format json`
+- Clarification next: `intent-cli clarification next --domain {domainPlaceholder} --format markdown`
+- Clarification answer: `intent-cli clarification answer --domain {domainPlaceholder} --id <id> --choice <option-id> --write`
+- Packet draft: `intent-cli packet draft --execution-unit <id> --target-repo {targetRepoPlaceholder} --format json`
+- Issue publish: `intent-cli issue publish-flow <id> --repo {targetRepoPlaceholder} --write --format json` then `intent-cli automation issue-publish --repo {targetRepoPlaceholder} --issue <n> --write --format json`
+- Bug-to-intent repair: `intent-cli guide workflow task bug-to-intent-repair --format json`
+- Review/closeout: `intent-cli review closeout-plan --pr <n> --repo {targetRepoPlaceholder} --domain {domainPlaceholder} --format json` and `intent-cli guide review --pr <n> --repo {targetRepoPlaceholder} --domain {domainPlaceholder} --format json`
+
+Hard rules:
+- Local Copilot MUST NOT launch AI providers from intent-cli.
+- All host metadata mutations go through installed `intent-cli` command surfaces.
+- Do NOT read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...`.
+- Do not create a cron, monitor, scheduler, reminder, or new thread after completing this wake.";
+
+        return new GuidePromptMatrixEntry
+        {
+            Mode = ModeHostOneshot,
+            Kind = KindOneshot,
+            Target = TargetHost,
+            FrequencyGuidance = FrequencyGuidanceOneshot,
+            ForbiddenSources = ForbiddenSources,
+            FirstCalls =
+            [
+                "intent-cli guide model --format json",
+                "intent-cli guide onboarding --format json",
+                "intent-cli guide commands list --format json",
+                $"intent-cli automation summary --domain {domainPlaceholder} --format json",
+                $"intent-cli intent status --domain {domainPlaceholder} --format json"
+            ],
+            Prompt = prompt,
+            Agent = AgentCopilotLocal,
+            AgentClassification = "local_host_agent",
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+        };
+    }
+
+    private static GuidePromptMatrixEntry BuildCopilotLocalChildLoop(string baseBranchPolicy, bool isSameRepo = false)
+    {
+        // G349: in a child implementation cwd, local Copilot is host-state-free —
+        // same restrictions as cloud Copilot child work (G345). The key difference
+        // from the cloud path is the agent tag so consumers can distinguish.
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
+        var sameRepoBlock = isSameRepo ? $"\n{RenderSameRepoTopologyBlock()}" : string.Empty;
+        var prompt =
+$@"Local Copilot coding-agent child-loop guidance (G349). This is a local Copilot agent running in a CHILD implementation cwd. Even though this is a local agent, the child cwd is GitHub-contract-only — the agent must NOT read, write, or mutate host metadata (`.intent-cli/`, `intents/`) from the implementation side.
+
+{basePolicyBlock}{sameRepoBlock}
+
+{CopilotChildContractParagraph}
+
+{CopilotAllowedDoBullets}
+
+{CopilotForbiddenDoBullets}
+
+Note: if this local Copilot agent needs to perform HOST-side intent/clarification/packet/publish work, cd to the HOST repo cwd and use `intent-cli guide prompt-matrix --mode host-loop --agent copilot-local` (or `--mode host-oneshot --agent copilot-local`) instead. The host-cwd path allows full intent-cli access. This child-loop path is strictly GitHub-contract-only.
+
+Hard rules:
+- From a child implementation cwd, local Copilot has the same restrictions as cloud Copilot: no `.intent-cli/` mutation, no host queue-state, no workflow label edits from the implementation side.
+- The PR body MUST include a deterministic closing reference (`Closes #<issue>`, `Fixes #<issue>`, or `Resolves #<issue>`) (G311).
+- Create PRs as ready-for-review (non-draft) by default.
+- Process at most one assignment / PR-mention per wake. Do NOT create a recurring loop from a child cwd.";
+
+        var forbiddenSources = isSameRepo
+            ? [.. ForbiddenSources, .. SameRepoAdditionalForbiddenSources]
+            : (IReadOnlyList<string>)ForbiddenSources;
+
+        return new GuidePromptMatrixEntry
+        {
+            Mode = ModeChildLoop,
+            Kind = KindLoop,
+            Target = TargetChild,
+            FrequencyGuidance = "N/A — local Copilot in a child cwd is GitHub-contract-only; use host-loop / host-oneshot with copilot-local for recurring host design work (G349).",
+            ForbiddenSources = forbiddenSources,
+            FirstCalls =
+            [
+                "gh auth status",
+                "gh issue view <N> --repo <owner>/<repo> --json number,title,body,labels,assignees",
+                "gh pr view <PR> --repo <owner>/<repo> --json number,isDraft,body,reviews,comments"
+            ],
+            Prompt = prompt,
+            Agent = AgentCopilotLocal,
+            AgentClassification = "local_child_agent_host_state_free",
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+            Topology = isSameRepo ? TopologySameRepo : null,
+        };
+    }
+
+    private static GuidePromptMatrixEntry BuildCopilotLocalChildOneshot(string baseBranchPolicy, bool isSameRepo = false)
+    {
+        // G349: same child-cwd restrictions as cloud Copilot child-oneshot.
+        var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Honor");
+        var sameRepoBlock = isSameRepo ? $"\n{RenderSameRepoTopologyBlock()}" : string.Empty;
+        var prompt =
+$@"Local Copilot coding-agent child one-shot guidance (G349). Child implementation cwd — host-state-free. Even though this is a local agent, from a child cwd it must NOT touch host metadata.
+
+{basePolicyBlock}{sameRepoBlock}
+
+{CopilotChildContractParagraph}
+
+{CopilotAllowedDoBullets}
+
+{CopilotForbiddenDoBullets}
+
+If host-side intent/clarification/packet/publish work is needed, switch to the HOST cwd and use `--agent copilot-local --mode host-oneshot`.
+
+Hard rules:
+- No `.intent-cli/` mutation from child cwd. No host queue-state reads.
+- PR body MUST include a closing reference (`Closes #<issue>` etc.) (G311).
+- Create PRs as ready-for-review (non-draft) by default.
+- Do not create a cron, monitor, scheduler, or new thread.";
+
+        var forbiddenSources = isSameRepo
+            ? [.. ForbiddenSources, .. SameRepoAdditionalForbiddenSources]
+            : (IReadOnlyList<string>)ForbiddenSources;
+
+        return new GuidePromptMatrixEntry
+        {
+            Mode = ModeChildOneshot,
+            Kind = KindOneshot,
+            Target = TargetChild,
+            FrequencyGuidance = FrequencyGuidanceOneshot,
+            ForbiddenSources = forbiddenSources,
+            FirstCalls =
+            [
+                "gh auth status",
+                "gh issue view <N> --repo <owner>/<repo> --json number,title,body,labels,assignees",
+                "gh pr view <PR> --repo <owner>/<repo> --json number,isDraft,body,reviews,comments"
+            ],
+            Prompt = prompt,
+            Agent = AgentCopilotLocal,
+            AgentClassification = "local_child_agent_host_state_free",
+            BaseBranchPolicy = baseBranchPolicy,
+            ExpectedBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy),
+            Topology = isSameRepo ? TopologySameRepo : null,
         };
     }
 
@@ -1047,16 +1344,18 @@ Hard rules:
                 case "--agent":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
-                        error = "--agent requires a value (claude, codex, generic, or copilot).";
+                        error = "--agent requires a value (claude, codex, generic, copilot, copilot-cloud, or copilot-local).";
                         return false;
                     }
                     var requestedAgent = args[index + 1].Trim().ToLowerInvariant();
                     if (!string.Equals(requestedAgent, AgentClaude, StringComparison.Ordinal)
                         && !string.Equals(requestedAgent, AgentCodex, StringComparison.Ordinal)
                         && !string.Equals(requestedAgent, AgentGeneric, StringComparison.Ordinal)
-                        && !string.Equals(requestedAgent, AgentCopilot, StringComparison.Ordinal))
+                        && !string.Equals(requestedAgent, AgentCopilot, StringComparison.Ordinal)
+                        && !string.Equals(requestedAgent, AgentCopilotCloud, StringComparison.Ordinal)
+                        && !string.Equals(requestedAgent, AgentCopilotLocal, StringComparison.Ordinal))
                     {
-                        error = $"--agent must be 'claude', 'codex', 'generic', or 'copilot' (got '{requestedAgent}').";
+                        error = $"--agent must be 'claude', 'codex', 'generic', 'copilot', 'copilot-cloud', or 'copilot-local' (got '{requestedAgent}').";
                         return false;
                     }
                     agent = requestedAgent;
@@ -1135,7 +1434,7 @@ Hard rules:
         writer.WriteLine();
         writer.WriteLine("Omit --mode to get all four entries.");
         writer.WriteLine("--domain, --target-repo, --agent, --frequency, and --topology are optional; provide them to render a concrete paste-ready prompt instead of one with placeholders.");
-        writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic, copilot (G345 — assignment-oriented; supported for child-oneshot, returns structured unsupported-loop guidance for child-loop, structured host-oneshot-human-driven guidance for host-oneshot, and structured unsupported-mode-agent-combination for host-loop).");
+        writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic, copilot / copilot-cloud (G345 — cloud/assignment-oriented; supported for child-oneshot, returns structured unsupported-loop guidance for child-loop, structured host-oneshot-human-driven guidance for host-oneshot, and structured unsupported-mode-agent-combination for host-loop), copilot-local (G349 — local Copilot coding-agent in a host cwd; can exec intent-cli for host operations; child cwd usage remains host-state-free).");
         writer.WriteLine("--frequency examples: 5m, 20m, 1h. Omit to keep the rendered prompt's ask-the-operator instruction.");
         writer.WriteLine($"--base-branch-policy values: {CliRuntimeContracts.DirectMainBaseBranchPolicy} (default; child PRs target `{CliRuntimeContracts.DirectMainBaseBranch}`), {CliRuntimeContracts.MainAiBaseBranchPolicy} (child PRs target `{CliRuntimeContracts.MainAiIntegrationBaseBranch}`).");
         writer.WriteLine($"--topology values: {TopologySameRepo} (G348 — adds same-repo forbidden-path guidance to child prompts; host intent metadata paths `.intent-cli/**` and `intents/**` are visible but forbidden for implementation agents).");

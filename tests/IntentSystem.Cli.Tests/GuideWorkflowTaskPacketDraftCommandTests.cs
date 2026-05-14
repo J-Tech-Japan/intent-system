@@ -176,4 +176,50 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
             }
         };
     }
+
+    // ----- G349: copilot-local host agent can ask packet-draft guide -----
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostCwd_CanAskPacketDraftGuide_ExitZero()
+    {
+        // G349 Verification: a local Copilot host agent running in a host cwd
+        // can call `guide workflow task packet-draft` and receive full packet
+        // directory layout and contract completeness guidance (exit 0).
+        // This surface is accessible to any host-cwd agent including copilot-local.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskPacketDraftCommand.Execute(
+            CreateContext(),
+            Array.Empty<string>(),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        // All four packet files surfaced.
+        Assert.Contains("packet.yaml", output, StringComparison.Ordinal);
+        Assert.Contains("implementation.md", output, StringComparison.Ordinal);
+        Assert.Contains("review-context.md", output, StringComparison.Ordinal);
+        Assert.Contains("github-body.md", output, StringComparison.Ordinal);
+        // Canonical packet-draft command named.
+        Assert.Contains("intent-cli packet draft", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G349_CopilotLocalHostCwd_PacketDraftJsonFormat_ExitZero()
+    {
+        // G349 Verification: local Copilot host agent can request JSON format from
+        // the packet-draft guide and gets a parsable payload with packet files.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskPacketDraftCommand.Execute(
+            CreateContext(),
+            new[] { "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("packet_files", out _), "packet_files key must be present.");
+    }
 }
