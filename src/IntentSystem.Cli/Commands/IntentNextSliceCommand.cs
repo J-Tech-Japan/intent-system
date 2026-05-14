@@ -33,6 +33,16 @@ internal static class IntentNextSliceCommand
     /// </summary>
     internal const string OutcomeDesignNeeded = "design-needed";
 
+    /// <summary>
+    /// G354: emitted when the packet candidate has missing contract sections
+    /// but ALL of them are <c>mechanical-repairable</c> (e.g.
+    /// <c>Verification</c>, <c>Related Links</c>). The result carries
+    /// per-section repair guidance so the host agent can append the
+    /// missing boilerplate without operator input and immediately
+    /// re-run to reach <c>issue-cut-ready</c>.
+    /// </summary>
+    internal const string OutcomePacketGapMechanicalRepairable = "packet-gap-mechanical-repairable";
+
     // G285: surfaced in `warnings` when the clarification file has stale
     // front-matter (`intent_state: open`) but the body explicitly records no
     // current blockers / open questions. The candidate may still publish.
@@ -348,12 +358,21 @@ internal static class IntentNextSliceCommand
         // `default-design` per `NextSlicePacketProvenanceReader`.
         var provenance = NextSlicePacketProvenanceReader.Read(directory);
 
+        // G354: classify missing sections as mechanical-repairable vs
+        // product-clarification-required so the host agent knows whether
+        // it can apply boilerplate templates autonomously or must wait
+        // for an operator/product decision.
+        var gapAnalysis = missing.Count > 0
+            ? PacketContractGapAnalyzer.Analyze(missing, directory)
+            : null;
+
         return new IntentNextSliceCandidate
         {
             ExecutionUnit = executionUnit,
             PacketDirectory = directory,
             GithubBodyPresent = githubBodyPresent,
             MissingContractSections = missing,
+            GapAnalysis = gapAnalysis,
             Provenance = provenance
         };
     }
@@ -413,6 +432,17 @@ internal static class IntentNextSliceCommand
 
         if (candidate.MissingContractSections.Count > 0)
         {
+            // G354: when every missing section is mechanical-repairable
+            // (Verification, Related Links), surface the specific repair
+            // outcome so the host agent can apply the boilerplate templates
+            // autonomously — no operator clarification needed.
+            if (candidate.GapAnalysis is not null
+                && candidate.GapAnalysis.OverallClassification ==
+                    PacketContractGapAnalyzer.ClassificationMechanicalRepairable)
+            {
+                return OutcomePacketGapMechanicalRepairable;
+            }
+
             return OutcomeClarificationRequired;
         }
 
@@ -827,6 +857,16 @@ internal sealed record IntentNextSliceCandidate
 
     [JsonPropertyName("missing_contract_sections")]
     public required IReadOnlyList<string> MissingContractSections { get; init; }
+
+    /// <summary>
+    /// G354: per-section gap classification and repair guidance.
+    /// Non-null only when <see cref="MissingContractSections"/> is non-empty.
+    /// When <see cref="PacketContractGapAnalysisResult.OverallClassification"/>
+    /// is <c>mechanical-repairable</c>, <see cref="PacketContractGapAnalysisResult.RepairGuidance"/>
+    /// contains actionable instructions the host agent can apply immediately.
+    /// </summary>
+    [JsonPropertyName("gap_analysis")]
+    public PacketContractGapAnalysisResult? GapAnalysis { get; init; }
 
     /// <summary>
     /// G328: packet provenance — which role authored the packet
