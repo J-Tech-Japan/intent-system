@@ -36,6 +36,16 @@ internal static class CliRuntimeContracts
     public const string DefaultBaseBranchPolicy = DirectMainBaseBranchPolicy;
     public const string DirectMainBaseBranch = "main";
     public const string MainAiIntegrationBaseBranch = "main-ai";
+    /// <summary>G350: config key for the final stable branch in same-repo topology (e.g. "main").</summary>
+    public const string StableBranchKey = "stable_branch";
+    /// <summary>G350: config key for the branch implementation PRs target in same-repo topology.</summary>
+    public const string ImplementationBaseBranchKey = "implementation_base_branch";
+    /// <summary>G350: config key for the dedicated metadata direct-push branch in same-repo topology.</summary>
+    public const string MetadataBranchKey = "metadata_branch";
+    /// <summary>G350: conventional default for the stable branch.</summary>
+    public const string DefaultStableBranch = "main";
+    /// <summary>G350: conventional default for the metadata branch in same-repo topology.</summary>
+    public const string DefaultMetadataBranch = "main-metadata";
     public const string DefaultWorktreeRoot = ".intent-cli/worktrees";
     public const string DefaultSupervisionArtifactRoot = ".intent-cli/supervision";
     public const string DefaultDirectRunArtifactRoot = ".intent-cli/runs";

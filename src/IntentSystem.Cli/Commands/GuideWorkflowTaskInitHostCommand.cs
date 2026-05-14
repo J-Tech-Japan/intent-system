@@ -108,6 +108,8 @@ internal static class GuideWorkflowTaskInitHostCommand
     /// <c>--topology same-repo</c> is passed. Documents the branch
     /// strategy, the forbidden paths for implementation agents, and
     /// the warning when no base-branch policy is configured.
+    /// G350: extended with <see cref="SameRepoMetadataLaneGuidance"/> that
+    /// describes the three-branch lane model (stable / implementation / metadata).
     /// </summary>
     internal static readonly SameRepoTopologyGuidance SameRepoTopology = new()
     {
@@ -130,7 +132,23 @@ internal static class GuideWorkflowTaskInitHostCommand
             "Host metadata changes committed to the integration branch are automatically visible to the next implementation PR; no separate host repo checkout is required in same-repo topology.",
             "The design host and review-runtime roles BOTH run from the same local checkout of this one repository. The `.intent-cli/` directory is present and REQUIRED for host operations; it is FORBIDDEN for implementation agents working on feature branches."
         },
-        Warning = "SAME-REPO TOPOLOGY WARNING: when `base_branch_policy` is not configured (or is `direct-main`), child implementation agents will default to targeting `main` directly. In a same-repo project this is almost certainly wrong. Set `base_branch_policy: main-ai` in `.intent-cli/config.yaml` and ensure every published child issue includes a `Base Branch Policy` section pointing at the integration branch."
+        Warning = "SAME-REPO TOPOLOGY WARNING: when `base_branch_policy` is not configured (or is `direct-main`), child implementation agents will default to targeting `main` directly. In a same-repo project this is almost certainly wrong. Set `base_branch_policy: main-ai` in `.intent-cli/config.yaml` and ensure every published child issue includes a `Base Branch Policy` section pointing at the integration branch.",
+        // G350: metadata lane guidance for the three-branch model.
+        MetadataLane = new SameRepoMetadataLaneGuidance
+        {
+            StableBranchRole = "`stable_branch` (e.g. `main`): the final stable branch. Human-controlled merges only — host agents and implementation agents MUST NOT direct-push here. Declare in [project] stable_branch = \"main\".",
+            ImplementationBaseBranchRole = "`implementation_base_branch` (e.g. `main` or `main-ai`): the branch implementation PRs target. MUST NOT include `.intent-cli/**` or `intents/**` path changes. Declare in [project] implementation_base_branch = \"main-ai\".",
+            MetadataBranchRole = "`metadata_branch` (e.g. `main-metadata`): dedicated branch for host-owned metadata direct-push. `.intent-cli/**`, `intents/**`, queue-state, runs.jsonl, packet artifacts, clarifications, and closeout state are committed and pushed directly here by host agents via intent-cli commands. Implementation PRs MUST NOT target this branch and MUST NOT include metadata path changes. Declare in [project] metadata_branch = \"main-metadata\".",
+            Diagnostics = new[]
+            {
+                "Metadata mutation on wrong branch: before committing queue-state, runs.jsonl, or packet artifacts, verify `git rev-parse --abbrev-ref HEAD` returns the configured `metadata_branch`. If not, switch: `git checkout <metadata_branch>` (or create it if missing) before any mutation.",
+                "Implementation PR touches metadata paths: reject any PR diff that modifies `.intent-cli/**` or `intents/**` when targeting `implementation_base_branch`. These paths are metadata-lane-only and must not appear in implementation PR branches.",
+                "Missing metadata branch: if `metadata_branch` does not exist on origin, create it before first host commit: `git checkout -b <metadata_branch> <stable_branch> && git push -u origin <metadata_branch>`.",
+                "Stale metadata branch: if the local `metadata_branch` is behind `origin/<metadata_branch>`, run `git fetch --all --prune && git pull --ff-only origin <metadata_branch>` before any mutation to avoid divergence.",
+                "Single-lane fallback: if `metadata_branch` is not configured, host metadata is committed to the same branch as implementation work (the G348 integration-branch model). This is acceptable for simple projects but increases merge-conflict risk for high-churn metadata."
+            },
+            ConfigExample = "[project]\nstable_branch = \"main\"\nimplementation_base_branch = \"main-ai\"\nmetadata_branch = \"main-metadata\"\nbase_branch_policy = \"main-ai\""
+        }
     };
 
     /// <summary>
@@ -224,6 +242,28 @@ internal static class GuideWorkflowTaskInitHostCommand
             ? SameRepoTopology.Warning
             : null;
 
+        // G350: resolve effective same-repo branch lane values from config.
+        var effectiveMetadataBranch = isSameRepo
+            ? (string.IsNullOrWhiteSpace(context.Config.Project.MetadataBranch)
+                ? null
+                : context.Config.Project.MetadataBranch)
+            : null;
+        var effectiveImplementationBaseBranch = isSameRepo
+            ? (string.IsNullOrWhiteSpace(context.Config.Project.ImplementationBaseBranch)
+                ? null
+                : context.Config.Project.ImplementationBaseBranch)
+            : null;
+        var effectiveStableBranch = isSameRepo
+            ? (string.IsNullOrWhiteSpace(context.Config.Project.StableBranch)
+                ? null
+                : context.Config.Project.StableBranch)
+            : null;
+        // G350: when same-repo topology is active but metadata_branch is not configured,
+        // surface an advisory diagnostic (single-lane fallback — acceptable but noted).
+        var metadataLaneWarning = isSameRepo && string.IsNullOrWhiteSpace(context.Config.Project.MetadataBranch)
+            ? "METADATA LANE NOT CONFIGURED: `metadata_branch` is not set in `.intent-cli/config.toml`. Host metadata will be committed to the same branch as implementation work (single-lane fallback). Consider declaring `metadata_branch = \"main-metadata\"` to separate high-churn metadata from implementation history."
+            : null;
+
         // G349: copilot-local agent guidance when --agent copilot-local is set.
         var isCopilotLocal = string.Equals(agent, "copilot-local", StringComparison.Ordinal);
         var copilotLocalGuidance = isCopilotLocal ? CopilotLocalAgent : null;
@@ -243,6 +283,10 @@ internal static class GuideWorkflowTaskInitHostCommand
                 Refusals = refusalReasons.Count == 0 ? null : refusalReasons,
                 SameRepoTopology = sameRepoGuidance,
                 SameRepoPolicyWarning = sameRepoPolicyWarning,
+                EffectiveMetadataBranch = effectiveMetadataBranch,
+                EffectiveImplementationBaseBranch = effectiveImplementationBaseBranch,
+                EffectiveStableBranch = effectiveStableBranch,
+                MetadataLaneWarning = metadataLaneWarning,
                 CopilotLocalAgent = copilotLocalGuidance
             };
             writer.Write(JsonSerializer.Serialize(payload, JsonOptions));
@@ -250,7 +294,7 @@ internal static class GuideWorkflowTaskInitHostCommand
         }
         else
         {
-            WriteMarkdown(visibleRoles, hasDotIntentCli, forceHost, refusalReasons, sameRepoGuidance, sameRepoPolicyWarning, copilotLocalGuidance, writer);
+            WriteMarkdown(visibleRoles, hasDotIntentCli, forceHost, refusalReasons, sameRepoGuidance, sameRepoPolicyWarning, effectiveMetadataBranch, effectiveImplementationBaseBranch, effectiveStableBranch, metadataLaneWarning, copilotLocalGuidance, writer);
         }
 
         return refusalReasons.Count == 0 ? 0 : 1;
@@ -283,6 +327,10 @@ internal static class GuideWorkflowTaskInitHostCommand
         IReadOnlyList<string> refusals,
         SameRepoTopologyGuidance? sameRepoGuidance,
         string? sameRepoPolicyWarning,
+        string? effectiveMetadataBranch,
+        string? effectiveImplementationBaseBranch,
+        string? effectiveStableBranch,
+        string? metadataLaneWarning,
         CopilotLocalAgentGuidance? copilotLocalGuidance,
         TextWriter writer)
     {
@@ -365,6 +413,39 @@ internal static class GuideWorkflowTaskInitHostCommand
             {
                 writer.WriteLine();
                 writer.WriteLine($"⚠ {sameRepoPolicyWarning}");
+            }
+
+            // G350: emit metadata lane section.
+            if (sameRepoGuidance.MetadataLane is not null)
+            {
+                writer.WriteLine();
+                writer.WriteLine("### Metadata lane (three-branch model)");
+                writer.WriteLine();
+                writer.WriteLine($"- {sameRepoGuidance.MetadataLane.StableBranchRole}");
+                writer.WriteLine($"- {sameRepoGuidance.MetadataLane.ImplementationBaseBranchRole}");
+                writer.WriteLine($"- {sameRepoGuidance.MetadataLane.MetadataBranchRole}");
+                writer.WriteLine();
+                writer.WriteLine("#### Effective branch configuration (from context)");
+                writer.WriteLine($"- stable_branch: `{effectiveStableBranch ?? "(not configured)"}`");
+                writer.WriteLine($"- implementation_base_branch: `{effectiveImplementationBaseBranch ?? "(not configured — derive from base_branch_policy)"}`");
+                writer.WriteLine($"- metadata_branch: `{effectiveMetadataBranch ?? "(not configured — single-lane fallback)"}`");
+                writer.WriteLine();
+                writer.WriteLine("#### Diagnostics");
+                foreach (var diag in sameRepoGuidance.MetadataLane.Diagnostics)
+                {
+                    writer.WriteLine($"- {diag}");
+                }
+                writer.WriteLine();
+                writer.WriteLine("#### Config example (`.intent-cli/config.toml`)");
+                writer.WriteLine("```toml");
+                writer.WriteLine(sameRepoGuidance.MetadataLane.ConfigExample);
+                writer.WriteLine("```");
+
+                if (metadataLaneWarning is not null)
+                {
+                    writer.WriteLine();
+                    writer.WriteLine($"⚠ {metadataLaneWarning}");
+                }
             }
         }
 
@@ -595,11 +676,28 @@ internal sealed record InitHostGuidance
     /// <summary>G349: copilot-local agent guidance; null when <c>--agent copilot-local</c> is not set.</summary>
     [JsonPropertyName("copilot_local_agent")]
     public CopilotLocalAgentGuidance? CopilotLocalAgent { get; init; }
+
+    /// <summary>G350: effective metadata branch resolved from config; null when same-repo topology is not active or not configured.</summary>
+    [JsonPropertyName("effective_metadata_branch")]
+    public string? EffectiveMetadataBranch { get; init; }
+
+    /// <summary>G350: effective implementation base branch resolved from config; null when same-repo topology is not active or not configured.</summary>
+    [JsonPropertyName("effective_implementation_base_branch")]
+    public string? EffectiveImplementationBaseBranch { get; init; }
+
+    /// <summary>G350: effective stable branch resolved from config; null when same-repo topology is not active or not configured.</summary>
+    [JsonPropertyName("effective_stable_branch")]
+    public string? EffectiveStableBranch { get; init; }
+
+    /// <summary>G350: advisory warning when same-repo topology is active but metadata_branch is not configured (single-lane fallback).</summary>
+    [JsonPropertyName("metadata_lane_warning")]
+    public string? MetadataLaneWarning { get; init; }
 }
 
 /// <summary>
 /// G348: same-repo topology guidance emitted when
 /// <c>--topology same-repo</c> is passed to <c>guide workflow task init-host</c>.
+/// G350: extended with <see cref="MetadataLane"/> for the three-branch lane model.
 /// </summary>
 internal sealed record SameRepoTopologyGuidance
 {
@@ -617,6 +715,34 @@ internal sealed record SameRepoTopologyGuidance
 
     [JsonPropertyName("warning")]
     public required string Warning { get; init; }
+
+    /// <summary>G350: three-branch lane model guidance (stable / implementation / metadata).</summary>
+    [JsonPropertyName("metadata_lane")]
+    public SameRepoMetadataLaneGuidance? MetadataLane { get; init; }
+}
+
+/// <summary>
+/// G350: guidance for the same-repo three-branch lane model.
+/// Documents the roles of <c>stable_branch</c>, <c>implementation_base_branch</c>,
+/// and <c>metadata_branch</c> in a same-repo topology, plus diagnostic checks
+/// that agents must run before operating on each lane.
+/// </summary>
+internal sealed record SameRepoMetadataLaneGuidance
+{
+    [JsonPropertyName("stable_branch_role")]
+    public required string StableBranchRole { get; init; }
+
+    [JsonPropertyName("implementation_base_branch_role")]
+    public required string ImplementationBaseBranchRole { get; init; }
+
+    [JsonPropertyName("metadata_branch_role")]
+    public required string MetadataBranchRole { get; init; }
+
+    [JsonPropertyName("diagnostics")]
+    public required IReadOnlyList<string> Diagnostics { get; init; }
+
+    [JsonPropertyName("config_example")]
+    public required string ConfigExample { get; init; }
 }
 
 /// <summary>

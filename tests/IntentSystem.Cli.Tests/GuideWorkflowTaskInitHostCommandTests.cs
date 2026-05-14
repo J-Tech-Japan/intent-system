@@ -628,4 +628,242 @@ public sealed class GuideWorkflowTaskInitHostCommandTests : IDisposable
         var output = writer.ToString();
         Assert.Contains("--agent must be 'copilot-local'", output, StringComparison.Ordinal);
     }
+
+    // ----- G350: same-repo metadata branch lane guidance -----
+
+    [Fact]
+    public void Execute_G350_TopologySameRepo_MarkdownIncludesMetadataLaneSection()
+    {
+        // G350 AC: `guide workflow task init-host --topology same-repo` must
+        // emit a Metadata Lane section describing the three branch roles.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--topology", "same-repo" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Metadata lane", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stable_branch", output, StringComparison.Ordinal);
+        Assert.Contains("implementation_base_branch", output, StringComparison.Ordinal);
+        Assert.Contains("metadata_branch", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G350_TopologySameRepo_JsonIncludesMetadataLaneNode()
+    {
+        // G350 AC: JSON shape must include `metadata_lane` under `same_repo_topology`
+        // with stable_branch_role, implementation_base_branch_role, metadata_branch_role,
+        // diagnostics, and config_example.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--topology", "same-repo", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("same_repo_topology", out var srt),
+            "same_repo_topology must be present.");
+        Assert.True(srt.TryGetProperty("metadata_lane", out var ml),
+            "metadata_lane must be present in same_repo_topology.");
+        Assert.True(ml.TryGetProperty("stable_branch_role", out _), "stable_branch_role must be present.");
+        Assert.True(ml.TryGetProperty("implementation_base_branch_role", out _), "implementation_base_branch_role must be present.");
+        Assert.True(ml.TryGetProperty("metadata_branch_role", out _), "metadata_branch_role must be present.");
+        Assert.True(ml.TryGetProperty("diagnostics", out var diags), "diagnostics must be present.");
+        Assert.True(diags.GetArrayLength() > 0, "diagnostics must be non-empty.");
+        Assert.True(ml.TryGetProperty("config_example", out _), "config_example must be present.");
+    }
+
+    [Fact]
+    public void Execute_G350_TopologySameRepo_NoMetadataBranch_EmitsMetadataLaneWarning()
+    {
+        // G350 AC: when same-repo topology is selected but metadata_branch is not
+        // configured, an advisory warning about single-lane fallback must appear.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--topology", "same-repo" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("METADATA LANE NOT CONFIGURED", output, StringComparison.Ordinal);
+        Assert.Contains("single-lane fallback", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_G350_TopologySameRepo_WithMetadataBranch_NoMetadataLaneWarning()
+    {
+        // G350 AC: when same-repo topology AND metadata_branch are configured,
+        // the metadata lane warning must NOT appear.
+        using var writer = new StringWriter();
+
+        var context = CreateContextWithBranchLane(emptyCwd, "main-metadata", "main-ai", "main");
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            context,
+            new[] { "--topology", "same-repo" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.DoesNotContain("METADATA LANE NOT CONFIGURED", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G350_TopologySameRepo_WithMetadataBranch_JsonIncludesEffectiveBranches()
+    {
+        // G350 AC: when metadata branch lane is configured, the JSON payload must
+        // surface effective_metadata_branch, effective_implementation_base_branch,
+        // and effective_stable_branch with the resolved values.
+        using var writer = new StringWriter();
+
+        var context = CreateContextWithBranchLane(emptyCwd, "main-metadata", "main-ai", "main");
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            context,
+            new[] { "--topology", "same-repo", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("effective_metadata_branch", out var emb),
+            "effective_metadata_branch must be present.");
+        Assert.Equal("main-metadata", emb.GetString());
+        Assert.True(root.TryGetProperty("effective_implementation_base_branch", out var eibb),
+            "effective_implementation_base_branch must be present.");
+        Assert.Equal("main-ai", eibb.GetString());
+        Assert.True(root.TryGetProperty("effective_stable_branch", out var esb),
+            "effective_stable_branch must be present.");
+        Assert.Equal("main", esb.GetString());
+    }
+
+    [Fact]
+    public void Execute_G350_NoTopology_MetadataLaneAbsent()
+    {
+        // G350: when --topology is not passed, metadata_lane must be absent.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.False(root.TryGetProperty("effective_metadata_branch", out _),
+            "effective_metadata_branch must be absent when --topology is not set.");
+        Assert.False(root.TryGetProperty("metadata_lane_warning", out _),
+            "metadata_lane_warning must be absent when --topology is not set.");
+    }
+
+    [Fact]
+    public void Execute_G350_TopologySameRepo_DiagnosticsIncludeWrongBranchCheck()
+    {
+        // G350 Verification: metadata lane diagnostics must include guidance about
+        // checking the current branch before metadata mutation.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--topology", "same-repo" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        // Diagnostic for wrong-branch metadata mutation.
+        Assert.Contains("wrong branch", output, StringComparison.OrdinalIgnoreCase);
+        // Diagnostic for implementation PR touching metadata paths.
+        Assert.Contains(".intent-cli/**", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G350_TopologySameRepo_ConfigExampleMentionsAllThreeBranches()
+    {
+        // G350 Verification: the config_example must show all three branch keys
+        // so operators can copy-paste a working configuration.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskInitHostCommand.Execute(
+            CreateContext(emptyCwd),
+            new[] { "--topology", "same-repo" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        // All three branch keys appear in the config example.
+        Assert.Contains("stable_branch", output, StringComparison.Ordinal);
+        Assert.Contains("implementation_base_branch", output, StringComparison.Ordinal);
+        Assert.Contains("metadata_branch", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G350_ProjectConfig_SupportsThreeBranchLaneFields()
+    {
+        // G350 AC: ProjectConfig must expose StableBranch, ImplementationBaseBranch,
+        // and MetadataBranch properties that default to empty (not configured).
+        var config = new ProjectConfig
+        {
+            Domain = "test",
+            ArtifactRoot = ".intent-cli"
+        };
+
+        Assert.Equal(string.Empty, config.MetadataBranch);
+        Assert.Equal(string.Empty, config.ImplementationBaseBranch);
+        Assert.Equal(string.Empty, config.StableBranch);
+    }
+
+    [Fact]
+    public void Execute_G350_ProjectConfig_CanSetThreeBranchLaneValues()
+    {
+        // G350 AC: ProjectConfig must accept explicit values for the three branch
+        // lane fields when declared in config.
+        var config = new ProjectConfig
+        {
+            Domain = "test",
+            ArtifactRoot = ".intent-cli",
+            StableBranch = "main",
+            ImplementationBaseBranch = "main-ai",
+            MetadataBranch = "main-metadata"
+        };
+
+        Assert.Equal("main", config.StableBranch);
+        Assert.Equal("main-ai", config.ImplementationBaseBranch);
+        Assert.Equal("main-metadata", config.MetadataBranch);
+    }
+
+    private static CliContext CreateContextWithBranchLane(
+        string repoRoot,
+        string metadataBranch,
+        string implementationBaseBranch,
+        string stableBranch)
+    {
+        return new CliContext
+        {
+            RepoRoot = repoRoot,
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "intent-cli",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    MetadataBranch = metadataBranch,
+                    ImplementationBaseBranch = implementationBaseBranch,
+                    StableBranch = stableBranch
+                }
+            }
+        };
+    }
 }
