@@ -110,6 +110,14 @@ internal static class WorkerPrCommentPreflightConstants
     {
         public const string RepairRequired = "repair-required";
         public const string NoActionableComments = "no-actionable-comments";
+
+        /// <summary>
+        /// G353: All actionable comments target host metadata paths
+        /// (<c>.intent-cli/**</c> or <c>intents/**</c>). The child worker
+        /// must not attempt to repair these; the host agent must commit/push
+        /// the artifact fix and re-run review readiness.
+        /// </summary>
+        public const string HostArtifactRepairRequired = "host-artifact-repair-required";
         public const string RequestUpdatePending = "request-update-pending";
         public const string UpdateInProgress = "update-in-progress";
         public const string MissingTargetLabel = "missing-target-label";
@@ -128,6 +136,12 @@ internal static class WorkerPrCommentPreflightConstants
         public const string DeclineWithSummary = "decline-with-summary";
         public const string LabelCleanupRequired = "label-cleanup-required";
         public const string SwitchRepo = "switch-repo";
+
+        /// <summary>
+        /// G353: Escalate to the host repair agent; the child worker must not
+        /// edit host metadata paths (<c>.intent-cli/**</c>, <c>intents/**</c>).
+        /// </summary>
+        public const string EscalateToHostRepair = "escalate-to-host-repair";
     }
 
     public static class Labels
