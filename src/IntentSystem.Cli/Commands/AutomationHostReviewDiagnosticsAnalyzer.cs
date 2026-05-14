@@ -29,7 +29,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         int reconcileHighConfidenceRepairsAvailable = 0,
         bool allowWipCapOverride = false,
         bool? prDraft = null,
-        int publishRecoveryHighConfidenceRepairsAvailable = 0)
+        int publishRecoveryHighConfidenceRepairsAvailable = 0,
+        bool workspaceSafeDirty = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(openPrs);
@@ -215,17 +216,44 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 warnings);
         }
 
+        // G355: workspace-safe-dirty is a deterministic repair when host-sync-preflight
+        // returns dirty-unrelated-submodule (G352). The workspace-guard stash lane can
+        // stash the unrelated paths and the wake proceeds cleanly. Surface this before
+        // the review/WIP checks so the host loop knows to apply the workspace-guard
+        // repair rather than aborting the wake.
+        if (workspaceSafeDirty)
+        {
+            details.Add(new AutomationHostReviewDiagnosticsDetail
+            {
+                Kind = SafeRepairCategories.WorkspaceSafeDirty,
+                TargetKind = null,
+                TargetNumber = null,
+                TargetUrl = null,
+                Description = "host-sync-preflight reported dirty-unrelated-submodule; workspace-guard stash lane is the deterministic repair.",
+            });
+            return Build(
+                repo,
+                AutomationHostReviewDiagnosticsClassifications.RepairedAndRetry,
+                "Host working tree has an unrelated dirty submodule or safe dirty path. Run `automation workspace-guard --mode begin --write` to stash it before the wake body, then `--mode end --write` after the push lands.",
+                recommendedNextCommand: $"intent-cli automation workspace-guard --mode begin --write --format json",
+                clarification: null,
+                details,
+                warnings,
+                safeRepairCategory: SafeRepairCategories.WorkspaceSafeDirty);
+        }
+
         if (stuckReviewingPr is not null)
         {
             details.Add(stuckReviewingPr);
             return Build(
                 repo,
                 AutomationHostReviewDiagnosticsClassifications.StuckReviewing,
-                $"PR #{stuckReviewingPr.TargetNumber} appears to be stuck mid-review. The host loop will not advance until intent-pr-reviewing is paired with an exit-transition label.",
-                recommendedNextCommand: $"intent-cli automation pr-transition --transition request-update --repo {repo} --pr {stuckReviewingPr.TargetNumber} --write --format json (or --transition approved when review is complete)",
+                $"PR #{stuckReviewingPr.TargetNumber} has a stale review lease (intent-pr-reviewing with no active review). Release the lease with `pr-transition --transition review-release` and retry review selection on the next wake.",
+                recommendedNextCommand: $"intent-cli automation pr-transition --transition review-release --repo {repo} --pr {stuckReviewingPr.TargetNumber} --write --format json",
                 clarification: null,
                 details,
-                warnings);
+                warnings,
+                safeRepairCategory: SafeRepairCategories.StaleReviewLease);
         }
 
         if (missingTargetPr is not null)
@@ -319,7 +347,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                         + $" && intent-cli automation issue-publish --repo {repo} --issue <new-issue-number> --write --format json",
                     clarification: null,
                     details,
-                    warnings);
+                    warnings,
+                    safeRepairCategory: SafeRepairCategories.IssuePublishGap);
             }
 
             details.Add(new AutomationHostReviewDiagnosticsDetail
@@ -365,7 +394,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                     + $" && intent-cli automation issue-publish --repo {repo} --issue <new-issue-number> --write --format json",
                 clarification: null,
                 details,
-                warnings);
+                warnings,
+                safeRepairCategory: SafeRepairCategories.IssuePublishGap);
         }
 
         // G313: when publish-recovery reports an unapplied high-confidence
@@ -393,7 +423,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 recommendedNextCommand: $"intent-cli automation publish-recovery --repo {repo} --write --format json",
                 clarification: null,
                 details,
-                warnings);
+                warnings,
+                safeRepairCategory: SafeRepairCategories.ReviewLinkageGap);
         }
 
         // G286: when reconcile has unapplied high-confidence repairs and no
@@ -417,7 +448,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 recommendedNextCommand: $"intent-cli automation reconcile --lane host-review --repo {repo} --write --format json",
                 clarification: null,
                 details,
-                warnings);
+                warnings,
+                safeRepairCategory: SafeRepairCategories.HostArtifactRepair);
         }
 
         return Build(
@@ -437,7 +469,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         string? recommendedNextCommand,
         AutomationHostReviewDiagnosticsClarification? clarification,
         IReadOnlyList<AutomationHostReviewDiagnosticsDetail> details,
-        IReadOnlyList<string> warnings) =>
+        IReadOnlyList<string> warnings,
+        string? safeRepairCategory = null) =>
         new()
         {
             Repo = repo,
@@ -448,6 +481,11 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
             StructuredClarification = clarification,
             Details = details,
             Warnings = warnings,
+            // G355: safe_repair_available is true only when a high-confidence
+            // deterministic repair is declared by diagnostics — never for
+            // unsafe-metadata, clarification-required, or true-idle paths.
+            SafeRepairAvailable = safeRepairCategory is not null,
+            SafeRepairCategory = safeRepairCategory,
         };
 
     private static IReadOnlyList<int> ExtractLinkedIssueNumbers(string repo, GitHubAutomationPrCandidate pr)
