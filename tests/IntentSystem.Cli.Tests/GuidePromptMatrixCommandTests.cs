@@ -2218,4 +2218,62 @@ public sealed class GuidePromptMatrixCommandTests
         // And the child loop must say: return to host loop for handling.
         Assert.Contains("host loop", prompt, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void Execute_G355_HostLoopPrompt_ContainsStaleReviewLeaseCategory()
+    {
+        // G355 AC: Prompt-matrix host-loop text includes stale-review-lease
+        // as a defined category with review-release as the repair action.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("stale-review-lease", prompt, StringComparison.Ordinal);
+        Assert.Contains("review-release", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G355_HostLoopPrompt_ContainsWorkspaceSafeDirtyCategory()
+    {
+        // G355 AC: Prompt-matrix host-loop text includes workspace-safe-dirty
+        // as a defined category with workspace-guard as the repair action.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("workspace-safe-dirty", prompt, StringComparison.Ordinal);
+        Assert.Contains("workspace-guard", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G355_ChildLoopPrompt_ContainsChildSelectorLabelGapCategory()
+    {
+        // G355 AC: Child-loop guidance explicitly names child-selector-label-gap
+        // as the child-side repair category and clarifies that host-only
+        // categories must NOT be repaired by the child loop.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("child-selector-label-gap", prompt, StringComparison.Ordinal);
+        // The guidance must also enumerate the host-only categories that must
+        // not be repaired by the child loop.
+        Assert.Contains("stale-review-lease", prompt, StringComparison.Ordinal);
+        Assert.Contains("workspace-safe-dirty", prompt, StringComparison.Ordinal);
+    }
 }

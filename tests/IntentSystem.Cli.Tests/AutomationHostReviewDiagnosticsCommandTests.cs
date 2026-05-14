@@ -1031,6 +1031,63 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Null(result.SafeRepairCategory);
     }
 
+    [Fact]
+    public void Execute_G355_StuckReviewing_SetsSafeRepairAvailableTrueWithStaleReviewLease()
+    {
+        // G355 AC: When diagnostics classifies stuck-reviewing (stale review
+        // lease), safe_repair_available must be true and safe_repair_category
+        // must be stale-review-lease. The recommended_next_command must
+        // reference pr-transition --transition review-release.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(490, "stuck reviewing", "https://github.com/J-Tech-Japan/intent-system/pull/490",
+                    body: "Closes #559", labels: ["intent-target", "intent-pr-reviewing"]),
+            ],
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("stuck-reviewing", result.Classification);
+        Assert.True(result.SafeRepairAvailable);
+        Assert.Equal("stale-review-lease", result.SafeRepairCategory);
+        Assert.NotNull(result.RecommendedNextCommand);
+        Assert.Contains("review-release", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G355_WorkspaceSafeDirty_SetsSafeRepairAvailableTrue()
+    {
+        // G355 AC: When --workspace-safe-dirty is passed, diagnostics must
+        // return repaired-and-retry with safe_repair_available: true and
+        // safe_repair_category: workspace-safe-dirty. This signals the host
+        // loop to run workspace-guard --mode begin --write before proceeding.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--workspace-safe-dirty", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("repaired-and-retry", result.Classification);
+        Assert.True(result.SafeRepairAvailable);
+        Assert.Equal("workspace-safe-dirty", result.SafeRepairCategory);
+        Assert.NotNull(result.RecommendedNextCommand);
+        Assert.Contains("workspace-guard", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// G342: deterministic stand-in for the publish-recovery probe.
     /// </summary>

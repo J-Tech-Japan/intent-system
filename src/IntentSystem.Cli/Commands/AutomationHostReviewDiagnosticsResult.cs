@@ -208,4 +208,30 @@ internal static class SafeRepairCategories
     /// <c>issue-publish-ready</c>).
     /// </summary>
     public const string IssuePublishGap = "issue-publish-gap";
+
+    /// <summary>
+    /// G355: A review lease is stale — the PR carries <c>intent-pr-reviewing</c>
+    /// with no active review in progress. The deterministic repair is
+    /// <c>pr-transition --transition review-release</c> (G292). After releasing
+    /// the lease the host loop retries review selection once.
+    /// </summary>
+    public const string StaleReviewLease = "stale-review-lease";
+
+    /// <summary>
+    /// G355: The host working tree has an unrelated dirty submodule or safe dirty
+    /// path that the workspace-guard stash lane can handle deterministically
+    /// (G352). The repair is <c>automation workspace-guard --mode begin --write</c>
+    /// before the wake body and <c>--mode end --write</c> after the push lands.
+    /// </summary>
+    public const string WorkspaceSafeDirty = "workspace-safe-dirty";
+
+    /// <summary>
+    /// G355 (child-loop only): A GitHub label state gap on the selected issue or
+    /// PR can be closed deterministically by re-applying the correct label via
+    /// <c>intent-cli worker</c> commands. This category is surfaced by child-loop
+    /// preflight (<c>worker issue-preflight</c> / <c>worker pr-comment-preflight</c>)
+    /// and MUST NOT be repaired by the child loop if the gap targets host metadata
+    /// paths (<c>.intent-cli/**</c>, <c>intents/**</c>).
+    /// </summary>
+    public const string ChildSelectorLabelGap = "child-selector-label-gap";
 }
