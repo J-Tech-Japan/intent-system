@@ -38,6 +38,8 @@ internal static class AutomationCloseoutDriftCheckCommand
     internal const string ReasonAmbiguousMapping = "ambiguous-pr-mapping";
     internal const string ReasonNoLinkedPr = "no-linked-pr";
     internal const string ReasonLookupFailed = "pr-lookup-failed";
+    internal const string ReasonMissingClosingIssueLinkage = "missing-closing-issue-linkage";
+    internal const string ReasonClosingIssueMismatch = "closing-issue-mismatch";
 
     /// <summary>Test seam — replaces the gh-backed PR lookup.</summary>
     public static Func<IGitHubPrLookup>? PrLookupFactory { get; set; }
@@ -231,24 +233,75 @@ internal static class AutomationCloseoutDriftCheckCommand
                 continue;
             }
 
-            // PR is merged and queue item is not Completed → safe repair.
+            // G356: PR is merged — verify closing-issue linkage before emitting safe-repair.
+            // The closing issue in GitHub must match the linked issue on the queue item.
+            // Missing or mismatched linkage → unsafe-stop (determinism requirement).
+            var linkedIssueNumber = singleItem.LinkedIssue?.Number;
+            if (linkedIssueNumber is null)
+            {
+                records.Add(new CloseoutDriftRecord
+                {
+                    ExecutionUnit = singleItem.ExecutionUnit,
+                    Result = ResultUnsafeStop,
+                    ReasonCode = ReasonMissingClosingIssueLinkage,
+                    Explanation = $"PR #{prNumber} is merged but queue item '{singleItem.ExecutionUnit}' has no linked_issue; cannot verify closing-issue linkage deterministically.",
+                    LinkedPrNumber = prNumber,
+                    LinkedIssueNumber = null,
+                });
+                continue;
+            }
+
+            var closingIssues = prView.ClosingIssuesReferences;
+            if (closingIssues.Count == 0)
+            {
+                records.Add(new CloseoutDriftRecord
+                {
+                    ExecutionUnit = singleItem.ExecutionUnit,
+                    Result = ResultUnsafeStop,
+                    ReasonCode = ReasonMissingClosingIssueLinkage,
+                    Explanation = $"PR #{prNumber} is merged but GitHub reports no closing-issue references; cannot confirm it closes issue #{linkedIssueNumber} deterministically.",
+                    LinkedPrNumber = prNumber,
+                    LinkedIssueNumber = linkedIssueNumber,
+                });
+                continue;
+            }
+
+            var matchesLinkedIssue = closingIssues.Any(r => r.Number == linkedIssueNumber.Value);
+            if (!matchesLinkedIssue)
+            {
+                var closingNums = string.Join(", ", closingIssues.Select(r => $"#{r.Number}"));
+                records.Add(new CloseoutDriftRecord
+                {
+                    ExecutionUnit = singleItem.ExecutionUnit,
+                    Result = ResultUnsafeStop,
+                    ReasonCode = ReasonClosingIssueMismatch,
+                    Explanation = $"PR #{prNumber} is merged but its closing issues ({closingNums}) do not include the queue item's linked issue #{linkedIssueNumber}; closing-issue mismatch — cannot apply closeout-drift repair.",
+                    LinkedPrNumber = prNumber,
+                    LinkedIssueNumber = linkedIssueNumber,
+                });
+                continue;
+            }
+
+            // PR is merged and its closing issues include the queue item's linked issue → safe repair.
             records.Add(new CloseoutDriftRecord
             {
                 ExecutionUnit = singleItem.ExecutionUnit,
                 Result = ResultSafeRepair,
                 ReasonCode = ReasonPrMerged,
-                Explanation = $"PR #{prNumber} is merged but queue item '{singleItem.ExecutionUnit}' is still in state '{singleItem.State.ToString().ToLowerInvariant()}'; closeout-drift repair available.",
+                Explanation = $"PR #{prNumber} is merged and closes issue #{linkedIssueNumber}; queue item '{singleItem.ExecutionUnit}' is still in state '{singleItem.State.ToString().ToLowerInvariant()}' — closeout-drift repair available.",
                 LinkedPrNumber = prNumber,
-                LinkedIssueNumber = singleItem.LinkedIssue?.Number,
+                LinkedIssueNumber = linkedIssueNumber,
             });
         }
 
         var safeRepairCount = records.Count(r => string.Equals(r.Result, ResultSafeRepair, StringComparison.Ordinal));
         var unsafeStopCount = records.Count(r => string.Equals(r.Result, ResultUnsafeStop, StringComparison.Ordinal));
 
-        // Apply repairs if --write.
+        // Apply repairs if --write — but only when there are NO unsafe stops.
+        // Mixed safe+unsafe: fail-closed; do not mutate durable state when any
+        // unsafe stop is present, even if other items are safe-repair candidates.
         var appliedCount = 0;
-        if (write && safeRepairCount > 0)
+        if (write && safeRepairCount > 0 && unsafeStopCount == 0)
         {
             var repairRecords = records
                 .Where(r => string.Equals(r.Result, ResultSafeRepair, StringComparison.Ordinal))
@@ -319,7 +372,9 @@ internal static class AutomationCloseoutDriftCheckCommand
         {
             return 1;
         }
-        if (unsafeStopCount > 0 && safeRepairCount == 0)
+        // Return non-zero when any unsafe stop is present, regardless of safe
+        // repair count. Mixed safe+unsafe is an operator-attention condition.
+        if (unsafeStopCount > 0)
         {
             return 1;
         }
@@ -330,6 +385,10 @@ internal static class AutomationCloseoutDriftCheckCommand
     {
         if (write)
         {
+            if (unsafeStops > 0)
+            {
+                return $"closeout-drift-check (write): blocked — {unsafeStops} unsafe stop(s) present; no mutations applied. {safeRepairs} safe repair(s) detected but skipped due to unsafe stop(s).";
+            }
             return $"closeout-drift-check (write): applied {applied} repair(s); {safeRepairs} safe repair(s) detected, {unsafeStops} unsafe stop(s).";
         }
         return $"closeout-drift-check (dry-run): {safeRepairs} safe repair(s); {unsafeStops} unsafe stop(s).";

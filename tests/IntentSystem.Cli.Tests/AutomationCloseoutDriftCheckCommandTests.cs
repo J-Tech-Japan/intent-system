@@ -22,12 +22,25 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
         AutomationCloseoutDriftCheckCommand.PrLookupFactory = null;
         AutomationCloseoutDriftCheckCommand.UtcNowFactory =
             () => new DateTimeOffset(2026, 5, 15, 10, 0, 0, TimeSpan.Zero);
+        // Reset all diagnostics-command static seams so tests that exercise the
+        // full diagnostics command do not leak state into other test classes.
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = null;
+        AutomationHostReviewDiagnosticsCommand.NestedProviderLauncher = null;
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = null;
+        AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
     }
 
     public void Dispose()
     {
         AutomationCloseoutDriftCheckCommand.PrLookupFactory = null;
         AutomationCloseoutDriftCheckCommand.UtcNowFactory = null;
+        // Restore diagnostics-command static seams after each test.
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = null;
+        AutomationHostReviewDiagnosticsCommand.NestedProviderLauncher = null;
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = null;
+        AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -38,10 +51,13 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
     public void Execute_MergedPrWithNonCompletedItem_ReturnsSafeRepair()
     {
         using var workspace = new DriftWorkspace();
+        // linkedIssueNumber=815: the queue item is for issue #815
         workspace.WriteQueueState(BuildQueueState("G330", "review",
-            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780"));
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780",
+            linkedIssueNumber: 815));
+        // PR #780 is merged and closes issue #815 (matches the queue item)
         AutomationCloseoutDriftCheckCommand.PrLookupFactory = () =>
-            new FakePrLookup(780, merged: true);
+            new FakePrLookup(780, merged: true, closingIssueNumbers: [815]);
 
         using var writer = new StringWriter();
         var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
@@ -61,6 +77,7 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
         Assert.Equal(AutomationCloseoutDriftCheckCommand.ResultSafeRepair, record.Result);
         Assert.Equal(AutomationCloseoutDriftCheckCommand.ReasonPrMerged, record.ReasonCode);
         Assert.Equal(780, record.LinkedPrNumber);
+        Assert.Equal(815, record.LinkedIssueNumber);
     }
 
     [Fact]
@@ -141,10 +158,10 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
     {
         using var workspace = new DriftWorkspace();
         workspace.WriteQueueState(BuildQueueStateWithTwoItems(
-            "G330", "review", "https://github.com/J-Tech-Japan/intent-system/pull/780",
-            "G331", "active", "https://github.com/J-Tech-Japan/intent-system/pull/780"));
+            "G330", "review", "https://github.com/J-Tech-Japan/intent-system/pull/780", linkedIssue1: 815,
+            "G331", "active", "https://github.com/J-Tech-Japan/intent-system/pull/780", linkedIssue2: 816));
         AutomationCloseoutDriftCheckCommand.PrLookupFactory = () =>
-            new FakePrLookup(780, merged: true);
+            new FakePrLookup(780, merged: true, closingIssueNumbers: [815]);
 
         using var writer = new StringWriter();
         var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
@@ -198,9 +215,10 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
     {
         using var workspace = new DriftWorkspace();
         workspace.WriteQueueState(BuildQueueState("G330", "review",
-            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780"));
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780",
+            linkedIssueNumber: 815));
         AutomationCloseoutDriftCheckCommand.PrLookupFactory = () =>
-            new FakePrLookup(780, merged: true);
+            new FakePrLookup(780, merged: true, closingIssueNumbers: [815]);
 
         using var writer = new StringWriter();
         var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
@@ -224,9 +242,10 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
     {
         using var workspace = new DriftWorkspace();
         workspace.WriteQueueState(BuildQueueState("G330", "review",
-            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780"));
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780",
+            linkedIssueNumber: 815));
         AutomationCloseoutDriftCheckCommand.PrLookupFactory = () =>
-            new FakePrLookup(780, merged: true);
+            new FakePrLookup(780, merged: true, closingIssueNumbers: [815]);
 
         using var writer = new StringWriter();
         var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
@@ -276,6 +295,131 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
         Assert.Equal(0, result.AppliedCount);
 
         // Queue-state must be unchanged.
+        Assert.Equal(originalQueueText, workspace.QueueStateOnDisk());
+        // No runs.jsonl created.
+        Assert.Empty(workspace.RunsLines());
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Closing-issue linkage verification (G356 AC)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_MergedPrWithNoLinkedIssueOnQueueItem_ReturnsUnsafeStop()
+    {
+        using var workspace = new DriftWorkspace();
+        // Queue item has no linked_issue (null) → cannot verify closing-issue linkage
+        workspace.WriteQueueState(BuildQueueState("G330", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780",
+            linkedIssueNumber: null));
+        AutomationCloseoutDriftCheckCommand.PrLookupFactory = () =>
+            new FakePrLookup(780, merged: true, closingIssueNumbers: [815]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutDriftCheckResult>(writer.ToString())!;
+        Assert.Equal(0, result.SafeRepairCount);
+        Assert.Equal(1, result.UnsafeStopCount);
+
+        var record = Assert.Single(result.Records);
+        Assert.Equal(AutomationCloseoutDriftCheckCommand.ResultUnsafeStop, record.Result);
+        Assert.Equal(AutomationCloseoutDriftCheckCommand.ReasonMissingClosingIssueLinkage, record.ReasonCode);
+    }
+
+    [Fact]
+    public void Execute_MergedPrWithNoClosingIssues_ReturnsUnsafeStop()
+    {
+        using var workspace = new DriftWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G330", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780",
+            linkedIssueNumber: 815));
+        // PR is merged but GitHub reports no closing-issue references
+        AutomationCloseoutDriftCheckCommand.PrLookupFactory = () =>
+            new FakePrLookup(780, merged: true, closingIssueNumbers: []);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutDriftCheckResult>(writer.ToString())!;
+        Assert.Equal(0, result.SafeRepairCount);
+        Assert.Equal(1, result.UnsafeStopCount);
+
+        var record = Assert.Single(result.Records);
+        Assert.Equal(AutomationCloseoutDriftCheckCommand.ResultUnsafeStop, record.Result);
+        Assert.Equal(AutomationCloseoutDriftCheckCommand.ReasonMissingClosingIssueLinkage, record.ReasonCode);
+    }
+
+    [Fact]
+    public void Execute_MergedPrWithClosingIssueMismatch_ReturnsUnsafeStop()
+    {
+        using var workspace = new DriftWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G330", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780",
+            linkedIssueNumber: 815));
+        // PR is merged but closes a different issue (#999), not #815
+        AutomationCloseoutDriftCheckCommand.PrLookupFactory = () =>
+            new FakePrLookup(780, merged: true, closingIssueNumbers: [999]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutDriftCheckResult>(writer.ToString())!;
+        Assert.Equal(0, result.SafeRepairCount);
+        Assert.Equal(1, result.UnsafeStopCount);
+
+        var record = Assert.Single(result.Records);
+        Assert.Equal(AutomationCloseoutDriftCheckCommand.ResultUnsafeStop, record.Result);
+        Assert.Equal(AutomationCloseoutDriftCheckCommand.ReasonClosingIssueMismatch, record.ReasonCode);
+    }
+
+    [Fact]
+    public void Execute_MixedSafeAndUnsafe_WriteBlockedReturnsNonZero()
+    {
+        // Two items with DIFFERENT PR numbers:
+        // item1: PR #780, linked issue #815, PR merged and closes #815 → safe-repair candidate
+        // item2: PR #781, linked issue #820, PR merged but closes nothing → missing-closing-issue-linkage → unsafe-stop
+        // --write must NOT mutate queue-state when any unsafe stop is present.
+        using var workspace = new DriftWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithTwoItems(
+            "G330", "review",
+            "https://github.com/J-Tech-Japan/intent-system/pull/780", linkedIssue1: 815,
+            "G331", "review",
+            "https://github.com/J-Tech-Japan/intent-system/pull/781", linkedIssue2: 820));
+        AutomationCloseoutDriftCheckCommand.PrLookupFactory = () => new FakeDictPrLookup(
+            new Dictionary<int, (bool Merged, int[] Closing)>
+            {
+                [780] = (true, [815]),   // safe-repair: merged + closes matching issue
+                [781] = (true, []),       // unsafe-stop: merged but no closing issues
+            });
+
+        var originalQueueText = workspace.QueueStateOnDisk();
+        using var writer = new StringWriter();
+        var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        // Must return non-zero and NOT mutate queue-state.
+        Assert.Equal(1, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutDriftCheckResult>(writer.ToString())!;
+        Assert.Equal(0, result.AppliedCount);
+        Assert.Equal(1, result.SafeRepairCount);
+        Assert.Equal(1, result.UnsafeStopCount);
+        Assert.Equal("write", result.Mode);
+        // Queue must be unchanged (fail-closed: no mutations when any unsafe stop present).
         Assert.Equal(originalQueueText, workspace.QueueStateOnDisk());
         // No runs.jsonl created.
         Assert.Empty(workspace.RunsLines());
@@ -419,9 +563,10 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
     {
         using var workspace = new DriftWorkspace();
         workspace.WriteQueueState(BuildQueueState("G330", "review",
-            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780"));
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/780",
+            linkedIssueNumber: 815));
         AutomationCloseoutDriftCheckCommand.PrLookupFactory = () =>
-            new FakePrLookup(780, merged: true);
+            new FakePrLookup(780, merged: true, closingIssueNumbers: [815]);
 
         using var writer = new StringWriter();
         var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
@@ -444,9 +589,9 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
     public void Execute_LinkedPrAsRawNumber_ParsesAndChecks()
     {
         using var workspace = new DriftWorkspace();
-        workspace.WriteQueueState(BuildQueueState("G330", "review", linkedPr: "780"));
+        workspace.WriteQueueState(BuildQueueState("G330", "review", linkedPr: "780", linkedIssueNumber: 815));
         AutomationCloseoutDriftCheckCommand.PrLookupFactory = () =>
-            new FakePrLookup(780, merged: true);
+            new FakePrLookup(780, merged: true, closingIssueNumbers: [815]);
 
         using var writer = new StringWriter();
         var exitCode = AutomationCloseoutDriftCheckCommand.Execute(
@@ -480,9 +625,18 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
     // Helper types
     // ──────────────────────────────────────────────────────────────────────────
 
-    private static string BuildQueueState(string executionUnit, string state, string? linkedPr)
+    private static string BuildQueueState(
+        string executionUnit,
+        string state,
+        string? linkedPr,
+        int? linkedIssueNumber = null)
     {
         var linked = linkedPr is null ? "null" : $"\"{linkedPr}\"";
+        var linkedIssueBlock = linkedIssueNumber.HasValue
+            ? $$"""
+              "linked_issue": {"repo": "J-Tech-Japan/intent-system", "number": {{linkedIssueNumber.Value}}, "url": "https://github.com/J-Tech-Japan/intent-system/issues/{{linkedIssueNumber.Value}}"},
+              """
+            : "\"linked_issue\": null,\n              ";
         return $$"""
             {
               "schema_version": "1",
@@ -497,7 +651,7 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
                   "clarification_return_path": "intents/intent-cli/clarifications/open.md",
                   "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
                   "linked_pr": {{linked}},
-                  "worker_role": "coder",
+                  {{linkedIssueBlock}}"worker_role": "coder",
                   "review_role": "reviewer",
                   "priority": "normal"
                 }
@@ -507,9 +661,15 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
     }
 
     private static string BuildQueueStateWithTwoItems(
-        string unit1, string state1, string linkedPr1,
-        string unit2, string state2, string linkedPr2)
+        string unit1, string state1, string linkedPr1, int? linkedIssue1,
+        string unit2, string state2, string linkedPr2, int? linkedIssue2)
     {
+        var linkedIssueBlock1 = linkedIssue1.HasValue
+            ? $"\"linked_issue\": {{\"repo\": \"J-Tech-Japan/intent-system\", \"number\": {linkedIssue1.Value}}},"
+            : "\"linked_issue\": null,";
+        var linkedIssueBlock2 = linkedIssue2.HasValue
+            ? $"\"linked_issue\": {{\"repo\": \"J-Tech-Japan/intent-system\", \"number\": {linkedIssue2.Value}}},"
+            : "\"linked_issue\": null,";
         return $$"""
             {
               "schema_version": "1",
@@ -524,6 +684,7 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
                   "clarification_return_path": "intents/intent-cli/clarifications/open.md",
                   "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
                   "linked_pr": "{{linkedPr1}}",
+                  {{linkedIssueBlock1}}
                   "worker_role": "coder",
                   "review_role": "reviewer",
                   "priority": "normal"
@@ -537,6 +698,7 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
                   "clarification_return_path": "intents/intent-cli/clarifications/open.md",
                   "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
                   "linked_pr": "{{linkedPr2}}",
+                  {{linkedIssueBlock2}}
                   "worker_role": "coder",
                   "review_role": "reviewer",
                   "priority": "normal"
@@ -551,12 +713,22 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
         private readonly int prNumber;
         private readonly bool merged;
         private readonly string state;
+        private readonly IReadOnlyList<int> closingIssueNumbers;
 
-        public FakePrLookup(int prNumber, bool merged, string state = "MERGED")
+        /// <param name="prNumber">Expected PR number (throws on mismatch).</param>
+        /// <param name="merged">Whether the PR is merged.</param>
+        /// <param name="state">GitHub state string; ignored when merged=true (forced to MERGED).</param>
+        /// <param name="closingIssueNumbers">Issue numbers to report in ClosingIssuesReferences.</param>
+        public FakePrLookup(
+            int prNumber,
+            bool merged,
+            string state = "MERGED",
+            int[]? closingIssueNumbers = null)
         {
             this.prNumber = prNumber;
             this.merged = merged;
             this.state = merged ? "MERGED" : state;
+            this.closingIssueNumbers = closingIssueNumbers ?? Array.Empty<int>();
         }
 
         public GitHubPrLookupResult Lookup(string repo, int number)
@@ -571,6 +743,42 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
                 Number = number,
                 State = this.state,
                 Merged = merged,
+                ClosingIssuesReferences = closingIssueNumbers
+                    .Select(n => new GitHubPrClosingIssueReference { Number = n })
+                    .ToArray(),
+            };
+        }
+    }
+
+    /// <summary>
+    /// Multi-PR variant of the fake lookup: accepts a dictionary of
+    /// prNumber → (merged, closingIssueNumbers) to support tests that
+    /// probe more than one PR number in a single Execute call.
+    /// </summary>
+    private sealed class FakeDictPrLookup : IGitHubPrLookup
+    {
+        private readonly Dictionary<int, (bool Merged, int[] Closing)> entries;
+
+        public FakeDictPrLookup(Dictionary<int, (bool Merged, int[] Closing)> entries)
+        {
+            this.entries = entries;
+        }
+
+        public GitHubPrLookupResult Lookup(string repo, int number)
+        {
+            if (!entries.TryGetValue(number, out var entry))
+            {
+                throw new InvalidOperationException(
+                    $"FakeDictPrLookup: unexpected PR number {number}");
+            }
+            return new GitHubPrLookupResult
+            {
+                Number = number,
+                State = entry.Merged ? "MERGED" : "OPEN",
+                Merged = entry.Merged,
+                ClosingIssuesReferences = entry.Closing
+                    .Select(n => new GitHubPrClosingIssueReference { Number = n })
+                    .ToArray(),
             };
         }
     }
