@@ -147,6 +147,119 @@ public sealed class HostSyncPreflightAnalyzerTests
         Assert.Contains(result.NextSteps, s => s.Contains("manual recovery", StringComparison.OrdinalIgnoreCase));
     }
 
+    // ── G357 submodule-checkout-mismatch ────────────────────────────────
+
+    [Fact]
+    public void Analyze_G357_AllDirtyPathsAreGitlinkMismatches_ReturnsSubmoduleCheckoutMismatch()
+    {
+        // G357: when ALL dirty-other paths are known gitlink mismatches
+        // (parent gitlink advanced, submodule itself is clean), classify as
+        // submodule-checkout-mismatch and recommend git submodule update.
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 0,
+            workingTreeEntries: new[] { Entry("child-repo", " M") },
+            submoduleGitlinkMismatchPaths: new[] { "child-repo" });
+
+        Assert.Equal("submodule-checkout-mismatch", result.Classification);
+        // Must NOT be proceed-allowed (requires git submodule update first).
+        Assert.False(result.ProceedAllowed);
+        // Must NOT activate the safe-stash lane — this uses the update lane.
+        Assert.False(result.SafeStashRequired);
+        Assert.Empty(result.SafeStashPaths);
+        // The mismatch path is surfaced in SubmoduleCheckoutMismatchPaths.
+        Assert.Single(result.SubmoduleCheckoutMismatchPaths);
+        Assert.Equal("child-repo", result.SubmoduleCheckoutMismatchPaths[0]);
+        // Summary must identify the gitlink mismatch and the repair command.
+        Assert.Contains("gitlink mismatch", result.Summary, StringComparison.Ordinal);
+        Assert.Contains("git submodule update --init", result.Summary, StringComparison.Ordinal);
+        Assert.Contains("child-repo", result.Summary, StringComparison.Ordinal);
+        // Next steps must describe the update command and follow-up preflight.
+        Assert.Contains(result.NextSteps, s => s.Contains("git submodule update --init child-repo", StringComparison.Ordinal));
+        Assert.Contains(result.NextSteps, s => s.Contains("host-sync-preflight", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Analyze_G357_MultipleGitlinkMismatchPaths_AllListedInNextSteps()
+    {
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 0,
+            workingTreeEntries: new[]
+            {
+                Entry("sub/repo-a", " M"),
+                Entry("sub/repo-b", " M")
+            },
+            submoduleGitlinkMismatchPaths: new[] { "sub/repo-a", "sub/repo-b" });
+
+        Assert.Equal("submodule-checkout-mismatch", result.Classification);
+        Assert.False(result.ProceedAllowed);
+        Assert.Equal(2, result.SubmoduleCheckoutMismatchPaths.Count);
+        // Both paths appear in the update command in next steps.
+        Assert.Contains(result.NextSteps, s =>
+            s.Contains("sub/repo-a", StringComparison.Ordinal) &&
+            s.Contains("sub/repo-b", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Analyze_G357_PartialGitlinkMismatch_RemainsUnrelatedSubmodule()
+    {
+        // If only SOME dirty-other paths are gitlink mismatches, the remaining
+        // unrelated changes must go through the safe-stash lane (G306), not the
+        // update lane — so we keep the dirty-unrelated-submodule classification.
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 0,
+            workingTreeEntries: new[]
+            {
+                Entry("child-repo", " M"),
+                Entry("some-other-file.txt", "??")
+            },
+            submoduleGitlinkMismatchPaths: new[] { "child-repo" });
+
+        Assert.Equal("dirty-unrelated-submodule", result.Classification);
+        Assert.True(result.ProceedAllowed);
+        Assert.True(result.SafeStashRequired);
+        Assert.Empty(result.SubmoduleCheckoutMismatchPaths);
+    }
+
+    [Fact]
+    public void Analyze_G357_GitlinkMismatchWithDurableDirt_ReturnsDirtyMixed()
+    {
+        // Durable-state dirt takes precedence: dirty-mixed is returned regardless
+        // of whether the other dirty paths are gitlink mismatches.
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 0,
+            workingTreeEntries: new[]
+            {
+                Entry(".intent-cli/queue-state.json", " M"),
+                Entry("child-repo", " M")
+            },
+            submoduleGitlinkMismatchPaths: new[] { "child-repo" });
+
+        Assert.Equal("dirty-mixed", result.Classification);
+        Assert.False(result.ProceedAllowed);
+        Assert.False(result.SafeStashRequired);
+        Assert.Empty(result.SubmoduleCheckoutMismatchPaths);
+    }
+
+    [Fact]
+    public void Analyze_G357_CleanRepo_NullSubmodulePaths_ReturnsClean()
+    {
+        // Passing null for submoduleGitlinkMismatchPaths (default) does not affect
+        // the clean case.
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 0,
+            workingTreeEntries: Array.Empty<HostSyncWorkingTreeEntry>(),
+            submoduleGitlinkMismatchPaths: null);
+
+        Assert.Equal("clean", result.Classification);
+        Assert.True(result.ProceedAllowed);
+        Assert.Empty(result.SubmoduleCheckoutMismatchPaths);
+    }
+
     private static HostSyncWorkingTreeEntry Entry(string path, string status) =>
         new() { Path = path, Status = status };
 }

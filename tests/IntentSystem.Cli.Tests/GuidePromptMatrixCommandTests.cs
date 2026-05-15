@@ -692,7 +692,7 @@ public sealed class GuidePromptMatrixCommandTests
 
         using var document = JsonDocument.Parse(writer.ToString());
         var prompt = document.RootElement.GetProperty("prompt").GetString()!;
-        Assert.Contains("Post-closeout fresh-state reload (G289)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Post-closeout fresh-state reload (G289, G357)", prompt, StringComparison.Ordinal);
         Assert.Contains("intent next-slice --dry-run", prompt, StringComparison.Ordinal);
         Assert.Contains("authoritative", prompt, StringComparison.Ordinal);
     }
@@ -1628,6 +1628,98 @@ public sealed class GuidePromptMatrixCommandTests
         var prompt = document.RootElement.GetProperty("prompt").GetString()!;
         Assert.Contains("**Pre-wake host sync (G304)**", prompt, StringComparison.Ordinal);
         Assert.Contains("automation host-sync-preflight", prompt, StringComparison.Ordinal);
+    }
+
+    // ── G357 initial pull before host wake reads ─────────────────────────
+
+    [Fact]
+    public void Execute_HostLoop_G357_InitialPullAppearsBeforeHostSyncPreflight()
+    {
+        // G357: the host-loop prompt must instruct the agent to run
+        // git pull --ff-only origin main BEFORE any intent-cli call or
+        // host-sync-preflight (i.e., the pull text must appear first in
+        // the loop body step 1).
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // The G357 pull text must be present.
+        Assert.Contains("git pull --ff-only origin main", prompt, StringComparison.Ordinal);
+        Assert.Contains("Initial pull (G357)", prompt, StringComparison.Ordinal);
+        Assert.Contains("VERY FIRST action", prompt, StringComparison.Ordinal);
+
+        // The pull text must appear BEFORE the host-sync-preflight text.
+        var pullIndex = prompt.IndexOf("Initial pull (G357)", StringComparison.Ordinal);
+        var preflightIndex = prompt.IndexOf("Pre-wake host sync (G304)", StringComparison.Ordinal);
+        Assert.True(pullIndex >= 0, "G357 initial pull text missing from host-loop prompt");
+        Assert.True(preflightIndex >= 0, "G304 pre-wake host sync text missing from host-loop prompt");
+        Assert.True(pullIndex < preflightIndex,
+            "G357 initial pull must appear before G304 host-sync-preflight in the loop body");
+    }
+
+    [Fact]
+    public void Execute_HostOneshot_G357_InitialPullPresent()
+    {
+        // G357 also applies to host-oneshot (single-wake body).
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("git pull --ff-only origin main", prompt, StringComparison.Ordinal);
+        Assert.Contains("Initial pull (G357)", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoop_G357_SubmoduleCheckoutMismatchHandlingPresent()
+    {
+        // G357: the host-loop prompt must instruct the agent to handle
+        // classification: submodule-checkout-mismatch via git submodule update
+        // (not the safe-stash lane).
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("classification: submodule-checkout-mismatch", prompt, StringComparison.Ordinal);
+        Assert.Contains("git submodule update --init <path>", prompt, StringComparison.Ordinal);
+        Assert.Contains("submodule_checkout_mismatch_paths", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoop_G357_PostCloseoutReloadMentionsSubmoduleUpdate()
+    {
+        // G357: the post-closeout fresh-state reload (Stage 2) must also instruct
+        // the agent to run git submodule update after the pull when the preflight
+        // reports submodule_checkout_mismatch_paths.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("Post-closeout fresh-state reload (G289, G357)", prompt, StringComparison.Ordinal);
+        // The post-closeout section must mention submodule update.
+        var postCloseoutIdx = prompt.IndexOf("Post-closeout fresh-state reload (G289, G357)", StringComparison.Ordinal);
+        var submoduleUpdateIdx = prompt.IndexOf("git submodule update --init", postCloseoutIdx, StringComparison.Ordinal);
+        Assert.True(submoduleUpdateIdx >= 0,
+            "Post-closeout section must mention git submodule update --init after the pull");
     }
 
     // ── G305 self-contained child one-shot guidance ─────────────────────

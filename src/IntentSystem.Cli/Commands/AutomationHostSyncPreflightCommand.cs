@@ -63,7 +63,8 @@ internal static class AutomationHostSyncPreflightCommand
         var result = HostSyncPreflightAnalyzer.Analyze(
             probe.Branch,
             probe.BehindOriginCommits,
-            probe.WorkingTreeEntries);
+            probe.WorkingTreeEntries,
+            probe.SubmoduleGitlinkMismatchPaths);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -105,6 +106,15 @@ internal static class AutomationHostSyncPreflightCommand
             foreach (var entry in result.DirtyUnrelatedPaths)
             {
                 writer.WriteLine($"- `{entry.Status}` `{entry.Path}`");
+            }
+        }
+        if (result.SubmoduleCheckoutMismatchPaths.Count > 0)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Submodule checkout mismatch paths (G357)");
+            foreach (var path in result.SubmoduleCheckoutMismatchPaths)
+            {
+                writer.WriteLine($"- `{path}` — parent gitlink advanced; run `git submodule update --init {path}`");
             }
         }
         if (result.NextSteps.Count > 0)
@@ -154,12 +164,91 @@ internal static class AutomationHostSyncPreflightCommand
             entries.Add(new HostSyncWorkingTreeEntry { Path = path, Status = status });
         }
 
+        // G357: detect submodule gitlink mismatches (parent gitlink advanced after
+        // git pull, submodule checkout is stale but the submodule itself is clean).
+        var submoduleGitlinkMismatchPaths = DetectSubmoduleGitlinkMismatches(repoRoot, entries);
+
         return new HostSyncGitProbe
         {
             Branch = branch,
             BehindOriginCommits = behindCommits,
-            WorkingTreeEntries = entries
+            WorkingTreeEntries = entries,
+            SubmoduleGitlinkMismatchPaths = submoduleGitlinkMismatchPaths
         };
+    }
+
+    /// <summary>
+    /// G357: determine which dirty working-tree paths are submodule gitlink
+    /// mismatches where the parent gitlink has advanced but the submodule working
+    /// tree is still at an older commit, AND the submodule itself has no local
+    /// uncommitted changes (so <c>git submodule update --init &lt;path&gt;</c> is safe).
+    /// </summary>
+    private static IReadOnlyList<string> DetectSubmoduleGitlinkMismatches(
+        string repoRoot,
+        IReadOnlyList<HostSyncWorkingTreeEntry> entries)
+    {
+        if (entries.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        // Collect known submodule paths from `git submodule status`.
+        // Format per line: [prefix(1)] sha1(40) space path [space (desc)]
+        // Prefix: ' '=ok  '+'=HEAD≠parent-gitlink  '-'=unregistered  'U'=conflict
+        var submoduleStatusOutput = RunGit(repoRoot, "submodule status").Replace("\r\n", "\n");
+        var knownSubmodulePaths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in submoduleStatusOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            // Need at least: prefix(1) + sha1(40) + space(1) + path(1) = 43 chars
+            if (line.Length < 43)
+            {
+                continue;
+            }
+            var rest = line[42..].TrimStart();
+            // rest = "path (optional desc)" — take everything up to the first space
+            var spaceIdx = rest.IndexOf(' ', StringComparison.Ordinal);
+            var path = spaceIdx >= 0 ? rest[..spaceIdx] : rest;
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                knownSubmodulePaths.Add(path);
+            }
+        }
+
+        if (knownSubmodulePaths.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var mismatchPaths = new List<string>();
+        foreach (var entry in entries)
+        {
+            if (!knownSubmodulePaths.Contains(entry.Path))
+            {
+                continue;
+            }
+
+            // Verify the submodule directory is an initialized git repo (.git file
+            // or .git dir) and that the submodule itself has a clean working tree.
+            // If the submodule has no local uncommitted changes, updating is safe.
+            var submoduleDir = Path.Combine(repoRoot, entry.Path);
+            if (!Directory.Exists(submoduleDir))
+            {
+                continue;
+            }
+            var gitMarker = Path.Combine(submoduleDir, ".git");
+            if (!Directory.Exists(gitMarker) && !File.Exists(gitMarker))
+            {
+                continue;
+            }
+            var subStatus = RunGit(submoduleDir, "status --porcelain").Trim();
+            if (string.IsNullOrEmpty(subStatus))
+            {
+                // Submodule has no local changes — gitlink mismatch is safe to repair.
+                mismatchPaths.Add(entry.Path);
+            }
+        }
+
+        return mismatchPaths;
     }
 
     private static string RunGit(string workingDirectory, string arguments)
@@ -219,4 +308,11 @@ internal sealed record HostSyncGitProbe
     public required string Branch { get; init; }
     public required int BehindOriginCommits { get; init; }
     public required IReadOnlyList<HostSyncWorkingTreeEntry> WorkingTreeEntries { get; init; }
+
+    /// <summary>
+    /// G357: submodule paths where the parent gitlink has advanced but the
+    /// submodule checkout is stale AND the submodule itself is clean (so
+    /// <c>git submodule update --init &lt;path&gt;</c> is the safe repair).
+    /// </summary>
+    public IReadOnlyList<string> SubmoduleGitlinkMismatchPaths { get; init; } = Array.Empty<string>();
 }
