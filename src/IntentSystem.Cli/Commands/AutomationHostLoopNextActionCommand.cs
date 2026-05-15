@@ -203,13 +203,18 @@ internal static class AutomationHostLoopNextActionCommand
         // this probe the lane would only fire when the operator typed
         // the count, and recoverable `linked_pr` blockers would fall
         // through to true-idle.
+        // The unsafe_stop_count gate is critical: publish-recovery --write
+        // refuses all mutations when any unsafe stop is present, so
+        // recommending it in a mixed (safe+unsafe) state would be a no-op
+        // and confuse the operator. Gate on UnsafeStopCount == 0 to ensure
+        // the lane is only surfaced when the repair is actually writeable.
         var publishRecoveryRepairsAvailable = parsed.PublishRecoveryRepairsAvailable;
         if (publishRecoveryRepairsAvailable == 0)
         {
             var recoveryProbe = PublishRecoveryProbeFactory?.Invoke(context)
                 ?? new IntentCliPublishRecoveryProbe(context);
             var recoveryProbed = recoveryProbe.Probe(parsed.Repo);
-            if (recoveryProbed != null && recoveryProbed.SafeRepairCount > 0)
+            if (recoveryProbed != null && recoveryProbed.SafeRepairCount > 0 && recoveryProbed.UnsafeStopCount == 0)
             {
                 publishRecoveryRepairsAvailable = recoveryProbed.SafeRepairCount;
             }

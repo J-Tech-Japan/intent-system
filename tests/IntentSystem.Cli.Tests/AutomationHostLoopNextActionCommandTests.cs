@@ -493,6 +493,48 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_PublishRecoveryProbe_LaneSuppressed_WhenUnsafeStopsPresent()
+    {
+        // G342 review fix: when the probe returns safe_repair_count > 0 but
+        // unsafe_stop_count > 0, publish-recovery --write refuses all mutations,
+        // so the repair-host-metadata lane must be suppressed and the host loop
+        // must fall through to true-idle (or the next applicable lane).
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        // Mixed: 1 safe repair available BUT 1 unsafe stop also present →
+        // publish-recovery --write would refuse to run → lane suppressed.
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 1, UnsafeStopCount = 1 });
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
+            new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationClean });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            var classification = JsonDocument.Parse(writer.ToString()).RootElement
+                .GetProperty("classification").GetString();
+            // Must NOT recommend repair-host-metadata — the write would be a no-op.
+            Assert.NotEqual("repair-host-metadata", classification);
+            // With no other signals, falls through to true-idle.
+            Assert.Equal("true-idle", classification);
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+            AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        }
+    }
+
+    [Fact]
     public void Execute_HostSyncPreflightProbe_SurfacesSafeStash_WhenDirtyUnrelatedSubmodule()
     {
         // G342: when host-sync-preflight reports
