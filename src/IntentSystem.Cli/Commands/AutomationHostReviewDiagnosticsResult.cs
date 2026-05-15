@@ -173,6 +173,16 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     /// implementer rather than mutate parent durable state.
     /// </summary>
     public const string DraftMergeBlocked = "draft-merge-blocked";
+
+    /// <summary>
+    /// G356: terminal class returned when one or more queue items are not
+    /// marked Completed even though their linked GitHub PR is already
+    /// merged. The host loop should run
+    /// <c>automation closeout-drift-check --write</c> to record closeout,
+    /// commit/push durable state, and retry the wake rather than
+    /// reporting a misleading <c>true-idle</c>.
+    /// </summary>
+    public const string CloseoutDriftRepair = "closeout-drift-repair";
 }
 
 /// <summary>
@@ -234,4 +244,14 @@ internal static class SafeRepairCategories
     /// paths (<c>.intent-cli/**</c>, <c>intents/**</c>).
     /// </summary>
     public const string ChildSelectorLabelGap = "child-selector-label-gap";
+
+    /// <summary>
+    /// G356: A queue item is not marked Completed even though its linked GitHub
+    /// PR is already merged. The deterministic repair is
+    /// <c>automation closeout-drift-check --write</c> (host-only), which marks
+    /// the item Completed and appends <c>pr-merged</c> / <c>closeout-recorded</c>
+    /// run events. After applying the repair, commit/push durable state and
+    /// retry the wake exactly once.
+    /// </summary>
+    public const string CloseoutDriftRepair = "closeout-drift-repair";
 }

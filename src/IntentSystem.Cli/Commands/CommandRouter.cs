@@ -166,6 +166,7 @@ internal static class CommandRouter
                 ["base-branch-check"] = AutomationBaseBranchCheckCommand.Execute,
                 ["check"] = AutomationCheckCommand.Execute,
                 ["clarification-stop"] = AutomationClarificationStopCommand.Execute,
+                ["closeout-drift-check"] = AutomationCloseoutDriftCheckCommand.Execute,
                 ["complete"] = AutomationCompleteCommand.Execute,
                 ["doctor"] = AutomationDoctorCommand.Execute,
                 ["durable-state-preflight"] = AutomationDurableStatePreflightCommand.Execute,

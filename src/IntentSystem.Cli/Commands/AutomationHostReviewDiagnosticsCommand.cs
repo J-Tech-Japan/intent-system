@@ -52,6 +52,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 out var reconcileUnsafeStopKinds,
                 out var reconcileRepairsAvailable,
                 out var publishRecoveryRepairsAvailable,
+                out var closeoutDriftRepairsAvailable,
                 out var allowWipCapOverride,
                 out var prDraft,
                 out var workspaceSafeDirty,
@@ -203,7 +204,8 @@ internal static class AutomationHostReviewDiagnosticsCommand
             allowWipCapOverride,
             prDraft,
             publishRecoveryRepairsAvailable,
-            workspaceSafeDirty);
+            workspaceSafeDirty,
+            closeoutDriftRepairsAvailable);
 
         Emit(writer, result, format);
         return 0;
@@ -237,6 +239,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         out IReadOnlyList<string> reconcileUnsafeStopKinds,
         out int reconcileRepairsAvailable,
         out int publishRecoveryRepairsAvailable,
+        out int closeoutDriftRepairsAvailable,
         out bool allowWipCapOverride,
         out bool? prDraft,
         out bool workspaceSafeDirty,
@@ -253,6 +256,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         reconcileUnsafeStopKinds = unsafeStops;
         reconcileRepairsAvailable = 0;
         publishRecoveryRepairsAvailable = 0;
+        closeoutDriftRepairsAvailable = 0;
         allowWipCapOverride = false;
         prDraft = null;
         workspaceSafeDirty = false;
@@ -337,6 +341,17 @@ internal static class AutomationHostReviewDiagnosticsCommand
                     publishRecoveryRepairsAvailable = publishRecoveryRepairCount;
                     index++;
                     break;
+                case "--closeout-drift-repairs-available":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var closeoutDriftRepairCount)
+                        || closeoutDriftRepairCount < 0)
+                    {
+                        error = "--closeout-drift-repairs-available requires a non-negative integer value.";
+                        return false;
+                    }
+                    closeoutDriftRepairsAvailable = closeoutDriftRepairCount;
+                    index++;
+                    break;
                 case "--allow-wip-cap-override":
                     allowWipCapOverride = true;
                     break;
@@ -382,7 +397,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                     index++;
                     break;
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--publish-recovery-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--publish-recovery-repairs-available <N>] [--closeout-drift-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--format text|json].";
                     return false;
             }
         }
