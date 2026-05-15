@@ -215,13 +215,22 @@ internal interface ICloseoutDriftCheckProbe
 
 /// <summary>
 /// G358: minimal projection of the closeout-drift-check dry-run output.
-/// Only the safe-repair count the host-loop analyzer needs surfaces here;
-/// richer per-repair detail stays in the full command output for operators
-/// who run it directly.
+/// Both <see cref="SafeRepairCount"/> and <see cref="UnsafeStopCount"/> are
+/// surfaced because the host-loop analyzer must suppress the
+/// <c>repair-host-metadata</c> lane whenever unsafe stops are present —
+/// <c>closeout-drift-check --write</c> refuses to apply any mutations when
+/// <c>unsafe_stop_count &gt; 0</c>, so recommending it would be a no-op.
 /// </summary>
 internal sealed record CloseoutDriftCheckProbeResult
 {
     public required int SafeRepairCount { get; init; }
+
+    /// <summary>
+    /// Count of items where closing-PR lookup found multiple merged PRs for
+    /// the same issue (ambiguous). When &gt; 0 the write path is blocked and
+    /// the host-loop analyzer must not surface the repair lane.
+    /// </summary>
+    public required int UnsafeStopCount { get; init; }
 }
 
 /// <summary>
@@ -296,9 +305,17 @@ internal sealed class IntentCliCloseoutDriftCheckProbe : ICloseoutDriftCheckProb
                 safeRepairCount = safeRepairCountElement.GetInt32();
             }
 
+            var unsafeStopCount = 0;
+            if (root.TryGetProperty("unsafe_stop_count", out var unsafeStopCountElement)
+                && unsafeStopCountElement.ValueKind == JsonValueKind.Number)
+            {
+                unsafeStopCount = unsafeStopCountElement.GetInt32();
+            }
+
             return new CloseoutDriftCheckProbeResult
             {
-                SafeRepairCount = safeRepairCount
+                SafeRepairCount = safeRepairCount,
+                UnsafeStopCount = unsafeStopCount
             };
         }
         catch (JsonException)

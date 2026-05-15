@@ -664,7 +664,7 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
         AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
             new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationClean });
         AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = _ => new FakeCloseoutDriftCheckProbe(
-            new CloseoutDriftCheckProbeResult { SafeRepairCount = 1 });
+            new CloseoutDriftCheckProbeResult { SafeRepairCount = 1, UnsafeStopCount = 0 });
 
         try
         {
@@ -710,7 +710,7 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
         AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
             new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationClean });
         AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = _ => new FakeCloseoutDriftCheckProbe(
-            new CloseoutDriftCheckProbeResult { SafeRepairCount = 0 });
+            new CloseoutDriftCheckProbeResult { SafeRepairCount = 0, UnsafeStopCount = 0 });
 
         try
         {
@@ -724,6 +724,51 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
             Assert.Equal(
                 "true-idle",
                 JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("classification").GetString());
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = null;
+            AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+            AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G358_CloseoutDriftCheckProbe_LaneSuppressed_WhenUnsafeStopsPresent()
+    {
+        // G358 review fix: when the probe returns safe_repair_count > 0 but
+        // unsafe_stop_count > 0, closeout-drift-check --write will refuse all
+        // mutations, so the repair-host-metadata lane must be suppressed and the
+        // host loop must fall through to true-idle (or the next applicable lane).
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 0, UnsafeStopCount = 0 });
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
+            new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationClean });
+        // Mixed: 1 safe repair available BUT 1 unsafe stop also present →
+        // closeout-drift-check --write would refuse to run → lane suppressed.
+        AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = _ => new FakeCloseoutDriftCheckProbe(
+            new CloseoutDriftCheckProbeResult { SafeRepairCount = 1, UnsafeStopCount = 1 });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            var classification = JsonDocument.Parse(writer.ToString()).RootElement
+                .GetProperty("classification").GetString();
+            // Must NOT recommend repair-host-metadata — the write would be a no-op.
+            Assert.NotEqual("repair-host-metadata", classification);
+            // With no other signals, falls through to true-idle.
+            Assert.Equal("true-idle", classification);
         }
         finally
         {

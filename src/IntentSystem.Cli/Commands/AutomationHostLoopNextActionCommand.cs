@@ -243,16 +243,20 @@ internal static class AutomationHostLoopNextActionCommand
 
         // G358: auto-probe `automation closeout-drift-check --dry-run` to detect
         // items with linked_issue but no linked_pr where GitHub confirms a single
-        // merged closing PR. When safe_repair_count > 0 the analyzer surfaces
-        // `repair-host-metadata` with the `closeout-drift-check --write`
-        // recommendation, so the host loop never falls through to true-idle while
-        // an infer-linked_pr repair is available.
+        // merged closing PR. When safe_repair_count > 0 AND unsafe_stop_count == 0
+        // the analyzer surfaces `repair-host-metadata` with the
+        // `closeout-drift-check --write` recommendation, so the host loop never
+        // falls through to true-idle while an infer-linked_pr repair is available.
+        // The unsafe_stop_count gate is critical: closeout-drift-check --write
+        // refuses all mutations when any unsafe stop is present (ambiguous closing
+        // PRs), so recommending it in that mixed state would be a no-op and confuse
+        // the operator.
         var closeoutDriftRepairsAvailable = 0;
         {
             var driftProbe = CloseoutDriftCheckProbeFactory?.Invoke(context)
                 ?? new IntentCliCloseoutDriftCheckProbe(context);
             var driftProbed = driftProbe.Probe(parsed.Repo);
-            if (driftProbed != null && driftProbed.SafeRepairCount > 0)
+            if (driftProbed != null && driftProbed.SafeRepairCount > 0 && driftProbed.UnsafeStopCount == 0)
             {
                 closeoutDriftRepairsAvailable = driftProbed.SafeRepairCount;
             }
