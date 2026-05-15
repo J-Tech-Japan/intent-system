@@ -214,6 +214,18 @@ internal static class HostLoopNextActionAnalyzer
                 },
                 "Publish artifact lifecycle drift — run G307 publish-lifecycle-repair.");
         }
+        if (input.CloseoutDriftRepairsAvailable > 0)
+        {
+            return Result(ClassificationRepairHostMetadata, mutationAllowed: true,
+                $"intent-cli automation closeout-drift-check --repo {input.Repo} --write --format json",
+                new[]
+                {
+                    $"closeout-drift-check detected {input.CloseoutDriftRepairsAvailable} queue item(s) with linked_issue but no linked_pr where GitHub confirms exactly one merged closing PR (G358).",
+                    "Run closeout-drift-check --write to infer and persist the linked_pr, mark the item Completed, and append pr-merged / closeout-recorded events.",
+                    "Re-run the host loop after the repair to confirm the item is resolved and no further drift remains."
+                },
+                "Closeout drift (G358): linked_issue-only items have an inferred closing PR — run closeout-drift-check --write.");
+        }
 
         // 6. publish next issue
         if (input.NextSliceIssueCutReady && input.PublishNextSliceExecutionUnit is { } unit && !input.OpenIntentTargetPrOrIssueExists)
@@ -342,6 +354,15 @@ internal sealed record HostLoopNextActionInput
 
     /// <summary>G307: count of stale lifecycle drift entries available for safe upgrade.</summary>
     public int PublishLifecycleDriftCount { get; init; }
+
+    /// <summary>
+    /// G358: count of queue items where <c>linked_issue</c> is present but
+    /// <c>linked_pr</c> is absent, and GitHub confirms exactly one merged
+    /// closing PR in the target repo — deterministic closeout-drift repairs.
+    /// When &gt; 0 the analyzer surfaces <c>repair-host-metadata</c> (priority 5)
+    /// recommending <c>closeout-drift-check --write</c>.
+    /// </summary>
+    public int CloseoutDriftRepairsAvailable { get; init; }
 
     /// <summary>True when intent next-slice --dry-run reports `issue-cut-ready`.</summary>
     public bool NextSliceIssueCutReady { get; init; }

@@ -198,3 +198,112 @@ internal sealed class IntentCliHostSyncPreflightProbe : IHostSyncPreflightProbe
         return null;
     }
 }
+
+// ── G358: closeout-drift-check probe ────────────────────────────────────────
+
+/// <summary>
+/// G358: testability seam for the auto-probe of
+/// <c>intent-cli automation closeout-drift-check --dry-run --format json</c>.
+/// Production uses <see cref="IntentCliCloseoutDriftCheckProbe"/>; tests
+/// inject a fake to model repairable / no-repairs outcomes without touching
+/// live queue-state or network.
+/// </summary>
+internal interface ICloseoutDriftCheckProbe
+{
+    CloseoutDriftCheckProbeResult? Probe(string repo);
+}
+
+/// <summary>
+/// G358: minimal projection of the closeout-drift-check dry-run output.
+/// Only the safe-repair count the host-loop analyzer needs surfaces here;
+/// richer per-repair detail stays in the full command output for operators
+/// who run it directly.
+/// </summary>
+internal sealed record CloseoutDriftCheckProbeResult
+{
+    public required int SafeRepairCount { get; init; }
+}
+
+/// <summary>
+/// G358: in-process invoker of <see cref="AutomationCloseoutDriftCheckCommand"/>
+/// in dry-run mode. Reuses the host's existing <see cref="CliContext"/> so
+/// queue-state resolves from the parent host root, not a child worktree.
+/// Fail-soft: returns <see langword="null"/> on any error so the host loop
+/// never crashes when closeout-drift-check itself is unhealthy.
+/// </summary>
+internal sealed class IntentCliCloseoutDriftCheckProbe : ICloseoutDriftCheckProbe
+{
+    private readonly CliContext _context;
+
+    public IntentCliCloseoutDriftCheckProbe(CliContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        _context = context;
+    }
+
+    public CloseoutDriftCheckProbeResult? Probe(string repo)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+
+        var args = new[]
+        {
+            "--repo", repo,
+            "--dry-run",
+            "--format", "json"
+        };
+
+        using var buffer = new StringWriter();
+        int exitCode;
+        try
+        {
+            exitCode = AutomationCloseoutDriftCheckCommand.Execute(_context, args, buffer);
+        }
+        catch (Exception exception) when (
+            exception is IOException or InvalidOperationException or JsonException
+            or ArgumentException or ArgumentNullException)
+        {
+            // ArgumentException / ArgumentNullException can occur when the host
+            // context has an empty domain (e.g., tests using CreateContextWithoutDomain).
+            // Always fail-soft so the host loop never crashes on probe errors.
+            return null;
+        }
+
+        if (exitCode != 0)
+        {
+            // Non-zero may indicate unsafe stops; still parse the JSON to get
+            // the safe-repair count (the host loop only cares about safe repairs).
+        }
+
+        var stdout = buffer.ToString();
+        if (string.IsNullOrWhiteSpace(stdout))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var safeRepairCount = 0;
+            if (root.TryGetProperty("safe_repair_count", out var safeRepairCountElement)
+                && safeRepairCountElement.ValueKind == JsonValueKind.Number)
+            {
+                safeRepairCount = safeRepairCountElement.GetInt32();
+            }
+
+            return new CloseoutDriftCheckProbeResult
+            {
+                SafeRepairCount = safeRepairCount
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+}

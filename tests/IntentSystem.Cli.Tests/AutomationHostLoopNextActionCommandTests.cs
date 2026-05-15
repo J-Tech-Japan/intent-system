@@ -18,12 +18,18 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     {
         AutomationHostLoopNextActionCommand.CandidateListerFactory = null;
         AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = null;
     }
 
     public void Dispose()
     {
         AutomationHostLoopNextActionCommand.CandidateListerFactory = null;
         AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = null;
     }
 
     [Fact]
@@ -640,6 +646,93 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Execute_G358_CloseoutDriftCheckProbe_SurfacesRepairHostMetadata_WhenSafeRepairsAvailable()
+    {
+        // G358: when `automation closeout-drift-check --dry-run` reports
+        // safe_repair_count > 0 (items with linked_issue but no linked_pr where
+        // GitHub confirms a single merged closing PR), the host loop must surface
+        // `repair-host-metadata` with the closeout-drift-check --write recommendation
+        // instead of falling through to `true-idle`.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 0, UnsafeStopCount = 0 });
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
+            new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationClean });
+        AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = _ => new FakeCloseoutDriftCheckProbe(
+            new CloseoutDriftCheckProbeResult { SafeRepairCount = 1 });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            var root = JsonDocument.Parse(writer.ToString()).RootElement;
+            Assert.Equal("repair-host-metadata", root.GetProperty("classification").GetString());
+            Assert.True(root.GetProperty("mutation_allowed").GetBoolean());
+            Assert.Contains(
+                "closeout-drift-check",
+                root.GetProperty("recommended_command").GetString() ?? string.Empty,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "--write",
+                root.GetProperty("recommended_command").GetString() ?? string.Empty,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = null;
+            AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+            AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G358_CloseoutDriftCheckProbe_TrueIdleWhenNoRepairs()
+    {
+        // G358: closeout-drift-check probe returning 0 repairs must not prevent
+        // the host loop from reaching true-idle (regression guard).
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 0, UnsafeStopCount = 0 });
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ => new FakeHostSyncPreflightProbe(
+            new HostSyncPreflightProbeResult { Classification = HostSyncPreflightAnalyzer.ClassificationClean });
+        AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = _ => new FakeCloseoutDriftCheckProbe(
+            new CloseoutDriftCheckProbeResult { SafeRepairCount = 0 });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            Assert.Equal(
+                "true-idle",
+                JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("classification").GetString());
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = null;
+            AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = null;
+            AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = null;
+        }
+    }
+
     private static CliContext CreateContextWithoutDomain() =>
         new()
         {
@@ -696,6 +789,18 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
             _onProbe?.Invoke();
             return _canned;
         }
+    }
+
+    /// <summary>
+    /// G358: deterministic stand-in for the closeout-drift-check probe.
+    /// Returns a canned safe-repair count so the host-loop tests can drive
+    /// the `repair-host-metadata` lane without touching live queue-state or network.
+    /// </summary>
+    private sealed class FakeCloseoutDriftCheckProbe : ICloseoutDriftCheckProbe
+    {
+        private readonly CloseoutDriftCheckProbeResult? _canned;
+        public FakeCloseoutDriftCheckProbe(CloseoutDriftCheckProbeResult? canned) { _canned = canned; }
+        public CloseoutDriftCheckProbeResult? Probe(string repo) => _canned;
     }
 
     private sealed class FakeLister : IGitHubAutomationCandidateLister
