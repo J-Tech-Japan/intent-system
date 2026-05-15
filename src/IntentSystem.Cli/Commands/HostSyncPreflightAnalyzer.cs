@@ -19,6 +19,9 @@ namespace IntentSystem.Cli.Commands;
 /// <item><c>dirty-host-durable-state</c> — uncommitted changes touch host durable-state files; refuse to proceed.</item>
 /// <item><c>dirty-unrelated-submodule</c> — only a submodule pointer / non-durable-state file is dirty; reported separately so the operator can decide without silent overwrite.</item>
 /// <item><c>dirty-mixed</c> — both dirty durable-state AND dirty unrelated changes are present; refuse to proceed and surface both buckets.</item>
+/// <item><c>submodule-checkout-mismatch</c> — G357: parent gitlink has advanced (typically after git pull)
+///   but the submodule working tree checkout is still at the old commit; the submodule itself is clean so
+///   <c>git submodule update --init &lt;path&gt;</c> is the deterministic safe repair.</item>
 /// </list>
 /// </summary>
 internal static class HostSyncPreflightAnalyzer
@@ -29,6 +32,13 @@ internal static class HostSyncPreflightAnalyzer
     public const string ClassificationDirtyUnrelatedSubmodule = "dirty-unrelated-submodule";
     public const string ClassificationDirtyMixed = "dirty-mixed";
 
+    /// <summary>
+    /// G357: parent gitlink has advanced but submodule working tree checkout is stale.
+    /// All paths in this classification have no local uncommitted changes inside the
+    /// submodule, so <c>git submodule update --init &lt;path&gt;</c> is the safe repair.
+    /// </summary>
+    public const string ClassificationSubmoduleCheckoutMismatch = "submodule-checkout-mismatch";
+
     private static readonly string[] DurableStatePathPrefixes =
     [
         ".intent-cli/queue-state.json",
@@ -37,10 +47,18 @@ internal static class HostSyncPreflightAnalyzer
         "intents/"
     ];
 
+    /// <param name="submoduleGitlinkMismatchPaths">
+    /// G357: paths where the parent gitlink has advanced but the submodule working tree
+    /// checkout is stale and the submodule itself is clean (so <c>git submodule update
+    /// --init &lt;path&gt;</c> is the safe repair). When all dirty-other paths appear in
+    /// this list and no dirty-durable paths exist, the classification is
+    /// <c>submodule-checkout-mismatch</c> rather than <c>dirty-unrelated-submodule</c>.
+    /// </param>
     public static HostSyncPreflightResult Analyze(
         string branch,
         int behindOriginCommits,
-        IReadOnlyList<HostSyncWorkingTreeEntry> workingTreeEntries)
+        IReadOnlyList<HostSyncWorkingTreeEntry> workingTreeEntries,
+        IReadOnlyList<string>? submoduleGitlinkMismatchPaths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(branch);
         ArgumentNullException.ThrowIfNull(workingTreeEntries);
@@ -48,6 +66,10 @@ internal static class HostSyncPreflightAnalyzer
         {
             throw new ArgumentOutOfRangeException(nameof(behindOriginCommits), "behind-origin count must be non-negative.");
         }
+
+        var mismatchSet = submoduleGitlinkMismatchPaths is { Count: > 0 }
+            ? new HashSet<string>(submoduleGitlinkMismatchPaths, StringComparer.Ordinal)
+            : null;
 
         var dirtyDurable = new List<HostSyncWorkingTreeEntry>();
         var dirtyOther = new List<HostSyncWorkingTreeEntry>();
@@ -63,20 +85,37 @@ internal static class HostSyncPreflightAnalyzer
             }
         }
 
+        // G357: submodule-checkout-mismatch applies when ALL dirty-other paths are
+        // known gitlink mismatches (parent gitlink advanced, submodule itself is clean).
+        var allOtherAreGitlinkMismatches = mismatchSet is not null
+            && dirtyOther.Count > 0
+            && dirtyOther.All(e => mismatchSet.Contains(e.Path));
+
         var clean = behindOriginCommits == 0 && dirtyDurable.Count == 0 && dirtyOther.Count == 0;
-        var classification = ClassifyTerminal(behindOriginCommits, dirtyDurable.Count, dirtyOther.Count);
+        var classification = ClassifyTerminal(
+            behindOriginCommits, dirtyDurable.Count, dirtyOther.Count, allOtherAreGitlinkMismatches);
 
         // G306: when ONLY unrelated dirty paths are present (no dirty
-        // durable host-state, no `dirty-mixed`), the host loop can proceed
-        // through the safe-stash lane: stash the unrelated paths via
-        // `automation workspace-guard --mode begin --write`, run the wake,
-        // then restore via `--mode end --write`. Dirty durable host-state
-        // and `dirty-mixed` remain hard stops because automation cannot
-        // safely stash files it might also be about to mutate.
-        var safeStashAllowed = dirtyDurable.Count == 0 && dirtyOther.Count > 0;
+        // durable host-state, no `dirty-mixed`, no submodule-checkout-mismatch),
+        // the host loop can proceed through the safe-stash lane: stash the unrelated
+        // paths via `automation workspace-guard --mode begin --write`, run the wake,
+        // then restore via `--mode end --write`. Dirty durable host-state and
+        // `dirty-mixed` remain hard stops because automation cannot safely stash files
+        // it might also be about to mutate. G357 submodule-checkout-mismatch uses the
+        // `git submodule update --init` lane instead — NOT the safe-stash lane.
+        var safeStashAllowed = dirtyDurable.Count == 0
+            && dirtyOther.Count > 0
+            && !allOtherAreGitlinkMismatches;
         var proceedAllowed = clean || safeStashAllowed;
 
-        var nextSteps = BuildNextSteps(classification, behindOriginCommits, dirtyDurable, dirtyOther);
+        // SubmoduleCheckoutMismatchPaths is only populated for the
+        // submodule-checkout-mismatch classification; dirty-mixed and other
+        // classifications that also touch dirtyOther do not surface this field.
+        var mismatchPathsList = string.Equals(classification, ClassificationSubmoduleCheckoutMismatch, StringComparison.Ordinal)
+            ? dirtyOther.Select(e => e.Path).ToArray()
+            : Array.Empty<string>();
+
+        var nextSteps = BuildNextSteps(classification, behindOriginCommits, dirtyDurable, dirtyOther, mismatchPathsList);
 
         return new HostSyncPreflightResult
         {
@@ -85,10 +124,13 @@ internal static class HostSyncPreflightAnalyzer
             Classification = classification,
             ProceedAllowed = proceedAllowed,
             SafeStashRequired = safeStashAllowed,
-            SafeStashPaths = dirtyOther,
+            // G306: SafeStashPaths only populated when the safe-stash lane is active.
+            // G357: submodule-checkout-mismatch uses the update lane, not safe-stash.
+            SafeStashPaths = safeStashAllowed ? dirtyOther : Array.Empty<HostSyncWorkingTreeEntry>(),
             DirtyDurableStatePaths = dirtyDurable,
             DirtyUnrelatedPaths = dirtyOther,
-            Summary = BuildSummary(classification, branch, behindOriginCommits, dirtyDurable.Count, dirtyOther.Count),
+            SubmoduleCheckoutMismatchPaths = mismatchPathsList,
+            Summary = BuildSummary(classification, branch, behindOriginCommits, dirtyDurable.Count, dirtyOther.Count, mismatchPathsList),
             NextSteps = nextSteps
         };
     }
@@ -110,7 +152,11 @@ internal static class HostSyncPreflightAnalyzer
         return false;
     }
 
-    private static string ClassifyTerminal(int behindOriginCommits, int dirtyDurableCount, int dirtyOtherCount)
+    private static string ClassifyTerminal(
+        int behindOriginCommits,
+        int dirtyDurableCount,
+        int dirtyOtherCount,
+        bool allOtherAreGitlinkMismatches)
     {
         if (dirtyDurableCount > 0 && dirtyOtherCount > 0)
         {
@@ -122,7 +168,11 @@ internal static class HostSyncPreflightAnalyzer
         }
         if (dirtyOtherCount > 0)
         {
-            return ClassificationDirtyUnrelatedSubmodule;
+            // G357: all dirty-other paths are submodule gitlink mismatches whose
+            // submodules themselves are clean → deterministic safe-update lane.
+            return allOtherAreGitlinkMismatches
+                ? ClassificationSubmoduleCheckoutMismatch
+                : ClassificationDirtyUnrelatedSubmodule;
         }
         if (behindOriginCommits > 0)
         {
@@ -131,7 +181,13 @@ internal static class HostSyncPreflightAnalyzer
         return ClassificationClean;
     }
 
-    private static string BuildSummary(string classification, string branch, int behindCount, int dirtyDurableCount, int dirtyOtherCount)
+    private static string BuildSummary(
+        string classification,
+        string branch,
+        int behindCount,
+        int dirtyDurableCount,
+        int dirtyOtherCount,
+        IReadOnlyList<string> mismatchPaths)
     {
         return classification switch
         {
@@ -145,6 +201,8 @@ internal static class HostSyncPreflightAnalyzer
                 $"Host repo on `{branch}` has {dirtyOtherCount} uncommitted change(s) outside durable host-state. Use the G306 safe-stash lane (`automation workspace-guard --mode begin --write` before the wake, `--mode end --write` after) to preserve and restore the unrelated changes; durable host-state remains untouched.",
             ClassificationDirtyMixed =>
                 $"Host repo on `{branch}` has {dirtyDurableCount} dirty durable-state path(s) AND {dirtyOtherCount} unrelated dirty path(s). Refusing to proceed (G304); both buckets must be reconciled before the wake.",
+            ClassificationSubmoduleCheckoutMismatch =>
+                $"Host repo on `{branch}` has {mismatchPaths.Count} submodule gitlink mismatch(es): the parent gitlink has advanced but the submodule checkout is stale (G357). Run `git submodule update --init {string.Join(" ", mismatchPaths)}` to update the submodule checkout(s) to the parent-recorded commit, then re-run `automation host-sync-preflight` to confirm clean.",
             _ => throw new InvalidOperationException($"Unknown host-sync classification '{classification}'.")
         };
     }
@@ -153,7 +211,8 @@ internal static class HostSyncPreflightAnalyzer
         string classification,
         int behindCommits,
         IReadOnlyList<HostSyncWorkingTreeEntry> dirtyDurable,
-        IReadOnlyList<HostSyncWorkingTreeEntry> dirtyOther)
+        IReadOnlyList<HostSyncWorkingTreeEntry> dirtyOther,
+        IReadOnlyList<string> mismatchPaths)
     {
         return classification switch
         {
@@ -177,7 +236,20 @@ internal static class HostSyncPreflightAnalyzer
             {
                 "Also reconcile the unrelated dirty paths: " + string.Join(", ", dirtyOther.Select(e => "`" + e.Path + "`"))
             }).ToArray(),
+            ClassificationSubmoduleCheckoutMismatch => BuildSubmoduleMismatchSteps(mismatchPaths),
             _ => throw new InvalidOperationException($"Unknown host-sync classification '{classification}'.")
+        };
+    }
+
+    private static IReadOnlyList<string> BuildSubmoduleMismatchSteps(IReadOnlyList<string> mismatchPaths)
+    {
+        var pathArgs = string.Join(" ", mismatchPaths);
+        var pathList = string.Join(", ", mismatchPaths.Select(p => $"`{p}`"));
+        return new[]
+        {
+            $"Run `git submodule update --init {pathArgs}` to update the submodule checkout(s) to the parent-recorded commit (G357). " +
+            $"This is safe because the submodule(s) have no local uncommitted changes (verified by host-sync preflight). Mismatch path(s): {pathList}.",
+            "Re-run `intent-cli automation host-sync-preflight --format json` after the update to confirm `classification: clean`."
         };
     }
 
@@ -240,6 +312,15 @@ internal sealed record HostSyncPreflightResult
 
     [JsonPropertyName("dirty_unrelated_paths")]
     public required IReadOnlyList<HostSyncWorkingTreeEntry> DirtyUnrelatedPaths { get; init; }
+
+    /// <summary>
+    /// G357: submodule paths where the parent gitlink has advanced but the local
+    /// checkout is stale, AND the submodule itself has no uncommitted changes. The
+    /// safe repair is <c>git submodule update --init &lt;path&gt;</c> for each path.
+    /// Empty unless <see cref="Classification"/> is <c>submodule-checkout-mismatch</c>.
+    /// </summary>
+    [JsonPropertyName("submodule_checkout_mismatch_paths")]
+    public IReadOnlyList<string> SubmoduleCheckoutMismatchPaths { get; init; } = Array.Empty<string>();
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
