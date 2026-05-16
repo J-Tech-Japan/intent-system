@@ -389,6 +389,108 @@ public sealed class DurableStatePreflightAnalyzerTests
         Assert.Equal(DurableStatePreflightAnalyzer.ClassificationNeedsOperatorReview, result.Classification);
     }
 
+    [Fact]
+    public void Analyze_PreparedPacketCommitReady_RoutesAllFourFilesToVerified()
+    {
+        // G361: every dirty canonical file under
+        // `.intent-cli/issues/<unit>/` shares one
+        // PreparedPacketCommitReady verdict; when the verdict is
+        // commit-ready, all four paths flow through the verified lane
+        // and the bundle is verified-commit-ready overall.
+        var shared = new PreparedPacketCommitReadyResult
+        {
+            Classification = PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady,
+            ExecutionUnit = "Z4R-G3",
+            PacketDirectory = ".intent-cli/issues/Z4R-G3/",
+            Summary = "prepared packet commit-ready",
+        };
+
+        var input = new DurableStatePreflightInput
+        {
+            DirtyPaths = new[]
+            {
+                BuildPreparedPacketDirtyPath("packet.yaml", shared),
+                BuildPreparedPacketDirtyPath("implementation.md", shared),
+                BuildPreparedPacketDirtyPath("review-context.md", shared),
+                BuildPreparedPacketDirtyPath("github-body.md", shared),
+            },
+        };
+
+        var result = DurableStatePreflightAnalyzer.Analyze(input);
+
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationVerifiedCommitReady, result.Classification);
+        Assert.Equal(4, result.VerifiedPaths.Count);
+        Assert.Empty(result.UnsafePaths);
+        Assert.NotNull(result.RecommendedCommitMessage);
+    }
+
+    [Fact]
+    public void Analyze_PreparedPacketUnsafe_RoutesAllFourFilesToUnsafe()
+    {
+        // G361: when the per-EU verdict is unsafe (e.g. missing canonical
+        // file, wrong-domain), every canonical path flows through the
+        // unsafe lane and the bundle is unsafe-durable-state overall.
+        var shared = new PreparedPacketCommitReadyResult
+        {
+            Classification = PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe,
+            ExecutionUnit = "Z4R-G3",
+            PacketDirectory = ".intent-cli/issues/Z4R-G3/",
+            Reason = PreparedPacketCommitReadyAnalyzer.ReasonMissingCanonicalFile,
+            Summary = "missing github-body.md",
+        };
+
+        var input = new DurableStatePreflightInput
+        {
+            DirtyPaths = new[]
+            {
+                BuildPreparedPacketDirtyPath("packet.yaml", shared),
+                BuildPreparedPacketDirtyPath("implementation.md", shared),
+                BuildPreparedPacketDirtyPath("review-context.md", shared),
+            },
+        };
+
+        var result = DurableStatePreflightAnalyzer.Analyze(input);
+
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(3, result.UnsafePaths.Count);
+    }
+
+    [Fact]
+    public void Analyze_PreparedPacketCanonicalFileWithoutDelta_FallsToUnsafe()
+    {
+        // G361: a canonical prepared-packet file without an accompanying
+        // PreparedPacketDelta (e.g. probe could not group the EU) routes
+        // to unsafe so the host loop never auto-commits ambiguous packet
+        // state.
+        var input = new DurableStatePreflightInput
+        {
+            DirtyPaths = new[]
+            {
+                new DurableStateDirtyPath
+                {
+                    Path = ".intent-cli/issues/Z4R-G3/packet.yaml",
+                    IsDeleted = false,
+                    PreparedPacketDelta = null,
+                },
+            },
+        };
+
+        var result = DurableStatePreflightAnalyzer.Analyze(input);
+
+        Assert.Equal(DurableStatePreflightAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Single(result.UnsafePaths);
+        Assert.Contains("prepared-packet", result.UnsafePaths[0].Reason, StringComparison.Ordinal);
+    }
+
+    private static DurableStateDirtyPath BuildPreparedPacketDirtyPath(
+        string fileName,
+        PreparedPacketCommitReadyResult sharedVerdict) => new()
+    {
+        Path = $".intent-cli/issues/Z4R-G3/{fileName}",
+        IsDeleted = false,
+        PreparedPacketDelta = sharedVerdict,
+    };
+
     private static DurableStateDirtyPath BuildVerifiedQueueStatePath() => new()
     {
         Path = ".intent-cli/queue-state.json",

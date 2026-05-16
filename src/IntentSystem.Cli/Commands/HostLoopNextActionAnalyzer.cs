@@ -76,6 +76,20 @@ internal static class HostLoopNextActionAnalyzer
     /// </summary>
     public const string ClassificationDesignNeeded = "design-needed";
 
+    /// <summary>
+    /// G361: emitted when host-sync-preflight reports
+    /// <c>dirty-host-durable-state</c> but the dirty surface is
+    /// actually a complete prepared packet directory under
+    /// <c>.intent-cli/issues/&lt;execution-unit&gt;/</c> that
+    /// durable-state-preflight already classified
+    /// <c>prepared-packet-commit-ready</c>. The host loop must commit
+    /// (and push) the verified packet directory BEFORE downstream
+    /// next-slice publish, so this lane overrides the generic
+    /// <see cref="ClassificationDirtyHostState"/> lane when the
+    /// repair-before-publish path is safe.
+    /// </summary>
+    public const string ClassificationPreparedPacketCommitReady = "prepared-packet-commit-ready";
+
     public const string ClassificationTrueIdle = "true-idle";
 
     public static HostLoopNextActionResult Analyze(HostLoopNextActionInput input)
@@ -91,7 +105,26 @@ internal static class HostLoopNextActionAnalyzer
                 "Stale installed CLI — refresh before any further host loop wake.");
         }
 
-        // 2. dirty host state (G304/G306 hard stop)
+        // 2. dirty host state (G304/G306 hard stop) — but first check
+        // whether the dirty surface is actually a complete prepared
+        // packet directory that durable-state-preflight has already
+        // classified `prepared-packet-commit-ready` (G361). When so, the
+        // safe path is to commit + push that directory BEFORE the next
+        // publish wake, not to surface a generic dirty-host-state stop.
+        if (input.SyncClassification is "dirty-host-durable-state" or "dirty-mixed"
+            && input.PreparedPacketCommitReadyAvailable
+            && !string.IsNullOrWhiteSpace(input.PreparedPacketExecutionUnit))
+        {
+            return Result(ClassificationPreparedPacketCommitReady, mutationAllowed: true,
+                $"intent-cli automation durable-state-preflight --domain {input.Domain ?? "<DOMAIN>"} --target-repo {input.Repo} --format json",
+                new[]
+                {
+                    $"host-sync-preflight classification: {input.SyncClassification}.",
+                    $"durable-state-preflight reports prepared packet directory `.intent-cli/issues/{input.PreparedPacketExecutionUnit}/` is commit-ready (G361): four canonical files present, packet.yaml parses, domain/target-repo bindings match.",
+                    "Commit + push the verified packet directory before the next publish wake; the operator must NOT bypass durable-state-preflight or commit additional untracked content."
+                },
+                $"Prepared packet `{input.PreparedPacketExecutionUnit}` commit-ready — commit before next-slice publish (G361).");
+        }
         if (input.SyncClassification is "dirty-host-durable-state" or "dirty-mixed")
         {
             return Result(ClassificationDirtyHostState, mutationAllowed: false,
@@ -387,6 +420,27 @@ internal sealed record HostLoopNextActionInput
     /// `true-idle`.
     /// </summary>
     public bool DesignNeeded { get; init; }
+
+    /// <summary>
+    /// G361: true when <c>automation durable-state-preflight</c>
+    /// reports that the dirty host-durable-state is actually a
+    /// complete prepared packet directory under
+    /// <c>.intent-cli/issues/&lt;unit&gt;/</c> classified
+    /// <c>prepared-packet-commit-ready</c>. Combined with a
+    /// <see cref="SyncClassification"/> of
+    /// <c>dirty-host-durable-state</c> / <c>dirty-mixed</c>, routes
+    /// the analyzer to the <c>prepared-packet-commit-ready</c> lane
+    /// instead of the generic dirty-host-state stop.
+    /// </summary>
+    public bool PreparedPacketCommitReadyAvailable { get; init; }
+
+    /// <summary>
+    /// G361: execution unit of the commit-ready packet directory
+    /// (e.g. <c>Z4R-G3</c>). Used in the evidence + summary lines
+    /// emitted on the <c>prepared-packet-commit-ready</c> lane.
+    /// Null when no such directory is present.
+    /// </summary>
+    public string? PreparedPacketExecutionUnit { get; init; }
 }
 
 internal sealed record ActionableReviewPr

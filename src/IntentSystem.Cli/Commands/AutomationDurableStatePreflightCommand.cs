@@ -52,7 +52,7 @@ internal static class AutomationDurableStatePreflightCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var format, out var error))
+        if (!TryParseArguments(args, out var format, out var domain, out var targetRepo, out var error))
         {
             writer.WriteLine(error);
             return 1;
@@ -62,7 +62,7 @@ internal static class AutomationDurableStatePreflightCommand
         try
         {
             probe = ProbeFactory?.Invoke(context.RepoRoot)
-                ?? CaptureProbe(context.RepoRoot);
+                ?? CaptureProbe(context, domain, targetRepo);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
@@ -97,11 +97,24 @@ internal static class AutomationDurableStatePreflightCommand
     /// delta analyzer. Untracked or always-unsafe paths get an empty
     /// per-path delta — the analyzer routes them through its
     /// review/unsafe lanes.
+    ///
+    /// G361: prepared-packet canonical files
+    /// (<c>.intent-cli/issues/&lt;unit&gt;/{packet.yaml,implementation.md,review-context.md,github-body.md}</c>)
+    /// are grouped per execution-unit; the four files are read from the
+    /// working tree and classified once via
+    /// <see cref="PreparedPacketCommitReadyAnalyzer"/> using the
+    /// active domain's binding regex and the requested target repo.
+    /// The shared verdict is attached to each path's delta so each one
+    /// is routed through the verified or unsafe lane together.
     /// </summary>
-    private static DurableStatePreflightProbe CaptureProbe(string repoRoot)
+    private static DurableStatePreflightProbe CaptureProbe(
+        CliContext context,
+        string? domain,
+        string? targetRepo)
     {
+        var repoRoot = context.RepoRoot;
         var statusOutput = RunGit(repoRoot, "status --porcelain").Replace("\r\n", "\n");
-        var dirtyPaths = new List<DurableStateDirtyPath>();
+        var rawEntries = new List<(string Path, string Status, bool IsDeleted)>();
         foreach (var rawLine in statusOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             if (rawLine.Length < 4)
@@ -118,6 +131,38 @@ internal static class AutomationDurableStatePreflightCommand
                 path = path[(arrowIndex + 4)..].Trim();
             }
 
+            // G361: `git status --porcelain` collapses entire untracked
+            // directories into a single trailing-slash entry (e.g.
+            // `?? .intent-cli/issues/Z4R-G3/`) by default. To recognize
+            // prepared-packet canonical files inside a new packet
+            // directory, expand directory entries by walking the
+            // working tree ourselves. We intentionally avoid the
+            // global `-uall` flag (the system-wide guidance flags it
+            // as memory-unsafe on large repos); this targeted
+            // expansion only walks the durable-state prefixes we
+            // already care about.
+            if (path.EndsWith('/'))
+            {
+                // G361: also accept directory entries that are PARENTS of
+                // durable-state paths (e.g. a brand-new `.intent-cli/`
+                // tree shows up as `?? .intent-cli/`); the per-file
+                // filter below will drop anything outside the durable
+                // surface after expansion.
+                if (!IsDurableStatePath(path) && !IsDurableStateParent(path))
+                {
+                    continue;
+                }
+                foreach (var expanded in ExpandUntrackedDirectory(repoRoot, path))
+                {
+                    if (!IsDurableStatePath(expanded))
+                    {
+                        continue;
+                    }
+                    rawEntries.Add((expanded, status, false));
+                }
+                continue;
+            }
+
             // G304 already filters by durable-state prefix in
             // host-sync-preflight; here we replicate the filter so this
             // command can be invoked standalone and only durable-state
@@ -127,12 +172,40 @@ internal static class AutomationDurableStatePreflightCommand
             {
                 continue;
             }
+            rawEntries.Add((path, status, status.Contains('D')));
+        }
 
-            var isDeleted = status.Contains('D');
+        // G361: group dirty prepared-packet files by execution-unit so the
+        // analyzer runs once per EU. The shared verdict is then attached
+        // to each individual canonical file's DurableStateDirtyPath.
+        var preparedPacketEUs = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (path, _, isDeleted) in rawEntries)
+        {
+            if (isDeleted) continue;
+            if (TryGetPreparedPacketExecutionUnit(path, out var eu))
+            {
+                preparedPacketEUs.Add(eu);
+            }
+        }
 
+        var preparedPacketResults = new Dictionary<string, PreparedPacketCommitReadyResult>(StringComparer.Ordinal);
+        string? executionUnitRegex = null;
+        if (preparedPacketEUs.Count > 0)
+        {
+            executionUnitRegex = TryResolveExecutionUnitRegex(context, domain);
+            foreach (var eu in preparedPacketEUs)
+            {
+                preparedPacketResults[eu] = BuildPreparedPacketResult(repoRoot, eu, executionUnitRegex, targetRepo);
+            }
+        }
+
+        var dirtyPaths = new List<DurableStateDirtyPath>();
+        foreach (var (path, _, isDeleted) in rawEntries)
+        {
             QueueStateForwardDeltaResult? queueDelta = null;
             RunsJsonlAppendOnlyResult? runsDelta = null;
             PublishYamlCanonicalResult? publishYamlDelta = null;
+            PreparedPacketCommitReadyResult? preparedPacketDelta = null;
 
             if (!isDeleted)
             {
@@ -153,6 +226,15 @@ internal static class AutomationDurableStatePreflightCommand
                     // instead of the legacy blanket-unsafe rule.
                     publishYamlDelta = TryPublishYamlDelta(repoRoot, path, executionUnit);
                 }
+                else if (TryGetPreparedPacketExecutionUnit(path, out var packetEu)
+                    && preparedPacketResults.TryGetValue(packetEu, out var sharedVerdict))
+                {
+                    // G361: attach the shared per-EU verdict to this
+                    // canonical file's delta. The analyzer routes the
+                    // path through the verified or unsafe lane based
+                    // on the verdict.
+                    preparedPacketDelta = sharedVerdict;
+                }
             }
 
             dirtyPaths.Add(new DurableStateDirtyPath
@@ -162,10 +244,207 @@ internal static class AutomationDurableStatePreflightCommand
                 QueueStateDelta = queueDelta,
                 RunsJsonlDelta = runsDelta,
                 PublishYamlDelta = publishYamlDelta,
+                PreparedPacketDelta = preparedPacketDelta,
             });
         }
 
         return new DurableStatePreflightProbe { DirtyPaths = dirtyPaths };
+    }
+
+    /// <summary>
+    /// G361: enumerate the on-disk files under an untracked durable-state
+    /// directory and return them as forward-slash repo-relative paths.
+    /// Used only for directory entries (those trailing-slash collapsed
+    /// rows in <c>git status --porcelain</c>); recurses through
+    /// subdirectories. Returns an empty enumerable when the directory
+    /// is unreadable or missing.
+    /// </summary>
+    private static IEnumerable<string> ExpandUntrackedDirectory(string repoRoot, string directoryRelPath)
+    {
+        var normalized = directoryRelPath.Replace('\\', '/').TrimStart('/').TrimEnd('/');
+        var absolute = Path.Combine(repoRoot, normalized.Replace('/', Path.DirectorySeparatorChar));
+        if (!Directory.Exists(absolute))
+        {
+            yield break;
+        }
+
+        IEnumerable<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(absolute, "*", SearchOption.AllDirectories);
+        }
+        catch (IOException) { yield break; }
+        catch (UnauthorizedAccessException) { yield break; }
+
+        foreach (var file in files)
+        {
+            var relative = Path.GetRelativePath(repoRoot, file).Replace('\\', '/');
+            yield return relative;
+        }
+    }
+
+    /// <summary>
+    /// G361: detect a prepared-packet canonical file path and extract
+    /// the directory-derived execution unit. Returns false for any path
+    /// outside <c>.intent-cli/issues/&lt;unit&gt;/{packet.yaml,implementation.md,review-context.md,github-body.md}</c>.
+    /// </summary>
+    private static bool TryGetPreparedPacketExecutionUnit(string path, out string executionUnit)
+    {
+        executionUnit = string.Empty;
+        if (string.IsNullOrEmpty(path)) return false;
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        if (!normalized.StartsWith(DurableStatePreflightAnalyzer.IssuesDirectorySegment, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        var remainder = normalized[DurableStatePreflightAnalyzer.IssuesDirectorySegment.Length..];
+        var slashIndex = remainder.IndexOf('/');
+        if (slashIndex <= 0)
+        {
+            return false;
+        }
+        var fileSegment = remainder[(slashIndex + 1)..];
+        var matchedCanonical = false;
+        foreach (var canonical in PreparedPacketCommitReadyAnalyzer.CanonicalFileNames)
+        {
+            if (fileSegment.Equals(canonical, StringComparison.Ordinal))
+            {
+                matchedCanonical = true;
+                break;
+            }
+        }
+        if (!matchedCanonical)
+        {
+            return false;
+        }
+        executionUnit = remainder[..slashIndex];
+        return !string.IsNullOrWhiteSpace(executionUnit);
+    }
+
+    /// <summary>
+    /// G361: read the four canonical files for a prepared-packet
+    /// execution unit from the working tree and feed them into
+    /// <see cref="PreparedPacketCommitReadyAnalyzer.Analyze"/>. Missing
+    /// files are forwarded as null so the analyzer's
+    /// <c>missing-canonical-file</c> branch fires.
+    /// </summary>
+    private static PreparedPacketCommitReadyResult BuildPreparedPacketResult(
+        string repoRoot,
+        string executionUnit,
+        string? executionUnitRegex,
+        string? requestedTargetRepo)
+    {
+        var packetDir = Path.Combine(repoRoot, ".intent-cli", "issues", executionUnit);
+
+        return PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = executionUnit,
+            PacketYaml = TryReadFile(Path.Combine(packetDir, PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml)),
+            ImplementationMarkdown = TryReadFile(Path.Combine(packetDir, PreparedPacketCommitReadyAnalyzer.FileNameImplementationMarkdown)),
+            ReviewContextMarkdown = TryReadFile(Path.Combine(packetDir, PreparedPacketCommitReadyAnalyzer.FileNameReviewContextMarkdown)),
+            GithubBodyMarkdown = TryReadFile(Path.Combine(packetDir, PreparedPacketCommitReadyAnalyzer.FileNameGithubBodyMarkdown)),
+            ExecutionUnitRegex = executionUnitRegex,
+            RequestedTargetRepo = requestedTargetRepo,
+        });
+    }
+
+    private static string? TryReadFile(string absolutePath)
+    {
+        if (!File.Exists(absolutePath))
+        {
+            return null;
+        }
+        try
+        {
+            return File.ReadAllText(absolutePath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// G361: resolve the active domain's <c>execution_unit_regex</c>
+    /// from <c>intents/&lt;domain&gt;/automation/bindings.md</c>.
+    /// Mirrors the resolution order used by
+    /// <see cref="AutomationSummaryAnalyzer"/> — child <c>RepoRoot</c>
+    /// first, then the configured parent intent repo root. Returns null
+    /// when no domain is supplied, the bindings file is missing, or the
+    /// field is absent. The analyzer downstream interprets null as
+    /// "no cross-domain check" so a misconfigured host cannot
+    /// indefinitely block the prepared-packet lane.
+    /// </summary>
+    private static string? TryResolveExecutionUnitRegex(CliContext context, string? domain)
+    {
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            domain = context.Config?.Project?.Domain;
+        }
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            return null;
+        }
+
+        var childPath = string.IsNullOrWhiteSpace(context.RepoRoot)
+            ? null
+            : Path.Combine(context.RepoRoot, "intents", domain, "automation", "bindings.md");
+        if (!string.IsNullOrWhiteSpace(childPath) && File.Exists(childPath))
+        {
+            var fromChild = ExtractExecutionUnitRegex(TryReadFile(childPath));
+            if (!string.IsNullOrWhiteSpace(fromChild))
+            {
+                return fromChild;
+            }
+        }
+
+        var parentRoot = context.ResolveParentIntentRepoRootPath();
+        if (string.IsNullOrWhiteSpace(parentRoot))
+        {
+            return null;
+        }
+        var parentPath = Path.Combine(parentRoot, "intents", domain, "automation", "bindings.md");
+        if (!File.Exists(parentPath))
+        {
+            return null;
+        }
+        return ExtractExecutionUnitRegex(TryReadFile(parentPath));
+    }
+
+    /// <summary>
+    /// G361: minimal tolerant parser for the
+    /// <c>execution_unit_regex</c> scalar inside a bindings.md file.
+    /// Mirrors the tolerant scan in
+    /// <see cref="AutomationSummaryAnalyzer"/>.
+    /// </summary>
+    private static string? ExtractExecutionUnitRegex(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return null;
+        }
+        var normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);
+        foreach (var rawLine in normalized.Split('\n'))
+        {
+            var line = rawLine.TrimEnd();
+            if (line.Length == 0) continue;
+            if (line[0] == ' ' || line[0] == '\t') continue;
+            if (line.StartsWith('#') || line.StartsWith("- ", StringComparison.Ordinal)) continue;
+            if (string.Equals(line.Trim(), "---", StringComparison.Ordinal)) continue;
+            var colonIndex = line.IndexOf(':', StringComparison.Ordinal);
+            if (colonIndex <= 0) continue;
+            var key = line[..colonIndex].Trim();
+            if (!string.Equals(key, "execution_unit_regex", StringComparison.Ordinal)) continue;
+            var value = line[(colonIndex + 1)..].Trim();
+            if (value.Length >= 2
+                && ((value[0] == '\'' && value[^1] == '\'')
+                    || (value[0] == '"' && value[^1] == '"')))
+            {
+                value = value[1..^1];
+            }
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+        return null;
     }
 
     private static QueueStateForwardDeltaResult TryQueueStateDelta(string repoRoot, string path)
@@ -326,6 +605,27 @@ internal static class AutomationDurableStatePreflightCommand
         return PublishYamlCanonicalAnalyzer.Analyze(content, executionUnit);
     }
 
+    /// <summary>
+    /// G361: returns true when <paramref name="path"/> is a trailing-slash
+    /// directory entry that could be a PARENT of a durable-state path —
+    /// e.g. <c>.intent-cli/</c> when the entire artifact root is
+    /// untracked. The caller still expands and per-file filters.
+    /// </summary>
+    private static bool IsDurableStateParent(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        // Strip the trailing slash for prefix comparisons.
+        if (normalized.EndsWith('/'))
+        {
+            normalized = normalized[..^1];
+        }
+        return normalized.Equals(".intent-cli", StringComparison.Ordinal)
+            || normalized.StartsWith(".intent-cli/", StringComparison.Ordinal)
+            || normalized.Equals("intents", StringComparison.Ordinal)
+            || normalized.StartsWith("intents/", StringComparison.Ordinal);
+    }
+
     private static bool IsDurableStatePath(string path)
     {
         if (string.IsNullOrEmpty(path)) return false;
@@ -405,9 +705,16 @@ internal static class AutomationDurableStatePreflightCommand
         }
     }
 
-    private static bool TryParseArguments(string[] args, out string format, out string error)
+    private static bool TryParseArguments(
+        string[] args,
+        out string format,
+        out string? domain,
+        out string? targetRepo,
+        out string error)
     {
         format = FormatMarkdown;
+        domain = null;
+        targetRepo = null;
         error = string.Empty;
 
         for (var index = 0; index < args.Length; index++)
@@ -430,10 +737,36 @@ internal static class AutomationDurableStatePreflightCommand
                     format = requested;
                     break;
 
-                // Allow --domain / --repo flags (the host-loop guidance
-                // passes them for parity with other automation commands)
-                // but ignore — the analyzer is repo-content-only.
                 case "--domain":
+                    // G361: domain selects the active
+                    // intents/<domain>/automation/bindings.md so the
+                    // prepared-packet lane can enforce
+                    // execution_unit_regex. Ignored when no dirty
+                    // prepared-packet directory is present.
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--domain requires a value.";
+                        return false;
+                    }
+                    domain = args[++index].Trim();
+                    break;
+
+                case "--target-repo":
+                    // G361: target-repo enforces that prepared-packet
+                    // directories declaring a different child repo are
+                    // refused. Ignored when no dirty prepared-packet
+                    // directory is present.
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--target-repo requires a value (owner/repo).";
+                        return false;
+                    }
+                    targetRepo = args[++index].Trim();
+                    break;
+
+                // Allow --repo for parity with other automation commands;
+                // ignored because durable-state-preflight is repo-content
+                // only and the relevant child target is `--target-repo`.
                 case "--repo":
                     if (index + 1 >= args.Length)
                     {

@@ -459,6 +459,50 @@ public sealed class HostLoopNextActionAnalyzerTests
             }).Classification);
     }
 
+    [Fact]
+    public void PreparedPacketCommitReady_OverridesDirtyHostStateWithSafeCommitLane()
+    {
+        // G361 AC5: when host-sync-preflight reports dirty-host-durable-state
+        // BUT durable-state-preflight already classified the dirty surface
+        // as a complete prepared packet directory (commit-ready), the
+        // analyzer must NOT surface generic dirty-host-state. Instead it
+        // routes to prepared-packet-commit-ready so the host loop commits
+        // + pushes the packet before publication.
+        var input = NewInput() with
+        {
+            SyncClassification = "dirty-host-durable-state",
+            PreparedPacketCommitReadyAvailable = true,
+            PreparedPacketExecutionUnit = "Z4R-G3",
+            Domain = "zero4racer-mobile-revival",
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal(HostLoopNextActionAnalyzer.ClassificationPreparedPacketCommitReady, result.Classification);
+        Assert.True(result.MutationAllowed);
+        Assert.Contains("Z4R-G3", result.Summary, StringComparison.Ordinal);
+        Assert.Contains("durable-state-preflight", result.RecommendedCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PreparedPacketCommitReady_RequiresDirtySyncClassification()
+    {
+        // Defensive: the lane only fires when host-sync-preflight is
+        // actually dirty; otherwise the analyzer falls through to its
+        // normal lanes. Without the dirty signal the prepared-packet
+        // input is irrelevant (nothing to commit).
+        var input = NewInput() with
+        {
+            SyncClassification = "clean",
+            PreparedPacketCommitReadyAvailable = true,
+            PreparedPacketExecutionUnit = "Z4R-G3",
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.NotEqual(HostLoopNextActionAnalyzer.ClassificationPreparedPacketCommitReady, result.Classification);
+    }
+
     private static HostLoopNextActionInput NewInput() =>
         new()
         {

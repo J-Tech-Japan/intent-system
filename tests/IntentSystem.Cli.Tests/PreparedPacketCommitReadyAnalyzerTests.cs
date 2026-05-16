@@ -1,0 +1,248 @@
+using IntentSystem.Cli.Commands;
+
+namespace IntentSystem.Cli.Tests;
+
+public sealed class PreparedPacketCommitReadyAnalyzerTests
+{
+    private const string CanonicalPacketYaml = """
+implementation_issue_packet:
+  source_execution_unit: Z4R-G3
+  issue_title: Demo packet
+  target_repo: J-Tech-Creations/Zero4Racer
+""";
+
+    private const string CanonicalGithubBody = """
+# Z4R-G3 demo packet
+
+## Goal
+Demo.
+
+## Why This Slice Exists Now
+Demo.
+
+## Current Observed State
+Demo.
+
+## Accepted Baseline You May Assume
+Demo.
+
+## Target Repo / Path / Part
+Demo.
+
+## In Scope
+Demo.
+
+## Out Of Scope
+Demo.
+
+## Acceptance Criteria
+Demo.
+
+## Verification
+Demo.
+
+## Related Links
+Demo.
+""";
+
+    private const string CanonicalReviewContext = """
+# Z4R-G3 review context
+
+Demo.
+""";
+
+    private const string CanonicalImplementation = """
+# Z4R-G3 implementation
+
+Demo.
+""";
+
+    [Fact]
+    public void Analyze_AllFourFilesAndMatchingBindings_ReturnsCommitReady()
+    {
+        // G361 AC1: complete prepared packet directory with the four
+        // canonical files and a matching domain binding regex returns
+        // a safe commit-ready result with deterministic verified files.
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady, result.Classification);
+        Assert.Equal("Z4R-G3", result.ExecutionUnit);
+        Assert.Equal(".intent-cli/issues/Z4R-G3/", result.PacketDirectory);
+        Assert.NotNull(result.VerifiedFiles);
+        Assert.Equal(4, result.VerifiedFiles!.Count);
+        Assert.Contains(".intent-cli/issues/Z4R-G3/packet.yaml", result.VerifiedFiles);
+        Assert.Contains(".intent-cli/issues/Z4R-G3/implementation.md", result.VerifiedFiles);
+        Assert.Contains(".intent-cli/issues/Z4R-G3/review-context.md", result.VerifiedFiles);
+        Assert.Contains(".intent-cli/issues/Z4R-G3/github-body.md", result.VerifiedFiles);
+        Assert.Null(result.Reason);
+    }
+
+    [Fact]
+    public void Analyze_MissingGithubBody_ReturnsUnsafeMissingCanonicalFile()
+    {
+        // G361 AC2: missing github-body.md returns unsafe with structured
+        // missing-canonical-file reason and lists the missing path.
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = null,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonMissingCanonicalFile, result.Reason);
+        Assert.NotNull(result.MissingFiles);
+        Assert.Single(result.MissingFiles!);
+        Assert.Contains(".intent-cli/issues/Z4R-G3/github-body.md", result.MissingFiles!);
+    }
+
+    [Fact]
+    public void Analyze_WrongDomain_ReturnsUnsafeWrongDomain()
+    {
+        // G361 AC3: SKS-G<N> packet while the active domain regex targets
+        // ^Z4R-G[0-9]+$ returns unsafe with wrong-domain reason; the
+        // packet content is otherwise complete (test isolates the
+        // cross-domain check).
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "SKS-G42",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonWrongDomain, result.Reason);
+        Assert.Equal("^Z4R-G[0-9]+$", result.DomainRegex);
+        Assert.Contains("SKS-G42", result.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Analyze_WrongTargetRepo_ReturnsUnsafeWrongTargetRepo()
+    {
+        // G361 AC4: packet declares a different target_repo than the host
+        // loop expects; return unsafe with wrong-target-repo and surface
+        // both declared and requested repos so the operator can resolve
+        // the mismatch.
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "Other/Repo",
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonWrongTargetRepo, result.Reason);
+        Assert.Equal("Other/Repo", result.RequestedTargetRepo);
+        Assert.Equal("J-Tech-Creations/Zero4Racer", result.DeclaredTargetRepo);
+    }
+
+    [Fact]
+    public void Analyze_MissingGithubBodySection_ReturnsUnsafeMissingSection()
+    {
+        // G361: github-body.md without one of the required standalone
+        // sections returns unsafe with the structured section name; this
+        // mirrors the issue contract validation in MetadataValidate so
+        // the host loop never auto-commits an incomplete child issue.
+        const string incompleteBody = """
+# Title
+## Goal
+## Why This Slice Exists Now
+## Current Observed State
+""";
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = incompleteBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonGithubBodyMissingSection, result.Reason);
+        Assert.NotNull(result.MissingGithubBodySection);
+    }
+
+    [Fact]
+    public void Analyze_NoBindingRegex_SkipsCrossDomainCheck()
+    {
+        // Fail-open: when the host has not configured a binding regex
+        // the analyzer must not block on cross-domain (mirrors G359
+        // posture). All other checks still apply.
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "SKS-G99",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = null,
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady, result.Classification);
+    }
+
+    [Fact]
+    public void Analyze_InvalidBindingRegex_FailsOpenAndAccepts()
+    {
+        // Defensive: a malformed binding regex must not indefinitely
+        // block the host loop. The analyzer falls back to "no check"
+        // when the regex won't compile (mirrors G359 fail-open).
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "[unclosed",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady, result.Classification);
+    }
+
+    [Fact]
+    public void Analyze_NoTargetRepoRequested_SkipsTargetRepoCheck()
+    {
+        // Without a requested target repo the analyzer skips the
+        // repo-binding check; useful when the durable-state preflight
+        // is invoked without --target-repo.
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = null,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady, result.Classification);
+    }
+}
