@@ -5,6 +5,11 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+// G358: serialise with AutomationCloseoutDriftCheckCommandTests so that
+// CandidateListerFactory resets in this class's ctor/Dispose cannot race
+// with the FakeEmptyLister assignment in
+// DiagnosticsCommand_WithCloseoutDriftRepairsAvailableFlag_ClassifiesCloseoutDriftRepair.
+[Collection("HostReviewDiagnostics")]
 public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
 {
     public AutomationHostReviewDiagnosticsCommandTests()

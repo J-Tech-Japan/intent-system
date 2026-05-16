@@ -20,6 +20,11 @@ namespace IntentSystem.Cli.Tests;
 /// - G358: host-loop-next-action surfaces repair-host-metadata when drift repairs available.
 /// - Diagnostics returns closeout-drift-repair instead of true-idle when count > 0.
 /// </summary>
+// G358: serialise with AutomationHostReviewDiagnosticsCommandTests so that
+// CandidateListerFactory resets in that class's ctor/Dispose cannot race
+// with the FakeEmptyLister set in
+// DiagnosticsCommand_WithCloseoutDriftRepairsAvailableFlag_ClassifiesCloseoutDriftRepair.
+[Collection("HostReviewDiagnostics")]
 public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
 {
     public AutomationCloseoutDriftCheckCommandTests()
@@ -28,9 +33,13 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
         AutomationCloseoutDriftCheckCommand.IssueLookupFactory = null;
         AutomationCloseoutDriftCheckCommand.UtcNowFactory =
             () => new DateTimeOffset(2026, 5, 15, 10, 0, 0, TimeSpan.Zero);
-        // Reset all diagnostics-command static seams so tests that exercise the
+        // Reset diagnostics-command probe seams so tests that exercise the
         // full diagnostics command do not leak state into other test classes.
-        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = null;
+        // CandidateListerFactory is intentionally NOT reset here: resetting a
+        // shared static in the constructor (which runs on a parallel thread) can
+        // race with tests in other classes that have already captured their fake
+        // lister. Each test that exercises the diagnostics command manages
+        // CandidateListerFactory within its own try/finally instead.
         AutomationHostReviewDiagnosticsCommand.NestedProviderLauncher = null;
         AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
         AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = null;
@@ -42,8 +51,10 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
         AutomationCloseoutDriftCheckCommand.PrLookupFactory = null;
         AutomationCloseoutDriftCheckCommand.IssueLookupFactory = null;
         AutomationCloseoutDriftCheckCommand.UtcNowFactory = null;
-        // Restore diagnostics-command static seams after each test.
-        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = null;
+        // Restore diagnostics-command probe seams after each test.
+        // CandidateListerFactory is intentionally NOT reset here — see the
+        // constructor comment. The specific test that uses it resets it in its
+        // own try/finally block.
         AutomationHostReviewDiagnosticsCommand.NestedProviderLauncher = null;
         AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
         AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = null;
@@ -487,11 +498,61 @@ public sealed class AutomationCloseoutDriftCheckCommandTests : IDisposable
     }
 
     [Fact]
+    public void Analyzer_CloseoutDriftRepair_SurfacesBeforeWipCapBlocked_WhenOpenIntentTargetPrExists()
+    {
+        // G358: the closeout-drift-repair lane must fire BEFORE the wip-cap-blocked
+        // return so that a merged-PR closeout can be recorded even while another
+        // intent-target issue or PR occupies the WIP slot. Previously the
+        // closeout-drift check was positioned after the wip-cap check so this
+        // scenario incorrectly returned wip-cap-blocked.
+        // PR with intent-target + intent-pr-update-in-progress simulates a PR
+        // currently held by a child worker — it is in-flight (triggers wip-cap)
+        // but is NOT classified as actionable-review-pr (which requires no
+        // blocking label). This is the real regression scenario: the child is
+        // holding the lease while a separate merged PR needs its closeout
+        // recorded.
+        var openIntentTargetPr = new GitHubAutomationPrCandidate
+        {
+            Number = 99,
+            Title = "In-flight work (child worker holds lease)",
+            Url = "https://github.com/J-Tech-Japan/intent-system/pull/99",
+            Body = "",
+            CreatedAt = "2026-05-15T00:00:00Z",
+            UpdatedAt = "2026-05-15T00:00:00Z",
+            State = "OPEN",
+            Labels =
+            [
+                new GitHubAutomationLabel { Name = "intent-target" },
+                new GitHubAutomationLabel { Name = "intent-pr-update-in-progress" },
+            ],
+        };
+
+        var result = AutomationHostReviewDiagnosticsAnalyzer.Analyze(
+            repo: "J-Tech-Japan/intent-system",
+            openPrs: [openIntentTargetPr],
+            publishedIntentTargetIssues: Array.Empty<GitHubAutomationIssueCandidate>(),
+            clarificationRequired: false,
+            candidateExecutionUnit: null,
+            closeoutDriftRepairsAvailable: 1);
+
+        Assert.Equal(
+            AutomationHostReviewDiagnosticsClassifications.CloseoutDriftRepair,
+            result.Classification);
+        Assert.True(result.SafeRepairAvailable);
+        Assert.Equal(SafeRepairCategories.CloseoutDriftRepair, result.SafeRepairCategory);
+    }
+
+    [Fact]
     public void DiagnosticsCommand_WithCloseoutDriftRepairsAvailableFlag_ClassifiesCloseoutDriftRepair()
     {
         using var workspace = new DriftWorkspace();
         workspace.WriteInstalledCliScript();
         AutomationInstalledCliSurfaceProbe.ProbeRunner = null; // use real check or stub
+        // Set CandidateListerFactory without resetting it to null afterwards.
+        // Resetting to null after the test can race with a concurrent test in
+        // another class that has already set its own fake lister, causing it to
+        // fall through to the real GhCli lister and return unexpected live data.
+        // Any subsequent test that needs the factory will set its own value.
         AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeEmptyLister();
 
         using var writer = new StringWriter();

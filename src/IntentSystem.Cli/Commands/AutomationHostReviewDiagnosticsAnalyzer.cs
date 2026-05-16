@@ -312,6 +312,33 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 warnings);
         }
 
+        // G358: when closeout-drift-check reports unapplied repairs, surface
+        // `closeout-drift-repair` BEFORE the WIP-cap / wait-for-child returns so
+        // the host loop can record the missing closeout even when an open
+        // intent-target issue or PR occupies the WIP slot. A merged-PR closeout
+        // is a deterministic state repair that does not publish new work, so it
+        // must not be hidden behind the WIP gate.
+        if (closeoutDriftRepairsAvailable > 0)
+        {
+            details.Add(new AutomationHostReviewDiagnosticsDetail
+            {
+                Kind = AutomationHostReviewDiagnosticsClassifications.CloseoutDriftRepair,
+                TargetKind = null,
+                TargetNumber = null,
+                TargetUrl = null,
+                Description = $"closeout-drift-check reports {closeoutDriftRepairsAvailable} queue item(s) whose linked PR is merged but whose state is not Completed.",
+            });
+            return Build(
+                repo,
+                AutomationHostReviewDiagnosticsClassifications.CloseoutDriftRepair,
+                $"Closeout drift detected: {closeoutDriftRepairsAvailable} queue item(s) are not Completed despite their linked PR being merged. Apply the repair with `automation closeout-drift-check --write`, commit/push durable state, then retry the wake.",
+                recommendedNextCommand: $"intent-cli automation closeout-drift-check --repo {repo} --write --format json",
+                clarification: null,
+                details,
+                warnings,
+                safeRepairCategory: SafeRepairCategories.CloseoutDriftRepair);
+        }
+
         if (inFlightPrs.Length > 0 || inFlightIssues.Length > 0)
         {
             // G288: when the operator explicitly opts in (--allow-wip-cap-override)
@@ -451,31 +478,6 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 details,
                 warnings,
                 safeRepairCategory: SafeRepairCategories.HostArtifactRepair);
-        }
-
-        // G356: when closeout-drift-check reports unapplied repairs, surface
-        // `closeout-drift-repair` before `true-idle` so the host loop records
-        // the missing closeout deterministically rather than declaring idle
-        // while a queue item remains un-completed for an already-merged PR.
-        if (closeoutDriftRepairsAvailable > 0)
-        {
-            details.Add(new AutomationHostReviewDiagnosticsDetail
-            {
-                Kind = AutomationHostReviewDiagnosticsClassifications.CloseoutDriftRepair,
-                TargetKind = null,
-                TargetNumber = null,
-                TargetUrl = null,
-                Description = $"closeout-drift-check reports {closeoutDriftRepairsAvailable} queue item(s) whose linked PR is merged but whose state is not Completed.",
-            });
-            return Build(
-                repo,
-                AutomationHostReviewDiagnosticsClassifications.CloseoutDriftRepair,
-                $"Closeout drift detected: {closeoutDriftRepairsAvailable} queue item(s) are not Completed despite their linked PR being merged. Apply the repair with `automation closeout-drift-check --write`, commit/push durable state, then retry the wake.",
-                recommendedNextCommand: $"intent-cli automation closeout-drift-check --repo {repo} --write --format json",
-                clarification: null,
-                details,
-                warnings,
-                safeRepairCategory: SafeRepairCategories.CloseoutDriftRepair);
         }
 
         return Build(
