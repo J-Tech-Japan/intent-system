@@ -1754,6 +1754,312 @@ public sealed class IntentNextSliceCommandTests
         Assert.Contains(expectedPath, result.Gaps[0].RepairGuidance!, StringComparison.Ordinal);
     }
 
+    // ─── G359 tests ───────────────────────────────────────────────────────────
+    // execution_unit_regex from intents/<domain>/automation/bindings.md must
+    // filter packet candidates from a shared `.intent-cli/issues` root so a
+    // wrong-namespace packet (e.g. SKS-G365) cannot be selected when
+    // --domain intent-cli is requested.
+
+    [Fact]
+    public void Execute_G359_SharedPacketRoot_DomainBindingsRegex_SelectsMatchingNamespace()
+    {
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteAutomationBindings(
+            "intent-cli",
+            """
+            ---
+            execution_unit_regex: '^G[0-9]+$'
+            ---
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G359/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/SKS-G365/github-body.md",
+            BuildCompleteContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        var candidate = root.GetProperty("candidate");
+        Assert.Equal("G359", candidate.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_G359_OnlySksPacketAvailable_IntentCliDomain_RecommendsDesignNeeded()
+    {
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteAutomationBindings(
+            "intent-cli",
+            """
+            ---
+            execution_unit_regex: '^G[0-9]+$'
+            ---
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/SKS-G365/github-body.md",
+            BuildCompleteContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // No matching candidate AND runtime creation NOT allowed → design-needed (G328).
+        Assert.Equal("design-needed", root.GetProperty("recommended_outcome").GetString());
+        Assert.False(root.TryGetProperty("candidate", out _));
+    }
+
+    [Fact]
+    public void Execute_G359_SekibanDomain_BindingsRegex_SelectsSksPacket()
+    {
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteAutomationBindings(
+            "intent-cli",
+            """
+            ---
+            execution_unit_regex: '^G[0-9]+$'
+            ---
+            """);
+        workspace.WriteAutomationBindings(
+            "sekiban-as-a-service",
+            """
+            ---
+            execution_unit_regex: '^SKS-G[0-9]+$'
+            ---
+            """);
+        // Clarification dir for sekiban domain to silence the missing-file note;
+        // not strictly required for the assertion but mirrors realistic state.
+        workspace.WriteClarificationOpen("", "sekiban-as-a-service");
+        workspace.WriteFile(
+            ".intent-cli/issues/G359/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/SKS-G365/github-body.md",
+            BuildCompleteContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "sekiban-as-a-service", "--target-repo", "J-Tech-Japan/SekibanAsAService"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        var candidate = root.GetProperty("candidate");
+        Assert.Equal("SKS-G365", candidate.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_G359_MismatchedTargetRepoWithinDomain_DoesNotReachIssueCutReady()
+    {
+        // Packet matches the domain bindings regex but its packet.yaml
+        // declares a different target_repo — must NOT reach issue-cut-ready.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteAutomationBindings(
+            "intent-cli",
+            """
+            ---
+            execution_unit_regex: '^G[0-9]+$'
+            ---
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G359/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G359/packet.yaml",
+            """
+            implementation_issue_packet:
+              source_execution_unit: G359
+              target_repo: J-Tech-Japan/other-repo
+              issue_title: G359 wrong repo
+              issue_kind: feature
+              goal: x
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.NotEqual("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        // With runtime creation NOT allowed, no candidate maps to design-needed.
+        Assert.Equal("design-needed", root.GetProperty("recommended_outcome").GetString());
+    }
+
+    [Fact]
+    public void Execute_G359_NoBindingsFile_FallsBackToOpenFilter()
+    {
+        // Pre-G359 hosts (no bindings.md) must continue to behave
+        // byte-identically: with no regex configured, every candidate
+        // passes the name filter.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G359/github-body.md",
+            BuildCompleteContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal(
+            "G359",
+            root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_G359_InvalidBindingsRegex_FallsBackToOpenFilter()
+    {
+        // Misconfigured bindings (invalid regex pattern) must not
+        // silently block ALL candidates; the filter degrades open.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteAutomationBindings(
+            "intent-cli",
+            """
+            ---
+            execution_unit_regex: '[unterminated'
+            ---
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G359/github-body.md",
+            BuildCompleteContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+    }
+
+    [Fact]
+    public void Execute_G359_QueuedSksPacket_NotSelectedUnderIntentCliDomain()
+    {
+        // Queued path (the preferred selection branch) must also honor
+        // the bindings regex — SKS-G365 queued but intent-cli requested
+        // should fall through to design-needed.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteAutomationBindings(
+            "intent-cli",
+            """
+            ---
+            execution_unit_regex: '^G[0-9]+$'
+            ---
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/SKS-G365/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-15T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G365",
+                  "title": "sks queued packet",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/sekiban-as-a-service/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("design-needed", root.GetProperty("recommended_outcome").GetString());
+        Assert.False(root.TryGetProperty("candidate", out _));
+    }
+
+    // ─── G359 pure unit tests for NextSliceDomainBindingsExecutionUnitRegex ───
+
+    [Fact]
+    public void NextSliceDomainBindingsExecutionUnitRegex_ExtractsFromFrontmatter()
+    {
+        var content = """
+            ---
+            repo: J-Tech-Japan/intent-system
+            execution_unit_regex: '^G[0-9]+$'
+            ---
+            """;
+
+        var pattern = NextSliceDomainBindingsExecutionUnitRegex.ExtractExecutionUnitRegex(content);
+
+        Assert.Equal("^G[0-9]+$", pattern);
+    }
+
+    [Fact]
+    public void NextSliceDomainBindingsExecutionUnitRegex_ExtractsDoubleQuotedValue()
+    {
+        var content = """
+            execution_unit_regex: "^SKS-G[0-9]+$"
+            """;
+
+        var pattern = NextSliceDomainBindingsExecutionUnitRegex.ExtractExecutionUnitRegex(content);
+
+        Assert.Equal("^SKS-G[0-9]+$", pattern);
+    }
+
+    [Fact]
+    public void NextSliceDomainBindingsExecutionUnitRegex_AbsentField_ReturnsNull()
+    {
+        var content = """
+            ---
+            repo: J-Tech-Japan/intent-system
+            ---
+            """;
+
+        var pattern = NextSliceDomainBindingsExecutionUnitRegex.ExtractExecutionUnitRegex(content);
+
+        Assert.Null(pattern);
+    }
+
+    [Fact]
+    public void NextSliceDomainBindingsExecutionUnitRegex_EmptyContent_ReturnsNull()
+    {
+        Assert.Null(NextSliceDomainBindingsExecutionUnitRegex.ExtractExecutionUnitRegex(string.Empty));
+    }
+
     private sealed class IntentNextSliceWorkspace : IDisposable
     {
         private readonly string rootPath = Directory
@@ -1790,6 +2096,13 @@ public sealed class IntentNextSliceCommandTests
             var path = Path.Combine(rootPath, "intents", domain, "clarifications");
             Directory.CreateDirectory(path);
             File.WriteAllText(Path.Combine(path, "open.md"), content);
+        }
+
+        public void WriteAutomationBindings(string domain, string content)
+        {
+            var path = Path.Combine(rootPath, "intents", domain, "automation");
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "bindings.md"), content);
         }
 
         public void WriteFile(string relativePath, string content)

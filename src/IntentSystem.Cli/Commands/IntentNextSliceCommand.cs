@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -240,6 +241,15 @@ internal static class IntentNextSliceCommand
             // `clarification status` surface returns the structured error
             // when the operator audits it directly.
         }
+        // G359: load the domain's execution_unit_regex from
+        // intents/<domain>/automation/bindings.md so candidates from a
+        // shared `.intent-cli/issues` root (multiple domains sharing
+        // one host workspace) are filtered to the requested domain's
+        // namespace. A missing bindings file, missing field, or
+        // invalid regex degrades to "no name filter" so pre-G359 hosts
+        // continue to behave byte-identically.
+        var executionUnitRegex = NextSliceDomainBindingsExecutionUnitRegex.TryLoad(context, domain);
+
         IntentNextSliceCandidate? candidate = null;
         if (Directory.Exists(packetRoot))
         {
@@ -252,10 +262,20 @@ internal static class IntentNextSliceCommand
             // filtered by those values. Domain is derived from the queue item's
             // clarification_return_path (shape: intents/<domain>/clarifications/open.md).
             // Target-repo is read from the packet.yaml file inside the packet directory.
+            // G359: Additionally, when the domain's bindings.md declares an
+            // execution_unit_regex, only packet directory names matching that
+            // regex are considered. This stops a shared packet root from
+            // surfacing a wrong-namespace candidate (e.g. SKS-G365 leaking
+            // into --domain intent-cli).
             foreach (var executionUnit in queued)
             {
                 var directory = Path.Combine(packetRoot, executionUnit);
                 if (!Directory.Exists(directory))
+                {
+                    continue;
+                }
+
+                if (!MatchesExecutionUnitRegex(executionUnitRegex, executionUnit))
                 {
                     continue;
                 }
@@ -277,6 +297,11 @@ internal static class IntentNextSliceCommand
                 {
                     var executionUnit = Path.GetFileName(directory)!;
                     if (completed.Contains(executionUnit))
+                    {
+                        continue;
+                    }
+
+                    if (!MatchesExecutionUnitRegex(executionUnitRegex, executionUnit))
                     {
                         continue;
                     }
@@ -447,6 +472,38 @@ internal static class IntentNextSliceCommand
         }
 
         return OutcomeIssueCutReady;
+    }
+
+    /// <summary>
+    /// G359: Returns true when the given <paramref name="executionUnit"/>
+    /// matches the domain's bindings.md <c>execution_unit_regex</c>. When
+    /// <paramref name="regex"/> is null (bindings file missing, field
+    /// missing, or invalid pattern) the filter is treated as "open" —
+    /// every unit passes so pre-G359 hosts and misconfigured bindings
+    /// never silently block all candidates.
+    /// </summary>
+    private static bool MatchesExecutionUnitRegex(Regex? regex, string executionUnit)
+    {
+        if (regex is null)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrEmpty(executionUnit))
+        {
+            return false;
+        }
+
+        try
+        {
+            return regex.IsMatch(executionUnit);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Treat catastrophic regex evaluation as no-match so a
+            // pathological binding cannot keep a stale candidate alive.
+            return false;
+        }
     }
 
     /// <summary>
