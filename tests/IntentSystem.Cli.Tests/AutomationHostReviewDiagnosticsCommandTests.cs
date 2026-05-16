@@ -5,6 +5,11 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+// G358: serialise with AutomationCloseoutDriftCheckCommandTests so that
+// CandidateListerFactory resets in this class's ctor/Dispose cannot race
+// with the FakeEmptyLister assignment in
+// DiagnosticsCommand_WithCloseoutDriftRepairsAvailableFlag_ClassifiesCloseoutDriftRepair.
+[Collection("HostReviewDiagnostics")]
 public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
 {
     public AutomationHostReviewDiagnosticsCommandTests()
@@ -896,6 +901,40 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
             Assert.Equal("publish-recovery-ready", result.Classification);
             Assert.NotNull(result.RecommendedNextCommand);
             Assert.Contains("publish-recovery", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+            AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_PublishRecoveryProbe_LaneSuppressed_WhenUnsafeStopsPresent()
+    {
+        // G358: when the publish-recovery probe reports safe_repairs > 0 but
+        // also unsafe_stop_count > 0, the diagnostics must NOT surface
+        // `publish-recovery-ready` because the --write path refuses all
+        // mutations when unsafe stops are present. The result must fall
+        // through to `true-idle` (no work to do safely).
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+        AutomationHostReviewDiagnosticsCommand.PublishRecoveryProbeFactory = _ => new FakePublishRecoveryProbe(
+            new PublishRecoveryProbeResult { SafeRepairCount = 1, UnsafeStopCount = 1 });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "owner/repo", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.NotEqual("publish-recovery-ready", result.Classification);
         }
         finally
         {

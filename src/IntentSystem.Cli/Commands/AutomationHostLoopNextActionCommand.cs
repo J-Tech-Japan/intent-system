@@ -54,6 +54,15 @@ internal static class AutomationHostLoopNextActionCommand
     /// </summary>
     public static Func<CliContext, IHostSyncPreflightProbe>? HostSyncPreflightProbeFactory { get; set; }
 
+    /// <summary>
+    /// G358: testability seam for the closeout-drift-check auto-probe.
+    /// Production uses <see cref="IntentCliCloseoutDriftCheckProbe"/> which
+    /// runs closeout-drift-check in dry-run mode; tests inject a fake to
+    /// model repairable / no-repairs outcomes without touching live
+    /// queue-state or network.
+    /// </summary>
+    public static Func<CliContext, ICloseoutDriftCheckProbe>? CloseoutDriftCheckProbeFactory { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -194,13 +203,18 @@ internal static class AutomationHostLoopNextActionCommand
         // this probe the lane would only fire when the operator typed
         // the count, and recoverable `linked_pr` blockers would fall
         // through to true-idle.
+        // The unsafe_stop_count gate is critical: publish-recovery --write
+        // refuses all mutations when any unsafe stop is present, so
+        // recommending it in a mixed (safe+unsafe) state would be a no-op
+        // and confuse the operator. Gate on UnsafeStopCount == 0 to ensure
+        // the lane is only surfaced when the repair is actually writeable.
         var publishRecoveryRepairsAvailable = parsed.PublishRecoveryRepairsAvailable;
         if (publishRecoveryRepairsAvailable == 0)
         {
             var recoveryProbe = PublishRecoveryProbeFactory?.Invoke(context)
                 ?? new IntentCliPublishRecoveryProbe(context);
             var recoveryProbed = recoveryProbe.Probe(parsed.Repo);
-            if (recoveryProbed != null && recoveryProbed.SafeRepairCount > 0)
+            if (recoveryProbed != null && recoveryProbed.SafeRepairCount > 0 && recoveryProbed.UnsafeStopCount == 0)
             {
                 publishRecoveryRepairsAvailable = recoveryProbed.SafeRepairCount;
             }
@@ -232,6 +246,27 @@ internal static class AutomationHostLoopNextActionCommand
             }
         }
 
+        // G358: auto-probe `automation closeout-drift-check --dry-run` to detect
+        // items with linked_issue but no linked_pr where GitHub confirms a single
+        // merged closing PR. When safe_repair_count > 0 AND unsafe_stop_count == 0
+        // the analyzer surfaces `repair-host-metadata` with the
+        // `closeout-drift-check --write` recommendation, so the host loop never
+        // falls through to true-idle while an infer-linked_pr repair is available.
+        // The unsafe_stop_count gate is critical: closeout-drift-check --write
+        // refuses all mutations when any unsafe stop is present (ambiguous closing
+        // PRs), so recommending it in that mixed state would be a no-op and confuse
+        // the operator.
+        var closeoutDriftRepairsAvailable = 0;
+        {
+            var driftProbe = CloseoutDriftCheckProbeFactory?.Invoke(context)
+                ?? new IntentCliCloseoutDriftCheckProbe(context);
+            var driftProbed = driftProbe.Probe(parsed.Repo);
+            if (driftProbed != null && driftProbed.SafeRepairCount > 0 && driftProbed.UnsafeStopCount == 0)
+            {
+                closeoutDriftRepairsAvailable = driftProbed.SafeRepairCount;
+            }
+        }
+
         var input = new HostLoopNextActionInput
         {
             Repo = parsed.Repo,
@@ -243,6 +278,7 @@ internal static class AutomationHostLoopNextActionCommand
             ApprovedPrPendingMergeCloseout = approvedPr,
             PublishRecoveryRepairsAvailable = publishRecoveryRepairsAvailable,
             PublishLifecycleDriftCount = parsed.PublishLifecycleDriftCount,
+            CloseoutDriftRepairsAvailable = closeoutDriftRepairsAvailable,
             NextSliceIssueCutReady = nextSliceIssueCutReady,
             PublishNextSliceExecutionUnit = publishNextSliceExecutionUnit,
             OpenIntentTargetPrOrIssueExists = openIntentTargetExistsResolved,

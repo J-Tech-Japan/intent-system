@@ -186,7 +186,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
             var recoveryProbe = PublishRecoveryProbeFactory?.Invoke(context)
                 ?? new IntentCliPublishRecoveryProbe(context);
             var recoveryProbed = recoveryProbe.Probe(repo!);
-            if (recoveryProbed != null && recoveryProbed.SafeRepairCount > 0)
+            if (recoveryProbed != null && recoveryProbed.SafeRepairCount > 0 && recoveryProbed.UnsafeStopCount == 0)
             {
                 publishRecoveryRepairsAvailable = recoveryProbed.SafeRepairCount;
             }

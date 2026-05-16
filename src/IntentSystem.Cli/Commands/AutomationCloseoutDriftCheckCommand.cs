@@ -41,8 +41,25 @@ internal static class AutomationCloseoutDriftCheckCommand
     internal const string ReasonMissingClosingIssueLinkage = "missing-closing-issue-linkage";
     internal const string ReasonClosingIssueMismatch = "closing-issue-mismatch";
 
+    // ── G358: reason codes for the linked_issue-only second pass ─────────────
+
+    /// <summary>G358: linked_issue found exactly one merged closing PR in the target repo; linked_pr inferred — safe repair available.</summary>
+    internal const string ReasonLinkedIssuePrInferred = "linked-issue-pr-inferred";
+
+    /// <summary>G358: linked_issue found more than one merged closing PR in the target repo; ambiguous — unsafe stop.</summary>
+    internal const string ReasonLinkedIssueAmbiguousClosingPrs = "linked-issue-ambiguous-closing-prs";
+
+    /// <summary>G358: linked_issue found no merged closing PRs in the target repo yet; skipped (issue may not be closed or PR not yet merged).</summary>
+    internal const string ReasonLinkedIssueNoMergedClosingPr = "linked-issue-no-merged-closing-pr";
+
+    /// <summary>G358: gh api graphql lookup for the linked_issue's closing PRs failed; skipped with warning.</summary>
+    internal const string ReasonLinkedIssueLookupFailed = "linked-issue-lookup-failed";
+
     /// <summary>Test seam — replaces the gh-backed PR lookup.</summary>
     public static Func<IGitHubPrLookup>? PrLookupFactory { get; set; }
+
+    /// <summary>G358: test seam — replaces the gh api graphql closing-PR lookup for linked_issue-only items.</summary>
+    public static Func<IGitHubIssueClosingPrLookup>? IssueLookupFactory { get; set; }
 
     /// <summary>Test seam — replaces the UTC timestamp source for run events.</summary>
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
@@ -113,13 +130,20 @@ internal static class AutomationCloseoutDriftCheckCommand
             return 0;
         }
 
-        // Collect non-Completed items that have a linked_pr.
-        var candidates = queueState.Items
+        // ── Pass 1 (G356): non-Completed items that have a linked_pr ───────
+        var pass1Candidates = queueState.Items
             .Where(item => item.State != QueueItemState.Completed
                 && !string.IsNullOrWhiteSpace(item.LinkedPr))
             .ToList();
 
-        if (candidates.Count == 0)
+        // ── Pass 2 (G358): non-Completed items with linked_issue but no linked_pr ──
+        var pass2Candidates = queueState.Items
+            .Where(item => item.State != QueueItemState.Completed
+                && item.LinkedIssue?.Number is { } n and > 0
+                && string.IsNullOrWhiteSpace(item.LinkedPr))
+            .ToList();
+
+        if (pass1Candidates.Count == 0 && pass2Candidates.Count == 0)
         {
             var empty = new CloseoutDriftCheckResult
             {
@@ -130,7 +154,7 @@ internal static class AutomationCloseoutDriftCheckCommand
                 AppliedCount = 0,
                 Records = Array.Empty<CloseoutDriftRecord>(),
                 Warnings = Array.Empty<string>(),
-                Summary = "closeout-drift-check: no candidate queue items with linked_pr; nothing to repair.",
+                Summary = "closeout-drift-check: no candidate queue items with linked_pr or linked_issue-only; nothing to repair.",
             };
             Emit(writer, empty, format);
             return 0;
@@ -141,7 +165,7 @@ internal static class AutomationCloseoutDriftCheckCommand
         var prToItems = new Dictionary<int, List<QueueItem>>();
         var itemsWithoutPrNumber = new List<QueueItem>();
 
-        foreach (var item in candidates)
+        foreach (var item in pass1Candidates)
         {
             var prNumber = TryParsePrNumberFromUrl(item.LinkedPr);
             if (prNumber is null)
@@ -159,6 +183,7 @@ internal static class AutomationCloseoutDriftCheckCommand
         }
 
         var prLookup = PrLookupFactory?.Invoke() ?? new GhCliGitHubPrLookup();
+        var issueLookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueClosingPrLookup();
         var records = new List<CloseoutDriftRecord>();
         var warnings = new List<string>();
 
@@ -294,6 +319,87 @@ internal static class AutomationCloseoutDriftCheckCommand
             });
         }
 
+        // ── Pass 2 (G358): items with linked_issue but no linked_pr ─────────
+        // Parse repo owner/name for same-repo PR filtering.
+        var repoSlashIdx = repo!.IndexOf('/', StringComparison.Ordinal);
+        var repoOwnerPart = repoSlashIdx >= 0 ? repo[..repoSlashIdx] : repo;
+        var repoNamePart = repoSlashIdx >= 0 && repoSlashIdx + 1 < repo.Length
+            ? repo[(repoSlashIdx + 1)..]
+            : string.Empty;
+
+        foreach (var item in pass2Candidates)
+        {
+            var issueNumber = item.LinkedIssue!.Number!.Value;
+
+            GitHubIssueClosingPrLookupResult issueView;
+            try
+            {
+                issueView = issueLookup.Lookup(repo, issueNumber);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                records.Add(new CloseoutDriftRecord
+                {
+                    ExecutionUnit = item.ExecutionUnit,
+                    Result = ResultSkipped,
+                    ReasonCode = ReasonLinkedIssueLookupFailed,
+                    Explanation = $"issue #{issueNumber} lookup failed: {exception.Message}; skipped.",
+                    LinkedPrNumber = null,
+                    LinkedIssueNumber = issueNumber,
+                });
+                warnings.Add($"issue #{issueNumber} lookup failed for '{item.ExecutionUnit}': {exception.Message}");
+                continue;
+            }
+
+            // G358: filter closing PRs to only merged same-repo PRs.
+            var mergedSameRepoPrs = issueView.ClosingPullRequests
+                .Where(pr => pr.Merged && IsSameRepoAsTarget(pr, repoOwnerPart, repoNamePart))
+                .ToList();
+
+            if (mergedSameRepoPrs.Count == 0)
+            {
+                records.Add(new CloseoutDriftRecord
+                {
+                    ExecutionUnit = item.ExecutionUnit,
+                    Result = ResultSkipped,
+                    ReasonCode = ReasonLinkedIssueNoMergedClosingPr,
+                    Explanation = $"issue #{issueNumber} has no merged closing PR in {repo} yet; skipped (issue state: {issueView.State}).",
+                    LinkedPrNumber = null,
+                    LinkedIssueNumber = issueNumber,
+                });
+                continue;
+            }
+
+            if (mergedSameRepoPrs.Count > 1)
+            {
+                var prNums = string.Join(", ", mergedSameRepoPrs.Select(p => $"#{p.Number}"));
+                records.Add(new CloseoutDriftRecord
+                {
+                    ExecutionUnit = item.ExecutionUnit,
+                    Result = ResultUnsafeStop,
+                    ReasonCode = ReasonLinkedIssueAmbiguousClosingPrs,
+                    Explanation = $"issue #{issueNumber} was closed by {mergedSameRepoPrs.Count} merged PRs in {repo} ({prNums}); ambiguous — cannot infer linked_pr deterministically.",
+                    LinkedPrNumber = null,
+                    LinkedIssueNumber = issueNumber,
+                });
+                continue;
+            }
+
+            // Exactly one merged same-repo closing PR — safe repair: infer linked_pr.
+            var inferredPr = mergedSameRepoPrs[0];
+            var inferredPrUrl = $"https://github.com/{repo}/pull/{inferredPr.Number}";
+            records.Add(new CloseoutDriftRecord
+            {
+                ExecutionUnit = item.ExecutionUnit,
+                Result = ResultSafeRepair,
+                ReasonCode = ReasonLinkedIssuePrInferred,
+                Explanation = $"issue #{issueNumber} was closed by exactly one merged PR in {repo}: #{inferredPr.Number}; queue item '{item.ExecutionUnit}' has no linked_pr — inferring '{inferredPrUrl}' and repair available (G358).",
+                LinkedPrNumber = inferredPr.Number,
+                LinkedIssueNumber = issueNumber,
+                InferredLinkedPrUrl = inferredPrUrl,
+            });
+        }
+
         var safeRepairCount = records.Count(r => string.Equals(r.Result, ResultSafeRepair, StringComparison.Ordinal));
         var unsafeStopCount = records.Count(r => string.Equals(r.Result, ResultUnsafeStop, StringComparison.Ordinal));
 
@@ -316,10 +422,28 @@ internal static class AutomationCloseoutDriftCheckCommand
                 .Where(r => r.LinkedPrNumber.HasValue)
                 .ToDictionary(r => r.ExecutionUnit, r => r.LinkedPrNumber!.Value);
 
+            // G358: map executionUnit → inferred PR URL for items where linked_pr
+            // was absent and must be written into queue-state during the repair.
+            var inferredPrUrls = repairRecords
+                .Where(r => r.InferredLinkedPrUrl is not null)
+                .ToDictionary(r => r.ExecutionUnit, r => r.InferredLinkedPrUrl!,
+                    StringComparer.Ordinal);
+
             var updatedItems = queueState.Items
-                .Select(item => unitsToComplete.Contains(item.ExecutionUnit)
-                    ? item with { State = QueueItemState.Completed }
-                    : item)
+                .Select(item =>
+                {
+                    if (!unitsToComplete.Contains(item.ExecutionUnit))
+                    {
+                        return item;
+                    }
+                    var completed = item with { State = QueueItemState.Completed };
+                    // G358: also populate linked_pr when it was inferred from the issue's closing PR.
+                    if (inferredPrUrls.TryGetValue(item.ExecutionUnit, out var inferredUrl))
+                    {
+                        completed = completed with { LinkedPr = inferredUrl };
+                    }
+                    return completed;
+                })
                 .ToArray();
 
             var updatedState = new QueueState
@@ -379,6 +503,21 @@ internal static class AutomationCloseoutDriftCheckCommand
             return 1;
         }
         return 0;
+    }
+
+    /// <summary>
+    /// G358: returns true when the PR's owner/name matches the target repo.
+    /// Empty owner/name fields (edge-case from the GraphQL response) are
+    /// treated as same-repo (safe fallback).
+    /// </summary>
+    private static bool IsSameRepoAsTarget(GitHubIssueClosingPrRef pr, string repoOwner, string repoName)
+    {
+        if (string.IsNullOrEmpty(pr.RepoOwner) || string.IsNullOrEmpty(pr.RepoName))
+        {
+            return true; // assume same-repo if the GraphQL response omits the field
+        }
+        return string.Equals(pr.RepoOwner, repoOwner, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(pr.RepoName, repoName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildSummary(int safeRepairs, int unsafeStops, int applied, bool write)
@@ -610,4 +749,13 @@ internal sealed record CloseoutDriftRecord
 
     [JsonPropertyName("linked_issue_number")]
     public int? LinkedIssueNumber { get; init; }
+
+    /// <summary>
+    /// G358: for records where <c>linked_pr</c> was absent in queue-state and
+    /// is inferred from the issue's closing PR facts, this is the URL written
+    /// (or to be written) into queue-state during the repair pass. Null for
+    /// Pass 1 records where <c>linked_pr</c> was already present.
+    /// </summary>
+    [JsonPropertyName("inferred_linked_pr_url")]
+    public string? InferredLinkedPrUrl { get; init; }
 }
