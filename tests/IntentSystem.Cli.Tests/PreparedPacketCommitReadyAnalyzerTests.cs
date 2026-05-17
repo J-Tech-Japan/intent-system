@@ -227,11 +227,14 @@ Demo.
     }
 
     [Fact]
-    public void Analyze_NoTargetRepoRequested_SkipsTargetRepoCheck()
+    public void Analyze_NoTargetRepoRequested_ReturnsUnsafeMissingTargetRepo()
     {
-        // Without a requested target repo the analyzer skips the
-        // repo-binding check; useful when the durable-state preflight
-        // is invoked without --target-repo.
+        // PR #824 review repair #7: the prepared-packet lane MUST NOT
+        // classify a packet as commit-ready without verifying its
+        // declared target_repo. When RequestedTargetRepo is null,
+        // fail closed with `missing-target-repo` so an invocation
+        // without `--target-repo` cannot bypass the child-repo
+        // binding check.
         var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
         {
             ExecutionUnit = "Z4R-G3",
@@ -243,7 +246,8 @@ Demo.
             RequestedTargetRepo = null,
         });
 
-        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonMissingTargetRepo, result.Reason);
     }
 
     [Fact]
@@ -341,6 +345,30 @@ Demo.
 
         Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
         Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, result.Reason);
+    }
+
+    [Fact]
+    public void Analyze_MissingTargetRepo_ReturnsUnsafe_EvenWhenOtherChecksPass()
+    {
+        // PR #824 review repair #7: a complete packet with bindings
+        // but no `RequestedTargetRepo` MUST return
+        // `missing-target-repo` rather than commit-ready. Closes
+        // the bypass where an invocation without `--target-repo`
+        // could silently classify a packet as commit-ready.
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = null,
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonMissingTargetRepo, result.Reason);
     }
 
     [Fact]

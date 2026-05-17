@@ -73,6 +73,17 @@ internal static class PreparedPacketCommitReadyAnalyzer
     /// </summary>
     public const string ReasonInvalidDomainBindingRegex = "invalid-domain-binding-regex";
 
+    /// <summary>
+    /// PR #824 review repair #7: the caller did not supply a
+    /// requested target repo (`--target-repo` flag), so the
+    /// prepared-packet lane cannot validate that the packet's
+    /// declared <c>target_repo</c> matches the intended publication
+    /// target. The lane MUST refuse rather than silently accept the
+    /// packet as commit-ready — without that validation a packet
+    /// aimed at a different child repo could still be auto-committed.
+    /// </summary>
+    public const string ReasonMissingTargetRepo = "missing-target-repo";
+
     public const string FileNamePacketYaml = "packet.yaml";
     public const string FileNameImplementationMarkdown = "implementation.md";
     public const string FileNameReviewContextMarkdown = "review-context.md";
@@ -245,6 +256,29 @@ internal static class PreparedPacketCommitReadyAnalyzer
         }
 
         // 4. Target repo check ------------------------------------------
+        // PR #824 review repair #7: the prepared-packet lane MUST NOT
+        // classify a packet as commit-ready without verifying its
+        // declared `target_repo` matches the host's intended
+        // publication target. The caller is required to supply
+        // `RequestedTargetRepo`; refuse otherwise so an invocation
+        // that reaches this lane without `--target-repo` cannot
+        // bypass the child-repo binding check.
+        if (string.IsNullOrWhiteSpace(input.RequestedTargetRepo))
+        {
+            return new PreparedPacketCommitReadyResult
+            {
+                Classification = ClassificationUnsafe,
+                Reason = ReasonMissingTargetRepo,
+                ExecutionUnit = input.ExecutionUnit,
+                PacketDirectory = packetDirectory,
+                Summary = $"prepared packet `{packetDirectory}` cannot be classified commit-ready: "
+                    + "no `--target-repo` was supplied, so the analyzer cannot verify the packet's "
+                    + "declared `target_repo` matches the intended child repo. Re-run "
+                    + "`automation durable-state-preflight --target-repo <owner/repo>` "
+                    + "(and `--domain <name>` for cross-domain scoping).",
+            };
+        }
+
         if (!string.IsNullOrWhiteSpace(input.RequestedTargetRepo))
         {
             var declaredRepo = LookupScalar(

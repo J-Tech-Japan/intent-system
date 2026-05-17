@@ -289,25 +289,32 @@ public sealed class AutomationDurableStatePreflightCommandTests : IDisposable
     public void Execute_PreparedPacketWithoutDomainFlag_ReturnsVerifiedCommitReady_OnConfiguredHost()
     {
         // PR #824 review repair #4: the legacy documented host-loop
-        // path is `automation durable-state-preflight --format json`
-        // (no --domain). On a host whose CliContext.Config.Project.Domain
-        // is populated (the normal case), the command MUST NOT
-        // silently treat that as an opt-in to fail-closed scoping.
-        // Otherwise a complete prepared packet would be blocked on the
-        // legacy path because the workspace has no bindings.md for
-        // the configured domain.
+        // path is `automation durable-state-preflight --target-repo
+        // <owner/repo> --format json` (no --domain). On a host whose
+        // CliContext.Config.Project.Domain is populated (the normal
+        // case), the command MUST NOT silently treat that as an
+        // opt-in to fail-closed cross-domain scoping. A complete
+        // prepared packet should still be commit-ready under that
+        // path, provided --target-repo is supplied (PR #824 review
+        // repair #7 requires --target-repo for the prepared-packet
+        // lane regardless of --domain).
 
         AutomationDurableStatePreflightCommand.ProbeFactory = null;
 
         using var workspace = new DurableStateGitWorkspace();
         // Packet directory present, but NO bindings.md is seeded —
-        // legacy path must not require one.
+        // legacy (no --domain) path must not require one.
         workspace.WritePreparedPacket("AnyExecutionUnit", targetRepo: "J-Tech-Japan/intent-system");
 
         using var writer = new StringWriter();
         var exitCode = AutomationDurableStatePreflightCommand.Execute(
             workspace.Context,
-            new[] { "--format", "json" }, // No --domain — legacy path.
+            new[]
+            {
+                // No --domain — exercises the no-cross-domain path.
+                "--target-repo", "J-Tech-Japan/intent-system",
+                "--format", "json",
+            },
             writer);
 
         Assert.Equal(0, exitCode);
