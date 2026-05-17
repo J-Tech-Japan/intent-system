@@ -1793,6 +1793,83 @@ public sealed class IntentNextSliceCommandTests
     }
 
     [Fact]
+    public void Execute_G359_WipPass_AppliesExecutionUnitRegex_IgnoresMisnamedQueueItem()
+    {
+        // PR #822 review repair: the WIP pass must also enforce
+        // `execution_unit_regex` so a misnamed SKS-G… queue item in
+        // Active/Review/Fixing state cannot block `--domain intent-cli`
+        // with `skip-next-slice-due-to-wip`. Before the fix, the WIP
+        // filter used clarification_return_path alone, so a queue item
+        // whose path pointed at intent-cli but whose execution_unit
+        // was SKS-G… would slip into WIP under the requested lane.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteAutomationBindings(
+            "intent-cli",
+            """
+            ---
+            execution_unit_regex: '^G[0-9]+$'
+            ---
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G280/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-16T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G99",
+                  "title": "misnamed wip item pointing at intent-cli clarifications",
+                  "state": "active",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {
+                    "repo": "J-Tech-Japan/intent-system",
+                    "number": 999,
+                    "url": "https://github.com/J-Tech-Japan/intent-system/issues/999"
+                  },
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                },
+                {
+                  "execution_unit": "G280",
+                  "title": "intent-cli queued slice",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // SKS-G99 misnamed item fails the intent-cli regex, so WIP is
+        // empty and G280 is selected — NOT skip-next-slice-due-to-wip.
+        Assert.NotEqual("skip-next-slice-due-to-wip", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal(0, root.GetProperty("wip").GetArrayLength());
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G280", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
     public void Execute_G359_OnlySksPacketAvailable_IntentCliDomain_RecommendsDesignNeeded()
     {
         using var workspace = new IntentNextSliceWorkspace();
