@@ -2060,6 +2060,102 @@ public sealed class IntentNextSliceCommandTests
         Assert.Null(NextSliceDomainBindingsExecutionUnitRegex.ExtractExecutionUnitRegex(string.Empty));
     }
 
+    [Fact]
+    public void NextSliceDomainBindingsExecutionUnitRegex_ParentRootAuthoritative_OverridesChildBindings()
+    {
+        // PR #822 review fix: when a parent intent repo root is
+        // configured, the PARENT bindings.md is the authoritative
+        // source of `execution_unit_regex` — a stale or partial child
+        // workspace bindings.md must NOT override it. This locks the
+        // parent-aware lookup contract used by the other
+        // parent-aware analyzers (AutomationSummaryAnalyzer /
+        // NextSliceClassifyAnalyzer).
+        var parentRoot = Directory.CreateTempSubdirectory("g359-parent-root-").FullName;
+        var childRoot = Directory.CreateTempSubdirectory("g359-child-root-").FullName;
+        try
+        {
+            // Parent has the authoritative regex.
+            var parentBindings = Path.Combine(parentRoot, "intents", "intent-cli", "automation");
+            Directory.CreateDirectory(parentBindings);
+            File.WriteAllText(Path.Combine(parentBindings, "bindings.md"),
+                "---\nexecution_unit_regex: '^G[0-9]+$'\n---\n");
+
+            // Child has a STALE / DIFFERENT regex that must NOT win.
+            var childBindings = Path.Combine(childRoot, "intents", "intent-cli", "automation");
+            Directory.CreateDirectory(childBindings);
+            File.WriteAllText(Path.Combine(childBindings, "bindings.md"),
+                "---\nexecution_unit_regex: '^SKS-G[0-9]+$'\n---\n");
+
+            var context = new CliContext
+            {
+                RepoRoot = childRoot,
+                Config = new CliConfig
+                {
+                    Project = new ProjectConfig
+                    {
+                        Domain = "intent-cli",
+                        ArtifactRoot = ".intent-cli",
+                        WorktreeRoot = ".intent-cli/worktrees",
+                        ParentIntentRepoRoot = parentRoot,
+                    },
+                },
+            };
+
+            var regex = NextSliceDomainBindingsExecutionUnitRegex.TryLoad(context, "intent-cli");
+
+            Assert.NotNull(regex);
+            // Parent regex matches `G42`; child's `^SKS-G[0-9]+$` would NOT.
+            Assert.True(regex!.IsMatch("G42"));
+            Assert.False(regex.IsMatch("SKS-G42"));
+        }
+        finally
+        {
+            if (Directory.Exists(parentRoot)) Directory.Delete(parentRoot, recursive: true);
+            if (Directory.Exists(childRoot)) Directory.Delete(childRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void NextSliceDomainBindingsExecutionUnitRegex_NoParentRoot_FallsBackToChildBindings()
+    {
+        // PR #822 review fix: without a parent root configured, the
+        // child workspace bindings.md remains the source of truth so
+        // host-colocated layouts (and the in-memory test fixtures)
+        // keep working.
+        var childRoot = Directory.CreateTempSubdirectory("g359-child-only-").FullName;
+        try
+        {
+            var childBindings = Path.Combine(childRoot, "intents", "intent-cli", "automation");
+            Directory.CreateDirectory(childBindings);
+            File.WriteAllText(Path.Combine(childBindings, "bindings.md"),
+                "---\nexecution_unit_regex: '^SKS-G[0-9]+$'\n---\n");
+
+            var context = new CliContext
+            {
+                RepoRoot = childRoot,
+                Config = new CliConfig
+                {
+                    Project = new ProjectConfig
+                    {
+                        Domain = "intent-cli",
+                        ArtifactRoot = ".intent-cli",
+                        WorktreeRoot = ".intent-cli/worktrees",
+                        // No ParentIntentRepoRoot configured.
+                    },
+                },
+            };
+
+            var regex = NextSliceDomainBindingsExecutionUnitRegex.TryLoad(context, "intent-cli");
+
+            Assert.NotNull(regex);
+            Assert.True(regex!.IsMatch("SKS-G42"));
+        }
+        finally
+        {
+            if (Directory.Exists(childRoot)) Directory.Delete(childRoot, recursive: true);
+        }
+    }
+
     private sealed class IntentNextSliceWorkspace : IDisposable
     {
         private readonly string rootPath = Directory

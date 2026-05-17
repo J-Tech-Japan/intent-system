@@ -74,28 +74,28 @@ internal static class NextSliceDomainBindingsExecutionUnitRegex
 
     private static string? ResolveBindingsAbsolutePath(CliContext context, string domain)
     {
-        // Prefer the child RepoRoot when the bindings.md is colocated
-        // (host workspace layout); fall back to a configured parent
-        // intent repo root. This mirrors the lookup logic in
-        // AutomationSummaryAnalyzer / NextSliceClassifyAnalyzer but
-        // checks the child root first so test workspaces that drop
-        // bindings under RepoRoot/intents/<domain>/... behave the
-        // same as production hosts with a colocated intents tree.
-        var childPath = string.IsNullOrWhiteSpace(context.RepoRoot)
-            ? null
-            : Path.Combine(context.RepoRoot, "intents", domain, "automation", "bindings.md");
-        if (!string.IsNullOrWhiteSpace(childPath) && File.Exists(childPath))
-        {
-            return childPath;
-        }
-
+        // PR #822 review fix: when a parent intent repo root is
+        // configured, the PARENT bindings.md is authoritative. The
+        // previous order (child first, parent fallback) let a stale or
+        // partial child workspace bindings.md override the host's
+        // authoritative bindings and drop `execution_unit_regex`,
+        // letting the wrong namespace leak back into
+        // `intent next-slice --dry-run`. This now mirrors the parent-
+        // aware lookup contract used by AutomationSummaryAnalyzer and
+        // NextSliceClassifyAnalyzer: parent root takes precedence when
+        // set, child root is the fallback for host-colocated workspace
+        // layouts (and the in-memory test fixtures).
         var parentRoot = context.ResolveParentIntentRepoRootPath();
-        if (string.IsNullOrWhiteSpace(parentRoot))
+        if (!string.IsNullOrWhiteSpace(parentRoot))
         {
-            return childPath;
+            return Path.Combine(parentRoot, "intents", domain, "automation", "bindings.md");
         }
 
-        return Path.Combine(parentRoot, "intents", domain, "automation", "bindings.md");
+        if (string.IsNullOrWhiteSpace(context.RepoRoot))
+        {
+            return null;
+        }
+        return Path.Combine(context.RepoRoot, "intents", domain, "automation", "bindings.md");
     }
 
     /// <summary>
