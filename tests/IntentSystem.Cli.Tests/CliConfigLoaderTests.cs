@@ -330,6 +330,66 @@ public sealed class CliConfigLoaderTests
     }
 
     [Fact]
+    public void Load_G362_RootKeys_ParsesSameRepoTopologyFields()
+    {
+        // G362 loader: root-keys config with metadata_source_branch,
+        // metadata_write_branch, and same_repo_topology must
+        // populate the new ProjectConfig fields end-to-end.
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        same_repo_topology = true
+        metadata_source_branch = "main"
+        metadata_write_branch = "main-metadata"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.True(config.Project.SameRepoTopology);
+        Assert.Equal("main", config.Project.MetadataSourceBranch);
+        Assert.Equal("main-metadata", config.Project.MetadataWriteBranch);
+    }
+
+    [Fact]
+    public void Load_G362_ProjectSection_ParsesSameRepoTopologyFields()
+    {
+        // G362 loader: [project]-section config with the new
+        // same-repo topology keys must populate ProjectConfig.
+        var toml = """
+        [project]
+        domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        same_repo_topology = true
+        metadata_source_branch = "main"
+        metadata_write_branch = "main-metadata"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.True(config.Project.SameRepoTopology);
+        Assert.Equal("main", config.Project.MetadataSourceBranch);
+        Assert.Equal("main-metadata", config.Project.MetadataWriteBranch);
+    }
+
+    [Fact]
+    public void Load_G362_DefaultsAllSameRepoTopologyFieldsWhenAbsent()
+    {
+        // Backward compat: hosts without the new G362 keys default
+        // to same_repo_topology=false and empty branch strings so
+        // pre-G362 behavior is byte-identical.
+        var toml = """
+        default_domain = "intent-cli"
+        artifact_root = ".intent-cli"
+        """;
+
+        var config = CliConfigLoader.Load(toml);
+
+        Assert.False(config.Project.SameRepoTopology);
+        Assert.Equal(string.Empty, config.Project.MetadataSourceBranch);
+        Assert.Equal(string.Empty, config.Project.MetadataWriteBranch);
+    }
+
+    [Fact]
     public void Load_G350_RootKeys_DefaultsThreeBranchLaneFieldsToEmpty()
     {
         // G350 loader AC: when the three branch-lane keys are absent from a root-keys

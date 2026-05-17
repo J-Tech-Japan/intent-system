@@ -63,6 +63,12 @@ internal static class CliConfigLoader
             ?? string.Empty;
         var metadataBranch = TryGetOptionalString(rootTable, CliRuntimeContracts.MetadataBranchKey)
             ?? string.Empty;
+        // G362: same-repo topology fields.
+        var metadataSourceBranch = TryGetOptionalString(rootTable, CliRuntimeContracts.MetadataSourceBranchKey)
+            ?? string.Empty;
+        var metadataWriteBranch = TryGetOptionalString(rootTable, CliRuntimeContracts.MetadataWriteBranchKey)
+            ?? string.Empty;
+        var sameRepoTopology = TryGetOptionalBool(rootTable, CliRuntimeContracts.SameRepoTopologyKey) ?? false;
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
         var run = ReadRun(rootTable);
@@ -78,6 +84,9 @@ internal static class CliConfigLoader
             stableBranch,
             implementationBaseBranch,
             metadataBranch,
+            metadataSourceBranch,
+            metadataWriteBranch,
+            sameRepoTopology,
             roles,
             supervision,
             run,
@@ -118,6 +127,12 @@ internal static class CliConfigLoader
             ?? string.Empty;
         var metadataBranch = TryGetOptionalString(projectTable, CliRuntimeContracts.MetadataBranchKey)
             ?? string.Empty;
+        // G362: same-repo topology fields, read from [project] section.
+        var metadataSourceBranch = TryGetOptionalString(projectTable, CliRuntimeContracts.MetadataSourceBranchKey)
+            ?? string.Empty;
+        var metadataWriteBranch = TryGetOptionalString(projectTable, CliRuntimeContracts.MetadataWriteBranchKey)
+            ?? string.Empty;
+        var sameRepoTopology = TryGetOptionalBool(projectTable, CliRuntimeContracts.SameRepoTopologyKey) ?? false;
         var roles = ReadRoles(rootTable);
         var supervision = ReadSupervision(rootTable);
         var run = ReadRun(rootTable);
@@ -133,6 +148,9 @@ internal static class CliConfigLoader
             stableBranch,
             implementationBaseBranch,
             metadataBranch,
+            metadataSourceBranch,
+            metadataWriteBranch,
+            sameRepoTopology,
             roles,
             supervision,
             run,
@@ -150,6 +168,9 @@ internal static class CliConfigLoader
         string stableBranch,
         string implementationBaseBranch,
         string metadataBranch,
+        string metadataSourceBranch,
+        string metadataWriteBranch,
+        bool sameRepoTopology,
         RoleMappings roles,
         SupervisionConfig supervision,
         RunConfig run,
@@ -167,7 +188,10 @@ internal static class CliConfigLoader
                 BaseBranchPolicy = baseBranchPolicy,
                 StableBranch = stableBranch,
                 ImplementationBaseBranch = implementationBaseBranch,
-                MetadataBranch = metadataBranch
+                MetadataBranch = metadataBranch,
+                MetadataSourceBranch = metadataSourceBranch,
+                MetadataWriteBranch = metadataWriteBranch,
+                SameRepoTopology = sameRepoTopology
             },
             Roles = roles,
             Supervision = supervision,
@@ -368,6 +392,30 @@ internal static class CliConfigLoader
         }
 
         return textValue;
+    }
+
+    /// <summary>
+    /// G362: TOML loader helper for optional boolean keys. Used by
+    /// the `same_repo_topology` flag. Throws when the key is present
+    /// with a non-bool value rather than silently defaulting.
+    /// </summary>
+    private static bool? TryGetOptionalBool(TomlTable table, string key)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        if (!table.TryGetValue(key, out var rawValue))
+        {
+            return null;
+        }
+
+        if (rawValue is bool boolValue)
+        {
+            return boolValue;
+        }
+
+        throw new InvalidOperationException(
+            $"CLI config value '{key}' must be a boolean.");
     }
 
     private static int? TryGetOptionalInt32(TomlTable table, string key)

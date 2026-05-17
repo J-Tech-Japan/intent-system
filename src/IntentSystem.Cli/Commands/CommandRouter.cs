@@ -181,6 +181,7 @@ internal static class CommandRouter
                 ["publish-lifecycle-repair"] = AutomationPublishLifecycleRepairCommand.Execute,
                 ["publish-recovery"] = AutomationPublishRecoveryCommand.Execute,
                 ["reconcile"] = AutomationReconcileCommand.Execute,
+                ["same-repo-metadata-preflight"] = AutomationSameRepoMetadataPreflightCommand.Execute,
                 ["summary"] = AutomationSummaryCommand.Execute,
                 ["workspace-guard"] = AutomationWorkspaceGuardCommand.Execute
             },

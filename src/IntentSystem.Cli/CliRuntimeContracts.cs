@@ -42,6 +42,32 @@ internal static class CliRuntimeContracts
     public const string ImplementationBaseBranchKey = "implementation_base_branch";
     /// <summary>G350: config key for the dedicated metadata direct-push branch in same-repo topology.</summary>
     public const string MetadataBranchKey = "metadata_branch";
+
+    /// <summary>
+    /// G362: config key for the branch the host loop READS metadata
+    /// from each wake (queue-state / runs / packets / next-slice).
+    /// Distinct from <see cref="MetadataBranchKey"/> so a stale
+    /// long-lived metadata branch can be detected. Empty falls back
+    /// to <see cref="MetadataBranchKey"/>.
+    /// </summary>
+    public const string MetadataSourceBranchKey = "metadata_source_branch";
+
+    /// <summary>
+    /// G362: config key for the branch the host loop WRITES metadata
+    /// commits to. Distinct from <see cref="MetadataSourceBranchKey"/>
+    /// so the same-repo preflight can compare source-vs-write
+    /// freshness. Empty falls back to <see cref="MetadataBranchKey"/>.
+    /// </summary>
+    public const string MetadataWriteBranchKey = "metadata_write_branch";
+
+    /// <summary>
+    /// G362: opt-in flag for same-repository topology. Hosts that
+    /// share metadata + implementation code in one repo set this to
+    /// <c>true</c> to enable the same-repo preflight gates;
+    /// generic hosts leave it false (the default) to keep pre-G362
+    /// pull-first <c>main</c> behavior (G357).
+    /// </summary>
+    public const string SameRepoTopologyKey = "same_repo_topology";
     /// <summary>G350: conventional default for the stable branch.</summary>
     public const string DefaultStableBranch = "main";
     /// <summary>G350: conventional default for the metadata branch in same-repo topology.</summary>
