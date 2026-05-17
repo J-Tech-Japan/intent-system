@@ -128,7 +128,35 @@ internal static class AutomationQueueSeedFromPacketCommand
                 ? context.Config.Project.Domain
                 : "intent-cli";
         var defaultClarificationReturnPath = $"intents/{resolvedDomain}/clarifications/open.md";
-        var seed = BuildSeedItem(executionUnit, packetFields, defaultClarificationReturnPath);
+
+        // PR #830 review repair #3 (08:27 comment): align role /
+        // priority fallbacks with the established
+        // `QueueEnqueueCommand` contract so seeded queue items look
+        // the same as packets enqueued through the standard path.
+        // - WorkerRole / ReviewRole default to the host's configured
+        //   roles (`context.Config.Roles.Implement` / `Review`,
+        //   which default to "Claude" / "Codex" per
+        //   `CliRuntimeContracts.DefaultImplementRole` /
+        //   `DefaultReviewRole`).
+        // - Priority defaults to "high" to match
+        //   `QueueEnqueueCommand.DefaultPriority`.
+        // Packets that explicitly declare any of these still win via
+        // `LookupScalar` precedence inside BuildSeedItem.
+        var defaultWorkerRole = !string.IsNullOrWhiteSpace(context.Config.Roles?.Implement)
+            ? context.Config.Roles!.Implement
+            : CliRuntimeContracts.DefaultImplementRole;
+        var defaultReviewRole = !string.IsNullOrWhiteSpace(context.Config.Roles?.Review)
+            ? context.Config.Roles!.Review
+            : CliRuntimeContracts.DefaultReviewRole;
+        const string defaultPriority = "high";
+
+        var seed = BuildSeedItem(
+            executionUnit,
+            packetFields,
+            defaultClarificationReturnPath,
+            defaultWorkerRole,
+            defaultReviewRole,
+            defaultPriority);
 
         // Read current queue-state (if present). Missing file is OK —
         // we'll create one with this seed as the sole item.
@@ -238,11 +266,17 @@ internal static class AutomationQueueSeedFromPacketCommand
     internal static QueueItem BuildSeedItem(
         string executionUnit,
         IReadOnlyDictionary<string, string> packetFields,
-        string defaultClarificationReturnPath)
+        string defaultClarificationReturnPath,
+        string defaultWorkerRole,
+        string defaultReviewRole,
+        string defaultPriority)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentNullException.ThrowIfNull(packetFields);
         ArgumentException.ThrowIfNullOrWhiteSpace(defaultClarificationReturnPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultWorkerRole);
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultReviewRole);
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultPriority);
 
         var packetDir = $".intent-cli/issues/{executionUnit}/";
         var title = LookupScalar(packetFields,
@@ -267,18 +301,26 @@ internal static class AutomationQueueSeedFromPacketCommand
             "clarification_return_path",
             "implementation_issue_packet.clarification_return_path")
             ?? defaultClarificationReturnPath;
+        // PR #830 review repair #3: align role / priority fallbacks
+        // with the established `QueueEnqueueCommand` contract
+        // (config-driven roles, priority "high"). Hardcoded
+        // "coder" / "reviewer" / "normal" diverged from that
+        // contract, so packets enqueued via this lane looked
+        // different from packets enqueued via the standard path.
+        // Packets that DO declare any field still win via
+        // LookupScalar.
         var workerRole = LookupScalar(packetFields,
             "worker_role",
             "implementation_issue_packet.worker_role")
-            ?? "coder";
+            ?? defaultWorkerRole;
         var reviewRole = LookupScalar(packetFields,
             "review_role",
             "implementation_issue_packet.review_role")
-            ?? "reviewer";
+            ?? defaultReviewRole;
         var priority = LookupScalar(packetFields,
             "priority",
             "implementation_issue_packet.priority")
-            ?? "normal";
+            ?? defaultPriority;
 
         // PR #830 review repair: preserve packet.yaml dependency /
         // blocked_by data when the packet declares them. Previously

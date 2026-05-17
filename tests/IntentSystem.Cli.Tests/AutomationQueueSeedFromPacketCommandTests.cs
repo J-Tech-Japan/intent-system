@@ -83,9 +83,15 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
         Assert.Equal(".intent-cli/issues/Z4R-G10/implementation.md", seeded.PacketPaths.Implementation);
         Assert.Equal(".intent-cli/issues/Z4R-G10/review-context.md", seeded.PacketPaths.ReviewContext);
         Assert.Equal("Demo", seeded.Title); // From packet.yaml issue_title.
-        Assert.Equal("coder", seeded.WorkerRole);
-        Assert.Equal("reviewer", seeded.ReviewRole);
-        Assert.Equal("normal", seeded.Priority);
+        // PR #830 review repair #3: role / priority fallbacks now
+        // align with the established `QueueEnqueueCommand` contract
+        // — host config Roles (defaulting to "Claude" / "Codex" per
+        // CliRuntimeContracts) and priority "high". The earlier
+        // hardcoded "coder" / "reviewer" / "normal" values were
+        // out of contract with the standard queue-enqueue path.
+        Assert.Equal(CliRuntimeContracts.DefaultImplementRole, seeded.WorkerRole);
+        Assert.Equal(CliRuntimeContracts.DefaultReviewRole, seeded.ReviewRole);
+        Assert.Equal("high", seeded.Priority);
 
         // runs.jsonl appended with the seed event.
         Assert.True(File.Exists(workspace.RunsPath));
@@ -495,6 +501,59 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
         Assert.Equal(".intent-cli/issues/Z4R-G42/packet.yaml", seeded.PacketPaths.Yaml);
         Assert.Equal(".intent-cli/issues/Z4R-G42/implementation.md", seeded.PacketPaths.Implementation);
         Assert.Equal(".intent-cli/issues/Z4R-G42/review-context.md", seeded.PacketPaths.ReviewContext);
+    }
+
+    [Fact]
+    public void Execute_PacketOmitsRoles_FallsBackToHostConfigRoles_NotHardcoded()
+    {
+        // PR #830 review repair #3 (08:27 comment): when packet.yaml
+        // does NOT declare `worker_role` / `review_role`, the seed
+        // MUST fall back to the host's configured roles
+        // (`config.Roles.Implement` / `Review`) — NOT to hardcoded
+        // strings. This matches the `QueueEnqueueCommand` contract
+        // so packets seeded via this lane look identical to packets
+        // enqueued via the standard path.
+        using var customWorkspace = new TestWorkspace();
+        // Override the default RoleMappings (`Claude` / `Codex`) on
+        // the seeded test context with explicitly configured values
+        // so the assertion proves the seed reads from config, not
+        // from a hardcoded fallback.
+        var newContext = new CliContext
+        {
+            RepoRoot = customWorkspace.Context.RepoRoot,
+            Config = customWorkspace.Context.Config with
+            {
+                Roles = new RoleMappings
+                {
+                    Implement = "custom-implementer",
+                    Review = "custom-reviewer",
+                },
+            },
+        };
+        customWorkspace.WritePreparedPacket("Z4R-G50", targetRepo: "J-Tech-Creations/Zero4Racer");
+        customWorkspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            newContext,
+            new[]
+            {
+                "--execution-unit", "Z4R-G50",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(customWorkspace.QueueStatePath));
+        var seeded = queueState.Items.Single(i => i.ExecutionUnit == "Z4R-G50");
+        Assert.Equal("custom-implementer", seeded.WorkerRole);
+        Assert.Equal("custom-reviewer", seeded.ReviewRole);
+        // Priority default "high" still applies — packet didn't
+        // declare one, host config doesn't override priority.
+        Assert.Equal("high", seeded.Priority);
     }
 
     [Fact]
