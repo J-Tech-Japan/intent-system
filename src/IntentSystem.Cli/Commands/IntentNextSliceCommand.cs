@@ -185,12 +185,37 @@ internal static class IntentNextSliceCommand
         // G359 (PR #822 review repair): load the domain's
         // execution_unit_regex BEFORE the WIP pass so the same scope
         // check applied to packet directories also applies to queue
-        // items. Without this, a misnamed `SKS-G…` queue item could
-        // still appear in WIP under `--domain intent-cli` and block
-        // the lane with `skip-next-slice-due-to-wip`, defeating the
-        // shared-root scoping rule. Missing bindings file / missing
-        // field / invalid regex still degrades to "no name filter".
-        var executionUnitRegex = NextSliceDomainBindingsExecutionUnitRegex.TryLoad(context, domain);
+        // items.
+        //
+        // PR #824 review repair #3: use the structured Resolve()
+        // outcome instead of TryLoad so callers can distinguish
+        // "no domain configured" (legacy fallback) from "domain
+        // configured but bindings.md missing" and "bindings present
+        // but pattern invalid". When a domain IS supplied AND the
+        // bindings are missing or malformed, fail closed: refuse to
+        // surface ANY candidate (so a wrong-namespace packet cannot
+        // sneak through without verifying the domain boundary).
+        var bindingsResolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(context, domain);
+        var executionUnitRegex = bindingsResolution.Regex;
+        var bindingsFailedClosed = !string.IsNullOrWhiteSpace(domainOverride)
+            && bindingsResolution.Kind != ExecutionUnitRegexResolutionKind.Present;
+        if (bindingsFailedClosed)
+        {
+            // Add a structured note so the operator can see the gap
+            // (missing bindings.md, missing field, or invalid pattern).
+            var kindLabel = bindingsResolution.Kind switch
+            {
+                ExecutionUnitRegexResolutionKind.MissingOrAbsent => "missing-domain-bindings",
+                ExecutionUnitRegexResolutionKind.InvalidPattern => "invalid-domain-bindings",
+                _ => bindingsResolution.Kind.ToString().ToLowerInvariant(),
+            };
+            notes.Add(
+                $"domain `{domain}` bindings.md `{bindingsResolution.BindingsPath ?? "(unresolved)"}` "
+                + $"reported `{kindLabel}` "
+                + (bindingsResolution.Detail is { Length: > 0 } ? $"({bindingsResolution.Detail}); " : "; ")
+                + "next-slice refuses to surface a candidate without verifying the active "
+                + "domain boundary (PR #824 review repair #3).");
+        }
 
         var wip = new List<string>();
         var queued = new List<string>();
@@ -264,7 +289,12 @@ internal static class IntentNextSliceCommand
         // behave byte-identically.
 
         IntentNextSliceCandidate? candidate = null;
-        if (Directory.Exists(packetRoot))
+        // PR #824 review repair #3: when the host requested a domain
+        // (--domain supplied) and the bindings.md is missing or
+        // malformed, refuse to surface ANY candidate. Otherwise a
+        // wrong-namespace packet could be accepted without verifying
+        // the domain boundary. The notes added above explain the gap.
+        if (Directory.Exists(packetRoot) && !bindingsFailedClosed)
         {
             // Pick the first queued execution_unit in queue-state order whose packet
             // directory exists AND whose domain/target-repo matches the filter.
@@ -565,14 +595,34 @@ internal static class IntentNextSliceCommand
         }
 
         // Target-repo filter: read packet.yaml to get target_repo field.
+        //
+        // PR #824 review repair #3: parse packet.yaml structurally
+        // (via the strict PreparedPacketYamlScalarParser) instead of
+        // the legacy line-scanner. Malformed YAML now fails the
+        // filter so a broken packet.yaml can never reach
+        // issue-cut-ready. Lazy import of the strict parser keeps
+        // this command from gaining a hard dependency on the G361
+        // helper.
         if (!string.IsNullOrWhiteSpace(targetRepo))
         {
             var packetYamlPath = Path.Combine(directory, "packet.yaml");
             if (File.Exists(packetYamlPath))
             {
-                var packetTargetRepo = TryReadPacketTargetRepo(packetYamlPath);
-                if (packetTargetRepo is not null
-                    && !string.Equals(packetTargetRepo, targetRepo, StringComparison.OrdinalIgnoreCase))
+                var packetTargetRepo = TryReadPacketTargetRepoStrict(packetYamlPath);
+                // Strict outcomes:
+                //  - matching value         → keep (passes filter).
+                //  - mismatched value       → filter out (return false).
+                //  - missing field          → keep (legacy behavior).
+                //  - malformed YAML / I/O   → filter out (return false): the
+                //    operator must fix the packet before host-loop selection
+                //    can trust it (PR #824 review repair #3).
+                if (packetTargetRepo.Outcome == PacketTargetRepoOutcomeKind.Mismatch
+                    || packetTargetRepo.Outcome == PacketTargetRepoOutcomeKind.MalformedYaml)
+                {
+                    return false;
+                }
+                if (packetTargetRepo.Outcome == PacketTargetRepoOutcomeKind.Present
+                    && !string.Equals(packetTargetRepo.Value, targetRepo, StringComparison.OrdinalIgnoreCase))
                 {
                     return false;
                 }
@@ -580,6 +630,65 @@ internal static class IntentNextSliceCommand
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// PR #824 review repair #3: structured outcome distinguishing a
+    /// present matching target_repo, a present mismatching target_repo,
+    /// a missing field (legacy lenience), and a malformed packet.yaml
+    /// (fail closed).
+    /// </summary>
+    private enum PacketTargetRepoOutcomeKind
+    {
+        Present,
+        MissingField,
+        Mismatch,
+        MalformedYaml,
+    }
+
+    private readonly record struct PacketTargetRepoOutcome(
+        PacketTargetRepoOutcomeKind Outcome,
+        string? Value);
+
+    private static PacketTargetRepoOutcome TryReadPacketTargetRepoStrict(string packetYamlPath)
+    {
+        string content;
+        try
+        {
+            content = File.ReadAllText(packetYamlPath);
+        }
+        catch (IOException)
+        {
+            return new PacketTargetRepoOutcome(PacketTargetRepoOutcomeKind.MalformedYaml, null);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new PacketTargetRepoOutcome(PacketTargetRepoOutcomeKind.MalformedYaml, null);
+        }
+
+        IReadOnlyDictionary<string, string> fields;
+        try
+        {
+            fields = PreparedPacketYamlScalarParser.Parse(content);
+        }
+        catch (FormatException)
+        {
+            // Malformed YAML — fail closed so the broken packet does
+            // not slip through the next-slice candidate filter.
+            return new PacketTargetRepoOutcome(PacketTargetRepoOutcomeKind.MalformedYaml, null);
+        }
+
+        if (fields.TryGetValue("implementation_issue_packet.target_repo", out var nested)
+            && !string.IsNullOrWhiteSpace(nested))
+        {
+            return new PacketTargetRepoOutcome(PacketTargetRepoOutcomeKind.Present, nested);
+        }
+        if (fields.TryGetValue("target_repo", out var flat)
+            && !string.IsNullOrWhiteSpace(flat))
+        {
+            return new PacketTargetRepoOutcome(PacketTargetRepoOutcomeKind.Present, flat);
+        }
+        return new PacketTargetRepoOutcome(PacketTargetRepoOutcomeKind.MissingField, null);
     }
 
     /// <summary>
@@ -612,67 +721,11 @@ internal static class IntentNextSliceCommand
         return parts[1];
     }
 
-    /// <summary>
-    /// Reads the <c>target_repo</c> scalar from a <c>packet.yaml</c> file using a
-    /// lightweight line scanner. Returns null when the file cannot be parsed or the
-    /// field is absent.
-    /// </summary>
-    private static string? TryReadPacketTargetRepo(string packetYamlPath)
-    {
-        try
-        {
-            var content = File.ReadAllText(packetYamlPath);
-            using var reader = new StringReader(content);
-            var inImplementationSection = false;
-            string? line;
-
-            while ((line = reader.ReadLine()) is not null)
-            {
-                var trimmedLine = line.TrimEnd();
-
-                // Track section headers (zero-indent, ends with colon).
-                if (!char.IsWhiteSpace(trimmedLine.Length > 0 ? trimmedLine[0] : ' ')
-                    && trimmedLine.EndsWith(":", StringComparison.Ordinal))
-                {
-                    var sectionName = trimmedLine[..^1];
-                    inImplementationSection = string.Equals(
-                        sectionName,
-                        "implementation_issue_packet",
-                        StringComparison.OrdinalIgnoreCase);
-                    continue;
-                }
-
-                if (!inImplementationSection)
-                {
-                    continue;
-                }
-
-                // Look for `  target_repo: <value>` (two-space indent).
-                if (!trimmedLine.StartsWith("  target_repo:", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var value = trimmedLine["  target_repo:".Length..].Trim();
-                if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
-                {
-                    value = value[1..^1];
-                }
-
-                return string.IsNullOrWhiteSpace(value) ? null : value;
-            }
-        }
-        catch (IOException)
-        {
-            // File unreadable — skip filter.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // File unreadable — skip filter.
-        }
-
-        return null;
-    }
+    // PR #824 review repair #3: legacy line-scanner
+    // `TryReadPacketTargetRepo` removed; the strict
+    // `TryReadPacketTargetRepoStrict` (above) replaces it and routes
+    // malformed packet.yaml through the fail-closed lane so the
+    // next-slice filter never silently trusts a broken packet.
 
     private static void WriteMarkdown(TextWriter writer, IntentNextSliceResult result)
     {

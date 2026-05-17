@@ -484,13 +484,33 @@ internal static class MetadataValidateAnalyzer
         return headings;
     }
 
+    /// <summary>
+    /// PR #824 review repair #6: match required sections by EXACT
+    /// heading text (case-insensitive, trimming trailing punctuation)
+    /// instead of substring `Contains`. The legacy loose match
+    /// accepted non-standalone headings like `## My Goal` or
+    /// `## Goal - notes`, so the github-body contract could pass
+    /// without the required exact sections. A heading is also
+    /// accepted when it equals `<section> / ...` — a documented
+    /// compound shape for `Target Repo / Path / Part` — but
+    /// arbitrary prefix-followed-by-text is rejected.
+    /// </summary>
     private static bool HasMatchingHeading(IReadOnlyList<string> headings, string section)
     {
-        // Loose match: substring + case-insensitive. Accommodates
-        // variations like "Target Repo / Path / Part" matching "Target Repo".
         foreach (var heading in headings)
         {
-            if (heading.Contains(section, StringComparison.OrdinalIgnoreCase))
+            var normalized = heading.TrimEnd().TrimEnd(':', '.', '!', '?').TrimEnd();
+            if (string.Equals(normalized, section, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            // Tolerate the documented compound shape
+            // `<section> / <suffix>` so historical packets that use
+            // `## Target Repo / Path / Part` keep matching the
+            // required `Target Repo` section name without admitting
+            // arbitrary `<section> - notes` augmentations.
+            var compoundPrefix = section + " /";
+            if (normalized.StartsWith(compoundPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }

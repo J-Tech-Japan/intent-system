@@ -459,6 +459,74 @@ public sealed class HostLoopNextActionAnalyzerTests
             }).Classification);
     }
 
+    [Fact]
+    public void PreparedPacketCommitReady_OverridesDirtyHostStateWithSafeCommitLane()
+    {
+        // G361 AC5: when host-sync-preflight reports dirty-host-durable-state
+        // BUT durable-state-preflight already classified the dirty surface
+        // as a complete prepared packet directory (commit-ready), the
+        // analyzer must NOT surface generic dirty-host-state. Instead it
+        // routes to prepared-packet-commit-ready so the host loop commits
+        // + pushes the packet before publication.
+        var input = NewInput() with
+        {
+            SyncClassification = "dirty-host-durable-state",
+            PreparedPacketCommitReadyAvailable = true,
+            PreparedPacketExecutionUnit = "Z4R-G3",
+            Domain = "zero4racer-mobile-revival",
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal(HostLoopNextActionAnalyzer.ClassificationPreparedPacketCommitReady, result.Classification);
+        Assert.True(result.MutationAllowed);
+        Assert.Contains("Z4R-G3", result.Summary, StringComparison.Ordinal);
+        Assert.Contains("durable-state-preflight", result.RecommendedCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PreparedPacketCommitReady_RequiresDirtySyncClassification()
+    {
+        // Defensive: the lane only fires when host-sync-preflight is
+        // actually dirty; otherwise the analyzer falls through to its
+        // normal lanes. Without the dirty signal the prepared-packet
+        // input is irrelevant (nothing to commit).
+        var input = NewInput() with
+        {
+            SyncClassification = "clean",
+            PreparedPacketCommitReadyAvailable = true,
+            PreparedPacketExecutionUnit = "Z4R-G3",
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.NotEqual(HostLoopNextActionAnalyzer.ClassificationPreparedPacketCommitReady, result.Classification);
+    }
+
+    [Fact]
+    public void PreparedPacketCommitReady_DoesNotOverride_DirtyMixed()
+    {
+        // PR #824 review repair: when host-sync-preflight reports
+        // `dirty-mixed`, there are ALSO unrelated dirty paths the
+        // operator must handle explicitly per the G304/G306 contract.
+        // Taking the prepared-packet commit-ready lane there would
+        // hide the unrelated portion and recommend a too-narrow
+        // commit. The analyzer MUST fall through to the
+        // dirty-host-state stop in that case.
+        var input = NewInput() with
+        {
+            SyncClassification = "dirty-mixed",
+            PreparedPacketCommitReadyAvailable = true,
+            PreparedPacketExecutionUnit = "Z4R-G3",
+            Domain = "zero4racer-mobile-revival",
+        };
+
+        var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        Assert.Equal(HostLoopNextActionAnalyzer.ClassificationDirtyHostState, result.Classification);
+        Assert.False(result.MutationAllowed);
+    }
+
     private static HostLoopNextActionInput NewInput() =>
         new()
         {

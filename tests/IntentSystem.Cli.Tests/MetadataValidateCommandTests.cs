@@ -331,6 +331,55 @@ public sealed class MetadataValidateCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenNonStandaloneGithubBodyHeading_ReturnsMissingSectionError()
+    {
+        // PR #824 review repair #6: substring matching on github-body
+        // section headings accepted non-standalone variants like
+        // `## My Goal` or `## Goal - notes`. The exact-match (plus
+        // compound `<section> / suffix` tolerance) rejects those so a
+        // packet cannot pass the contract without the required exact
+        // sections. `## My Goal` does not equal `Goal` and does not
+        // start with `Goal /`, so it is flagged.
+        using var ws = new MetadataValidateWorkspace();
+        ws.WriteValidPacket("G206", linkedIssue: 517, linkedPr: 518, status: "completed");
+        var bodyPath = Path.Combine(ws.RootPath, ".intent-cli", "issues", "G206", "github-body.md");
+        File.WriteAllText(bodyPath, """
+            ## My Goal
+            ...
+            ## Why This Slice Exists Now
+            ...
+            ## Current Observed State
+            ...
+            ## Accepted Baseline You May Assume
+            ...
+            ## Target Repo / Path / Part
+            ...
+            ## In Scope
+            ...
+            ## Out Of Scope
+            ...
+            ## Acceptance Criteria
+            ...
+            ## Verification
+            ...
+            ## Related Links
+            ...
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = MetadataValidateCommand.Execute(
+            ws.Context,
+            new[] { "--root", ws.RootPath, "--execution-unit", "G206", "--format", "json" },
+            writer);
+
+        Assert.NotEqual(0, exitCode);
+        var result = JsonSerializer.Deserialize<MetadataValidateResult>(writer.ToString())!;
+        Assert.Contains(result.Errors, e =>
+            e.Code == MetadataValidateConstants.Codes.GithubBodyMissingSection
+            && e.Message.Contains("'Goal'", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_GivenPublishQueueIssueMismatch_ReturnsError()
     {
         using var ws = new MetadataValidateWorkspace();

@@ -27,19 +27,39 @@ internal static class NextSliceDomainBindingsExecutionUnitRegex
     /// file is missing, the field is absent, or the pattern fails to
     /// compile (degrades open so misconfiguration cannot block the
     /// host loop entirely).
+    ///
+    /// PR #824 review repair #3: callers that need to fail closed on
+    /// missing/invalid bindings should use <see cref="Resolve"/>
+    /// instead — it returns a structured outcome distinguishing
+    /// <see cref="ExecutionUnitRegexResolutionKind.Present"/>,
+    /// <see cref="ExecutionUnitRegexResolutionKind.MissingOrAbsent"/>,
+    /// and <see cref="ExecutionUnitRegexResolutionKind.InvalidPattern"/>.
     /// </summary>
     public static Regex? TryLoad(CliContext context, string? domain)
+        => Resolve(context, domain).Regex;
+
+    /// <summary>
+    /// PR #824 review repair #3: structured resolver so callers can
+    /// fail closed when bindings are missing or malformed instead of
+    /// silently treating both cases as "no filter". The bindings-
+    /// missing path is the operator's responsibility to fix (drop a
+    /// bindings.md for the active domain) and the pattern-invalid
+    /// path is the operator's responsibility to repair (typo in the
+    /// scalar). Callers that should keep the legacy fail-open
+    /// posture continue to use <see cref="TryLoad"/>.
+    /// </summary>
+    public static ExecutionUnitRegexResolution Resolve(CliContext context, string? domain)
     {
         ArgumentNullException.ThrowIfNull(context);
         if (string.IsNullOrWhiteSpace(domain))
         {
-            return null;
+            return ExecutionUnitRegexResolution.MissingOrAbsent("(no domain configured)");
         }
 
         var bindingsPath = ResolveBindingsAbsolutePath(context, domain);
         if (string.IsNullOrWhiteSpace(bindingsPath) || !File.Exists(bindingsPath))
         {
-            return null;
+            return ExecutionUnitRegexResolution.MissingOrAbsent(bindingsPath ?? "(unresolved)");
         }
 
         string content;
@@ -47,28 +67,29 @@ internal static class NextSliceDomainBindingsExecutionUnitRegex
         {
             content = File.ReadAllText(bindingsPath);
         }
-        catch (IOException)
+        catch (IOException exception)
         {
-            return null;
+            return ExecutionUnitRegexResolution.MissingOrAbsent($"{bindingsPath}: {exception.Message}");
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException exception)
         {
-            return null;
+            return ExecutionUnitRegexResolution.MissingOrAbsent($"{bindingsPath}: {exception.Message}");
         }
 
         var pattern = ExtractExecutionUnitRegex(content);
         if (string.IsNullOrWhiteSpace(pattern))
         {
-            return null;
+            return ExecutionUnitRegexResolution.MissingOrAbsent(bindingsPath);
         }
 
         try
         {
-            return new Regex(pattern, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
+            var regex = new Regex(pattern, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
+            return ExecutionUnitRegexResolution.Present(regex, pattern, bindingsPath);
         }
-        catch (ArgumentException)
+        catch (ArgumentException exception)
         {
-            return null;
+            return ExecutionUnitRegexResolution.InvalidPattern(pattern, exception.Message, bindingsPath);
         }
     }
 
@@ -166,4 +187,55 @@ internal static class NextSliceDomainBindingsExecutionUnitRegex
 
         return null;
     }
+}
+
+/// <summary>
+/// PR #824 review repair #3: 3-state outcome of resolving the active
+/// domain's <c>execution_unit_regex</c>. Callers that should fail
+/// closed on missing or invalid bindings inspect <see cref="Kind"/>
+/// rather than treating a null regex as "no filter".
+/// </summary>
+internal enum ExecutionUnitRegexResolutionKind
+{
+    /// <summary>Bindings file present, field present, pattern compiles.</summary>
+    Present,
+    /// <summary>Bindings file missing, field absent, or read failed.</summary>
+    MissingOrAbsent,
+    /// <summary>Pattern present but does not compile (operator typo).</summary>
+    InvalidPattern,
+}
+
+/// <summary>
+/// PR #824 review repair #3: structured outcome of
+/// <see cref="NextSliceDomainBindingsExecutionUnitRegex.Resolve"/>.
+/// </summary>
+internal sealed record ExecutionUnitRegexResolution
+{
+    public required ExecutionUnitRegexResolutionKind Kind { get; init; }
+    public Regex? Regex { get; init; }
+    public string? Pattern { get; init; }
+    public string? BindingsPath { get; init; }
+    public string? Detail { get; init; }
+
+    public static ExecutionUnitRegexResolution Present(Regex regex, string pattern, string bindingsPath) => new()
+    {
+        Kind = ExecutionUnitRegexResolutionKind.Present,
+        Regex = regex,
+        Pattern = pattern,
+        BindingsPath = bindingsPath,
+    };
+
+    public static ExecutionUnitRegexResolution MissingOrAbsent(string bindingsPath) => new()
+    {
+        Kind = ExecutionUnitRegexResolutionKind.MissingOrAbsent,
+        BindingsPath = bindingsPath,
+    };
+
+    public static ExecutionUnitRegexResolution InvalidPattern(string pattern, string detail, string bindingsPath) => new()
+    {
+        Kind = ExecutionUnitRegexResolutionKind.InvalidPattern,
+        Pattern = pattern,
+        Detail = detail,
+        BindingsPath = bindingsPath,
+    };
 }

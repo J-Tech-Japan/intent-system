@@ -1982,12 +1982,19 @@ public sealed class IntentNextSliceCommandTests
     }
 
     [Fact]
-    public void Execute_G359_NoBindingsFile_FallsBackToOpenFilter()
+    public void Execute_G359_NoBindingsFile_FailsClosedWithDomainNote()
     {
-        // Pre-G359 hosts (no bindings.md) must continue to behave
-        // byte-identically: with no regex configured, every candidate
-        // passes the name filter.
+        // PR #824 review repair #3: when `--domain` is supplied AND
+        // bindings.md is missing, next-slice MUST fail closed —
+        // accepting a candidate without verifying the active domain
+        // boundary defeats G361's safety contract. The previous fail-
+        // open behavior let a wrong-namespace packet slip into
+        // issue-cut-ready under a misconfigured host.
         using var workspace = new IntentNextSliceWorkspace();
+        // Delete the default permissive bindings the workspace
+        // constructor seeded so we exercise the genuine "no
+        // bindings.md" path.
+        workspace.DeleteAutomationBindings("intent-cli");
         workspace.WriteFile(
             ".intent-cli/issues/G359/github-body.md",
             BuildCompleteContractBody());
@@ -2001,17 +2008,21 @@ public sealed class IntentNextSliceCommandTests
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var root = document.RootElement;
-        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
-        Assert.Equal(
-            "G359",
-            root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+        Assert.NotEqual("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.False(root.TryGetProperty("candidate", out _));
+        var notes = root.GetProperty("notes");
+        Assert.Contains(
+            notes.EnumerateArray().Select(n => n.GetString() ?? string.Empty),
+            n => n.Contains("missing-domain-bindings", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Execute_G359_InvalidBindingsRegex_FallsBackToOpenFilter()
+    public void Execute_G359_InvalidBindingsRegex_FailsClosedWithDomainNote()
     {
-        // Misconfigured bindings (invalid regex pattern) must not
-        // silently block ALL candidates; the filter degrades open.
+        // PR #824 review repair #3: misconfigured bindings (invalid
+        // regex pattern) MUST fail closed rather than silently
+        // skipping the cross-domain check. A malformed bindings.md is
+        // an operator-fixable error, not a license to publish.
         using var workspace = new IntentNextSliceWorkspace();
         workspace.WriteAutomationBindings(
             "intent-cli",
@@ -2033,7 +2044,53 @@ public sealed class IntentNextSliceCommandTests
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var root = document.RootElement;
-        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.NotEqual("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.False(root.TryGetProperty("candidate", out _));
+        var notes = root.GetProperty("notes");
+        Assert.Contains(
+            notes.EnumerateArray().Select(n => n.GetString() ?? string.Empty),
+            n => n.Contains("invalid-domain-bindings", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G359_MalformedPacketYaml_FailsClosed_NotIssueCutReady()
+    {
+        // PR #824 review repair #3: a malformed packet.yaml (e.g.
+        // tab indentation, missing colon) MUST fail closed in the
+        // next-slice selection lane. The legacy line-scanner silently
+        // ignored broken lines so a packet could reach issue-cut-ready
+        // with a corrupt body — the strict parser now routes that
+        // case through the unsafe lane.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteAutomationBindings(
+            "intent-cli",
+            """
+            ---
+            execution_unit_regex: '^G[0-9]+$'
+            ---
+            """);
+        workspace.WriteFile(
+            ".intent-cli/issues/G359/github-body.md",
+            BuildCompleteContractBody());
+        // Malformed: tab character in indentation is a YAML syntax error
+        // (1.2 §6.1). The strict parser raises FormatException and the
+        // command marks the packet ineligible.
+        workspace.WriteFile(
+            ".intent-cli/issues/G359/packet.yaml",
+            "implementation_issue_packet:\n\tsource_execution_unit: G359\n\ttarget_repo: J-Tech-Japan/intent-system\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // Malformed packet.yaml is filtered out → no candidate → not
+        // issue-cut-ready (runtime-creation-not-allowed → design-needed).
+        Assert.NotEqual("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
     }
 
     [Fact]
@@ -2255,6 +2312,20 @@ public sealed class IntentNextSliceCommandTests
                     }
                 }
             };
+
+            // PR #824 review repair #3: with `--domain` supplied,
+            // missing bindings is now an unsafe stop. Seed a permissive
+            // default bindings.md so legacy tests that don't write one
+            // explicitly continue to behave like the pre-PR-#824 fail-
+            // open path. Tests that need a specific regex still call
+            // WriteAutomationBindings to overwrite this default.
+            WriteAutomationBindings(
+                "intent-cli",
+                """
+                ---
+                execution_unit_regex: '.*'
+                ---
+                """);
         }
 
         public CliContext Context { get; }
@@ -2269,6 +2340,15 @@ public sealed class IntentNextSliceCommandTests
             var path = Path.Combine(rootPath, "intents", domain, "clarifications");
             Directory.CreateDirectory(path);
             File.WriteAllText(Path.Combine(path, "open.md"), content);
+        }
+
+        public void DeleteAutomationBindings(string domain)
+        {
+            var path = Path.Combine(rootPath, "intents", domain, "automation", "bindings.md");
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
         }
 
         public void WriteAutomationBindings(string domain, string content)

@@ -284,7 +284,9 @@ internal static class AutomationHostLoopNextActionCommand
             OpenIntentTargetPrOrIssueExists = openIntentTargetExistsResolved,
             AnyChildWorkerLeaseHeld = anyLeaseHeld,
             HardClarificationOpen = hardClarificationOpen,
-            DesignNeeded = designNeeded
+            DesignNeeded = designNeeded,
+            PreparedPacketCommitReadyAvailable = parsed.PreparedPacketCommitReadyAvailable,
+            PreparedPacketExecutionUnit = parsed.PreparedPacketExecutionUnit,
         };
 
         var result = HostLoopNextActionAnalyzer.Analyze(input);
@@ -457,6 +459,8 @@ internal static class AutomationHostLoopNextActionCommand
         var hardClarificationOpen = false;
         string? approvedPrMergeStateStatus = null;
         var approvedPrMetadataBlocked = false;
+        var preparedPacketCommitReady = false;
+        string? preparedPacketExecutionUnit = null;
         var format = FormatMarkdown;
 
         for (var index = 0; index < args.Length; index++)
@@ -535,6 +539,25 @@ internal static class AutomationHostLoopNextActionCommand
                     // / packet directory) is not ready for closeout.
                     approvedPrMetadataBlocked = true;
                     break;
+                case "--prepared-packet-commit-ready":
+                    // G361: durable-state-preflight reported a complete
+                    // prepared packet directory under
+                    // `.intent-cli/issues/<unit>/` is safe to commit.
+                    // Combined with a dirty sync classification, routes
+                    // the analyzer to the prepared-packet-commit-ready
+                    // lane.
+                    preparedPacketCommitReady = true;
+                    break;
+                case "--prepared-packet-execution-unit":
+                    // G361: execution unit name surfaced by
+                    // durable-state-preflight; flows into the
+                    // prepared-packet-commit-ready evidence.
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--prepared-packet-execution-unit requires a value."; return false;
+                    }
+                    preparedPacketExecutionUnit = args[++index].Trim();
+                    break;
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -573,6 +596,8 @@ internal static class AutomationHostLoopNextActionCommand
             HardClarificationOpen = hardClarificationOpen,
             ApprovedPrMergeStateStatus = approvedPrMergeStateStatus,
             ApprovedPrMetadataBlocked = approvedPrMetadataBlocked,
+            PreparedPacketCommitReadyAvailable = preparedPacketCommitReady,
+            PreparedPacketExecutionUnit = preparedPacketExecutionUnit,
             Format = format
         };
         return true;
@@ -592,6 +617,8 @@ internal static class AutomationHostLoopNextActionCommand
         public required bool HardClarificationOpen { get; init; }
         public string? ApprovedPrMergeStateStatus { get; init; }
         public required bool ApprovedPrMetadataBlocked { get; init; }
+        public required bool PreparedPacketCommitReadyAvailable { get; init; }
+        public string? PreparedPacketExecutionUnit { get; init; }
         public required string Format { get; init; }
     }
 }

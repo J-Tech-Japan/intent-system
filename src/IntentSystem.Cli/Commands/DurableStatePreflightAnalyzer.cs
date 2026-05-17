@@ -107,6 +107,18 @@ internal static class DurableStatePreflightAnalyzer
                         ApplyPublishYamlResult(path, entry, verified, review, unsafePaths);
                         break;
                     }
+                    if (IsPreparedPacketCanonicalFile(path))
+                    {
+                        // G361: route the four canonical prepared-packet
+                        // files (packet.yaml / implementation.md /
+                        // review-context.md / github-body.md) through the
+                        // prepared-packet lane. Caller supplies a
+                        // PreparedPacketDelta computed once per execution
+                        // unit; this path-level call simply forwards the
+                        // shared verdict.
+                        ApplyPreparedPacketResult(path, entry, verified, unsafePaths);
+                        break;
+                    }
                     if (path.StartsWith(IssuesDirectorySegment, StringComparison.Ordinal))
                     {
                         // G343: any non-publish.yaml file under
@@ -248,6 +260,89 @@ internal static class DurableStatePreflightAnalyzer
                 {
                     Path = path,
                     Reason = $"unrecognized runs.jsonl delta classification `{entry.RunsJsonlDelta.Classification}` for `{path}`.",
+                });
+                break;
+        }
+    }
+
+    /// <summary>
+    /// G361: detect a dirty file at
+    /// <c>.intent-cli/issues/&lt;execution-unit&gt;/{packet.yaml,implementation.md,review-context.md,github-body.md}</c>.
+    /// The directory must have the exact three-segment shape (anything
+    /// deeper stays operator-owned).
+    /// </summary>
+    private static bool IsPreparedPacketCanonicalFile(string normalizedPath)
+    {
+        if (!normalizedPath.StartsWith(IssuesDirectorySegment, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        var remainder = normalizedPath[IssuesDirectorySegment.Length..];
+        var slashIndex = remainder.IndexOf('/');
+        if (slashIndex <= 0)
+        {
+            return false;
+        }
+        var fileSegment = remainder[(slashIndex + 1)..];
+        foreach (var canonical in PreparedPacketCommitReadyAnalyzer.CanonicalFileNames)
+        {
+            if (fileSegment.Equals(canonical, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// G361: forward the per-execution-unit prepared-packet verdict to
+    /// the verified/unsafe lanes for every dirty canonical file under
+    /// that EU directory. The caller (probe) computes the verdict once
+    /// per EU and attaches the same shared result to each path's
+    /// <see cref="DurableStateDirtyPath.PreparedPacketDelta"/>.
+    /// </summary>
+    private static void ApplyPreparedPacketResult(
+        string path,
+        DurableStateDirtyPath entry,
+        List<DurableStateVerifiedPath> verified,
+        List<DurableStateUnsafePath> unsafePaths)
+    {
+        if (entry.PreparedPacketDelta is null)
+        {
+            // The probe did not (or could not) collect the four canonical
+            // files for this EU. Refuse to auto-commit — operator owns
+            // ambiguous packet-tree state.
+            unsafePaths.Add(new DurableStateUnsafePath
+            {
+                Path = path,
+                Reason = $"`{path}` is dirty inside a prepared-packet directory but no prepared-packet verdict was supplied; host-loop auto-commit refuses ambiguous prepared-packet state. Re-run `intent-cli automation durable-state-preflight --domain <domain> --target-repo <owner/repo>` to populate the canonical-content delta.",
+            });
+            return;
+        }
+
+        switch (entry.PreparedPacketDelta.Classification)
+        {
+            case PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady:
+                verified.Add(new DurableStateVerifiedPath
+                {
+                    Path = path,
+                    Summary = entry.PreparedPacketDelta.Summary,
+                });
+                break;
+
+            case PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe:
+                unsafePaths.Add(new DurableStateUnsafePath
+                {
+                    Path = path,
+                    Reason = entry.PreparedPacketDelta.Summary,
+                });
+                break;
+
+            default:
+                unsafePaths.Add(new DurableStateUnsafePath
+                {
+                    Path = path,
+                    Reason = $"unrecognized prepared-packet classification `{entry.PreparedPacketDelta.Classification}` for `{path}`.",
                 });
                 break;
         }
@@ -409,6 +504,18 @@ internal sealed record DurableStateDirtyPath
     /// path or when the file could not be read.
     /// </summary>
     public PublishYamlCanonicalResult? PublishYamlDelta { get; init; }
+
+    /// <summary>
+    /// G361: optional prepared-packet classification for dirty
+    /// <c>.intent-cli/issues/&lt;unit&gt;/{packet.yaml,implementation.md,review-context.md,github-body.md}</c>
+    /// paths. The caller computes this once per execution-unit (reads
+    /// all four canonical files, resolves the active domain binding
+    /// regex and target repo, calls
+    /// <see cref="PreparedPacketCommitReadyAnalyzer.Analyze"/>) and
+    /// attaches the same shared result to each path's delta. Null on
+    /// any other path or when the four-file probe is missing.
+    /// </summary>
+    public PreparedPacketCommitReadyResult? PreparedPacketDelta { get; init; }
 }
 
 internal sealed record DurableStatePreflightInput
