@@ -487,9 +487,16 @@ internal static class IssuePublishFlowCommand
                 break;
             }
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        catch (Exception exception) when (exception is InvalidOperationException
+            or IOException
+            or System.Text.Json.JsonException)
         {
-            // fall through; treat as no idempotency hit
+            // fall through; treat as no idempotency hit.
+            // PR #830 review repair: JsonException added so a
+            // malformed queue-state.json cannot crash this idempotency
+            // probe — it just bypasses the early-exit fast path and
+            // lets the atomic-seed gate (below) handle the malformed
+            // file as "not present" with a structured operator stop.
         }
 
         return false;
@@ -504,6 +511,16 @@ internal static class IssuePublishFlowCommand
     /// as "not present" so the caller fails closed and routes the
     /// operator to <c>automation queue-seed-from-packet</c> rather
     /// than creating an orphan GitHub issue.
+    ///
+    /// PR #830 review repair: also catches
+    /// <see cref="System.Text.Json.JsonException"/> so a malformed
+    /// <c>queue-state.json</c> (truncated write, hand-edit typo,
+    /// stale partial commit, etc.) cannot crash
+    /// <c>issue publish-flow --write</c> via an unhandled exception.
+    /// Malformed input falls through to "not present" → atomic-seed
+    /// gate trips → operator gets the structured stop with the
+    /// recommended <c>automation queue-seed-from-packet</c> recovery
+    /// command, matching the existing fail-closed handling.
     /// </summary>
     private static bool QueueStateContainsExecutionUnit(string queueStatePath, string executionUnit)
     {
@@ -522,9 +539,13 @@ internal static class IssuePublishFlowCommand
                 }
             }
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        catch (Exception exception) when (exception is InvalidOperationException
+            or IOException
+            or System.Text.Json.JsonException)
         {
             // Treat as not present — fall through to fail-closed.
+            // PR #830 review repair: JsonException added to handle
+            // malformed queue-state.json without crashing.
         }
         return false;
     }

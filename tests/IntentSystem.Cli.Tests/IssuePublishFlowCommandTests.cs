@@ -429,6 +429,51 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenWriteWithMalformedQueueState_RefusesBeforeCreate_NoCrash()
+    {
+        // PR #830 review repair (18:52 comment): when
+        // `queue-state.json` exists but is MALFORMED (truncated
+        // write, hand-edit typo, partial commit, etc.),
+        // `QueueStateSerializer.Deserialize` throws `JsonException`.
+        // Before this fix the atomic-seed gate only caught
+        // `InvalidOperationException` and `IOException`, so the
+        // exception bubbled up and crashed `issue publish-flow
+        // --write` instead of returning a structured stop. The fix
+        // adds `JsonException` to the catch list so malformed input
+        // falls through to "not present" → atomic-seed gate trips →
+        // operator sees the same structured stop and recovery
+        // command as the missing-file case. The CreatorFactory stub
+        // MUST NOT be invoked.
+        using var workspace = new IssuePublishFlowWorkspace();
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody("G278 Fix issue publish-flow durable state synchronization"));
+        // Write deliberately malformed queue-state.json (truncated
+        // mid-object — what a crashed writer might leave).
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.QueueStatePath)!);
+        File.WriteAllText(workspace.QueueStatePath, "{ \"items\": [ { \"execution_unit\":");
+
+        var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/659");
+        IssuePublishFlowCommand.CreatorFactory = () => stub;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        // No crash — structured stop instead.
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("created").GetBoolean());
+        var error = root.GetProperty("error").GetString()!;
+        Assert.Contains("execution_unit `G278`", error, StringComparison.Ordinal);
+        Assert.Contains("atomic-seed gate", error, StringComparison.Ordinal);
+        Assert.Contains("queue-seed-from-packet", error, StringComparison.Ordinal);
+        // Defensive: no GitHub mutation occurred.
+        Assert.Equal(0, stub.CallCount);
+    }
+
+    [Fact]
     public void Execute_GivenLinkedIssueInQueueStateButPublishYamlMissing_IsIdempotentAndDoesNotCallGitHub()
     {
         using var workspace = new IssuePublishFlowWorkspace();
