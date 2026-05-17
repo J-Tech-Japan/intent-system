@@ -484,6 +484,65 @@ Demo.
     }
 
     [Fact]
+    public void Analyze_GithubBody_DraftParentheticalHeading_ReturnsUnsafeMissingSection()
+    {
+        // PR #824 review repair #8: confirm exact-match heading
+        // rejects `## Current Observed State (draft)` — a documented
+        // reviewer-cited example of a non-standalone heading that
+        // must NOT satisfy the canonical `Current Observed State`
+        // section. Locks the behavior for the specific phrasing the
+        // reviewer surfaced.
+        const string parentheticalHeading = """
+            # Title
+
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State (draft)
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Verification
+            x
+
+            ## Related Links
+            x
+            """;
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = parentheticalHeading,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonGithubBodyMissingSection, result.Reason);
+        Assert.Equal("Current Observed State", result.MissingGithubBodySection);
+    }
+
+    [Fact]
     public void Analyze_MalformedPacketYaml_UnbalancedQuote_ReturnsUnsafeUnparseable()
     {
         // An operator typo that breaks scalar parsing (unbalanced
