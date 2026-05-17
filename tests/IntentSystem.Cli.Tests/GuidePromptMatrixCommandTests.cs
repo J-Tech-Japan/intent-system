@@ -204,7 +204,7 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
-    public void Execute_ModeHostLoopJson_FirstCallsIncludeSixCommands()
+    public void Execute_ModeHostLoopJson_FirstCallsIncludeSevenCommands()
     {
         using var writer = new StringWriter();
         GuidePromptMatrixCommand.Execute(
@@ -215,9 +215,21 @@ public sealed class GuidePromptMatrixCommandTests
         using var document = JsonDocument.Parse(writer.ToString());
         var firstCalls = document.RootElement.GetProperty("first_calls")
             .EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Equal(6, firstCalls.Length);
+        // PR #829 review repair: same-repo-metadata-preflight is now
+        // a first-call between automation summary and intent status,
+        // so the count is 7 (was 6).
+        Assert.Equal(7, firstCalls.Length);
         Assert.Contains(firstCalls, c => c!.Contains("intent status", StringComparison.Ordinal));
         Assert.Contains(firstCalls, c => c!.Contains("next-slice --dry-run", StringComparison.Ordinal));
+        Assert.Contains(firstCalls, c => c!.Contains("automation same-repo-metadata-preflight", StringComparison.Ordinal));
+        // The preflight MUST come after automation summary and
+        // before intent status — the whole point of the gate is to
+        // run BEFORE any queue-state read.
+        var summaryIdx = Array.FindIndex(firstCalls, c => c!.Contains("automation summary", StringComparison.Ordinal));
+        var preflightIdx = Array.FindIndex(firstCalls, c => c!.Contains("automation same-repo-metadata-preflight", StringComparison.Ordinal));
+        var statusIdx = Array.FindIndex(firstCalls, c => c!.Contains("intent status", StringComparison.Ordinal));
+        Assert.True(summaryIdx < preflightIdx, "automation summary must precede same-repo-metadata-preflight in first-calls");
+        Assert.True(preflightIdx < statusIdx, "same-repo-metadata-preflight must precede intent status in first-calls");
     }
 
     [Fact]
@@ -354,7 +366,7 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
-    public void Execute_ModeHostOneshotJson_FirstCallsIncludeSixCommands()
+    public void Execute_ModeHostOneshotJson_FirstCallsIncludeSevenCommands()
     {
         using var writer = new StringWriter();
         GuidePromptMatrixCommand.Execute(
@@ -365,7 +377,10 @@ public sealed class GuidePromptMatrixCommandTests
         using var document = JsonDocument.Parse(writer.ToString());
         var firstCalls = document.RootElement.GetProperty("first_calls")
             .EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Equal(6, firstCalls.Length);
+        // PR #829 review repair: same-repo-metadata-preflight is now
+        // a first-call between automation summary and intent status.
+        Assert.Equal(7, firstCalls.Length);
+        Assert.Contains(firstCalls, c => c!.Contains("automation same-repo-metadata-preflight", StringComparison.Ordinal));
     }
 
     // ── domain / target-repo placeholder tests ───────────────────────────

@@ -243,14 +243,45 @@ internal static class AutomationSameRepoMetadataPreflightCommand
     private static SameRepoMetadataPreflightProbe CaptureProbe(string repoRoot, string branch)
     {
         // Best-effort fetch so the comparison sees fresh origin
-        // state. Ignore failures (offline / first-time clone) and
-        // proceed with whatever refs we have locally.
-        RunGit(repoRoot, $"fetch origin {branch}", allowFailure: true);
+        // state. PR #829 review repair: when `git fetch` fails, the
+        // local remote-tracking ref (`origin/<branch>`) may be
+        // stale OR refer to a branch that no longer exists on the
+        // remote (deleted / renamed since the last successful
+        // fetch). Verify with `git ls-remote --heads` before
+        // trusting the cached ref, so we never report `clean`
+        // against a branch the remote has removed.
+        var (fetchExit, _) = RunGit(repoRoot, $"fetch origin {branch}", allowFailure: true);
+
+        bool? remoteBranchExistsViaLsRemote = null;
+        if (fetchExit != 0)
+        {
+            var (lsExit, lsOutput) = RunGit(repoRoot, $"ls-remote --heads origin {branch}", allowFailure: true);
+            if (lsExit == 0)
+            {
+                // ls-remote --heads emits a line per matching head;
+                // empty output means the remote no longer has it.
+                remoteBranchExistsViaLsRemote = !string.IsNullOrWhiteSpace(lsOutput);
+            }
+            // lsExit != 0 → ls-remote also failed (likely offline);
+            // leave the flag null and fall back to the cached ref
+            // best-effort. The downstream `clean` check still
+            // requires SHA equality, so a stale-but-equal local +
+            // origin/<branch> remains the safe default.
+        }
 
         var (localExit, localSha) = RunGit(repoRoot, $"rev-parse {branch}", allowFailure: true);
         var (originExit, originSha) = RunGit(repoRoot, $"rev-parse origin/{branch}", allowFailure: true);
 
         var originExists = originExit == 0 && !string.IsNullOrWhiteSpace(originSha);
+        // PR #829 review repair: when ls-remote affirmatively
+        // reports the remote branch is gone, override the cached
+        // origin/<branch> signal so the classifier returns
+        // `missing-branch` instead of a misleading clean / behind.
+        if (remoteBranchExistsViaLsRemote == false)
+        {
+            originExists = false;
+        }
+
         var localIsAncestor = false;
         if (originExists && localExit == 0 && !string.IsNullOrWhiteSpace(localSha))
         {
