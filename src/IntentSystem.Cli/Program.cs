@@ -107,6 +107,7 @@ internal static class Program
                 || string.Equals(args[1], "pr-transition", StringComparison.Ordinal)
                 || string.Equals(args[1], "publish-lifecycle-repair", StringComparison.Ordinal)
                 || string.Equals(args[1], "publish-recovery", StringComparison.Ordinal)
+                || string.Equals(args[1], "queue-seed-from-packet", StringComparison.Ordinal)
                 || string.Equals(args[1], "reconcile", StringComparison.Ordinal)
                 || string.Equals(args[1], "same-repo-metadata-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "summary", StringComparison.Ordinal)

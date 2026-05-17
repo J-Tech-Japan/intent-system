@@ -180,6 +180,7 @@ internal static class CommandRouter
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,
                 ["publish-lifecycle-repair"] = AutomationPublishLifecycleRepairCommand.Execute,
                 ["publish-recovery"] = AutomationPublishRecoveryCommand.Execute,
+                ["queue-seed-from-packet"] = AutomationQueueSeedFromPacketCommand.Execute,
                 ["reconcile"] = AutomationReconcileCommand.Execute,
                 ["same-repo-metadata-preflight"] = AutomationSameRepoMetadataPreflightCommand.Execute,
                 ["summary"] = AutomationSummaryCommand.Execute,
