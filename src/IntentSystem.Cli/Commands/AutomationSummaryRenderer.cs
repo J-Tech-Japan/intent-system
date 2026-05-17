@@ -24,6 +24,17 @@ internal static class AutomationSummaryRenderer
         writer.WriteLine("## Base branch policy");
         writer.WriteLine($"- effective_base_branch_policy: {result.EffectiveBaseBranchPolicy}");
         writer.WriteLine($"- implementation_base_branch: {result.ImplementationBaseBranch}");
+        // G362: same-repo topology branch contract — only rendered
+        // when the host opted into the same-repo gates so generic
+        // host repos keep the pre-G362 output unchanged.
+        if (result.SameRepoTopology
+            || !string.IsNullOrWhiteSpace(result.MetadataSourceBranch)
+            || !string.IsNullOrWhiteSpace(result.MetadataWriteBranch))
+        {
+            writer.WriteLine($"- same_repo_topology: {(result.SameRepoTopology ? "true" : "false")}");
+            writer.WriteLine($"- metadata_source_branch: {(string.IsNullOrWhiteSpace(result.MetadataSourceBranch) ? "(unset)" : result.MetadataSourceBranch)}");
+            writer.WriteLine($"- metadata_write_branch: {(string.IsNullOrWhiteSpace(result.MetadataWriteBranch) ? "(unset)" : result.MetadataWriteBranch)}");
+        }
         writer.WriteLine();
 
         writer.WriteLine("## Bindings");

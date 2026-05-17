@@ -25,7 +25,27 @@ internal static class AutomationSummaryAnalyzer
         // as stable fields so AI threads can derive the expected PR base branch
         // without reading prompt memory or host `.intent-cli` directly.
         var effectivePolicy = context.Config.Project.BaseBranchPolicy;
-        var implementationBaseBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(effectivePolicy);
+        var configuredImplementationBaseBranch = context.Config.Project.ImplementationBaseBranch;
+        // G362: prefer the explicitly configured ImplementationBaseBranch
+        // (G350 field) over the policy-derived default so same-repo
+        // topology with `main-ai` etc. surfaces the correct branch.
+        var implementationBaseBranch = string.IsNullOrWhiteSpace(configuredImplementationBaseBranch)
+            ? BaseBranchPolicyContract.ResolveExpectedBaseBranch(effectivePolicy)
+            : configuredImplementationBaseBranch;
+
+        // G362: surface metadata source/write branch fields when the
+        // host is configured for same-repo topology. When neither
+        // explicit branch is set, fall back to the legacy
+        // MetadataBranch field (G350); both empty signals "no
+        // same-repo gates in play" and the loop keeps its pre-G362
+        // pull-first main behavior (G357).
+        var sameRepoTopology = context.Config.Project.SameRepoTopology;
+        var metadataSourceBranch = ResolveMetadataBranch(
+            context.Config.Project.MetadataSourceBranch,
+            context.Config.Project.MetadataBranch);
+        var metadataWriteBranch = ResolveMetadataBranch(
+            context.Config.Project.MetadataWriteBranch,
+            context.Config.Project.MetadataBranch);
 
         return new AutomationSummaryResult
         {
@@ -38,6 +58,9 @@ internal static class AutomationSummaryAnalyzer
             ExecutionUnitRegex = bindings.ExecutionUnitRegex,
             EffectiveBaseBranchPolicy = effectivePolicy,
             ImplementationBaseBranch = implementationBaseBranch,
+            SameRepoTopology = sameRepoTopology,
+            MetadataSourceBranch = metadataSourceBranch,
+            MetadataWriteBranch = metadataWriteBranch,
             IssueWorkflowLabels = AutomationSummaryConstants.IssueWorkflowLabels,
             PrWorkflowLabels = AutomationSummaryConstants.PrWorkflowLabels,
             HostLoopResponsibilities = AutomationSummaryConstants.HostLoopResponsibilities,
@@ -50,6 +73,24 @@ internal static class AutomationSummaryAnalyzer
             WipCapGuidance = AutomationSummaryConstants.WipCapGuidance,
             Warnings = warnings
         };
+    }
+
+    /// <summary>
+    /// G362: prefer the explicit per-role branch field
+    /// (<see cref="ProjectConfig.MetadataSourceBranch"/> /
+    /// <see cref="ProjectConfig.MetadataWriteBranch"/>) when set;
+    /// otherwise fall back to the single-field
+    /// <see cref="ProjectConfig.MetadataBranch"/> (G350). Returns
+    /// empty string when neither is configured — callers MUST treat
+    /// that as "no same-repo gate in play".
+    /// </summary>
+    private static string ResolveMetadataBranch(string roleSpecific, string legacy)
+    {
+        if (!string.IsNullOrWhiteSpace(roleSpecific))
+        {
+            return roleSpecific.Trim();
+        }
+        return string.IsNullOrWhiteSpace(legacy) ? string.Empty : legacy.Trim();
     }
 
     private static ParsedBindings LoadBindings(

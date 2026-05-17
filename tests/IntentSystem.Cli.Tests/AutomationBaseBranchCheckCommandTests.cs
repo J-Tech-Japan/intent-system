@@ -135,6 +135,79 @@ public sealed class AutomationBaseBranchCheckCommandTests
         Assert.Contains("Recommended actions", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_ConfiguredImplementationBaseBranch_OverridesPolicyDerivedDefault()
+    {
+        // G362: when the host config sets an explicit
+        // ImplementationBaseBranch (same-repo topology, e.g.
+        // `main-implementation`), the base-branch-check MUST use
+        // that branch as the expected base — not the policy
+        // default. Closes the gap where a PR could be approved
+        // against `main` even when the implementation branch is
+        // pinned elsewhere.
+        using var writer = new StringWriter();
+        var context = new CliContext
+        {
+            RepoRoot = Path.GetTempPath(),
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "intent-cli",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    BaseBranchPolicy = "direct-main",
+                    ImplementationBaseBranch = "main-implementation",
+                    SameRepoTopology = true,
+                },
+            },
+        };
+        var exitCode = AutomationBaseBranchCheckCommand.Execute(
+            context,
+            ["--repo", "owner/repo", "--pr", "99", "--actual-base", "main-implementation", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.Equal("main-implementation", root.GetProperty("expected_base").GetString());
+    }
+
+    [Fact]
+    public void Execute_ConfiguredImplementationBaseBranch_RejectsPolicyDefaultBase()
+    {
+        // G362: with ImplementationBaseBranch=`main-implementation`,
+        // a PR targeting `main` MUST be flagged as a mismatch — the
+        // configured branch takes precedence over the policy default.
+        using var writer = new StringWriter();
+        var context = new CliContext
+        {
+            RepoRoot = Path.GetTempPath(),
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "intent-cli",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    BaseBranchPolicy = "direct-main",
+                    ImplementationBaseBranch = "main-implementation",
+                    SameRepoTopology = true,
+                },
+            },
+        };
+        var exitCode = AutomationBaseBranchCheckCommand.Execute(
+            context,
+            ["--repo", "owner/repo", "--pr", "99", "--actual-base", "main", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("mismatch", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("main-implementation", document.RootElement.GetProperty("expected_base").GetString());
+    }
+
     private static CliContext CreateContext(string baseBranchPolicy)
     {
         return new CliContext

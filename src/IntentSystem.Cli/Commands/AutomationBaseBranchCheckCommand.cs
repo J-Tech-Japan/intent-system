@@ -59,7 +59,17 @@ internal static class AutomationBaseBranchCheckCommand
             return 1;
         }
 
-        var expectedBase = BaseBranchPolicyContract.ResolveExpectedBaseBranch(configuredPolicy);
+        // G362: when the host config sets an explicit
+        // ImplementationBaseBranch (same-repo topology, e.g.
+        // `main-ai`), that field takes precedence over the
+        // policy-derived default. Otherwise fall through to the
+        // policy lookup so non-same-repo hosts keep pre-G362
+        // behavior byte-identically.
+        var configuredImplementationBase = context.Config.Project.ImplementationBaseBranch;
+        var policyDerivedBase = BaseBranchPolicyContract.ResolveExpectedBaseBranch(configuredPolicy);
+        var expectedBase = string.IsNullOrWhiteSpace(configuredImplementationBase)
+            ? policyDerivedBase
+            : configuredImplementationBase.Trim();
         var actualBase = request.ActualBase.Trim();
         var matches = string.Equals(actualBase, expectedBase, StringComparison.Ordinal);
 

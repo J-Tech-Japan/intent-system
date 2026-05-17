@@ -35,6 +35,36 @@ internal sealed record ProjectConfig
 
     /// <summary>G350: dedicated metadata direct-push branch in same-repo topology (e.g. "main-metadata"). Empty = not configured.</summary>
     public string MetadataBranch { get; init; } = string.Empty;
+
+    /// <summary>
+    /// G362: branch the host loop must READ metadata (queue-state,
+    /// runs.jsonl, packet directories) from before each wake. In a
+    /// same-repo topology with a long-lived <c>main-metadata</c> branch
+    /// the operator may pin reads to <c>main</c> (current durable state)
+    /// while writes still target <c>main-metadata</c>. Empty falls back
+    /// to <see cref="MetadataBranch"/>; if both are empty the loop
+    /// keeps its pre-G362 pull-first <c>main</c> behavior (G357).
+    /// </summary>
+    public string MetadataSourceBranch { get; init; } = string.Empty;
+
+    /// <summary>
+    /// G362: branch the host loop must WRITE metadata commits to.
+    /// Distinct from <see cref="MetadataSourceBranch"/> so a stale
+    /// <c>main-metadata</c> can be detected (the operator periodically
+    /// merges metadata writes back to <c>main</c>). Empty falls back
+    /// to <see cref="MetadataBranch"/>.
+    /// </summary>
+    public string MetadataWriteBranch { get; init; } = string.Empty;
+
+    /// <summary>
+    /// G362: when true, the project is configured as same-repository
+    /// topology (host metadata and implementation code share one
+    /// repo). Triggers additional preflight gates so the host loop
+    /// cannot read stale metadata or approve PRs against the wrong
+    /// base branch. Defaults to false so generic host repos keep
+    /// pre-G362 behavior.
+    /// </summary>
+    public bool SameRepoTopology { get; init; }
 }
 
 internal sealed record RoleMappings

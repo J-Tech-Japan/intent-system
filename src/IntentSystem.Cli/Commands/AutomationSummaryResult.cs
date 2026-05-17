@@ -47,6 +47,26 @@ internal sealed record AutomationSummaryResult
     [JsonPropertyName("implementation_base_branch")]
     public required string ImplementationBaseBranch { get; init; }
 
+    /// <summary>
+    /// G362: same-repo topology metadata branch contract surfaced to
+    /// the host loop so the prompt no longer has to infer branches
+    /// from memory. <c>same_repo_topology</c> is true when the host
+    /// is configured for same-repository topology (host metadata and
+    /// implementation code share one repo). The branch fields name
+    /// the metadata SOURCE (read), metadata WRITE (commit target),
+    /// and implementation PR base branches — empty string means
+    /// "not configured", in which case the loop keeps its pre-G362
+    /// pull-first <c>main</c> behavior (G357).
+    /// </summary>
+    [JsonPropertyName("same_repo_topology")]
+    public bool SameRepoTopology { get; init; }
+
+    [JsonPropertyName("metadata_source_branch")]
+    public string MetadataSourceBranch { get; init; } = string.Empty;
+
+    [JsonPropertyName("metadata_write_branch")]
+    public string MetadataWriteBranch { get; init; } = string.Empty;
+
     [JsonPropertyName("issue_workflow_labels")]
     public required IReadOnlyList<string> IssueWorkflowLabels { get; init; }
 
