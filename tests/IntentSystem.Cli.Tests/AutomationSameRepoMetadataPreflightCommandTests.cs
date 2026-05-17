@@ -95,6 +95,67 @@ public sealed class AutomationSameRepoMetadataPreflightCommandTests : IDisposabl
     }
 
     [Fact]
+    public void Classify_OriginExistsButLocalMissing_ReturnsMissingLocalBranch_NotDiverged()
+    {
+        // PR #829 review repair: on a fresh checkout with
+        // `origin/main-metadata` fetched but no local branch yet,
+        // `git rev-parse main-metadata` fails so LocalSha arrives
+        // empty. Previously the classifier fell through to
+        // `diverged` (because LocalIsAncestorOfOrigin defaulted to
+        // false), which blocked the wake with a confusing "true
+        // fork" message. Treat this as a dedicated bootstrap state
+        // and recommend `git checkout -t origin/<branch>` instead.
+        var probe = new SameRepoMetadataPreflightProbe
+        {
+            LocalSha = string.Empty,
+            OriginSha = "ccccccc",
+            OriginBranchExists = true,
+            LocalIsAncestorOfOrigin = false,
+        };
+
+        var result = AutomationSameRepoMetadataPreflightCommand.Classify(probe, "main-metadata");
+
+        Assert.Equal(
+            AutomationSameRepoMetadataPreflightCommand.ClassificationMissingLocalBranch,
+            result.Classification);
+        Assert.Equal(string.Empty, result.LocalSha);
+        Assert.Equal("ccccccc", result.OriginSha);
+        Assert.Contains(
+            result.RecommendedActions,
+            a => a.Contains("git checkout -t origin/main-metadata", StringComparison.Ordinal));
+        // The diverged-only "rebase" / "Do NOT proceed" wording
+        // MUST NOT appear in the bootstrap remediation — those would
+        // mislead the operator into treating a fresh checkout as a
+        // true fork.
+        Assert.DoesNotContain(
+            result.RecommendedActions,
+            a => a.Contains("rebase", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            result.RecommendedActions,
+            a => a.Contains("Do NOT proceed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Classify_OriginExistsButLocalNull_ReturnsMissingLocalBranch_NotDiverged()
+    {
+        // Companion case: defensively handle LocalSha=null (the
+        // probe record's nullable contract) the same way as empty.
+        var probe = new SameRepoMetadataPreflightProbe
+        {
+            LocalSha = null,
+            OriginSha = "ddddddd",
+            OriginBranchExists = true,
+            LocalIsAncestorOfOrigin = false,
+        };
+
+        var result = AutomationSameRepoMetadataPreflightCommand.Classify(probe, "main-metadata");
+
+        Assert.Equal(
+            AutomationSameRepoMetadataPreflightCommand.ClassificationMissingLocalBranch,
+            result.Classification);
+    }
+
+    [Fact]
     public void Execute_NoMetadataBranchConfigured_ReturnsNotConfigured_AndExitZero()
     {
         // G362 acceptance: hosts without same-repo metadata branch

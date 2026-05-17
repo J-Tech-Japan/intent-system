@@ -27,6 +27,11 @@ namespace IntentSystem.Cli.Commands;
 /// <item><c>not-configured</c> — no metadata source branch is set;
 ///   fall through to the legacy G357 pull-first main behavior.</item>
 /// <item><c>missing-branch</c> — origin has no such branch.</item>
+/// <item><c>missing-local-branch</c> — origin has the branch but
+///   the local ref hasn't been created yet (common bootstrap case
+///   on a fresh checkout). Recommend creating / tracking the local
+///   branch from <c>origin/&lt;branch&gt;</c> rather than treating
+///   it as a true fork. PR #829 review repair.</item>
 /// </list>
 ///
 /// READ-ONLY: never pushes, never mutates the working tree, never
@@ -42,6 +47,15 @@ internal static class AutomationSameRepoMetadataPreflightCommand
     public const string ClassificationDiverged = "diverged";
     public const string ClassificationNotConfigured = "not-configured";
     public const string ClassificationMissingBranch = "missing-branch";
+    /// <summary>
+    /// PR #829 review repair: origin has the configured metadata
+    /// branch, but the local ref does not exist yet (e.g. a fresh
+    /// clone where <c>origin/main-metadata</c> is fetched but no
+    /// local <c>main-metadata</c> branch has been created). This
+    /// MUST NOT be classified as <c>diverged</c> — the operator
+    /// only needs to create / track the local branch.
+    /// </summary>
+    public const string ClassificationMissingLocalBranch = "missing-local-branch";
 
     /// <summary>
     /// Test seam: replaces the default git capture with an in-memory
@@ -134,6 +148,33 @@ internal static class AutomationSameRepoMetadataPreflightCommand
                 {
                     $"git push origin {branch}",
                     "Update `[project] metadata_source_branch` in `.intent-cli/config.toml` if the branch name is wrong.",
+                },
+            };
+        }
+
+        // PR #829 review repair: when origin has the branch but the
+        // local ref hasn't been created yet (fresh checkout — common
+        // bootstrap case), `git rev-parse {branch}` fails and the
+        // probe arrives with an empty LocalSha. Classifying that as
+        // `diverged` was wrong: there is no local history to fork
+        // FROM. Treat as a dedicated bootstrap state so the
+        // recommendation is "create / track the local branch", not
+        // "manually reconcile a true fork".
+        if (string.IsNullOrWhiteSpace(probe.LocalSha))
+        {
+            return new SameRepoMetadataPreflightResult
+            {
+                Classification = ClassificationMissingLocalBranch,
+                Branch = branch,
+                LocalSha = string.Empty,
+                OriginSha = probe.OriginSha ?? string.Empty,
+                Summary = $"origin has `{branch}` but the local ref does not exist yet (fresh checkout / bootstrap case). "
+                    + $"Metadata reads cannot proceed until a local `{branch}` is created and tracking origin.",
+                RecommendedActions = new[]
+                {
+                    $"git fetch origin {branch} && git checkout -t origin/{branch}",
+                    $"Or, if already on another branch: git branch --track {branch} origin/{branch}",
+                    "Re-run `automation same-repo-metadata-preflight` to confirm `clean`.",
                 },
             };
         }
