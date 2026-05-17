@@ -1722,6 +1722,64 @@ public sealed class GuidePromptMatrixCommandTests
             "Post-closeout section must mention git submodule update --init after the pull");
     }
 
+    // ── G362 same-repo metadata branch override (PR #829 review repair) ──
+
+    [Fact]
+    public void Execute_HostLoop_G362_InitialPullDocumentsSameRepoMetadataBranchOverride()
+    {
+        // PR #829 review repair: in same-repo topology with a configured
+        // metadata_source_branch, the host cwd is checked out on the
+        // metadata branch (e.g. `main-metadata`), not on `main`. The
+        // hardcoded `git pull --ff-only origin main` would fail
+        // non-fast-forward or pull the wrong source. The initial-pull
+        // text MUST document the substitution so operators know to use
+        // `origin <metadata_source_branch>` instead, and MUST point
+        // them at `automation summary` for the fields.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("Same-repo metadata branch override (G362)", prompt, StringComparison.Ordinal);
+        Assert.Contains("same_repo_topology: true", prompt, StringComparison.Ordinal);
+        Assert.Contains("metadata_source_branch", prompt, StringComparison.Ordinal);
+        Assert.Contains("git pull --ff-only origin <metadata_source_branch>", prompt, StringComparison.Ordinal);
+        // Override note must appear inside the initial-pull bullet
+        // (before host-sync-preflight) so it's discoverable next to
+        // the very first pull command.
+        var initialPullIdx = prompt.IndexOf("Initial pull (G357)", StringComparison.Ordinal);
+        var overrideIdx = prompt.IndexOf("Same-repo metadata branch override (G362)", StringComparison.Ordinal);
+        var hostSyncIdx = prompt.IndexOf("Pre-wake host sync (G304)", StringComparison.Ordinal);
+        Assert.True(initialPullIdx >= 0, "Initial pull marker missing");
+        Assert.True(overrideIdx > initialPullIdx, "Override note must follow initial pull marker");
+        Assert.True(overrideIdx < hostSyncIdx, "Override note must precede host-sync-preflight marker");
+    }
+
+    [Fact]
+    public void Execute_HostOneshot_G362_InitialPullDocumentsSameRepoMetadataBranchOverride()
+    {
+        // PR #829 review repair, companion case: host-oneshot has the
+        // same hardcoded `git pull --ff-only origin main` and the same
+        // gap in same-repo topology. The one-shot body MUST also
+        // document the substitution.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-oneshot", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("Same-repo metadata branch override (G362)", prompt, StringComparison.Ordinal);
+        Assert.Contains("metadata_source_branch", prompt, StringComparison.Ordinal);
+        Assert.Contains("git pull --ff-only origin <metadata_source_branch>", prompt, StringComparison.Ordinal);
+    }
+
     // ── G305 self-contained child one-shot guidance ─────────────────────
 
     [Fact]
