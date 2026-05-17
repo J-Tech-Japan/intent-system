@@ -208,6 +208,89 @@ public sealed class AutomationBaseBranchCheckCommandTests
         Assert.Equal("main-implementation", document.RootElement.GetProperty("expected_base").GetString());
     }
 
+    [Fact]
+    public void Execute_ExplicitPolicyOverride_TakesPrecedence_OverConfiguredImplementationBaseBranch()
+    {
+        // PR #829 review repair: the `--policy` CLI flag is the
+        // caller's explicit override and MUST win over the
+        // ImplementationBaseBranch config fallback. Without this
+        // gate, `intent-cli automation base-branch-check --policy
+        // direct-main ...` would silently compare against the
+        // config's implementation branch and hide a real mismatch
+        // — defeating the diagnostic purpose of the override.
+        using var writer = new StringWriter();
+        var context = new CliContext
+        {
+            RepoRoot = Path.GetTempPath(),
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "intent-cli",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    BaseBranchPolicy = "main-ai",
+                    ImplementationBaseBranch = "main-implementation",
+                    SameRepoTopology = true,
+                },
+            },
+        };
+
+        // Operator overrides with --policy direct-main: expected
+        // base MUST be the policy-derived `main`, NOT the configured
+        // `main-implementation`.
+        var exitCode = AutomationBaseBranchCheckCommand.Execute(
+            context,
+            ["--repo", "owner/repo", "--pr", "99", "--actual-base", "main", "--policy", "direct-main", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.Equal("direct-main", root.GetProperty("policy").GetString());
+        Assert.Equal("main", root.GetProperty("expected_base").GetString());
+    }
+
+    [Fact]
+    public void Execute_ExplicitPolicyOverride_FlagsMismatch_AgainstConfiguredImplementationBaseBranch()
+    {
+        // PR #829 review repair, companion case: with `--policy
+        // direct-main` supplied, a PR that still targets the
+        // configured `main-implementation` MUST be flagged as a
+        // mismatch — the CLI override wins, exposing the gap the
+        // operator was investigating.
+        using var writer = new StringWriter();
+        var context = new CliContext
+        {
+            RepoRoot = Path.GetTempPath(),
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "intent-cli",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    BaseBranchPolicy = "main-ai",
+                    ImplementationBaseBranch = "main-implementation",
+                    SameRepoTopology = true,
+                },
+            },
+        };
+
+        var exitCode = AutomationBaseBranchCheckCommand.Execute(
+            context,
+            ["--repo", "owner/repo", "--pr", "99", "--actual-base", "main-implementation", "--policy", "direct-main", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("mismatch", root.GetProperty("status").GetString());
+        Assert.Equal("direct-main", root.GetProperty("policy").GetString());
+        Assert.Equal("main", root.GetProperty("expected_base").GetString());
+    }
+
     private static CliContext CreateContext(string baseBranchPolicy)
     {
         return new CliContext

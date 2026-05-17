@@ -65,11 +65,21 @@ internal static class AutomationBaseBranchCheckCommand
         // policy-derived default. Otherwise fall through to the
         // policy lookup so non-same-repo hosts keep pre-G362
         // behavior byte-identically.
+        //
+        // PR #829 review repair: the `--policy` CLI flag is the
+        // caller's explicit override and MUST win over the
+        // ImplementationBaseBranch config fallback. Only consult the
+        // config field when `--policy` was NOT supplied, so that
+        // `intent-cli automation base-branch-check --policy direct-main ...`
+        // never silently compares against a same-repo
+        // implementation branch and hides a real mismatch.
         var configuredImplementationBase = context.Config.Project.ImplementationBaseBranch;
         var policyDerivedBase = BaseBranchPolicyContract.ResolveExpectedBaseBranch(configuredPolicy);
-        var expectedBase = string.IsNullOrWhiteSpace(configuredImplementationBase)
+        var expectedBase = !string.IsNullOrWhiteSpace(request.PolicyOverride)
             ? policyDerivedBase
-            : configuredImplementationBase.Trim();
+            : string.IsNullOrWhiteSpace(configuredImplementationBase)
+                ? policyDerivedBase
+                : configuredImplementationBase.Trim();
         var actualBase = request.ActualBase.Trim();
         var matches = string.Equals(actualBase, expectedBase, StringComparison.Ordinal);
 
