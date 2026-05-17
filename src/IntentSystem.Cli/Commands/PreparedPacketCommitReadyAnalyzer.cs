@@ -54,6 +54,25 @@ internal static class PreparedPacketCommitReadyAnalyzer
     public const string ReasonGithubBodyMissingSection = "github-body-missing-section";
     public const string ReasonMalformedExecutionUnit = "malformed-execution-unit";
 
+    /// <summary>
+    /// PR #824 review repair #2: the host requested a domain binding
+    /// (<see cref="PreparedPacketCommitReadyInput.RequireDomainBinding"/>
+    /// was true) but the bindings.md file or its
+    /// <c>execution_unit_regex</c> field is missing. Refusing the
+    /// packet here is the only way to guarantee a packet is never
+    /// auto-committed without verifying the active domain boundary.
+    /// </summary>
+    public const string ReasonMissingDomainBindingRegex = "missing-domain-binding-regex";
+
+    /// <summary>
+    /// PR #824 review repair #2: bindings.md declared an
+    /// <c>execution_unit_regex</c> but it does not compile (operator
+    /// typo, missing escape, etc.). Refusing the packet here is the
+    /// only way to guarantee a malformed bindings file can never
+    /// silently bypass the cross-domain check.
+    /// </summary>
+    public const string ReasonInvalidDomainBindingRegex = "invalid-domain-binding-regex";
+
     public const string FileNamePacketYaml = "packet.yaml";
     public const string FileNameImplementationMarkdown = "implementation.md";
     public const string FileNameReviewContextMarkdown = "review-context.md";
@@ -108,10 +127,29 @@ internal static class PreparedPacketCommitReadyAnalyzer
         }
 
         // 2. Domain binding regex check ---------------------------------
-        // Mirrors G359 cross-domain scoping: if the host configured an
-        // execution_unit_regex for the active domain, the directory-derived
-        // execution-unit must match it. Without a binding regex, any unit
-        // shape is accepted (host has not opted into cross-domain scoping).
+        // PR #824 review repair #2: when the host requests a domain
+        // binding (`RequireDomainBinding == true`), missing or
+        // malformed `execution_unit_regex` is an UNSAFE STOP — accepting
+        // a packet without verifying the domain boundary defeats the
+        // purpose of the lane. Only when the host explicitly opted out
+        // of cross-domain scoping (RequireDomainBinding == false AND no
+        // regex supplied) is the check skipped.
+        if (input.RequireDomainBinding && string.IsNullOrWhiteSpace(input.ExecutionUnitRegex))
+        {
+            return new PreparedPacketCommitReadyResult
+            {
+                Classification = ClassificationUnsafe,
+                Reason = ReasonMissingDomainBindingRegex,
+                ExecutionUnit = input.ExecutionUnit,
+                PacketDirectory = packetDirectory,
+                Summary = $"prepared packet `{packetDirectory}` cannot be classified commit-ready: "
+                    + "the active domain has no `execution_unit_regex` in its bindings.md "
+                    + "(either the bindings file is missing or the field is absent). Host-loop "
+                    + "auto-commit refuses to accept a prepared packet without verifying the "
+                    + "active domain boundary.",
+            };
+        }
+
         if (!string.IsNullOrWhiteSpace(input.ExecutionUnitRegex))
         {
             Regex regex;
@@ -119,12 +157,29 @@ internal static class PreparedPacketCommitReadyAnalyzer
             {
                 regex = new Regex(input.ExecutionUnitRegex, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
             }
-            catch (ArgumentException)
+            catch (ArgumentException exception)
             {
-                // A misconfigured regex falls back to "no domain check" so a
-                // malformed bindings.md cannot indefinitely block the host
-                // loop. Callers can detect the gap via the regex-load probe
-                // separately (mirrors G359 fail-open posture).
+                if (input.RequireDomainBinding)
+                {
+                    // PR #824 review repair #2: fail closed on an
+                    // unparseable binding regex when the host requested
+                    // the binding. A malformed bindings.md must never
+                    // silently bypass the cross-domain check.
+                    return new PreparedPacketCommitReadyResult
+                    {
+                        Classification = ClassificationUnsafe,
+                        Reason = ReasonInvalidDomainBindingRegex,
+                        ExecutionUnit = input.ExecutionUnit,
+                        PacketDirectory = packetDirectory,
+                        DomainRegex = input.ExecutionUnitRegex,
+                        Summary = $"prepared packet `{packetDirectory}` cannot be classified commit-ready: "
+                            + $"the active domain's `execution_unit_regex` `{input.ExecutionUnitRegex}` does not "
+                            + $"compile ({exception.Message}). Fix the bindings.md pattern before "
+                            + "the host loop can verify the domain boundary.",
+                    };
+                }
+                // Legacy fail-open path retained ONLY when the host did
+                // not require a binding (no --domain configured).
                 regex = null!;
             }
 
@@ -336,6 +391,21 @@ internal sealed record PreparedPacketCommitReadyInput
     /// the analyzer skips the target-repo check in that case.
     /// </summary>
     public string? RequestedTargetRepo { get; init; }
+
+    /// <summary>
+    /// PR #824 review repair #2: when true, the host explicitly
+    /// requires a domain binding (`--domain` was supplied to the
+    /// preflight). Missing or malformed
+    /// <see cref="ExecutionUnitRegex"/> becomes an unsafe stop in
+    /// that case (<see cref="PreparedPacketCommitReadyAnalyzer.ReasonMissingDomainBindingRegex"/>
+    /// / <see cref="PreparedPacketCommitReadyAnalyzer.ReasonInvalidDomainBindingRegex"/>)
+    /// — accepting a packet without verifying the active domain
+    /// boundary defeats the purpose of the lane. When false (no
+    /// domain configured), the legacy fail-open behavior is retained
+    /// for backward compatibility with hosts that have not opted into
+    /// cross-domain scoping.
+    /// </summary>
+    public bool RequireDomainBinding { get; init; }
 }
 
 /// <summary>
@@ -384,15 +454,98 @@ internal static class PreparedPacketYamlScalarParser
         @"^(?<indent>[ \t]*)(?<key>[A-Za-z_][A-Za-z0-9_\-]*)[ \t]*:[ \t]*(?<value>.*)$",
         System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.Multiline);
 
+    /// <summary>
+    /// Parse a packet.yaml scalar map. PR #824 review repair #2:
+    /// validates each non-blank, non-comment line for basic YAML
+    /// syntax conformance and throws <see cref="FormatException"/>
+    /// when a malformed line is encountered. This makes
+    /// <see cref="PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable"/>
+    /// reachable for files that the legacy line-scanner would have
+    /// silently ignored.
+    ///
+    /// Rejected as malformed (fail-closed):
+    /// <list type="bullet">
+    /// <item>Tab characters anywhere in the leading indentation
+    ///   (YAML 1.2 §6.1 forbids tab indentation).</item>
+    /// <item>Lines that have neither a colon nor are a comment / list
+    ///   marker / frontmatter delimiter (`key value` with no colon).</item>
+    /// <item>A line that starts with a colon (missing key).</item>
+    /// <item>A value containing an unbalanced single or double quote
+    ///   (operator typo that breaks scalar parsing).</item>
+    /// </list>
+    /// </summary>
     public static IReadOnlyDictionary<string, string> Parse(string yaml)
     {
         ArgumentNullException.ThrowIfNull(yaml);
 
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         var pathStack = new List<(int Indent, string Key)>();
+        var normalized = yaml.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var lines = normalized.Split('\n');
+        var insideFrontmatter = false;
+        var sawFrontmatterOpen = false;
 
-        foreach (System.Text.RegularExpressions.Match match in YamlScalarKeyRegex.Matches(yaml))
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
+            var rawLine = lines[lineIndex];
+            var lineNumber = lineIndex + 1;
+
+            if (string.IsNullOrWhiteSpace(rawLine))
+            {
+                continue;
+            }
+
+            // Tab in leading whitespace is a YAML syntax error (1.2 §6.1).
+            for (var charIndex = 0; charIndex < rawLine.Length; charIndex++)
+            {
+                var ch = rawLine[charIndex];
+                if (ch == ' ')
+                {
+                    continue;
+                }
+                if (ch == '\t')
+                {
+                    throw new FormatException(
+                        $"line {lineNumber}: tab character in indentation is invalid YAML (use spaces).");
+                }
+                break;
+            }
+
+            var trimmedStart = rawLine.TrimStart();
+
+            // Comments are allowed and ignored.
+            if (trimmedStart.StartsWith('#'))
+            {
+                continue;
+            }
+
+            // List markers and document delimiters are ignored (frontmatter).
+            if (string.Equals(trimmedStart.TrimEnd(), "---", StringComparison.Ordinal))
+            {
+                if (!sawFrontmatterOpen)
+                {
+                    sawFrontmatterOpen = true;
+                    insideFrontmatter = true;
+                }
+                else if (insideFrontmatter)
+                {
+                    insideFrontmatter = false;
+                }
+                continue;
+            }
+            if (trimmedStart.StartsWith("- ", StringComparison.Ordinal)
+                || string.Equals(trimmedStart.TrimEnd(), "-", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var match = YamlScalarKeyRegex.Match(rawLine);
+            if (!match.Success)
+            {
+                throw new FormatException(
+                    $"line {lineNumber}: malformed YAML (expected `key: value` or comment / list marker / frontmatter delimiter): `{rawLine.Trim()}`.");
+            }
+
             var indent = match.Groups["indent"].Value.Length;
             var key = match.Groups["key"].Value;
             var rawValue = match.Groups["value"].Value;
@@ -404,6 +557,19 @@ internal static class PreparedPacketYamlScalarParser
                 value = value[..hashIndex];
             }
             value = value.Trim();
+
+            // Fail closed on unbalanced quotes in the value scalar.
+            if (HasUnbalancedQuote(value, '\''))
+            {
+                throw new FormatException(
+                    $"line {lineNumber}: unbalanced single quote in value for `{key}`: `{rawValue.Trim()}`.");
+            }
+            if (HasUnbalancedQuote(value, '"'))
+            {
+                throw new FormatException(
+                    $"line {lineNumber}: unbalanced double quote in value for `{key}`: `{rawValue.Trim()}`.");
+            }
+
             if (value.Length >= 2
                 && (value[0] == '"' && value[^1] == '"'
                     || value[0] == '\'' && value[^1] == '\''))
@@ -435,5 +601,22 @@ internal static class PreparedPacketYamlScalarParser
         }
 
         return fields;
+    }
+
+    private static bool HasUnbalancedQuote(string value, char quote)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+        var count = 0;
+        foreach (var ch in value)
+        {
+            if (ch == quote)
+            {
+                count++;
+            }
+        }
+        return (count % 2) != 0;
     }
 }

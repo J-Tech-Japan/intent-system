@@ -190,12 +190,22 @@ internal static class AutomationDurableStatePreflightCommand
 
         var preparedPacketResults = new Dictionary<string, PreparedPacketCommitReadyResult>(StringComparer.Ordinal);
         string? executionUnitRegex = null;
+        // PR #824 review repair #2: when the host supplied `--domain`,
+        // require the bindings.md `execution_unit_regex` to be present
+        // and valid. The analyzer fails closed (unsafe stop) when it is
+        // missing or malformed, so a prepared packet can never be
+        // accepted without verifying the active domain boundary.
+        var resolvedDomain = string.IsNullOrWhiteSpace(domain)
+            ? context.Config?.Project?.Domain
+            : domain;
+        var requireDomainBinding = !string.IsNullOrWhiteSpace(resolvedDomain);
         if (preparedPacketEUs.Count > 0)
         {
             executionUnitRegex = TryResolveExecutionUnitRegex(context, domain);
             foreach (var eu in preparedPacketEUs)
             {
-                preparedPacketResults[eu] = BuildPreparedPacketResult(repoRoot, eu, executionUnitRegex, targetRepo);
+                preparedPacketResults[eu] = BuildPreparedPacketResult(
+                    repoRoot, eu, executionUnitRegex, targetRepo, requireDomainBinding);
             }
         }
 
@@ -332,7 +342,8 @@ internal static class AutomationDurableStatePreflightCommand
         string repoRoot,
         string executionUnit,
         string? executionUnitRegex,
-        string? requestedTargetRepo)
+        string? requestedTargetRepo,
+        bool requireDomainBinding)
     {
         var packetDir = Path.Combine(repoRoot, ".intent-cli", "issues", executionUnit);
 
@@ -345,6 +356,7 @@ internal static class AutomationDurableStatePreflightCommand
             GithubBodyMarkdown = TryReadFile(Path.Combine(packetDir, PreparedPacketCommitReadyAnalyzer.FileNameGithubBodyMarkdown)),
             ExecutionUnitRegex = executionUnitRegex,
             RequestedTargetRepo = requestedTargetRepo,
+            RequireDomainBinding = requireDomainBinding,
         });
     }
 

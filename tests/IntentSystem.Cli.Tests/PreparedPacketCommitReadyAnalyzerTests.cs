@@ -245,4 +245,124 @@ Demo.
 
         Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady, result.Classification);
     }
+
+    [Fact]
+    public void Analyze_RequireDomainBinding_MissingRegex_ReturnsUnsafeMissingBinding()
+    {
+        // PR #824 review repair #2: when the host requires a domain
+        // binding (`--domain` was supplied), missing
+        // `execution_unit_regex` is an unsafe stop — the packet must
+        // not be auto-committed without verifying the domain
+        // boundary. Reason is structured for operator triage.
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = null,
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonMissingDomainBindingRegex, result.Reason);
+    }
+
+    [Fact]
+    public void Analyze_RequireDomainBinding_InvalidRegex_ReturnsUnsafeInvalidBinding()
+    {
+        // PR #824 review repair #2: when the host requires a domain
+        // binding and the bindings.md `execution_unit_regex` does not
+        // compile, fail closed with `invalid-domain-binding-regex`
+        // instead of silently bypassing the domain check.
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "[unclosed",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonInvalidDomainBindingRegex, result.Reason);
+        Assert.Equal("[unclosed", result.DomainRegex);
+    }
+
+    [Fact]
+    public void Analyze_MalformedPacketYaml_TabIndentation_ReturnsUnsafeUnparseable()
+    {
+        // PR #824 review repair #2: tab character in indentation is
+        // invalid YAML (1.2 §6.1). The strict parser fails closed so
+        // `packet-yaml-unparseable` is actually reachable for this
+        // class of bad packet — previously the line-scanner silently
+        // ignored it.
+        const string tabIndentedPacket = "implementation_issue_packet:\n\tsource_execution_unit: Z4R-G3\n\ttarget_repo: J-Tech-Creations/Zero4Racer\n";
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = tabIndentedPacket,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, result.Reason);
+        Assert.Contains("tab", result.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Analyze_MalformedPacketYaml_MissingColon_ReturnsUnsafeUnparseable()
+    {
+        // A non-blank, non-comment line that doesn't have a `key: value`
+        // shape is malformed YAML. Previously the line-scanner silently
+        // ignored it; now the parser fails closed.
+        const string missingColonPacket = "target_repo J-Tech-Creations/Zero4Racer\nsource_execution_unit: Z4R-G3\n";
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = missingColonPacket,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, result.Reason);
+    }
+
+    [Fact]
+    public void Analyze_MalformedPacketYaml_UnbalancedQuote_ReturnsUnsafeUnparseable()
+    {
+        // An operator typo that breaks scalar parsing (unbalanced
+        // quote) must fail closed so the packet isn't auto-committed
+        // with corrupt content.
+        const string unbalancedQuotePacket = "implementation_issue_packet:\n  source_execution_unit: Z4R-G3\n  target_repo: \"J-Tech-Creations/Zero4Racer\n";
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = unbalancedQuotePacket,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, result.Reason);
+    }
 }
