@@ -112,7 +112,23 @@ internal static class AutomationQueueSeedFromPacketCommand
         }
 
         var packetFields = ReadPacketFields(packetDirectoryAbsolute);
-        var seed = BuildSeedItem(executionUnit, packetFields);
+        // PR #830 review repair #2: resolve the canonical clarification
+        // return path for the host domain so packets that omit the
+        // `clarification_return_path` field still seed with a usable
+        // route. The convention used across the codebase (see
+        // BugIntentEnqueueCommand, ProjectionPacketRuntimeReader,
+        // AutomationHostQueueItemRecoveryCommand) is
+        // `intents/<domain>/clarifications/open.md`. Falling back to
+        // `string.Empty` here would silently break the packet ↔
+        // queue-item clarification path contract enforced by
+        // ClarifyOpenCommand and MetadataValidateAnalyzer.
+        var resolvedDomain = !string.IsNullOrWhiteSpace(domain)
+            ? domain!
+            : !string.IsNullOrWhiteSpace(context.Config.Project.Domain)
+                ? context.Config.Project.Domain
+                : "intent-cli";
+        var defaultClarificationReturnPath = $"intents/{resolvedDomain}/clarifications/open.md";
+        var seed = BuildSeedItem(executionUnit, packetFields, defaultClarificationReturnPath);
 
         // Read current queue-state (if present). Missing file is OK —
         // we'll create one with this seed as the sole item.
@@ -219,10 +235,14 @@ internal static class AutomationQueueSeedFromPacketCommand
     /// the operator can override later via metadata-update if
     /// needed.
     /// </summary>
-    internal static QueueItem BuildSeedItem(string executionUnit, IReadOnlyDictionary<string, string> packetFields)
+    internal static QueueItem BuildSeedItem(
+        string executionUnit,
+        IReadOnlyDictionary<string, string> packetFields,
+        string defaultClarificationReturnPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentNullException.ThrowIfNull(packetFields);
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultClarificationReturnPath);
 
         var packetDir = $".intent-cli/issues/{executionUnit}/";
         var title = LookupScalar(packetFields,
@@ -236,14 +256,17 @@ internal static class AutomationQueueSeedFromPacketCommand
             "implementation_issue_packet.target_repo",
             "implementation_issue.target_repo",
             "target_repo");
-        // ClarificationReturnPath is conventionally
-        // `intents/<domain>/clarifications/open.md`. Without a packet
-        // field we leave it empty — downstream consumers degrade
-        // gracefully and the operator can metadata-update later.
+        // PR #830 review repair #2: ClarificationReturnPath
+        // convention is `intents/<domain>/clarifications/open.md`. If
+        // the packet declares one, honor it; otherwise fall back to
+        // the caller-provided per-domain default so downstream
+        // consumers (ClarifyOpenCommand, MetadataValidateAnalyzer)
+        // see a real path. An empty path would violate the packet ↔
+        // queue-item clarification path contract.
         var clarificationReturnPath = LookupScalar(packetFields,
             "clarification_return_path",
             "implementation_issue_packet.clarification_return_path")
-            ?? string.Empty;
+            ?? defaultClarificationReturnPath;
         var workerRole = LookupScalar(packetFields,
             "worker_role",
             "implementation_issue_packet.worker_role")

@@ -360,6 +360,78 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_PacketOmitsClarificationReturnPath_FallsBackToDomainDefault()
+    {
+        // PR #830 review repair #2: when packet.yaml does not declare
+        // `clarification_return_path`, the seeded queue item MUST
+        // fall back to the canonical per-domain default
+        // (`intents/<domain>/clarifications/open.md`). An empty path
+        // would silently break the packet ↔ queue-item clarification
+        // path contract enforced by ClarifyOpenCommand and
+        // MetadataValidateAnalyzer.
+        workspace.WritePreparedPacket("Z4R-G10", targetRepo: "J-Tech-Creations/Zero4Racer");
+        workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--execution-unit", "Z4R-G10",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var seeded = queueState.Items.Single(i => i.ExecutionUnit == "Z4R-G10");
+        Assert.Equal("intents/intent-cli/clarifications/open.md", seeded.ClarificationReturnPath);
+    }
+
+    [Fact]
+    public void Execute_PacketDeclaresClarificationReturnPath_PreservesIt()
+    {
+        // PR #830 review repair #2 (companion): when packet.yaml
+        // DOES declare `clarification_return_path`, the seed MUST
+        // honor that value (no silent override by the per-domain
+        // default). This locks the LookupScalar precedence.
+        var dir = Path.Combine(workspace.RootPath, ".intent-cli", "issues", "Z4R-G11");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "packet.yaml"),
+            "implementation_issue_packet:\n"
+            + "  source_execution_unit: Z4R-G11\n"
+            + "  issue_title: Demo with explicit clarification\n"
+            + "  target_repo: J-Tech-Creations/Zero4Racer\n"
+            + "  clarification_return_path: intents/custom-domain/clarifications/open.md\n");
+        File.WriteAllText(Path.Combine(dir, "implementation.md"), "# impl\n");
+        File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
+        File.WriteAllText(Path.Combine(dir, "github-body.md"),
+            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+        workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--execution-unit", "Z4R-G11",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var seeded = queueState.Items.Single(i => i.ExecutionUnit == "Z4R-G11");
+        Assert.Equal("intents/custom-domain/clarifications/open.md", seeded.ClarificationReturnPath);
+    }
+
+    [Fact]
     public void Execute_PacketDirectoryMissing_ReturnsStructuredStop()
     {
         // Defensive: command run on an EU whose packet directory
