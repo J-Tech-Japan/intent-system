@@ -111,7 +111,18 @@ internal static class HostLoopNextActionAnalyzer
         // classified `prepared-packet-commit-ready` (G361). When so, the
         // safe path is to commit + push that directory BEFORE the next
         // publish wake, not to surface a generic dirty-host-state stop.
-        if (input.SyncClassification is "dirty-host-durable-state" or "dirty-mixed"
+        //
+        // PR #824 review repair: this lane is restricted to pure
+        // `dirty-host-durable-state`. `dirty-mixed` ALSO contains
+        // unrelated dirty paths the operator must handle explicitly
+        // (the G304/G306 contract requires this — see the host-sync
+        // guidance) so taking the commit-before-publish lane on
+        // `dirty-mixed` would hide non-durable-state changes and
+        // recommend a too-narrow commit. On `dirty-mixed`, fall through
+        // to the dirty-host-state stop so the operator separates the
+        // packet directory from the unrelated portion before any
+        // auto-commit.
+        if (input.SyncClassification == "dirty-host-durable-state"
             && input.PreparedPacketCommitReadyAvailable
             && !string.IsNullOrWhiteSpace(input.PreparedPacketExecutionUnit))
         {
