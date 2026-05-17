@@ -317,6 +317,80 @@ public sealed class AutomationDurableStatePreflightCommandTests : IDisposable
             doc.RootElement.GetProperty("classification").GetString());
     }
 
+    [Fact]
+    public void Execute_PreparedPacket_ParentBindingsAreAuthoritativeOverChildStaleBindings()
+    {
+        // PR #824 review repair #5: when a parent intent repo root
+        // is configured, the PARENT bindings.md must be authoritative.
+        // A stale child workspace bindings.md (with a wrong regex)
+        // must NOT override the parent's authoritative regex.
+        //
+        // Setup: packet `Z4R-G3` would match a parent regex
+        // `^Z4R-G[0-9]+$` but does NOT match a stale child regex
+        // `^G[0-9]+$`. With the bug, the child's regex won (Z4R-G3
+        // misclassified as wrong-domain unsafe). With the fix, the
+        // parent regex wins (Z4R-G3 is commit-ready).
+
+        AutomationDurableStatePreflightCommand.ProbeFactory = null;
+
+        using var childWorkspace = new DurableStateGitWorkspace();
+        var parentRoot = Directory.CreateTempSubdirectory("durable-state-parent-").FullName;
+        try
+        {
+            // Parent (authoritative) bindings.
+            var parentBindingsDir = Path.Combine(parentRoot, "intents", "intent-cli", "automation");
+            Directory.CreateDirectory(parentBindingsDir);
+            File.WriteAllText(
+                Path.Combine(parentBindingsDir, "bindings.md"),
+                "---\nexecution_unit_regex: '^Z4R-G[0-9]+$'\n---\n");
+
+            // Stale child bindings: would reject Z4R-G3.
+            childWorkspace.WriteBindings("intent-cli", executionUnitRegex: "^G[0-9]+$");
+
+            childWorkspace.WritePreparedPacket(
+                "Z4R-G3", targetRepo: "J-Tech-Japan/intent-system");
+
+            // ProjectConfig is init-only, so build a child context
+            // with the parent root configured rather than mutating
+            // the workspace's context.
+            var contextWithParentRoot = new CliContext
+            {
+                RepoRoot = childWorkspace.Context.RepoRoot,
+                Config = new CliConfig
+                {
+                    Project = new ProjectConfig
+                    {
+                        Domain = childWorkspace.Context.Config.Project.Domain,
+                        ArtifactRoot = childWorkspace.Context.Config.Project.ArtifactRoot,
+                        WorktreeRoot = childWorkspace.Context.Config.Project.WorktreeRoot,
+                        ParentIntentRepoRoot = parentRoot,
+                    },
+                },
+            };
+
+            using var writer = new StringWriter();
+            var exitCode = AutomationDurableStatePreflightCommand.Execute(
+                contextWithParentRoot,
+                new[]
+                {
+                    "--domain", "intent-cli",
+                    "--target-repo", "J-Tech-Japan/intent-system",
+                    "--format", "json",
+                },
+                writer);
+
+            Assert.Equal(0, exitCode);
+            using var doc = JsonDocument.Parse(writer.ToString());
+            Assert.Equal(
+                DurableStatePreflightAnalyzer.ClassificationVerifiedCommitReady,
+                doc.RootElement.GetProperty("classification").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(parentRoot)) Directory.Delete(parentRoot, recursive: true);
+        }
+    }
+
     private sealed class DurableStateWorkspace : IDisposable
     {
         public DurableStateWorkspace()

@@ -400,34 +400,42 @@ internal static class AutomationDurableStatePreflightCommand
         // `domainExplicitlySupplied` so the legacy host-loop path
         // (no flag) skips bindings resolution entirely; this guard
         // is a defense-in-depth backstop.
+        //
+        // PR #824 review repair #5: when a parent intent repo root
+        // is configured, the PARENT bindings.md is authoritative.
+        // Mirrors the parent-aware lookup contract used by
+        // AutomationSummaryAnalyzer / NextSliceClassifyAnalyzer (and
+        // re-established for NextSliceDomainBindingsExecutionUnitRegex
+        // in the G359 PR #822 review repair). The previous order
+        // (child first, parent fallback) let a stale child
+        // bindings.md override the authoritative host bindings and
+        // misclassify cross-domain packet dirs as commit-ready.
         if (string.IsNullOrWhiteSpace(domain))
         {
             return null;
         }
 
-        var childPath = string.IsNullOrWhiteSpace(context.RepoRoot)
-            ? null
-            : Path.Combine(context.RepoRoot, "intents", domain, "automation", "bindings.md");
-        if (!string.IsNullOrWhiteSpace(childPath) && File.Exists(childPath))
+        var parentRoot = context.ResolveParentIntentRepoRootPath();
+        if (!string.IsNullOrWhiteSpace(parentRoot))
         {
-            var fromChild = ExtractExecutionUnitRegex(TryReadFile(childPath));
-            if (!string.IsNullOrWhiteSpace(fromChild))
+            var parentPath = Path.Combine(parentRoot, "intents", domain, "automation", "bindings.md");
+            if (File.Exists(parentPath))
             {
-                return fromChild;
+                return ExtractExecutionUnitRegex(TryReadFile(parentPath));
             }
+            return null;
         }
 
-        var parentRoot = context.ResolveParentIntentRepoRootPath();
-        if (string.IsNullOrWhiteSpace(parentRoot))
+        if (string.IsNullOrWhiteSpace(context.RepoRoot))
         {
             return null;
         }
-        var parentPath = Path.Combine(parentRoot, "intents", domain, "automation", "bindings.md");
-        if (!File.Exists(parentPath))
+        var childPath = Path.Combine(context.RepoRoot, "intents", domain, "automation", "bindings.md");
+        if (!File.Exists(childPath))
         {
             return null;
         }
-        return ExtractExecutionUnitRegex(TryReadFile(parentPath));
+        return ExtractExecutionUnitRegex(TryReadFile(childPath));
     }
 
     /// <summary>

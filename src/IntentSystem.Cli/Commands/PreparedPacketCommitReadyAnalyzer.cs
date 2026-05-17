@@ -86,6 +86,32 @@ internal static class PreparedPacketCommitReadyAnalyzer
         FileNameGithubBodyMarkdown,
     };
 
+    /// <summary>
+    /// PR #824 review repair #5: canonical github-body section
+    /// headings the analyzer requires for commit-ready
+    /// classification. The match is EXACT (case-insensitive after
+    /// trimming trailing punctuation), so non-standalone variants
+    /// (`## My Goal`, `## Goal - notes`) are rejected. The list
+    /// mirrors the IntentNextSliceCommand contract sections and the
+    /// canonical github-body shape produced by the packet draft
+    /// surface — including the full `Target Repo / Path / Part`
+    /// heading rather than the looser MetadataValidate substring
+    /// `Target Repo`.
+    /// </summary>
+    public static readonly IReadOnlyList<string> RequiredGithubBodySections = new[]
+    {
+        "Goal",
+        "Why This Slice Exists Now",
+        "Current Observed State",
+        "Accepted Baseline You May Assume",
+        "Target Repo / Path / Part",
+        "In Scope",
+        "Out Of Scope",
+        "Acceptance Criteria",
+        "Verification",
+        "Related Links",
+    };
+
     public static PreparedPacketCommitReadyResult Analyze(PreparedPacketCommitReadyInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -259,8 +285,12 @@ internal static class PreparedPacketCommitReadyAnalyzer
         }
 
         // 5. github-body.md required sections ---------------------------
+        // PR #824 review repair #5: use the analyzer's own
+        // RequiredGithubBodySections (with the full canonical heading
+        // names) plus the strict exact-match HasMatchingHeading helper
+        // so non-standalone headings like `## My Goal` are rejected.
         var headings = ExtractHeadings(input.GithubBodyMarkdown!);
-        foreach (var section in MetadataValidateConstants.RequiredGithubBodySections)
+        foreach (var section in RequiredGithubBodySections)
         {
             if (!HasMatchingHeading(headings, section))
             {
@@ -339,11 +369,23 @@ internal static class PreparedPacketCommitReadyAnalyzer
         return headings;
     }
 
+    /// <summary>
+    /// PR #824 review repair #5: match required sections by EXACT
+    /// heading text (case-insensitive) instead of substring contains.
+    /// The substring match accepted non-standalone headings like
+    /// `## My Goal` or `## Goal - notes` and would have let a packet
+    /// pass without the required `## Goal` section. Trailing
+    /// punctuation that the markdown renderer ignores
+    /// (colon / period / trailing whitespace) is tolerated so that
+    /// `## Goal:` still satisfies `Goal`, but partial-word matches
+    /// like `My Goal` are rejected.
+    /// </summary>
     private static bool HasMatchingHeading(IReadOnlyList<string> headings, string section)
     {
         foreach (var heading in headings)
         {
-            if (heading.Contains(section, StringComparison.OrdinalIgnoreCase))
+            var normalized = heading.TrimEnd().TrimEnd(':', '.', '!', '?').TrimEnd();
+            if (string.Equals(normalized, section, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }

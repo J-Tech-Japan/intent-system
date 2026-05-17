@@ -344,6 +344,118 @@ Demo.
     }
 
     [Fact]
+    public void Analyze_GithubBody_NonStandaloneHeading_ReturnsUnsafeMissingSection()
+    {
+        // PR #824 review repair #5: `## My Goal` is a partial /
+        // non-standalone heading that the old substring-Contains
+        // match accepted. The strict exact-match rejects it so the
+        // packet is classified missing-section.
+        const string nonStandaloneGoal = """
+            # Title
+
+            ## My Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Verification
+            x
+
+            ## Related Links
+            x
+            """;
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = nonStandaloneGoal,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonGithubBodyMissingSection, result.Reason);
+        Assert.Equal("Goal", result.MissingGithubBodySection);
+    }
+
+    [Fact]
+    public void Analyze_GithubBody_AnnotatedHeading_ReturnsUnsafeMissingSection()
+    {
+        // `## Goal - notes` is also non-standalone; the strict match
+        // rejects it.
+        const string annotatedGoal = """
+            # Title
+
+            ## Goal - notes
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Verification
+            x
+
+            ## Related Links
+            x
+            """;
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = CanonicalPacketYaml,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = annotatedGoal,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationUnsafe, result.Classification);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonGithubBodyMissingSection, result.Reason);
+        Assert.Equal("Goal", result.MissingGithubBodySection);
+    }
+
+    [Fact]
     public void Analyze_MalformedPacketYaml_UnbalancedQuote_ReturnsUnsafeUnparseable()
     {
         // An operator typo that breaks scalar parsing (unbalanced
