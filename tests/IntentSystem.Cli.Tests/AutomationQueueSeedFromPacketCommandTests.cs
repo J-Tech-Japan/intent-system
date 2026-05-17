@@ -432,6 +432,72 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_FullyHydratedPacket_PreservesAllMetadataInOneSeed()
+    {
+        // PR #830 review repair #3 (08:17 comment, integrated case):
+        // when packet.yaml carries the FULL payload — non-empty
+        // clarification path, dependencies, blocked_by, role
+        // overrides, priority, and title — the seeded queue item MUST
+        // preserve ALL fields in a single round-trip. This locks the
+        // complete preservation chain in one assertion so future
+        // refactors of BuildSeedItem cannot silently regress any
+        // single field without flipping this test.
+        var dir = Path.Combine(workspace.RootPath, ".intent-cli", "issues", "Z4R-G42");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "packet.yaml"),
+            "implementation_issue_packet:\n"
+            + "  source_execution_unit: Z4R-G42\n"
+            + "  issue_title: Fully hydrated demo\n"
+            + "  target_repo: J-Tech-Creations/Zero4Racer\n"
+            + "  clarification_return_path: intents/zero4racer/clarifications/open.md\n"
+            + "  dependencies: [Z4R-G40, Z4R-G41]\n"
+            + "  blocked_by: [Z4R-G39]\n"
+            + "  worker_role: implementor\n"
+            + "  review_role: reviewer-bot\n"
+            + "  priority: high\n");
+        File.WriteAllText(Path.Combine(dir, "implementation.md"), "# impl\n");
+        File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
+        File.WriteAllText(Path.Combine(dir, "github-body.md"),
+            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+        workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--execution-unit", "Z4R-G42",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var seeded = queueState.Items.Single(i => i.ExecutionUnit == "Z4R-G42");
+
+        // Title + state.
+        Assert.Equal("Fully hydrated demo", seeded.Title);
+        Assert.Equal(QueueItemState.Queued, seeded.State);
+        // Clarification path honored verbatim from the packet (NOT
+        // overridden by the per-domain default).
+        Assert.Equal("intents/zero4racer/clarifications/open.md", seeded.ClarificationReturnPath);
+        // Dependencies + blocked_by preserved as authored.
+        Assert.Equal(new[] { "Z4R-G40", "Z4R-G41" }, seeded.Dependencies);
+        Assert.Equal(new[] { "Z4R-G39" }, seeded.BlockedBy);
+        // Role / priority overrides preserved.
+        Assert.Equal("implementor", seeded.WorkerRole);
+        Assert.Equal("reviewer-bot", seeded.ReviewRole);
+        Assert.Equal("high", seeded.Priority);
+        // Packet paths derived from execution unit.
+        Assert.Equal(".intent-cli/issues/Z4R-G42/packet.yaml", seeded.PacketPaths.Yaml);
+        Assert.Equal(".intent-cli/issues/Z4R-G42/implementation.md", seeded.PacketPaths.Implementation);
+        Assert.Equal(".intent-cli/issues/Z4R-G42/review-context.md", seeded.PacketPaths.ReviewContext);
+    }
+
+    [Fact]
     public void Execute_PacketDirectoryMissing_ReturnsStructuredStop()
     {
         // Defensive: command run on an EU whose packet directory
