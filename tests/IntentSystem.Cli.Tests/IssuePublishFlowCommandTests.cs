@@ -227,6 +227,11 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     {
         using var workspace = new IssuePublishFlowWorkspace();
         workspace.WriteGithubBody("G245", BuildCompleteContractBody("G245 Add intent-cli issue publish-flow command"));
+        // PR #830 review repair: G363's atomic-seed gate requires
+        // the execution-unit to be present in queue-state BEFORE
+        // `gh issue create` is invoked. Seed it so this test
+        // exercises the gh-create-failure path (not the gate).
+        workspace.SeedQueueState("G245", "G245 Add intent-cli issue publish-flow command");
 
         IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
 
@@ -340,8 +345,15 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_GivenWriteWithMissingQueueState_RefusesSuccessAfterCreate()
+    public void Execute_GivenWriteWithMissingQueueState_RefusesBeforeCreate()
     {
+        // PR #830 review repair: G363's atomic-seed gate refuses
+        // BEFORE any GitHub mutation when queue-state.json doesn't
+        // exist at all. The previous behavior called `gh issue
+        // create`, captured the URL, and then surfaced a
+        // post-create synchronization error — an orphan GitHub
+        // issue with no queue link. The CreatorFactory stub MUST
+        // NOT be invoked.
         using var workspace = new IssuePublishFlowWorkspace();
         workspace.WriteGithubBody("G278", BuildCompleteContractBody("G278 Fix issue publish-flow durable state synchronization"));
         // intentionally do NOT seed queue-state.json
@@ -362,19 +374,29 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         Assert.False(root.GetProperty("created").GetBoolean());
         Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
         Assert.False(root.GetProperty("queue_state_patched").GetBoolean());
-        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/659", root.GetProperty("issue_url").GetString());
         var error = root.GetProperty("error").GetString()!;
-        Assert.Contains("durable state is not fully synchronized", error, StringComparison.Ordinal);
-        Assert.Contains("queue-state.json", error, StringComparison.Ordinal);
-        Assert.Contains("automation reconcile", error, StringComparison.Ordinal);
+        // New error mentions the atomic-seed gate and the safe
+        // recovery surface (queue-seed-from-packet) — no
+        // issue_url because no GitHub mutation occurred.
+        Assert.Contains("execution_unit `G278`", error, StringComparison.Ordinal);
+        Assert.Contains("atomic-seed gate", error, StringComparison.Ordinal);
+        Assert.Contains("queue-seed-from-packet", error, StringComparison.Ordinal);
+        Assert.Equal(0, stub.CallCount);
 
-        // queue-state stays absent; reconcile is the operator-driven repair path.
+        // queue-state stays absent.
         Assert.False(File.Exists(workspace.QueueStatePath));
     }
 
     [Fact]
-    public void Execute_GivenWriteWithQueueStateMissingExecutionUnit_RefusesSuccessAfterCreate()
+    public void Execute_GivenWriteWithQueueStateMissingExecutionUnit_RefusesBeforeCreate()
     {
+        // PR #830 review repair: G363's atomic-seed gate fails closed
+        // BEFORE any GitHub mutation when queue-state lacks the
+        // execution-unit. The previous behavior fell through to
+        // `gh issue create` and noticed the queue miss afterward —
+        // that violated the atomic-seed contract (orphan GitHub
+        // issue, no queue link). The CreatorFactory stub is
+        // registered defensively but MUST NOT be invoked.
         using var workspace = new IssuePublishFlowWorkspace();
         workspace.WriteGithubBody("G278", BuildCompleteContractBody("G278 Fix issue publish-flow durable state synchronization"));
         // queue-state has a different unit, not G278
@@ -396,7 +418,14 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
         Assert.False(root.GetProperty("queue_state_patched").GetBoolean());
         var error = root.GetProperty("error").GetString()!;
-        Assert.Contains("execution_unit 'G278'", error, StringComparison.Ordinal);
+        // New error mentions the unit, the atomic-seed gate, and the
+        // recommended seed command. Backtick wrap matches the
+        // operator-facing structured stop format.
+        Assert.Contains("execution_unit `G278`", error, StringComparison.Ordinal);
+        Assert.Contains("atomic-seed gate", error, StringComparison.Ordinal);
+        Assert.Contains("queue-seed-from-packet", error, StringComparison.Ordinal);
+        // Defensive: the gate MUST fire BEFORE any GitHub call.
+        Assert.Equal(0, stub.CallCount);
     }
 
     [Fact]

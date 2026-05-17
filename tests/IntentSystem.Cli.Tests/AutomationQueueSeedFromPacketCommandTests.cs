@@ -280,6 +280,86 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_PacketYamlDeclaresDependenciesAndBlockedBy_PreservesThemInSeed()
+    {
+        // PR #830 review repair: when packet.yaml carries
+        // `dependencies` and `blocked_by` arrays (and explicit
+        // role/priority overrides), the seeded QueueItem MUST
+        // preserve them rather than silently hardcoding empties /
+        // defaults. The G361 scalar parser stores list values as
+        // raw bracketed text; the new `ParsePacketArrayField`
+        // expands them into the QueueItem arrays.
+        var dir = Path.Combine(workspace.RootPath, ".intent-cli", "issues", "Z4R-G10");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "packet.yaml"),
+            "implementation_issue_packet:\n"
+            + "  source_execution_unit: Z4R-G10\n"
+            + "  issue_title: Demo\n"
+            + "  target_repo: J-Tech-Creations/Zero4Racer\n"
+            + "  dependencies: [Z4R-G8, Z4R-G9]\n"
+            + "  blocked_by: [Z4R-G7]\n"
+            + "  worker_role: implementor\n"
+            + "  review_role: reviewer-bot\n"
+            + "  priority: high\n");
+        File.WriteAllText(Path.Combine(dir, "implementation.md"), "# impl\n");
+        File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
+        File.WriteAllText(Path.Combine(dir, "github-body.md"),
+            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+        workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--execution-unit", "Z4R-G10",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var seeded = queueState.Items.Single(i => i.ExecutionUnit == "Z4R-G10");
+        Assert.Equal(new[] { "Z4R-G8", "Z4R-G9" }, seeded.Dependencies);
+        Assert.Equal(new[] { "Z4R-G7" }, seeded.BlockedBy);
+        Assert.Equal("implementor", seeded.WorkerRole);
+        Assert.Equal("reviewer-bot", seeded.ReviewRole);
+        Assert.Equal("high", seeded.Priority);
+    }
+
+    [Fact]
+    public void Execute_PacketYamlOmitsDependencies_LeavesEmptyArrays_NoGuessing()
+    {
+        // Backward compat: packets that legitimately carry no
+        // dependency metadata still produce queue items with empty
+        // arrays — the loader MUST NEVER guess.
+        workspace.WritePreparedPacket("Z4R-G10", targetRepo: "J-Tech-Creations/Zero4Racer");
+        workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--execution-unit", "Z4R-G10",
+                "--domain", "intent-cli",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var seeded = queueState.Items.Single(i => i.ExecutionUnit == "Z4R-G10");
+        Assert.Empty(seeded.Dependencies);
+        Assert.Empty(seeded.BlockedBy);
+    }
+
+    [Fact]
     public void Execute_PacketDirectoryMissing_ReturnsStructuredStop()
     {
         // Defensive: command run on an EU whose packet directory
