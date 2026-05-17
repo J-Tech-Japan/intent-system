@@ -14,7 +14,47 @@
     <PackageTags>intent-cli;dotnet-tool</PackageTags>
     <RepositoryUrl>https://github.com/J-Tech-Japan/intent-system</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!--
+      G360: build-time metadata baked into the assembly's
+      AssemblyInformationalVersion so the version flag handler can
+      identify the installed binary without reading host state at
+      runtime.
+
+      IntentSystemLatestExecutionUnit is the latest implemented
+      intent-system G-number at pack/build time. Bump it as new
+      slices land. CI may override via the MSBuild property of the
+      same name.
+
+      The git short SHA is captured from SourceRevisionId
+      (set by Microsoft.SourceLink.GitHub or any CI that exports
+      SourceRevisionId). When neither is available the SHA segment
+      is omitted gracefully.
+    -->
+    <IntentSystemLatestExecutionUnit Condition="'$(IntentSystemLatestExecutionUnit)' == ''">G360</IntentSystemLatestExecutionUnit>
+    <SourceRevisionShortId Condition="'$(SourceRevisionId)' != ''">$(SourceRevisionId.Substring(0, 7))</SourceRevisionShortId>
+    <InformationalVersion Condition="'$(SourceRevisionShortId)' != ''">$(Version)-$(SourceRevisionShortId)-$(IntentSystemLatestExecutionUnit)</InformationalVersion>
+    <InformationalVersion Condition="'$(SourceRevisionShortId)' == ''">$(Version)-$(IntentSystemLatestExecutionUnit)</InformationalVersion>
   </PropertyGroup>
+
+  <!--
+    G360: capture the current git short SHA at build time so the
+    InformationalVersion can include it even when SourceLink is
+    not wired up. Best-effort: ignored when git is not available
+    or the project is built outside a git worktree. The git
+    command resolves the seven-character short SHA so the value
+    matches the form specified by the issue body (e.g. f6cbf65).
+  -->
+  <Target Name="ResolveIntentCliSourceRevision" BeforeTargets="GetAssemblyAttributes;CoreCompile" Condition="'$(SourceRevisionShortId)' == ''">
+    <Exec Command="git rev-parse --short=7 HEAD" WorkingDirectory="$(MSBuildProjectDirectory)" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="SourceRevisionShortIdFromGit" />
+      <Output TaskParameter="ExitCode" PropertyName="SourceRevisionShortIdGitExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(SourceRevisionShortIdGitExitCode)' == '0' AND '$(SourceRevisionShortIdFromGit)' != ''">
+      <SourceRevisionShortId>$(SourceRevisionShortIdFromGit.Trim())</SourceRevisionShortId>
+      <InformationalVersion>$(Version)-$(SourceRevisionShortId)-$(IntentSystemLatestExecutionUnit)</InformationalVersion>
+    </PropertyGroup>
+  </Target>
 
   <ItemGroup>
     <ProjectReference Include="..\IntentSystem.Clarify\IntentSystem.Clarify.csproj" />

@@ -10,6 +10,19 @@ internal static class Program
     {
         try
         {
+            // G360: process-level `--version` / `-v` MUST exit before
+            // any host-state resolution. Operators rely on
+            // `intent-cli --version` to verify the installed binary
+            // from any cwd (home directory, child implementation
+            // repo, fresh CI machine). Routing it through the
+            // bootstrap path would still emit the G299 missing-host-
+            // state guidance because the command router doesn't
+            // recognize it; handle it inline here instead.
+            if (VersionCommand.IsVersionRequest(args))
+            {
+                return VersionCommand.Execute(Console.Out);
+            }
+
             if (DirectRunDetachedCaptureCommand.TryExecute(args, out var directRunDetachedCaptureExitCode))
             {
                 return directRunDetachedCaptureExitCode;
