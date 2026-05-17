@@ -557,6 +557,88 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_DomainFlagOmitted_DefaultsToHostConfigDomain_AndRegexCheckStillRuns()
+    {
+        // PR #830 review repair (19:07 comment, fail-open fix): when
+        // `--domain` is omitted, the command MUST default to the
+        // host config's `Project.Domain` so the domain-binding
+        // regex check still runs. Previously,
+        // `RequireDomainBinding = !string.IsNullOrWhiteSpace(domain)`
+        // skipped the check entirely when the flag was omitted —
+        // a fail-open path where a wrong-domain packet could be
+        // seeded as long as `target_repo` matched.
+        //
+        // This test writes a packet whose execution unit does NOT
+        // match the host domain's binding regex, omits `--domain`,
+        // and asserts the seed is REFUSED (classification: unsafe)
+        // because the regex check now runs against the configured
+        // host domain.
+        workspace.WritePreparedPacket("Q9X-G10", targetRepo: "J-Tech-Creations/Zero4Racer");
+        workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--execution-unit", "Q9X-G10",
+                // intentionally omit --domain
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            AutomationQueueSeedFromPacketCommand.ClassificationUnsafe,
+            doc.RootElement.GetProperty("classification").GetString());
+        // queue-state was NOT created — fail-open path closed.
+        Assert.False(File.Exists(workspace.QueueStatePath));
+    }
+
+    [Fact]
+    public void Execute_DomainFlagAndHostConfigDomainBothMissing_RefusesWithUsageError()
+    {
+        // PR #830 review repair (19:07 comment, defensive case):
+        // when neither `--domain` nor `[project] domain` in
+        // `.intent-cli/config.toml` is set, there's no safe way to
+        // pick a domain for the regex check. Refuse to proceed
+        // rather than silently failing open. This is a stricter
+        // guarantee than the old behavior, but it's the right one:
+        // the only callers reaching this branch are misconfigured
+        // hosts that would have skipped the regex check before.
+        using var emptyDomainWorkspace = new TestWorkspace();
+        var newContext = new CliContext
+        {
+            RepoRoot = emptyDomainWorkspace.Context.RepoRoot,
+            Config = emptyDomainWorkspace.Context.Config with
+            {
+                Project = emptyDomainWorkspace.Context.Config.Project with { Domain = string.Empty },
+            },
+        };
+        emptyDomainWorkspace.WritePreparedPacket("Z4R-G10", targetRepo: "J-Tech-Creations/Zero4Racer");
+        emptyDomainWorkspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            newContext,
+            new[]
+            {
+                "--execution-unit", "Z4R-G10",
+                "--target-repo", "J-Tech-Creations/Zero4Racer",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--domain is required", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("fail open", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Execute_PacketDirectoryMissing_ReturnsStructuredStop()
     {
         // Defensive: command run on an EU whose packet directory

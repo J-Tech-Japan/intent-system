@@ -64,6 +64,26 @@ internal static class AutomationQueueSeedFromPacketCommand
             return 1;
         }
 
+        // PR #830 review repair (19:07 comment): `--domain` is
+        // optional on the CLI, but the underlying domain-binding
+        // regex check MUST ALWAYS RUN — otherwise a wrong-domain
+        // packet could be seeded as long as `target_repo` matches
+        // (fail-open). When `--domain` is omitted, default to the
+        // host config's `Project.Domain`. Refuse to proceed if
+        // neither is available: there is no safe deterministic way
+        // to pick a domain in that case, and silently skipping the
+        // regex check is exactly the gap the reviewer flagged.
+        var effectiveDomain = !string.IsNullOrWhiteSpace(domain)
+            ? domain!
+            : context.Config?.Project?.Domain;
+        if (string.IsNullOrWhiteSpace(effectiveDomain))
+        {
+            writer.WriteLine(
+                "--domain is required when `[project] domain` is not set in `.intent-cli/config.toml`. "
+                + "The domain-binding regex check refuses to silently fail open on wrong-domain packets.");
+            return 1;
+        }
+
         var packetDirectoryRelative = $".intent-cli/issues/{executionUnit}/";
         var packetDirectoryAbsolute = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit);
         if (!Directory.Exists(packetDirectoryAbsolute))
@@ -90,9 +110,14 @@ internal static class AutomationQueueSeedFromPacketCommand
             ImplementationMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameImplementationMarkdown)),
             ReviewContextMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameReviewContextMarkdown)),
             GithubBodyMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameGithubBodyMarkdown)),
-            ExecutionUnitRegex = TryResolveExecutionUnitRegex(context, domain),
+            ExecutionUnitRegex = TryResolveExecutionUnitRegex(context, effectiveDomain),
             RequestedTargetRepo = targetRepo,
-            RequireDomainBinding = !string.IsNullOrWhiteSpace(domain),
+            // PR #830 review repair (19:07 comment): always require
+            // a domain binding now that `effectiveDomain` is always
+            // populated (either from `--domain` or the host config).
+            // Closes the fail-open path where omitting `--domain`
+            // skipped the regex check.
+            RequireDomainBinding = true,
         });
 
         if (validation.Classification != PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady)
@@ -122,12 +147,12 @@ internal static class AutomationQueueSeedFromPacketCommand
         // `string.Empty` here would silently break the packet ↔
         // queue-item clarification path contract enforced by
         // ClarifyOpenCommand and MetadataValidateAnalyzer.
-        var resolvedDomain = !string.IsNullOrWhiteSpace(domain)
-            ? domain!
-            : !string.IsNullOrWhiteSpace(context.Config.Project.Domain)
-                ? context.Config.Project.Domain
-                : "intent-cli";
-        var defaultClarificationReturnPath = $"intents/{resolvedDomain}/clarifications/open.md";
+        // PR #830 review repair (19:07 comment): `effectiveDomain`
+        // is already resolved above (--domain → host config Domain,
+        // with a hard refusal when neither is set) so the
+        // clarification path computation reuses the same value
+        // rather than re-deriving it.
+        var defaultClarificationReturnPath = $"intents/{effectiveDomain}/clarifications/open.md";
 
         // PR #830 review repair #3 (08:27 comment): align role /
         // priority fallbacks with the established
