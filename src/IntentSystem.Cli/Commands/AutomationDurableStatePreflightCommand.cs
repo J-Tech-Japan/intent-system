@@ -190,22 +190,27 @@ internal static class AutomationDurableStatePreflightCommand
 
         var preparedPacketResults = new Dictionary<string, PreparedPacketCommitReadyResult>(StringComparer.Ordinal);
         string? executionUnitRegex = null;
-        // PR #824 review repair #2: when the host supplied `--domain`,
-        // require the bindings.md `execution_unit_regex` to be present
-        // and valid. The analyzer fails closed (unsafe stop) when it is
-        // missing or malformed, so a prepared packet can never be
-        // accepted without verifying the active domain boundary.
-        var resolvedDomain = string.IsNullOrWhiteSpace(domain)
-            ? context.Config?.Project?.Domain
-            : domain;
-        var requireDomainBinding = !string.IsNullOrWhiteSpace(resolvedDomain);
+        // PR #824 review repair #4: only require / resolve the
+        // bindings when `--domain` was EXPLICITLY supplied on the
+        // command line. The configured project domain
+        // (`context.Config.Project.Domain`) is metadata, not an
+        // opt-in to fail-closed scoping. Without this guard the
+        // legacy host-loop path (`automation durable-state-preflight
+        // --format json`, no flag) would fail closed for any
+        // configured host even though the analyzer / tests document
+        // the legacy fail-open behavior. Track the explicit flag
+        // here so the bindings probe and the analyzer's
+        // `RequireDomainBinding` only fire on operator opt-in.
+        var domainExplicitlySupplied = !string.IsNullOrWhiteSpace(domain);
         if (preparedPacketEUs.Count > 0)
         {
-            executionUnitRegex = TryResolveExecutionUnitRegex(context, domain);
+            executionUnitRegex = domainExplicitlySupplied
+                ? TryResolveExecutionUnitRegex(context, domain)
+                : null;
             foreach (var eu in preparedPacketEUs)
             {
                 preparedPacketResults[eu] = BuildPreparedPacketResult(
-                    repoRoot, eu, executionUnitRegex, targetRepo, requireDomainBinding);
+                    repoRoot, eu, executionUnitRegex, targetRepo, domainExplicitlySupplied);
             }
         }
 
@@ -389,10 +394,12 @@ internal static class AutomationDurableStatePreflightCommand
     /// </summary>
     private static string? TryResolveExecutionUnitRegex(CliContext context, string? domain)
     {
-        if (string.IsNullOrWhiteSpace(domain))
-        {
-            domain = context.Config?.Project?.Domain;
-        }
+        // PR #824 review repair #4: do NOT fall back to
+        // `context.Config.Project.Domain` when the caller did not
+        // supply --domain. The caller already gates this method on
+        // `domainExplicitlySupplied` so the legacy host-loop path
+        // (no flag) skips bindings resolution entirely; this guard
+        // is a defense-in-depth backstop.
         if (string.IsNullOrWhiteSpace(domain))
         {
             return null;

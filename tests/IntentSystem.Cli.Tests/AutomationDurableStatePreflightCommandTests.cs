@@ -285,6 +285,38 @@ public sealed class AutomationDurableStatePreflightCommandTests : IDisposable
             doc.RootElement.GetProperty("classification").GetString());
     }
 
+    [Fact]
+    public void Execute_PreparedPacketWithoutDomainFlag_ReturnsVerifiedCommitReady_OnConfiguredHost()
+    {
+        // PR #824 review repair #4: the legacy documented host-loop
+        // path is `automation durable-state-preflight --format json`
+        // (no --domain). On a host whose CliContext.Config.Project.Domain
+        // is populated (the normal case), the command MUST NOT
+        // silently treat that as an opt-in to fail-closed scoping.
+        // Otherwise a complete prepared packet would be blocked on the
+        // legacy path because the workspace has no bindings.md for
+        // the configured domain.
+
+        AutomationDurableStatePreflightCommand.ProbeFactory = null;
+
+        using var workspace = new DurableStateGitWorkspace();
+        // Packet directory present, but NO bindings.md is seeded —
+        // legacy path must not require one.
+        workspace.WritePreparedPacket("AnyExecutionUnit", targetRepo: "J-Tech-Japan/intent-system");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationDurableStatePreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--format", "json" }, // No --domain — legacy path.
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            DurableStatePreflightAnalyzer.ClassificationVerifiedCommitReady,
+            doc.RootElement.GetProperty("classification").GetString());
+    }
+
     private sealed class DurableStateWorkspace : IDisposable
     {
         public DurableStateWorkspace()
