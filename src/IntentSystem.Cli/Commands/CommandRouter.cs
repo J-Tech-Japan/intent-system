@@ -177,6 +177,8 @@ internal static class CommandRouter
                 ["host-sync-preflight"] = AutomationHostSyncPreflightCommand.Execute,
                 ["intent-target-gap-recovery"] = AutomationIntentTargetGapRecoveryCommand.Execute,
                 ["issue-publish"] = AutomationIssuePublishCommand.Execute,
+                ["label-palette-audit"] = AutomationLabelPaletteAuditCommand.Execute,
+                ["label-palette-sync"] = AutomationLabelPaletteSyncCommand.Execute,
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,
                 ["publish-lifecycle-repair"] = AutomationPublishLifecycleRepairCommand.Execute,
                 ["publish-recovery"] = AutomationPublishRecoveryCommand.Execute,
