@@ -104,6 +104,8 @@ internal static class Program
                 || string.Equals(args[1], "host-review-diagnostics", StringComparison.Ordinal)
                 || string.Equals(args[1], "host-sync-preflight", StringComparison.Ordinal)
                 || string.Equals(args[1], "issue-publish", StringComparison.Ordinal)
+                || string.Equals(args[1], "label-palette-audit", StringComparison.Ordinal)
+                || string.Equals(args[1], "label-palette-sync", StringComparison.Ordinal)
                 || string.Equals(args[1], "pr-transition", StringComparison.Ordinal)
                 || string.Equals(args[1], "publish-lifecycle-repair", StringComparison.Ordinal)
                 || string.Equals(args[1], "publish-recovery", StringComparison.Ordinal)
