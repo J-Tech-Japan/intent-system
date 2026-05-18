@@ -1253,6 +1253,161 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Contains("workspace-guard", result.RecommendedNextCommand!, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_G365_HostBinding_Match_DerivesDomainAndProbesAndReturnsIssuePublishReady()
+    {
+        // G365: when neither --candidate nor --domain is supplied and
+        // the host-binding records target_repo matching --repo, the
+        // resolver-supplied domain reaches the next-slice probe and a
+        // returned `issue-cut-ready` candidate flips diagnostics from
+        // `true-idle` to `issue-publish-ready`.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        string? probedDomain = null;
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.HostBindingDomainResolverDelegate = (_, repo) =>
+            HostBindingDomainResolution.Match("sekiban-as-a-service", "/host/.intent-cli/host-binding.toml");
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G406" },
+            onProbeArgs: (_, d) => probedDomain = d);
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context, // configured domain = "intent-cli"
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal("sekiban-as-a-service", probedDomain);
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.Equal("issue-publish-ready", result.Classification);
+            Assert.Contains("SKS-G406", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.HostBindingDomainResolverDelegate = null;
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G365_HostBinding_Mismatch_EmitsMissingDomainBindingClassification()
+    {
+        // G365: when no --domain is supplied and the host-binding records
+        // a target_repo that does not match --repo, diagnostics must
+        // return `missing-domain-binding` with read_only true and a
+        // recommendation to pass --domain explicitly. The next-slice
+        // probe must NOT run.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        var probeWasInvoked = false;
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.HostBindingDomainResolverDelegate = (_, _) =>
+            HostBindingDomainResolution.Mismatch(
+                domain: "intent-cli",
+                boundTargetRepo: "J-Tech-Japan/intent-system",
+                bindingPath: "/host/.intent-cli/host-binding.toml");
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "WRONG-DOMAIN" },
+            onProbe: () => probeWasInvoked = true);
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.False(probeWasInvoked, "next-slice probe must not run on host-binding mismatch");
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.Equal("missing-domain-binding", result.Classification);
+            Assert.True(result.ReadOnly);
+            Assert.False(result.SafeRepairAvailable);
+            Assert.Null(result.SafeRepairCategory);
+            Assert.NotNull(result.RecommendedNextCommand);
+            Assert.Contains("--domain <DOMAIN>", result.RecommendedNextCommand!, StringComparison.Ordinal);
+            Assert.Single(result.Details);
+            Assert.Contains("J-Tech-Japan/intent-system", result.Details[0].Description, StringComparison.Ordinal);
+            Assert.Contains("J-Tech-Japan/SekibanAsAService", result.Details[0].Description, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.HostBindingDomainResolverDelegate = null;
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G365_HostBinding_Missing_FallsBackToConfiguredDomain()
+    {
+        // G365 backward-compat: when no host-binding is present the
+        // existing G341 fallback to context.Config.Project.Domain
+        // continues to work unchanged.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        string? probedDomain = null;
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.HostBindingDomainResolverDelegate = (_, _) =>
+            HostBindingDomainResolution.Missing("(no binding file)");
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null },
+            onProbeArgs: (_, d) => probedDomain = d);
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context, // configured domain = "intent-cli"
+                ["--repo", "owner/repo", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal("intent-cli", probedDomain);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.HostBindingDomainResolverDelegate = null;
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G365_ExplicitDomainFlag_BypassesHostBindingLookup()
+    {
+        // G365: when --domain is supplied, the host-binding resolver
+        // must not be invoked. This preserves the pre-G365 contract
+        // that an explicit domain flag wins.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        var resolverInvoked = false;
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.HostBindingDomainResolverDelegate = (_, _) =>
+        {
+            resolverInvoked = true;
+            return HostBindingDomainResolution.Mismatch(
+                "wrong-domain", "wrong-repo", "/host/.intent-cli/host-binding.toml");
+        };
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "owner/repo", "--domain", "operator-supplied", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.False(resolverInvoked, "host-binding resolver must not run when --domain is supplied");
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.HostBindingDomainResolverDelegate = null;
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
     /// <summary>
     /// G342: deterministic stand-in for the publish-recovery probe.
     /// </summary>
