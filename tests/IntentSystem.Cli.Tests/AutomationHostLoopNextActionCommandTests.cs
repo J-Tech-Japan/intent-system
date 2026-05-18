@@ -888,6 +888,195 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Execute_G365_HostBinding_Match_DerivesDomainAndPublishesNextIssue()
+    {
+        // G365: when --domain is omitted but --repo matches the host's
+        // host-binding.toml target_repo, the binding's domain is used
+        // for the next-slice probe so a real `issue-cut-ready` candidate
+        // surfaces as `publish-next-issue` instead of `design-needed`.
+        // Mirrors the observed SekibanAsAService SKS-G406 case where the
+        // operator runs the host loop without typing the domain.
+        string? probedDomain = null;
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.HostBindingDomainResolverDelegate = (_, repo) =>
+            HostBindingDomainResolution.Match("sekiban-as-a-service", "/host/.intent-cli/host-binding.toml");
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeProbeRecorder(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G406" },
+            (_, d) => probedDomain = d);
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContextWithoutDomain(),
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            Assert.Equal("sekiban-as-a-service", probedDomain);
+            using var doc = JsonDocument.Parse(writer.ToString());
+            var root = doc.RootElement;
+            Assert.Equal("publish-next-issue", root.GetProperty("classification").GetString());
+            Assert.Equal("SKS-G406", root.GetProperty("candidate_execution_unit").GetString());
+            var recommended = root.GetProperty("recommended_command").GetString()!;
+            Assert.Contains("--execution-unit SKS-G406", recommended, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.HostBindingDomainResolverDelegate = null;
+            AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G365_HostBinding_Mismatch_EmitsMissingDomainBindingClassification()
+    {
+        // G365: when --domain is omitted and the host-binding records a
+        // different target_repo than --repo, the command MUST surface
+        // `missing-domain-binding` rather than silently fall back to the
+        // configured domain. The probe MUST NOT be invoked (it would
+        // run against the wrong domain).
+        var probeWasInvoked = false;
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.HostBindingDomainResolverDelegate = (_, _) =>
+            HostBindingDomainResolution.Mismatch(
+                domain: "intent-cli",
+                boundTargetRepo: "J-Tech-Japan/intent-system",
+                bindingPath: "/host/.intent-cli/host-binding.toml");
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "WRONG-DOMAIN" },
+            onProbe: () => probeWasInvoked = true);
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContextWithoutDomain(),
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            Assert.False(probeWasInvoked, "next-slice probe must not run when host-binding records a different target_repo");
+            using var doc = JsonDocument.Parse(writer.ToString());
+            var root = doc.RootElement;
+            Assert.Equal("missing-domain-binding", root.GetProperty("classification").GetString());
+            Assert.False(root.GetProperty("mutation_allowed").GetBoolean());
+            var recommended = root.GetProperty("recommended_command").GetString()!;
+            Assert.Contains("--domain <DOMAIN>", recommended, StringComparison.Ordinal);
+            var evidence = string.Join(' ',
+                root.GetProperty("evidence").EnumerateArray().Select(e => e.GetString()));
+            Assert.Contains("J-Tech-Japan/intent-system", evidence, StringComparison.Ordinal);
+            Assert.Contains("J-Tech-Japan/SekibanAsAService", evidence, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.HostBindingDomainResolverDelegate = null;
+            AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G365_HostBinding_Missing_FallsBackToConfiguredDomain()
+    {
+        // G365: when no host-binding is present, the existing G341
+        // fallback to `context.Config.Project.Domain` MUST remain
+        // byte-identical. Pre-G365 hosts (no binding file) keep
+        // working exactly as they did under G341.
+        string? probedDomain = null;
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.HostBindingDomainResolverDelegate = (_, _) =>
+            HostBindingDomainResolution.Missing("(no binding file)");
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeProbeRecorder(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null },
+            (_, d) => probedDomain = d);
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(), // configured domain = "intent-cli"
+                ["--repo", "owner/repo", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            Assert.Equal("intent-cli", probedDomain);
+            using var doc = JsonDocument.Parse(writer.ToString());
+            Assert.Equal("true-idle", doc.RootElement.GetProperty("classification").GetString());
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.HostBindingDomainResolverDelegate = null;
+            AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G365_ExplicitDomainFlag_BypassesHostBindingLookup()
+    {
+        // G365: an operator-supplied `--domain` is authoritative; the
+        // host-binding resolver MUST NOT be invoked. This preserves the
+        // pre-G365 contract that an explicit domain flag wins.
+        var resolverInvoked = false;
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.HostBindingDomainResolverDelegate = (_, _) =>
+        {
+            resolverInvoked = true;
+            return HostBindingDomainResolution.Mismatch(
+                "wrong-domain", "wrong-repo", "/host/.intent-cli/host-binding.toml");
+        };
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContextWithoutDomain(),
+                ["--repo", "owner/repo",
+                 "--domain", "operator-supplied",
+                 "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            Assert.False(resolverInvoked, "host-binding resolver must not run when --domain is supplied");
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.HostBindingDomainResolverDelegate = null;
+            AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    /// <summary>
+    /// G365: stand-in for the next-slice probe that records the
+    /// (repo, domain) pair the command supplied. Used by tests that
+    /// assert the derived domain reaches the probe.
+    /// </summary>
+    private sealed class FakeProbeRecorder : INextSliceDryRunProbe
+    {
+        private readonly NextSliceProbeResult? _canned;
+        private readonly Action<string, string> _onProbeArgs;
+        public FakeProbeRecorder(NextSliceProbeResult? canned, Action<string, string> onProbeArgs)
+        {
+            _canned = canned;
+            _onProbeArgs = onProbeArgs;
+        }
+        public NextSliceProbeResult? Probe(string repo, string domain)
+        {
+            _onProbeArgs(repo, domain);
+            return _canned;
+        }
+    }
+
     private static CliContext CreateContextWithoutDomain() =>
         new()
         {

@@ -183,6 +183,20 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     /// reporting a misleading <c>true-idle</c>.
     /// </summary>
     public const string CloseoutDriftRepair = "closeout-drift-repair";
+
+    /// <summary>
+    /// G365: terminal class returned when the operator did not supply
+    /// <c>--domain</c> and the host-binding lookup returns
+    /// <see cref="HostBindingDomainResolutionKind.Mismatch"/> — the
+    /// host's <c>.intent-cli/host-binding.toml</c> records a different
+    /// <c>target_repo</c> than the <c>--repo</c> argument. The host
+    /// loop must NOT silently fall back to the configured domain in
+    /// this case because the next-slice probe would run against the
+    /// wrong domain and report a misleading <c>true-idle</c> /
+    /// <c>design-needed</c> outcome. The recommended fix is to either
+    /// pass <c>--domain</c> explicitly or update the binding.
+    /// </summary>
+    public const string MissingDomainBinding = "missing-domain-binding";
 }
 
 /// <summary>

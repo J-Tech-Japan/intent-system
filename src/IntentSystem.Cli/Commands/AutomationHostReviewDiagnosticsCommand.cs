@@ -63,25 +63,57 @@ internal static class AutomationHostReviewDiagnosticsCommand
             return 1;
         }
 
-        // G341: when the operator omits `--domain`, fall back to the
-        // host's configured domain. Needed so the next-slice probe
-        // below can run without requiring the operator to type the
-        // domain every time.
-        if (string.IsNullOrWhiteSpace(domain))
-        {
-            var configuredDomain = context.Config?.Project?.Domain;
-            if (!string.IsNullOrWhiteSpace(configuredDomain))
-            {
-                domain = configuredDomain.Trim();
-            }
-        }
-
         var resolvedWorkdir = ResolveWorkdir(context, workdir);
         if (string.IsNullOrWhiteSpace(repo)
             && !AutomationCheckCommand.TryInferGitHubRepo(resolvedWorkdir, out repo, out error))
         {
             writer.WriteLine(error);
             return 1;
+        }
+
+        // G341 / G365: domain resolution priority when --domain is
+        // omitted:
+        //
+        //   1. `.intent-cli/host-binding.toml` (G365) — the canonical
+        //      domain-for-this-target-repo mapping. When the requested
+        //      `--repo` matches the binding's `target_repo` the
+        //      binding's `domain` is authoritative.
+        //   2. `context.Config.Project.Domain` (G341 legacy) — used
+        //      when no binding file is present.
+        //
+        // Mismatch outcome (binding records a different target_repo)
+        // short-circuits to a `missing-domain-binding` emission so the
+        // host loop surfaces the gap rather than silently using the
+        // wrong domain.
+        var domainBinding = HostBindingDomainResolution.Missing(null);
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            var resolver = HostBindingDomainResolverDelegate
+                ?? HostBindingDomainResolver.Resolve;
+            domainBinding = resolver(context, repo!);
+            if (domainBinding.Kind == HostBindingDomainResolutionKind.Match
+                && !string.IsNullOrWhiteSpace(domainBinding.Domain))
+            {
+                domain = domainBinding.Domain;
+            }
+            else if (domainBinding.Kind == HostBindingDomainResolutionKind.Missing)
+            {
+                var configuredDomain = context.Config?.Project?.Domain;
+                if (!string.IsNullOrWhiteSpace(configuredDomain))
+                {
+                    domain = configuredDomain.Trim();
+                }
+            }
+            // Mismatch: deliberately do NOT fall through to the
+            // configured domain; the structured emission below names
+            // the inconsistency.
+        }
+
+        if (domainBinding.Kind == HostBindingDomainResolutionKind.Mismatch
+            && string.IsNullOrWhiteSpace(domain))
+        {
+            EmitMissingDomainBinding(writer, repo!, domainBinding, format);
+            return 0;
         }
 
         var surfaceReport = AutomationInstalledCliSurfaceProbe.Check(context);
@@ -256,6 +288,52 @@ internal static class AutomationHostReviewDiagnosticsCommand
     /// signal.
     /// </summary>
     public static Func<CliContext, IPublishRecoveryProbe>? PublishRecoveryProbeFactory { get; set; }
+
+    /// <summary>
+    /// G365: testability seam for the host-binding domain resolver.
+    /// Mirrors the seam in <see cref="AutomationHostLoopNextActionCommand"/>
+    /// so both surfaces agree on the same per-repo domain mapping.
+    /// </summary>
+    public static Func<CliContext, string, HostBindingDomainResolution>? HostBindingDomainResolverDelegate { get; set; }
+
+    private static void EmitMissingDomainBinding(
+        TextWriter writer,
+        string repo,
+        HostBindingDomainResolution binding,
+        string format)
+    {
+        var bindingPath = binding.BindingPath ?? "(unresolved)";
+        var boundRepo = binding.BoundTargetRepo ?? "(none)";
+        var boundDomain = binding.Domain ?? "(none)";
+        var emitted = new AutomationHostReviewDiagnosticsResult
+        {
+            Repo = repo,
+            Classification = AutomationHostReviewDiagnosticsClassifications.MissingDomainBinding,
+            Summary =
+                $"Missing domain binding for `{repo}` — host-binding.toml maps a different target_repo (`{boundRepo}` / domain `{boundDomain}`); "
+                + "pass --domain explicitly or align the host-binding so candidate-less diagnostics can probe the right domain.",
+            ReadOnly = true,
+            RecommendedNextCommand =
+                $"intent-cli automation host-review-diagnostics --repo {repo} --domain <DOMAIN> --format json",
+            StructuredClarification = null,
+            Details =
+            [
+                new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = AutomationHostReviewDiagnosticsClassifications.MissingDomainBinding,
+                    TargetKind = null,
+                    TargetNumber = null,
+                    TargetUrl = null,
+                    Description =
+                        $"binding_path: {bindingPath}; bound_target_repo: {boundRepo}; bound_domain: {boundDomain}; requested_repo: {repo}",
+                }
+            ],
+            Warnings = Array.Empty<string>(),
+            SafeRepairAvailable = false,
+            SafeRepairCategory = null,
+        };
+        Emit(writer, emitted, format);
+    }
 
     private static bool TryParseArguments(
         string[] args,
