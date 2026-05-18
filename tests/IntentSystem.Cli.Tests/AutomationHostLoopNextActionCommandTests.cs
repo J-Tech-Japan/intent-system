@@ -455,6 +455,74 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G364_PublishNextIssue_SurfacesCandidateExecutionUnitField()
+    {
+        // G364 AC: when the analyzer selects the `publish-next-issue`
+        // lane, the JSON output must expose the chosen execution unit
+        // as a top-level `candidate_execution_unit` field — not only
+        // inside `recommended_command` / `evidence`. This lets host
+        // loop wake scripts and dashboards read the next-slice target
+        // deterministically without parsing the command string.
+        // Captures the observed SekibanAsAService SKS-G403 shape.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G403" });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            var root = JsonDocument.Parse(writer.ToString()).RootElement;
+            Assert.Equal("publish-next-issue", root.GetProperty("classification").GetString());
+            Assert.Equal("SKS-G403", root.GetProperty("candidate_execution_unit").GetString());
+            Assert.Contains("SKS-G403", root.GetProperty("recommended_command").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G364_NonPublishLane_CandidateExecutionUnitFieldIsNull()
+    {
+        // G364: `candidate_execution_unit` is only meaningful for lanes
+        // where a specific next-slice / prepared-packet unit was chosen.
+        // For all other classifications (e.g. true-idle, wip-cap-blocked)
+        // the field must be null so consumers can deterministically
+        // detect "no specific candidate selected".
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: Array.Empty<GitHubAutomationIssueCandidate>());
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "no-actionable-item", ExecutionUnit = null });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = AutomationHostLoopNextActionCommand.Execute(
+                CreateContext(),
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            var root = JsonDocument.Parse(writer.ToString()).RootElement;
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("candidate_execution_unit").ValueKind);
+        }
+        finally
+        {
+            AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
     public void Execute_PublishRecoveryProbe_SurfacesRepairHostMetadata_WhenSafeRepairsAvailable()
     {
         // G342: when `automation publish-recovery --dry-run` reports
