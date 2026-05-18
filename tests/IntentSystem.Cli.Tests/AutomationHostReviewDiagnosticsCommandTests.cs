@@ -874,6 +874,132 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G364_NextSliceProbe_ClarificationRequired_RoutesToClarificationLane()
+    {
+        // G364 AC: when `intent next-slice --dry-run` reports
+        // `clarification-required`, the diagnostics must surface
+        // `clarification-required` instead of falling through to
+        // `true-idle`. This mirrors the host-loop-next-action probe
+        // (which already maps the same outcome to hardClarificationOpen)
+        // so both surfaces agree on the same next-slice signal. The
+        // observed SekibanAsAService SKS-G403 case showed that without
+        // this mapping the host loop sees `true-idle` on the diagnostics
+        // surface while the explicit `intent next-slice` command reports
+        // a real blocker — the two must not disagree.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "clarification-required", ExecutionUnit = null });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.Equal("clarification-required", result.Classification);
+            Assert.NotEqual("true-idle", result.Classification);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G364_NextSliceProbe_IssueCutReady_AndExplicitCandidate_Agree()
+    {
+        // G364 AC: diagnostics with `--candidate SKS-G403` and diagnostics
+        // without `--candidate` (where the auto-probe returns
+        // `issue-cut-ready` for SKS-G403) must agree on classification.
+        // Captures the observed SKS-G403 regression shape: explicit
+        // candidate path returns `issue-publish-ready`; the implicit
+        // path must do the same.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        try
+        {
+            // 1. Implicit candidate path: probe returns issue-cut-ready
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+                new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G403" });
+            using var implicitWriter = new StringWriter();
+            var implicitExit = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--format", "json"],
+                implicitWriter);
+            Assert.Equal(0, implicitExit);
+            var implicitResult = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(implicitWriter.ToString())!;
+
+            // 2. Explicit candidate path: operator passes --candidate
+            // SKS-G403 directly (probe is skipped by design)
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+                new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G403" });
+            using var explicitWriter = new StringWriter();
+            var explicitExit = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "J-Tech-Japan/SekibanAsAService", "--candidate", "SKS-G403", "--format", "json"],
+                explicitWriter);
+            Assert.Equal(0, explicitExit);
+            var explicitResult = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(explicitWriter.ToString())!;
+
+            // Both paths must agree on classification (issue-publish-ready)
+            // and surface SKS-G403 in the recommended next command.
+            Assert.Equal("issue-publish-ready", implicitResult.Classification);
+            Assert.Equal("issue-publish-ready", explicitResult.Classification);
+            Assert.Equal(implicitResult.Classification, explicitResult.Classification);
+            Assert.Contains("SKS-G403", implicitResult.RecommendedNextCommand!, StringComparison.Ordinal);
+            Assert.Contains("SKS-G403", explicitResult.RecommendedNextCommand!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_G364_NextSliceProbe_DesignNeeded_LeavesAnalyzerToClassify()
+    {
+        // G364 AC (negative): diagnostics does not own the
+        // `design-needed` lane — that lane lives in the host-loop-next-action
+        // analyzer. When next-slice reports `design-needed`, the
+        // diagnostics probe must NOT promote it to a different
+        // classification or clarification gate. The analyzer is allowed
+        // to fall through to `true-idle` (its current behavior) because
+        // diagnostics has no lane vocabulary for design-needed; the
+        // host-loop-next-action surface is responsible for surfacing
+        // design-needed to the operator. This test pins the contract so
+        // a future "promote design-needed to clarification" change is
+        // intentional.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+        AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "design-needed", ExecutionUnit = null });
+
+        try
+        {
+            using var writer = new StringWriter();
+            var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+                workspace.Context,
+                ["--repo", "owner/repo", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+            Assert.NotEqual("clarification-required", result.Classification);
+            Assert.NotEqual("issue-publish-ready", result.Classification);
+        }
+        finally
+        {
+            AutomationHostReviewDiagnosticsCommand.NextSliceDryRunProbeFactory = null;
+        }
+    }
+
+    [Fact]
     public void Execute_PublishRecoveryProbe_SurfacesPublishRecoveryReady_WhenSafeRepairsAvailable()
     {
         // G342: when `automation publish-recovery --dry-run` reports

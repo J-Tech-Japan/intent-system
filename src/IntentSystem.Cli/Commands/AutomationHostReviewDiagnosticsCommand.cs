@@ -162,16 +162,45 @@ internal static class AutomationHostReviewDiagnosticsCommand
         // Fail-soft: a probe error (queue-state missing, packet root
         // unreadable) falls through to the existing
         // candidate-not-supplied path so the host loop never crashes.
+        //
+        // G364: extend the switch so `clarification-required` from the
+        // next-slice probe routes to the `clarification-required`
+        // diagnostics lane instead of falling through to `true-idle`.
+        // This keeps diagnostics in lockstep with the host-loop-next-action
+        // probe (which already handles all next-slice outcomes) and is
+        // what the observed SekibanAsAService SKS-G403 case requires.
         if (string.IsNullOrWhiteSpace(candidate) && !string.IsNullOrWhiteSpace(domain))
         {
             var probe = NextSliceDryRunProbeFactory?.Invoke(context)
                 ?? new IntentCliNextSliceDryRunProbe(context);
             var probed = probe.Probe(repo!, domain!);
-            if (probed != null
-                && string.Equals(probed.RecommendedOutcome, "issue-cut-ready", StringComparison.Ordinal)
-                && !string.IsNullOrWhiteSpace(probed.ExecutionUnit))
+            if (probed != null)
             {
-                candidate = probed.ExecutionUnit;
+                switch (probed.RecommendedOutcome)
+                {
+                    case "issue-cut-ready":
+                        if (!string.IsNullOrWhiteSpace(probed.ExecutionUnit))
+                        {
+                            candidate = probed.ExecutionUnit;
+                        }
+                        break;
+
+                    case "clarification-required":
+                        // G364: next-slice authoritatively reports a
+                        // clarification gate. Forward to the analyzer's
+                        // existing `clarification-required` lane so the
+                        // host loop surfaces the blocker rather than
+                        // falling through to `true-idle`.
+                        clarificationRequired = true;
+                        break;
+
+                    // Other outcomes (design-needed, skip-next-slice-due-to-wip,
+                    // no-actionable-item) intentionally not handled here:
+                    // diagnostics has no design-needed lane (host-loop-next-action
+                    // owns that lane via its analyzer), and skip-due-to-wip /
+                    // no-actionable-item correctly flow through the existing
+                    // wip-cap / true-idle logic based on GitHub label state.
+                }
             }
         }
 

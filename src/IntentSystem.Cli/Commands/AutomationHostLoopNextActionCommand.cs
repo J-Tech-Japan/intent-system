@@ -290,6 +290,29 @@ internal static class AutomationHostLoopNextActionCommand
         };
 
         var result = HostLoopNextActionAnalyzer.Analyze(input);
+
+        // G364: surface the next-slice candidate execution unit as a
+        // top-level structured field whenever it is relevant to the
+        // emitted action. Today the unit appears inside the recommended
+        // command and the evidence; promoting it to its own field lets
+        // downstream consumers (host loop wake scripts, dashboards) read
+        // it without parsing the recommended_command string.
+        //
+        // The field is populated for two analyzer lanes:
+        //   * publish-next-issue (G275/G318): next-slice surfaced an
+        //     `issue-cut-ready` candidate ready to publish.
+        //   * prepared-packet-commit-ready (G361): durable-state preflight
+        //     surfaced a prepared packet directory whose execution unit
+        //     should be committed before the next host action.
+        // For all other lanes the field is null so consumers can detect
+        // "no specific candidate selected" deterministically.
+        var candidateExecutionUnit =
+            string.Equals(result.Classification, HostLoopNextActionAnalyzer.ClassificationPublishNextIssue, StringComparison.Ordinal)
+                ? input.PublishNextSliceExecutionUnit
+                : string.Equals(result.Classification, HostLoopNextActionAnalyzer.ClassificationPreparedPacketCommitReady, StringComparison.Ordinal)
+                    ? input.PreparedPacketExecutionUnit
+                    : null;
+
         var emitted = new HostLoopNextActionEmittedResult
         {
             Repo = parsed.Repo,
@@ -297,6 +320,7 @@ internal static class AutomationHostLoopNextActionCommand
             Classification = result.Classification,
             MutationAllowed = result.MutationAllowed,
             RecommendedCommand = result.RecommendedCommand,
+            CandidateExecutionUnit = candidateExecutionUnit,
             Evidence = result.Evidence,
             Summary = result.Summary
         };
@@ -630,6 +654,17 @@ internal sealed record HostLoopNextActionEmittedResult
     [JsonPropertyName("classification")] public required string Classification { get; init; }
     [JsonPropertyName("mutation_allowed")] public required bool MutationAllowed { get; init; }
     [JsonPropertyName("recommended_command")] public required string? RecommendedCommand { get; init; }
+
+    /// <summary>
+    /// G364: when the analyzer chose the <c>publish-next-issue</c> or
+    /// <c>prepared-packet-commit-ready</c> lane, the next-slice / prepared
+    /// packet execution unit is also surfaced here as a top-level structured
+    /// field so consumers can read it directly rather than parsing it out of
+    /// <see cref="RecommendedCommand"/>. <c>null</c> for all other
+    /// classifications.
+    /// </summary>
+    [JsonPropertyName("candidate_execution_unit")] public string? CandidateExecutionUnit { get; init; }
+
     [JsonPropertyName("evidence")] public required IReadOnlyList<string> Evidence { get; init; }
     [JsonPropertyName("summary")] public required string Summary { get; init; }
 }
