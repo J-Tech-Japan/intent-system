@@ -254,9 +254,20 @@ public sealed class VersionCommandTests : IDisposable
     /// </summary>
     private static string LocateBuiltCliBinary()
     {
-        // tests/IntentSystem.Cli.Tests/bin/Debug/net10.0/IntentSystem.Cli.Tests.dll
-        // → src/IntentSystem.Cli/bin/Debug/net10.0/IntentSystem.Cli(.dll)
+        // G370: the CI workflow builds Release while the local dev
+        // loop builds Debug. Detect the configuration from the test
+        // assembly's own bin path so the same lookup works in both
+        // (and any future configuration name that lands here).
+        // Layout under `tests/IntentSystem.Cli.Tests/bin/<Config>/<TFM>/`:
+        //   tests/.../IntentSystem.Cli.Tests.dll
+        //   → src/IntentSystem.Cli/bin/<Config>/<TFM>/IntentSystem.Cli(.dll)
         var testDir = Path.GetDirectoryName(typeof(VersionCommandTests).Assembly.Location)!;
+        var configurationDir = Directory.GetParent(testDir);
+        var configurationName = configurationDir?.Parent?.Name == "bin"
+            ? configurationDir!.Name
+            : "Debug";
+        var targetFramework = Path.GetFileName(testDir);
+
         var repoRoot = testDir;
         while (repoRoot is not null
             && !File.Exists(Path.Combine(repoRoot, "IntentSystem.sln")))
@@ -269,7 +280,7 @@ public sealed class VersionCommandTests : IDisposable
         {
             return string.Empty;
         }
-        var cliDir = Path.Combine(repoRoot, "src", "IntentSystem.Cli", "bin", "Debug", "net10.0");
+        var cliDir = Path.Combine(repoRoot, "src", "IntentSystem.Cli", "bin", configurationName, targetFramework);
         // dotnet SDK produces a native host launcher `IntentSystem.Cli`
         // (the project's AssemblyName, not the `ToolCommandName`).
         // Prefer that native exec when present.

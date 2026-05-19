@@ -107,8 +107,14 @@ internal static class WorkerPrReviewPreflightCommand
             return 1;
         }
 
+        // G370: split the source-issue lookup failure mode into two
+        // contracts so the non-actionable exit-code is stable across
+        // CI environments without weakening the fail-closed posture for
+        // genuinely OPEN actionable PRs. See
+        // <see cref="IsStateLevelNonActionable"/>.
         GitHubIssueLookupResult? sourceIssuePayload = null;
-        if (candidate is { } traced)
+        var preLookupNonActionable = IsStateLevelNonActionable(prPayload);
+        if (candidate is { } traced && !preLookupNonActionable)
         {
             IGitHubIssueLookup issueLookup;
             try
@@ -167,6 +173,45 @@ internal static class WorkerPrReviewPreflightCommand
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// G370: returns <c>true</c> when the PR payload alone already
+    /// determines non-actionability (closed, merged, or a fresh draft
+    /// without any review-cycle label). In those cases the source-issue
+    /// lookup is unnecessary -- the analyzer can classify the PR as
+    /// non-actionable from the PR payload -- so we skip the lookup
+    /// rather than letting a transient `gh` failure flip the exit code.
+    /// </summary>
+    private static bool IsStateLevelNonActionable(GitHubPrLookupResult pr)
+    {
+        if (pr.Closed || pr.Merged)
+        {
+            return true;
+        }
+        if (string.Equals(pr.State, "CLOSED", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(pr.State, "MERGED", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (pr.IsDraft && !HasReviewCycleLabel(pr))
+        {
+            return true;
+        }
+        return false;
+    }
+
+    private static bool HasReviewCycleLabel(GitHubPrLookupResult pr)
+    {
+        foreach (var label in pr.Labels)
+        {
+            if (label.Name is { Length: > 0 } name
+                && name.StartsWith("intent-pr-", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void WriteText(TextWriter writer, WorkerPrReviewPreflightResult result)

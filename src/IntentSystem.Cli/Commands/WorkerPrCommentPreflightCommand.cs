@@ -148,8 +148,25 @@ internal static class WorkerPrCommentPreflightCommand
             return 1;
         }
 
+        // G370: split the source-issue lookup failure mode into two
+        // contracts so the non-actionable exit-code is stable across
+        // CI environments without weakening the fail-closed posture for
+        // genuinely OPEN actionable PRs:
+        //
+        //   * Closed / fresh-draft PRs are already non-actionable from
+        //     the PR payload alone. Skip the source-issue lookup
+        //     entirely; the analyzer accepts a null `sourceIssuePayload`
+        //     for those paths. This way a `gh` permission shortfall
+        //     (token without `issues: read`), rate limit, or network
+        //     blip cannot flip a deterministic non-actionable PR to
+        //     exit 1 on a fresh runner.
+        //
+        //   * For any other PR we still attempt the lookup and
+        //     fail-closed on transport failures; the existing
+        //     "transport-failure" test pins that lane.
         GitHubIssueLookupResult? sourceIssuePayload = null;
-        if (candidate is { } traced)
+        var preLookupNonActionable = IsStateLevelNonActionable(prPayload);
+        if (candidate is { } traced && !preLookupNonActionable)
         {
             IGitHubIssueLookup issueLookup;
             try
@@ -209,6 +226,49 @@ internal static class WorkerPrCommentPreflightCommand
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// G370: returns <c>true</c> when the PR payload alone already
+    /// determines non-actionability (closed, merged, or a fresh draft
+    /// without any review-cycle label). In those cases the source-issue
+    /// lookup is unnecessary -- the analyzer can classify the PR as
+    /// non-actionable from the PR payload -- so we skip the lookup
+    /// rather than letting a transient `gh` failure flip the exit code.
+    /// </summary>
+    private static bool IsStateLevelNonActionable(GitHubPrLookupResult pr)
+    {
+        if (pr.Closed || pr.Merged)
+        {
+            return true;
+        }
+        if (string.Equals(pr.State, "CLOSED", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(pr.State, "MERGED", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (pr.IsDraft && !HasReviewCycleLabel(pr))
+        {
+            return true;
+        }
+        return false;
+    }
+
+    private static bool HasReviewCycleLabel(GitHubPrLookupResult pr)
+    {
+        foreach (var label in pr.Labels)
+        {
+            if (label.Name is { Length: > 0 } name
+                && (name.StartsWith("intent-pr-", StringComparison.Ordinal)
+                    || string.Equals(name, "intent-target", StringComparison.Ordinal)))
+            {
+                if (name.StartsWith("intent-pr-", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static void WriteText(TextWriter writer, WorkerPrCommentPreflightResult result)
