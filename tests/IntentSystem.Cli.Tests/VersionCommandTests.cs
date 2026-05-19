@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using IntentSystem.Cli.Commands;
+using IntentSystem.Cli.Infrastructure;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -9,11 +10,20 @@ public sealed class VersionCommandTests : IDisposable
     public VersionCommandTests()
     {
         VersionCommand.OverrideVersionString = null;
+        VersionCommand.OverridePrivatePreviewMetadata = null;
+        // G367: the binary embedded into this test process might carry
+        // AssemblyMetadata("PrivatePreviewChannel") when the CI pack
+        // workflow built it. Tests that pin the single-line `--version`
+        // contract must opt out so a CI run does not accidentally trip
+        // them by appending the metadata trailer.
+        VersionCommand.SuppressPrivatePreviewTrailer = true;
     }
 
     public void Dispose()
     {
         VersionCommand.OverrideVersionString = null;
+        VersionCommand.OverridePrivatePreviewMetadata = null;
+        VersionCommand.SuppressPrivatePreviewTrailer = false;
     }
 
     [Theory]
@@ -183,6 +193,58 @@ public sealed class VersionCommandTests : IDisposable
                 Directory.Delete(nonHostDir, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public void Execute_WithPrivatePreviewMetadataOverride_AppendsTrailerLineAfterVersion()
+    {
+        // G367: a CI-built private-preview package surfaces an extra
+        // single-line trailer below the version banner so operators
+        // can grep `channel=private-preview` and `expires=` without
+        // unpacking the .nupkg or touching host state.
+        VersionCommand.SuppressPrivatePreviewTrailer = false;
+        VersionCommand.OverridePrivatePreviewMetadata = new PrivatePreviewMetadata
+        {
+            Channel = PrivatePreviewMetadata.ChannelPrivatePreview,
+            BuildTimestamp = new DateTimeOffset(2026, 5, 19, 12, 34, 56, TimeSpan.Zero),
+            ExpiresAt = new DateTimeOffset(2026, 6, 2, 12, 34, 56, TimeSpan.Zero),
+            SourceCommit = "f6cbf65",
+        };
+        using var writer = new StringWriter();
+
+        var exitCode = VersionCommand.Execute(writer);
+
+        Assert.Equal(0, exitCode);
+        var lines = writer.ToString()
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.StartsWith("intent-cli ", lines[0], StringComparison.Ordinal);
+        Assert.Equal(
+            "channel=private-preview built=2026-05-19T12:34:56Z expires=2026-06-02T12:34:56Z commit=f6cbf65",
+            lines[1]);
+    }
+
+    [Fact]
+    public void Execute_WithoutPrivatePreviewMetadata_OmitsTrailer()
+    {
+        // G367: source builds (no AssemblyMetadata("PrivatePreviewChannel"))
+        // must NOT emit the trailer so the `--version` contract stays
+        // single-line for ordinary contributors.
+        VersionCommand.SuppressPrivatePreviewTrailer = false;
+        VersionCommand.OverridePrivatePreviewMetadata = null;
+        using var writer = new StringWriter();
+
+        var exitCode = VersionCommand.Execute(writer);
+
+        Assert.Equal(0, exitCode);
+        var lines = writer.ToString()
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        // The running test assembly has no private-preview metadata
+        // baked in unless the CI workflow set the MSBuild properties,
+        // which the suppression seam above accounts for. Without the
+        // override the trailer must be absent.
+        Assert.Single(lines);
+        Assert.StartsWith("intent-cli ", lines[0], StringComparison.Ordinal);
     }
 
     /// <summary>

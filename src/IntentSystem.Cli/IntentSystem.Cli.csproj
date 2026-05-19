@@ -56,6 +56,31 @@
     </PropertyGroup>
   </Target>
 
+  <!--
+    G367: when the CI private-preview pack workflow runs on a merge to
+    main it sets four MSBuild properties so the produced .nupkg
+    embeds machine-readable preview metadata as
+    AssemblyMetadata("PrivatePreview...") attributes. A normal local
+    `dotnet build` / `dotnet pack` leaves the properties blank, which
+    skips this ItemGroup entirely and produces a source build with no
+    expiry contract, matching the issue acceptance that source builds
+    remain unrestricted. CI passes:
+      PrivatePreviewChannel=private-preview
+      PrivatePreviewBuildTimestamp=ISO-8601 UTC build timestamp
+      PrivatePreviewExpiresAt=ISO-8601 UTC build timestamp plus 14 days
+      PrivatePreviewSourceCommit=full git SHA
+    The runtime side reads the resulting attributes in
+    IntentSystem.Cli.Infrastructure.PrivatePreviewMetadata so
+    `intent-cli version` can surface the channel and expiry to the
+    private tester without depending on host state.
+  -->
+  <ItemGroup Condition="'$(PrivatePreviewChannel)' != ''">
+    <AssemblyMetadata Include="PrivatePreviewChannel" Value="$(PrivatePreviewChannel)" />
+    <AssemblyMetadata Include="PrivatePreviewBuildTimestamp" Value="$(PrivatePreviewBuildTimestamp)" />
+    <AssemblyMetadata Include="PrivatePreviewExpiresAt" Value="$(PrivatePreviewExpiresAt)" />
+    <AssemblyMetadata Include="PrivatePreviewSourceCommit" Value="$(PrivatePreviewSourceCommit)" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\IntentSystem.Clarify\IntentSystem.Clarify.csproj" />
     <ProjectReference Include="..\IntentSystem.ConceptIntake\IntentSystem.ConceptIntake.csproj" />
