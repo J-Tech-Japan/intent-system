@@ -100,37 +100,55 @@ internal static class WorkerPrCommentPreflightCommand
             return 1;
         }
 
-        IGitHubPrCommentsLookup commentsLookup;
-        try
-        {
-            commentsLookup = CommentsLookupFactory?.Invoke() ?? new GhCliGitHubPrCommentsLookup();
-        }
-        catch (Exception exception) when (
-            exception is InvalidOperationException
-            or IOException)
-        {
-            writer.WriteLine(
-                $"failed to initialize GitHub PR comments lookup: {exception.Message}");
-            return 1;
-        }
+        // G370: compute the state-level non-actionable verdict BEFORE
+        // any further GitHub lookup. The analyzer's step-1 fast path
+        // for closed-not-merged / fresh-draft PRs is purely a function
+        // of the PR payload, so the command must short-circuit here to
+        // avoid letting a transient `gh pr view --comments` transport
+        // failure (rate limit, permission shortfall, network blip)
+        // flip a deterministic non-actionable PR to exit 1. The
+        // analyzer accepts an empty comments payload for that path; we
+        // build one inline instead of hitting GitHub again.
+        var preLookupNonActionable = IsStateLevelNonActionable(prPayload);
 
         GitHubPrCommentsLookupResult commentsPayload;
-        try
+        if (preLookupNonActionable)
         {
-            commentsPayload = commentsLookup.Lookup(repo!, prNumber);
+            commentsPayload = new GitHubPrCommentsLookupResult();
         }
-        catch (Exception exception)
+        else
         {
-            writer.WriteLine(
-                $"failed to look up GitHub PR comments for {repo}#{prNumber}: {exception.Message}");
-            return 1;
-        }
+            IGitHubPrCommentsLookup commentsLookup;
+            try
+            {
+                commentsLookup = CommentsLookupFactory?.Invoke() ?? new GhCliGitHubPrCommentsLookup();
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException
+                or IOException)
+            {
+                writer.WriteLine(
+                    $"failed to initialize GitHub PR comments lookup: {exception.Message}");
+                return 1;
+            }
 
-        if (commentsPayload is null)
-        {
-            writer.WriteLine(
-                $"GitHub PR comments lookup returned no payload for {repo}#{prNumber}.");
-            return 1;
+            try
+            {
+                commentsPayload = commentsLookup.Lookup(repo!, prNumber);
+            }
+            catch (Exception exception)
+            {
+                writer.WriteLine(
+                    $"failed to look up GitHub PR comments for {repo}#{prNumber}: {exception.Message}");
+                return 1;
+            }
+
+            if (commentsPayload is null)
+            {
+                writer.WriteLine(
+                    $"GitHub PR comments lookup returned no payload for {repo}#{prNumber}.");
+                return 1;
+            }
         }
 
         SourceIssueCandidate? candidate;
@@ -148,24 +166,12 @@ internal static class WorkerPrCommentPreflightCommand
             return 1;
         }
 
-        // G370: split the source-issue lookup failure mode into two
-        // contracts so the non-actionable exit-code is stable across
-        // CI environments without weakening the fail-closed posture for
-        // genuinely OPEN actionable PRs:
-        //
-        //   * Closed / fresh-draft PRs are already non-actionable from
-        //     the PR payload alone. Skip the source-issue lookup
-        //     entirely; the analyzer accepts a null `sourceIssuePayload`
-        //     for those paths. This way a `gh` permission shortfall
-        //     (token without `issues: read`), rate limit, or network
-        //     blip cannot flip a deterministic non-actionable PR to
-        //     exit 1 on a fresh runner.
-        //
-        //   * For any other PR we still attempt the lookup and
-        //     fail-closed on transport failures; the existing
-        //     "transport-failure" test pins that lane.
+        // G370: same state-level short-circuit applies to the source-
+        // issue lookup. The analyzer can classify a closed/draft PR as
+        // non-actionable with `sourceIssuePayload = null`; skipping the
+        // lookup here ensures a transient `gh issue view` failure
+        // cannot flip the exit code either.
         GitHubIssueLookupResult? sourceIssuePayload = null;
-        var preLookupNonActionable = IsStateLevelNonActionable(prPayload);
         if (candidate is { } traced && !preLookupNonActionable)
         {
             IGitHubIssueLookup issueLookup;
