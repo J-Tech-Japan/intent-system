@@ -43,6 +43,41 @@ Equivalent `dnx` path:
 (cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" intent-cli project status)
 ```
 
+## Private-preview install (G367)
+
+The `private-preview-pack` GitHub Actions workflow runs on every merge to
+`main` and uploads an `intent-cli` `.nupkg` plus a `preview-metadata.json`
+descriptor as a workflow artifact named
+`intent-cli-private-preview-<version>`. The package version pattern is
+`0.2.0-preview.<run_number>.<run_attempt>`, so every CI run produces a
+distinct version.
+
+Install or update from a downloaded artifact:
+
+```bash
+# 1. Download and unzip the workflow artifact from the GitHub Actions
+#    run page, e.g. into ./private-preview-package.
+# 2. Install (or update) the .NET tool from that local folder:
+dotnet tool install --global --add-source ./private-preview-package \
+  --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
+# Or for an upgrade-in-place:
+dotnet tool update --global --add-source ./private-preview-package \
+  --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
+```
+
+The installed binary exposes the preview metadata via `intent-cli --version`:
+
+```text
+intent-cli 0.2.0-preview.<run_number>.<run_attempt>-<short-sha>-G<unit>
+channel=private-preview built=<iso-utc> expires=<iso-utc> commit=<full-sha>
+```
+
+CI-built private-preview packages expire 14 days after their build
+timestamp; refresh the install from a newer workflow run when the
+`expires=` line moves into the past. Local source builds
+(`dotnet pack` without the CI properties) carry no expiry trailer and
+remain unrestricted.
+
 ## CLI command roles
 
 The accepted production automation boundary lives in the parent host-side

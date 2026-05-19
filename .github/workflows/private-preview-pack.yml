@@ -1,0 +1,136 @@
+# G367: build a private-preview intent-cli .nupkg on every merge to
+# main and upload it as a workflow artifact. Private testers download
+# the artifact and install the tool from a local folder source rather
+# than from public NuGet -- see README.md "Private-preview install" for
+# the consumption steps. Three key properties of this workflow:
+#
+#   1. The package version changes on every run so a tester can tell
+#      which CI build they installed. The patch component is derived
+#      from `github.run_number` plus `github.run_attempt` so two
+#      different workflow runs of the same commit also produce
+#      distinct versions.
+#
+#   2. The CI build embeds machine-readable preview metadata
+#      (channel / build timestamp / expires-at / source commit) into
+#      the produced assembly via MSBuild properties consumed by
+#      `src/IntentSystem.Cli/IntentSystem.Cli.csproj`. The pack step
+#      compiles the CLI fresh with those properties active (no
+#      `--no-build`) so the conditional `AssemblyMetadata` ItemGroup is
+#      actually materialized into the packaged DLL.
+#
+#   3. A deterministic verifier (`tools/PreviewArtifactVerify`) opens
+#      the produced .nupkg, walks the embedded IntentSystem.Cli.dll's
+#      AssemblyMetadata custom attributes, and fails the workflow if
+#      the preview pack is missing any `PrivatePreview*` entry OR if a
+#      source-only pack (same source tree, no preview properties)
+#      accidentally carries them. This makes the build-time wiring
+#      regression-proof without depending on a real GitHub Actions run.
+name: private-preview-pack
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-preview-pack-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: preview
+
+      - name: Compute private-preview metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_VERSION="0.2.0"
+          BUILD_NUMBER="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          PACKAGE_VERSION="${BASE_VERSION}-preview.${BUILD_NUMBER}"
+          BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          EXPIRES_AT="$(date -u -d '+14 days' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          {
+            echo "package_version=${PACKAGE_VERSION}"
+            echo "build_timestamp=${BUILD_TIMESTAMP}"
+            echo "expires_at=${EXPIRES_AT}"
+            echo "short_sha=${SHORT_SHA}"
+          } | tee -a "${GITHUB_OUTPUT}"
+
+      - name: Restore
+        run: dotnet restore IntentSystem.sln
+
+      - name: Build (source contract, no preview properties)
+        run: dotnet build IntentSystem.sln --configuration Release --no-restore
+
+      - name: Test (source contract)
+        run: dotnet test IntentSystem.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Pack private-preview .nupkg (recompiles with preview properties active)
+        run: |
+          dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
+            --configuration Release \
+            -o .artifacts/private-preview \
+            -p:Version=${{ steps.meta.outputs.package_version }} \
+            -p:PrivatePreviewChannel=private-preview \
+            -p:PrivatePreviewBuildTimestamp=${{ steps.meta.outputs.build_timestamp }} \
+            -p:PrivatePreviewExpiresAt=${{ steps.meta.outputs.expires_at }} \
+            -p:PrivatePreviewSourceCommit=${{ github.sha }}
+
+      - name: Pack source baseline (no preview properties)
+        run: |
+          dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
+            --configuration Release \
+            -o .artifacts/source-baseline
+
+      - name: Verify preview pack embeds AssemblyMetadata
+        run: |
+          PREVIEW_NUPKG="$(ls .artifacts/private-preview/intent-cli.*.nupkg | head -n 1)"
+          SOURCE_NUPKG="$(ls .artifacts/source-baseline/intent-cli.*.nupkg | head -n 1)"
+          echo "preview-nupkg=${PREVIEW_NUPKG}"
+          echo "source-nupkg=${SOURCE_NUPKG}"
+          dotnet run --project tools/PreviewArtifactVerify --configuration Release -- \
+            "${PREVIEW_NUPKG}" --expect-preview
+          dotnet run --project tools/PreviewArtifactVerify --configuration Release -- \
+            "${SOURCE_NUPKG}" --expect-no-preview
+
+      - name: Write artifact metadata
+        run: |
+          mkdir -p .artifacts/private-preview
+          cat > .artifacts/private-preview/preview-metadata.json <<EOF
+          {
+            "channel": "private-preview",
+            "package_version": "${{ steps.meta.outputs.package_version }}",
+            "build_timestamp": "${{ steps.meta.outputs.build_timestamp }}",
+            "expires_at": "${{ steps.meta.outputs.expires_at }}",
+            "source_commit": "${{ github.sha }}",
+            "source_short_sha": "${{ steps.meta.outputs.short_sha }}",
+            "run_number": "${{ github.run_number }}",
+            "run_attempt": "${{ github.run_attempt }}"
+          }
+          EOF
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: intent-cli-private-preview-${{ steps.meta.outputs.package_version }}
+          path: .artifacts/private-preview/**
+          retention-days: 14
+          if-no-files-found: error

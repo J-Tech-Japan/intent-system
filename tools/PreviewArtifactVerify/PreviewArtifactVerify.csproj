@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    G367: deterministic verifier the private-preview-pack workflow runs
+    after packing to prove the produced .nupkg compiled DLL carries (or
+    omits) the four PrivatePreview AssemblyMetadata entries. Lives
+    outside the main solution so adding or removing the verifier never
+    touches the shipping product surface. See Program.cs for the CLI
+    contract.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>IntentSystem.Tools.PreviewArtifactVerify</RootNamespace>
+    <AssemblyName>PreviewArtifactVerify</AssemblyName>
+  </PropertyGroup>
+
+</Project>

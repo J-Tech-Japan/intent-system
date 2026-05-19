@@ -1,4 +1,5 @@
 using System.Reflection;
+using IntentSystem.Cli.Infrastructure;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -26,6 +27,25 @@ internal static class VersionCommand
     public static string? OverrideVersionString { get; set; }
 
     /// <summary>
+    /// G367 test seam: override the resolved
+    /// <see cref="PrivatePreviewMetadata"/> for tests so they can
+    /// assert the version output contains (or omits) the optional
+    /// private-preview trailer without rebuilding the assembly.
+    /// Setting this to <c>null</c> falls back to reading the running
+    /// assembly's <see cref="AssemblyMetadataAttribute"/> entries.
+    /// </summary>
+    public static PrivatePreviewMetadata? OverridePrivatePreviewMetadata { get; set; }
+
+    /// <summary>
+    /// G367 test seam: when <c>true</c>, <see cref="Execute"/> skips
+    /// reading <see cref="PrivatePreviewMetadata.Read"/> against the
+    /// real assembly so existing tests that pinned the single-line
+    /// output stay deterministic regardless of whether the build
+    /// embedded preview metadata.
+    /// </summary>
+    public static bool SuppressPrivatePreviewTrailer { get; set; }
+
+    /// <summary>
     /// Returns <c>true</c> when <paramref name="args"/> request the
     /// version output (the recognized shapes are <c>--version</c>,
     /// <c>-v</c>, or <c>version</c> as the first or only token).
@@ -49,6 +69,27 @@ internal static class VersionCommand
         var versionString = OverrideVersionString
             ?? BuildVersionString(typeof(VersionCommand).Assembly);
         writer.WriteLine(versionString);
+
+        // G367: when the CI workflow built this assembly with the
+        // private-preview metadata properties, append a single
+        // additional line so operators can tell a CI preview artifact
+        // from a source build without scraping the package itself.
+        // Local builds (no AssemblyMetadata("PrivatePreviewChannel"))
+        // are silent here, matching the issue acceptance that source
+        // builds carry no expiry contract. The
+        // <see cref="SuppressPrivatePreviewTrailer"/> seam keeps
+        // existing single-line `--version` tests deterministic across
+        // CI/source environments.
+        if (OverrideVersionString is null && !SuppressPrivatePreviewTrailer)
+        {
+            var preview = OverridePrivatePreviewMetadata
+                ?? PrivatePreviewMetadata.Read(typeof(VersionCommand).Assembly);
+            if (preview is not null)
+            {
+                writer.WriteLine(preview.ToVersionTrailer());
+            }
+        }
+
         return 0;
     }
 
