@@ -23,6 +23,20 @@ internal static class Program
                 return VersionCommand.Execute(Console.Out);
             }
 
+            // G368: CI-packed private-preview artifacts expire 14 days
+            // after their build timestamp (G367 metadata). Once the
+            // expiry passes, fail closed BEFORE any workflow command or
+            // host-state lookup so operators see a single, clear
+            // "download a newer artifact" message regardless of the
+            // current working directory. `--version` is intentionally
+            // exempt (handled above) so the operator can still inspect
+            // the embedded build/expiry trailer. Source builds
+            // (no PrivatePreview AssemblyMetadata) pass through.
+            if (PrivatePreviewExpiryGate.Check(Console.Out) == PrivatePreviewExpiryDecision.Expired)
+            {
+                return PrivatePreviewExpiryGate.ExpiredExitCode;
+            }
+
             if (DirectRunDetachedCaptureCommand.TryExecute(args, out var directRunDetachedCaptureExitCode))
             {
                 return directRunDetachedCaptureExitCode;
