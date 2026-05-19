@@ -1,8 +1,8 @@
 # G367: build a private-preview intent-cli .nupkg on every merge to
 # main and upload it as a workflow artifact. Private testers download
 # the artifact and install the tool from a local folder source rather
-# than from public NuGet — see README.md "Private-preview install" for
-# the consumption steps. Two key properties of this workflow:
+# than from public NuGet -- see README.md "Private-preview install" for
+# the consumption steps. Three key properties of this workflow:
 #
 #   1. The package version changes on every run so a tester can tell
 #      which CI build they installed. The patch component is derived
@@ -13,10 +13,18 @@
 #   2. The CI build embeds machine-readable preview metadata
 #      (channel / build timestamp / expires-at / source commit) into
 #      the produced assembly via MSBuild properties consumed by
-#      `src/IntentSystem.Cli/IntentSystem.Cli.csproj`. Local source
-#      builds that do not set these properties produce a package with
-#      no expiry contract — matching the issue acceptance that
-#      contributor builds remain unrestricted.
+#      `src/IntentSystem.Cli/IntentSystem.Cli.csproj`. The pack step
+#      compiles the CLI fresh with those properties active (no
+#      `--no-build`) so the conditional `AssemblyMetadata` ItemGroup is
+#      actually materialized into the packaged DLL.
+#
+#   3. A deterministic verifier (`tools/PreviewArtifactVerify`) opens
+#      the produced .nupkg, walks the embedded IntentSystem.Cli.dll's
+#      AssemblyMetadata custom attributes, and fails the workflow if
+#      the preview pack is missing any `PrivatePreview*` entry OR if a
+#      source-only pack (same source tree, no preview properties)
+#      accidentally carries them. This makes the build-time wiring
+#      regression-proof without depending on a real GitHub Actions run.
 name: private-preview-pack
 
 on:
@@ -35,7 +43,7 @@ concurrency:
 jobs:
   pack:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,23 +77,39 @@ jobs:
       - name: Restore
         run: dotnet restore IntentSystem.sln
 
-      - name: Build
+      - name: Build (source contract, no preview properties)
         run: dotnet build IntentSystem.sln --configuration Release --no-restore
 
-      - name: Test
+      - name: Test (source contract)
         run: dotnet test IntentSystem.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
 
-      - name: Pack private-preview .nupkg
+      - name: Pack private-preview .nupkg (recompiles with preview properties active)
         run: |
           dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
             --configuration Release \
-            --no-build \
             -o .artifacts/private-preview \
             -p:Version=${{ steps.meta.outputs.package_version }} \
             -p:PrivatePreviewChannel=private-preview \
             -p:PrivatePreviewBuildTimestamp=${{ steps.meta.outputs.build_timestamp }} \
             -p:PrivatePreviewExpiresAt=${{ steps.meta.outputs.expires_at }} \
             -p:PrivatePreviewSourceCommit=${{ github.sha }}
+
+      - name: Pack source baseline (no preview properties)
+        run: |
+          dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
+            --configuration Release \
+            -o .artifacts/source-baseline
+
+      - name: Verify preview pack embeds AssemblyMetadata
+        run: |
+          PREVIEW_NUPKG="$(ls .artifacts/private-preview/intent-cli.*.nupkg | head -n 1)"
+          SOURCE_NUPKG="$(ls .artifacts/source-baseline/intent-cli.*.nupkg | head -n 1)"
+          echo "preview-nupkg=${PREVIEW_NUPKG}"
+          echo "source-nupkg=${SOURCE_NUPKG}"
+          dotnet run --project tools/PreviewArtifactVerify --configuration Release -- \
+            "${PREVIEW_NUPKG}" --expect-preview
+          dotnet run --project tools/PreviewArtifactVerify --configuration Release -- \
+            "${SOURCE_NUPKG}" --expect-no-preview
 
       - name: Write artifact metadata
         run: |
