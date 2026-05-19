@@ -203,10 +203,21 @@ internal static class WorkerPrReviewPreflightCommand
 
     private static bool HasReviewCycleLabel(GitHubPrLookupResult pr)
     {
+        // Match the analyzer's `HasAnyReviewLabel` set exactly so the
+        // command-layer short-circuit cannot diverge from the
+        // classifier's draft gate. Includes `intent-pr-reviewing`
+        // because the review-side analyzer treats it as an active
+        // review-cycle marker; the comment-side analyzer omits it.
         foreach (var label in pr.Labels)
         {
-            if (label.Name is { Length: > 0 } name
-                && name.StartsWith("intent-pr-", StringComparison.Ordinal))
+            if (label.Name is not { Length: > 0 } name)
+            {
+                continue;
+            }
+            if (string.Equals(name, WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing, StringComparison.Ordinal)
+                || string.Equals(name, WorkerPrReviewPreflightConstants.Labels.IntentPrRequestUpdate, StringComparison.Ordinal)
+                || string.Equals(name, WorkerPrReviewPreflightConstants.Labels.IntentPrUpdateInProgress, StringComparison.Ordinal)
+                || string.Equals(name, WorkerPrReviewPreflightConstants.Labels.IntentPrApproved, StringComparison.Ordinal))
             {
                 return true;
             }
