@@ -741,6 +741,110 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Contains("--pr-draft must be 'true' or 'false'", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // ── G376 draft-aware review decision ────────────────────────────────
+
+    [Fact]
+    public void Execute_PrDraftTrue_DraftReviewReady_ClassifiesDraftReadyToPromote_AndRecommendsMarkReady()
+    {
+        // Zero4Racer PR #203 shape: draft PR that is otherwise review-ready
+        // (closeout ready, guide ready, base main, diff passed, no findings)
+        // and not operator-intended. The host loop verifies readiness and
+        // passes --draft-review-ready; the diagnostic must NOT release the
+        // lease — it should recommend marking the PR ready and continuing.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(203, "draft but ready", "https://github.com/owner/repo/pull/203",
+                    "Closes #199", new[] { "intent-target" })
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(199, "issue", "https://github.com/owner/repo/issues/199",
+                    new[] { "intent-target" })
+            ]
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "owner/repo", "--pr-draft", "true", "--draft-review-ready", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("draft-ready-to-promote", result.Classification);
+        Assert.NotNull(result.RecommendedNextCommand);
+        Assert.Contains("gh pr ready 203", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.DoesNotContain("review-release", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PrDraftTrue_FindingsPresent_ClassifiesDraftRequestUpdate()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(203, "draft with findings", "https://github.com/owner/repo/pull/203",
+                    "Closes #199", new[] { "intent-target" })
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(199, "issue", "https://github.com/owner/repo/issues/199",
+                    new[] { "intent-target" })
+            ]
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "owner/repo", "--pr-draft", "true", "--draft-findings-present", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("draft-request-update", result.Classification);
+        Assert.NotNull(result.RecommendedNextCommand);
+        Assert.Contains("request-update", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PrDraftTrue_OperatorIntended_StaysDraftMergeBlocked_EvenWhenReviewReady()
+    {
+        // Fail-closed: an explicitly operator-intended draft is never
+        // auto-promoted, even when review readiness is also asserted.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(203, "operator-held draft", "https://github.com/owner/repo/pull/203",
+                    "Closes #199", new[] { "intent-target" })
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(199, "issue", "https://github.com/owner/repo/issues/199",
+                    new[] { "intent-target" })
+            ]
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "owner/repo", "--pr-draft", "true", "--draft-review-ready", "--operator-intended-draft", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("draft-merge-blocked", result.Classification);
+        Assert.NotNull(result.RecommendedNextCommand);
+        Assert.Contains("review-release", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Contains("operator-intended", result.Summary, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Execute_NextSliceProbe_AutoPopulatesCandidate_WhenDomainFlagOrConfigPresent()
     {

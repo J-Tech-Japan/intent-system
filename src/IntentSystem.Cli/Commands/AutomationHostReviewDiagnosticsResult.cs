@@ -175,6 +175,27 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     public const string DraftMergeBlocked = "draft-merge-blocked";
 
     /// <summary>
+    /// G376: terminal class returned when a selected review PR is draft but
+    /// the host positively verified it is otherwise review-ready (closeout
+    /// ready, guide ready, base on policy, diff check passed, no findings)
+    /// and the draft state is NOT operator-intended. Rather than releasing
+    /// the review lease with no outcome (the pre-G376 behavior), the host
+    /// loop should mark the PR ready for review (`gh pr ready`) and continue
+    /// approval/merge/closeout. This keeps a review-ready draft from looping
+    /// in repeated lease-release.
+    /// </summary>
+    public const string DraftReadyToPromote = "draft-ready-to-promote";
+
+    /// <summary>
+    /// G376: terminal class returned when a draft review PR has
+    /// implementation findings — it should be marked ready only after the
+    /// worker addresses them. The host loop requests a worker update with a
+    /// clear, implementation-actionable reason instead of leaving the PR in
+    /// repeated lease-release.
+    /// </summary>
+    public const string DraftRequestUpdate = "draft-request-update";
+
+    /// <summary>
     /// G356: terminal class returned when one or more queue items are not
     /// marked Completed even though their linked GitHub PR is already
     /// merged. The host loop should run

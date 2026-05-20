@@ -31,7 +31,10 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         bool? prDraft = null,
         int publishRecoveryHighConfidenceRepairsAvailable = 0,
         bool workspaceSafeDirty = false,
-        int closeoutDriftRepairsAvailable = 0)
+        int closeoutDriftRepairsAvailable = 0,
+        bool draftReviewReady = false,
+        bool draftFindingsPresent = false,
+        bool operatorIntendedDraft = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(openPrs);
@@ -144,6 +147,73 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 ?? stuckReviewingPr
                 ?? FindFirstDraftCandidate(openPrs);
 
+            // G376: make the draft decision draft-aware. The pre-G376
+            // behavior released the review lease for ANY draft PR
+            // (draft-merge-blocked → review-release), which left a
+            // review-ready draft looping with no outcome. Now consult the
+            // pure classifier with the readiness signals the host loop
+            // verified. When neither readiness nor operator-intent signals
+            // are supplied (the backward-compatible default), the decision
+            // is `blocked-needs-verification`, which preserves the original
+            // draft-merge-blocked / review-release behavior.
+            var draftDecision = HostReviewDraftDecisionClassifier.Classify(
+                isDraft: true,
+                reviewReady: draftReviewReady,
+                hasFindings: draftFindingsPresent,
+                operatorIntendedDraft: operatorIntendedDraft);
+            var draftNumberText = draftPr?.TargetNumber is { } draftNum
+                ? $"#{draftNum}"
+                : "(unmatched)";
+
+            if (draftDecision.IsPromoteReady)
+            {
+                details.Add(new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = AutomationHostReviewDiagnosticsClassifications.DraftReadyToPromote,
+                    TargetKind = draftPr?.TargetKind ?? GhCliGitHubLabelMutator.Kinds.Pr,
+                    TargetNumber = draftPr?.TargetNumber,
+                    TargetUrl = draftPr?.TargetUrl,
+                    Description = $"PR {draftNumberText} is draft but otherwise review-ready with no findings and not operator-intended (G376). {draftDecision.Reason}",
+                });
+                return Build(
+                    repo,
+                    AutomationHostReviewDiagnosticsClassifications.DraftReadyToPromote,
+                    $"PR {draftNumberText} is draft but otherwise review-ready (G376). Mark it ready for review, then continue approval/merge/closeout instead of releasing the review lease.",
+                    recommendedNextCommand: draftPr?.TargetNumber is { } promoteNumber
+                        ? $"gh pr ready {promoteNumber} --repo {repo} && intent-cli automation host-review-preflight --repo {repo} --format json"
+                        : null,
+                    clarification: null,
+                    details,
+                    warnings);
+            }
+
+            if (draftDecision.IsRequestUpdate)
+            {
+                details.Add(new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = AutomationHostReviewDiagnosticsClassifications.DraftRequestUpdate,
+                    TargetKind = draftPr?.TargetKind ?? GhCliGitHubLabelMutator.Kinds.Pr,
+                    TargetNumber = draftPr?.TargetNumber,
+                    TargetUrl = draftPr?.TargetUrl,
+                    Description = $"PR {draftNumberText} is draft and has implementation findings (G376). {draftDecision.Reason}",
+                });
+                return Build(
+                    repo,
+                    AutomationHostReviewDiagnosticsClassifications.DraftRequestUpdate,
+                    $"PR {draftNumberText} is draft with implementation findings (G376). Request a worker update with a clear actionable reason and have the worker mark the PR ready once addressed.",
+                    recommendedNextCommand: draftPr?.TargetNumber is { } requestNumber
+                        ? $"intent-cli automation pr-transition --transition request-update --repo {repo} --pr {requestNumber} --write --format json"
+                        : null,
+                    clarification: null,
+                    details,
+                    warnings);
+            }
+
+            // Operator-intended draft, or readiness not verified: stay
+            // fail-closed with the original draft-merge-blocked behavior.
+            var blockedReason = operatorIntendedDraft
+                ? "operator-intended"
+                : "review-readiness not verified";
             details.Add(new AutomationHostReviewDiagnosticsDetail
             {
                 Kind = AutomationHostReviewDiagnosticsClassifications.DraftMergeBlocked,
@@ -151,15 +221,15 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
                 TargetNumber = draftPr?.TargetNumber,
                 TargetUrl = draftPr?.TargetUrl,
                 Description = draftPr is null
-                    ? $"--pr-draft true was passed; no open PR could be matched to a target. Stop the host loop until the operator names the draft PR."
-                    : $"PR #{draftPr.TargetNumber} is still draft; host approval/merge/closeout must NOT proceed (G297). Drop the review lease via pr-transition --transition review-release and surface the gap.",
+                    ? $"--pr-draft true was passed ({blockedReason}); no open PR could be matched to a target. Stop the host loop until the operator names the draft PR."
+                    : $"PR #{draftPr.TargetNumber} is still draft ({blockedReason}); host approval/merge/closeout must NOT proceed (G297/G376). Drop the review lease via pr-transition --transition review-release and surface the gap.",
             });
             return Build(
                 repo,
                 AutomationHostReviewDiagnosticsClassifications.DraftMergeBlocked,
                 draftPr is null
-                    ? "Selected review PR is reported as draft (G297). Host approval/merge/closeout cannot proceed; release the review lease and surface the gap to the implementer/operator."
-                    : $"PR #{draftPr.TargetNumber} is still draft (G297). Host approval/merge/closeout cannot proceed; release the review lease and surface the gap to the implementer/operator.",
+                    ? $"Selected review PR is reported as draft ({blockedReason}; G297/G376). Host approval/merge/closeout cannot proceed; release the review lease and surface the gap to the implementer/operator."
+                    : $"PR #{draftPr.TargetNumber} is still draft ({blockedReason}; G297/G376). Host approval/merge/closeout cannot proceed; release the review lease and surface the gap to the implementer/operator.",
                 recommendedNextCommand: draftPr?.TargetNumber is { } number
                     ? $"intent-cli automation pr-transition --transition review-release --repo {repo} --pr {number} --write --format json"
                     : null,
