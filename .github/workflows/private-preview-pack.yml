@@ -235,7 +235,7 @@ jobs:
 
           \`\`\`text
           intent-cli ${PACKAGE_VERSION}-${SHORT_SHA}-G<unit>
-          channel=private-preview built=${BUILD_TIMESTAMP} expires=${EXPIRES_AT} commit=${SHORT_SHA}
+          channel=private-preview built=${BUILD_TIMESTAMP} expires=${EXPIRES_AT} commit=${SOURCE_COMMIT}
           \`\`\`
 
           The \`channel=private-preview\` trailer is your confirmation
