@@ -78,7 +78,7 @@ Alternatively, run `intent-cli worker pr-comment-preflight --repo <OWNER>/<REPO>
 - If there are no unresolved actionable comments, stop. Set outcome to `no-actionable-comments`.
 - If ALL actionable comments target host metadata paths (`.intent-cli/**` or `intents/**`), stop. Set outcome to `host-artifact-repair-required`. These paths are host-owned durable artifacts that child implementation workers must not edit; the host repair agent must handle them. (The `pr-comment-preflight` result will show `classification: host-artifact-repair-required` in this case.)
 - If a comment is ambiguous and cannot be resolved without guessing, stop. Set outcome to `clarification-required`. Report which comment and why.
-- If the requested change is already applied in the existing branch, stop. Set outcome to `already-resolved`.
+- If the requested change is already applied in the existing branch (no new commit needed), stop. Set outcome to `already-resolved`. Like `repair-pushed`, this converges the PR to `intent-pr-rereview-ready` and clears `intent-pr-request-update`, so the host re-reviews it and `worker next-action` will NOT re-select it (G372). Do NOT use `no-actionable-comments` for this case — that outcome leaves `intent-pr-request-update` in place and the selector would re-pick the PR on the next wake.
 
 Repair steps:
 1. Claim the PR: `intent-cli worker claim --kind pr --number <n> --repo <OWNER>/<REPO> --write --format json`.
@@ -89,9 +89,9 @@ Repair steps:
 6. From the parent host root, run `intent-cli worker result-summary --kind pr-comment-fix --pr <n> --repo <OWNER>/<REPO> --format json`, then `intent-cli worker complete --kind pr --number <n> --repo <OWNER>/<REPO> --outcome repair-pushed --write --format json`.
 
 Outcome classification:
-- `repair-pushed` — narrow fix pushed to the existing PR branch.
-- `no-actionable-comments` — no unresolved actionable review comments; nothing to fix.
-- `already-resolved` — the requested change is already applied in the branch.
+- `repair-pushed` — a NEW narrow fix commit was pushed to the existing PR branch. Converges the PR to `intent-pr-rereview-ready` (removes `intent-pr-request-update` / `intent-pr-update-in-progress`).
+- `already-resolved` — the requested change is ALREADY on the branch, so no new commit is needed. Converges identically to `repair-pushed` (rereview-ready), so the host re-reviews and the selector will not re-pick the PR (G372). Use this — not `no-actionable-comments` — whenever the PR carries `intent-pr-request-update` but the branch already satisfies it.
+- `no-actionable-comments` — there were never any unresolved actionable review comments to act on (e.g. the request-update label was applied but no concrete change was requested, or all comments were already addressed and acknowledged). This releases the claim but does NOT add `intent-pr-rereview-ready`; only use it when there is genuinely nothing for the host to re-review on the basis of a code change.
 - `clarification-required` — ambiguous comment or blocker found; cannot proceed without operator input.
 - `host-artifact-repair-required` — all actionable comments target host metadata paths (`.intent-cli/**` or `intents/**`); child worker must not attempt to repair them.
 - `failed` — fix failed (build/test failure, unresolvable conflict).
@@ -127,9 +127,9 @@ Hard rules:
             },
             OutcomeClassification = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["repair-pushed"] = "Narrow fix pushed to the existing PR branch.",
-                ["no-actionable-comments"] = "No unresolved actionable review comments; nothing to fix.",
-                ["already-resolved"] = "The requested change is already applied in the branch.",
+                ["repair-pushed"] = "A new narrow fix commit was pushed to the existing PR branch; converges to intent-pr-rereview-ready.",
+                ["no-actionable-comments"] = "No unresolved actionable review comments to act on; releases the claim but does NOT add intent-pr-rereview-ready.",
+                ["already-resolved"] = "The requested change is already on the branch (no new commit); converges to intent-pr-rereview-ready like repair-pushed so the selector will not re-pick the PR (G372). Prefer this over no-actionable-comments when intent-pr-request-update is present but already satisfied.",
                 ["clarification-required"] = "Ambiguous comment or blocker found; cannot proceed without operator input.",
                 ["host-artifact-repair-required"] = "All actionable comments target host metadata paths (.intent-cli/** or intents/**); child worker must not attempt to repair them.",
                 ["failed"] = "Fix failed (build/test failure, unresolvable conflict).",

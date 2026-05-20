@@ -625,6 +625,96 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_PrAlreadyResolvedOutcome_WriteConvergesToRereviewReadyAndClearsRequestUpdate()
+    {
+        // G372: completing a PR-comment-fix with `already-resolved` (the
+        // requested change is already on the branch) must converge the PR
+        // exactly like repair-pushed — remove intent-pr-update-in-progress
+        // AND intent-pr-request-update, add intent-pr-rereview-ready — so
+        // the selector cannot re-pick the PR on the next wake. This pins the
+        // fix for the observed PR #842 5-minute oscillation.
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-request-update", "intent-pr-update-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "pr",
+                "--number", "842",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.AlreadyResolved,
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.True(result.Proceed);
+        Assert.True(result.Applied);
+        Assert.Contains("intent-pr-rereview-ready", result.AddLabels);
+        Assert.Contains("intent-pr-update-in-progress", result.RemoveLabels);
+        Assert.Contains("intent-pr-request-update", result.RemoveLabels);
+        // intent-pr-created MUST NOT be added to a PR.
+        Assert.DoesNotContain("intent-pr-created", result.AddLabels);
+
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Contains("intent-pr-rereview-ready", transition.AddLabels);
+        Assert.Contains("intent-pr-update-in-progress", transition.RemoveLabels);
+        Assert.Contains("intent-pr-request-update", transition.RemoveLabels);
+
+        // The resulting PR must carry NO child-actionable update label, so
+        // `worker next-action` returns `none` for it until the host opens a
+        // new review request.
+        var finalLabels = mutator.Labels
+            .Except(transition.RemoveLabels, StringComparer.Ordinal)
+            .Concat(transition.AddLabels)
+            .ToArray();
+        Assert.Contains("intent-pr-rereview-ready", finalLabels);
+        Assert.DoesNotContain("intent-pr-request-update", finalLabels);
+        Assert.DoesNotContain("intent-pr-update-in-progress", finalLabels);
+    }
+
+    [Fact]
+    public void Execute_PrAlreadyResolvedOnConvergedPr_RefusesAlreadyCompleted()
+    {
+        // G372: once a PR has converged to intent-pr-rereview-ready, a
+        // repeat already-resolved completion must refuse rather than
+        // re-add the label — mirroring the existing repair-pushed guard.
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-update-in-progress", "intent-pr-rereview-ready" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "pr",
+                "--number", "842",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.AlreadyResolved,
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(2, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
+        Assert.Contains(result.Errors, e => e.StartsWith(WorkerClaimCompleteConstants.ErrorCodes.CompleteAlreadyCompleted, StringComparison.Ordinal));
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
     public void Execute_PrFailedOutcome_RemovesUpdateInProgressOnly()
     {
         using var workspace = new WorkerCompleteWorkspace();
