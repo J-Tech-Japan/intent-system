@@ -843,7 +843,7 @@ public sealed class RunFixCommandTests
         var wrapperPath = tempDirectory.CreateExecutableFile(
             "bin/codex-isolated",
             $$"""
-            #!/bin/zsh
+            #!/bin/bash
             export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
             exec {{providerBinaryPath}} "$@"
             """);
@@ -963,7 +963,7 @@ public sealed class RunFixCommandTests
         var wrapperPath = tempDirectory.CreateExecutableFile(
             "bin/codex-isolated",
             $$"""
-            #!/bin/zsh
+            #!/bin/bash
             export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
             exec {{providerBinaryPath}} "$@"
             """);
@@ -1125,7 +1125,7 @@ public sealed class RunFixCommandTests
         var wrapperPath = tempDirectory.CreateExecutableFile(
             "bin/codex-isolated",
             $$"""
-            #!/bin/zsh
+            #!/bin/bash
             export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
             exec {{providerBinaryPath}} "$@"
             """);
@@ -1253,7 +1253,7 @@ public sealed class RunFixCommandTests
         var wrapperPath = tempDirectory.CreateExecutableFile(
             "bin/codex-isolated",
             $$"""
-            #!/bin/zsh
+            #!/bin/bash
             export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
             exec {{providerBinaryPath}} "$@"
             """);
@@ -1392,7 +1392,7 @@ public sealed class RunFixCommandTests
         var wrapperPath = tempDirectory.CreateExecutableFile(
             "bin/codex-isolated",
             $$"""
-            #!/bin/zsh
+            #!/bin/bash
             export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
             exec {{providerBinaryPath}} "$@"
             """);
@@ -1507,7 +1507,7 @@ public sealed class RunFixCommandTests
         var wrapperPath = tempDirectory.CreateExecutableFile(
             "bin/codex-isolated",
             $$"""
-            #!/bin/zsh
+            #!/bin/bash
             export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
             exec {{providerBinaryPath}} "$@"
             """);
@@ -1640,7 +1640,7 @@ public sealed class RunFixCommandTests
         var wrapperPath = tempDirectory.CreateExecutableFile(
             "bin/codex-isolated",
             $$"""
-            #!/bin/zsh
+            #!/bin/bash
             export CODEX_HOME={{tempDirectory.GetPath(".codex-direct-backend")}}
             exec {{providerBinaryPath}} "$@"
             """);

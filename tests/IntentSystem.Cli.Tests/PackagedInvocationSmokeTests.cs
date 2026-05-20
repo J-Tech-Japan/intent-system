@@ -172,9 +172,12 @@ public sealed class PackagedInvocationSmokeTests
 
     private static ProcessResult RunShellCommand(string script, string workingDirectory)
     {
+        // G370: resolve the host shell at runtime so the packaged-
+        // invocation smoke can run on GitHub-hosted Ubuntu (no zsh)
+        // without losing the macOS dev-loop behavior.
         var startInfo = new ProcessStartInfo
         {
-            FileName = "/bin/zsh",
+            FileName = IntentSystem.Cli.Tests.TestSupport.PortableShellResolver.Resolve(),
             WorkingDirectory = workingDirectory,
             UseShellExecute = false
         };

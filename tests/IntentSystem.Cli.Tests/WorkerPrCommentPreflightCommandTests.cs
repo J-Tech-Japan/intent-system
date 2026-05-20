@@ -542,6 +542,65 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenClosedPrAndCommentsLookupThrows_StillClassifiesAsNonActionable()
+    {
+        // G370 regression: closed/draft PRs are state-level
+        // non-actionable from the PR payload alone, so a transient
+        // failure on `gh pr view --comments` (rate limit, permission
+        // shortfall, network blip) MUST NOT flip the exit code. The
+        // command must short-circuit before invoking the comments
+        // lookup.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        WorkerPrCommentPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(
+            number: 6151, state: "CLOSED", title: "closed",
+            body: "Closes #100",
+            labelNames: new[] { "intent-target" },
+            closed: true,
+            closingIssueNumbers: new[] { 100 }));
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () =>
+            new ThrowingCommentsLookup("simulated comments-lookup failure: gh pr view --comments exited 1");
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "6151", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.NonActionable, result.Classification);
+        Assert.Contains(result.Reasons, r => r.Contains("closed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_GivenFreshDraftPrAndCommentsLookupThrows_StillClassifiesAsNonActionable()
+    {
+        // G370 regression: a fresh draft (no `intent-pr-*` review-cycle
+        // label) is state-level non-actionable. Comments lookup must
+        // be skipped so a transport failure cannot flip exit 0 -> 1.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        WorkerPrCommentPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(
+            number: 6152, state: "OPEN", title: "fresh draft",
+            body: "Closes #100",
+            labelNames: new[] { "intent-target" },
+            isDraft: true,
+            closingIssueNumbers: new[] { 100 }));
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () =>
+            new ThrowingCommentsLookup("simulated comments-lookup failure: rate limit");
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "6152", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.NonActionable, result.Classification);
+        Assert.Contains(result.Reasons, r => r.Contains("draft", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_GivenJsonFormat_RoundTripsStably()
     {
         using var workspace = new WorkerPrCommentPreflightWorkspace();

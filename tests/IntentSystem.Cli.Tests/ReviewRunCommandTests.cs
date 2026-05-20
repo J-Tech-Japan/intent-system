@@ -1447,9 +1447,13 @@ public sealed class ReviewRunCommandTests
 
     private static Process StartCliProcess(string workingDirectory, string arguments)
     {
+        // G370: resolve the wrapper shell at runtime so GitHub-hosted
+        // Ubuntu runners (no `/bin/zsh`) can host the same fixture.
+        // Production behavior is unchanged: macOS dev loops still pick
+        // `/bin/zsh` first, Linux CI falls through to bash.
         var startInfo = new ProcessStartInfo
         {
-            FileName = "/bin/zsh",
+            FileName = IntentSystem.Cli.Tests.TestSupport.PortableShellResolver.Resolve(),
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
             RedirectStandardOutput = true,

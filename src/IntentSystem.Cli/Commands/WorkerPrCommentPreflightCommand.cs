@@ -100,37 +100,55 @@ internal static class WorkerPrCommentPreflightCommand
             return 1;
         }
 
-        IGitHubPrCommentsLookup commentsLookup;
-        try
-        {
-            commentsLookup = CommentsLookupFactory?.Invoke() ?? new GhCliGitHubPrCommentsLookup();
-        }
-        catch (Exception exception) when (
-            exception is InvalidOperationException
-            or IOException)
-        {
-            writer.WriteLine(
-                $"failed to initialize GitHub PR comments lookup: {exception.Message}");
-            return 1;
-        }
+        // G370: compute the state-level non-actionable verdict BEFORE
+        // any further GitHub lookup. The analyzer's step-1 fast path
+        // for closed-not-merged / fresh-draft PRs is purely a function
+        // of the PR payload, so the command must short-circuit here to
+        // avoid letting a transient `gh pr view --comments` transport
+        // failure (rate limit, permission shortfall, network blip)
+        // flip a deterministic non-actionable PR to exit 1. The
+        // analyzer accepts an empty comments payload for that path; we
+        // build one inline instead of hitting GitHub again.
+        var preLookupNonActionable = IsStateLevelNonActionable(prPayload);
 
         GitHubPrCommentsLookupResult commentsPayload;
-        try
+        if (preLookupNonActionable)
         {
-            commentsPayload = commentsLookup.Lookup(repo!, prNumber);
+            commentsPayload = new GitHubPrCommentsLookupResult();
         }
-        catch (Exception exception)
+        else
         {
-            writer.WriteLine(
-                $"failed to look up GitHub PR comments for {repo}#{prNumber}: {exception.Message}");
-            return 1;
-        }
+            IGitHubPrCommentsLookup commentsLookup;
+            try
+            {
+                commentsLookup = CommentsLookupFactory?.Invoke() ?? new GhCliGitHubPrCommentsLookup();
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException
+                or IOException)
+            {
+                writer.WriteLine(
+                    $"failed to initialize GitHub PR comments lookup: {exception.Message}");
+                return 1;
+            }
 
-        if (commentsPayload is null)
-        {
-            writer.WriteLine(
-                $"GitHub PR comments lookup returned no payload for {repo}#{prNumber}.");
-            return 1;
+            try
+            {
+                commentsPayload = commentsLookup.Lookup(repo!, prNumber);
+            }
+            catch (Exception exception)
+            {
+                writer.WriteLine(
+                    $"failed to look up GitHub PR comments for {repo}#{prNumber}: {exception.Message}");
+                return 1;
+            }
+
+            if (commentsPayload is null)
+            {
+                writer.WriteLine(
+                    $"GitHub PR comments lookup returned no payload for {repo}#{prNumber}.");
+                return 1;
+            }
         }
 
         SourceIssueCandidate? candidate;
@@ -148,8 +166,13 @@ internal static class WorkerPrCommentPreflightCommand
             return 1;
         }
 
+        // G370: same state-level short-circuit applies to the source-
+        // issue lookup. The analyzer can classify a closed/draft PR as
+        // non-actionable with `sourceIssuePayload = null`; skipping the
+        // lookup here ensures a transient `gh issue view` failure
+        // cannot flip the exit code either.
         GitHubIssueLookupResult? sourceIssuePayload = null;
-        if (candidate is { } traced)
+        if (candidate is { } traced && !preLookupNonActionable)
         {
             IGitHubIssueLookup issueLookup;
             try
@@ -209,6 +232,56 @@ internal static class WorkerPrCommentPreflightCommand
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// G370: returns <c>true</c> when the PR payload alone already
+    /// determines non-actionability (closed, merged, or a fresh draft
+    /// without any review-cycle label). In those cases the source-issue
+    /// lookup is unnecessary -- the analyzer can classify the PR as
+    /// non-actionable from the PR payload -- so we skip the lookup
+    /// rather than letting a transient `gh` failure flip the exit code.
+    /// </summary>
+    private static bool IsStateLevelNonActionable(GitHubPrLookupResult pr)
+    {
+        if (pr.Closed || pr.Merged)
+        {
+            return true;
+        }
+        if (string.Equals(pr.State, "CLOSED", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(pr.State, "MERGED", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (pr.IsDraft && !HasReviewCycleLabel(pr))
+        {
+            return true;
+        }
+        return false;
+    }
+
+    private static bool HasReviewCycleLabel(GitHubPrLookupResult pr)
+    {
+        // Match the analyzer's `HasAnyReviewLabel` set exactly so the
+        // command-layer short-circuit cannot diverge from the
+        // classifier's draft gate. `intent-target` is the host-side
+        // selector marker and must NOT count: an `intent-target`-only
+        // draft PR is still non-actionable from the analyzer's
+        // perspective, so we want to skip the source-issue lookup.
+        foreach (var label in pr.Labels)
+        {
+            if (label.Name is not { Length: > 0 } name)
+            {
+                continue;
+            }
+            if (string.Equals(name, WorkerPrCommentPreflightConstants.Labels.IntentPrRequestUpdate, StringComparison.Ordinal)
+                || string.Equals(name, WorkerPrCommentPreflightConstants.Labels.IntentPrUpdateInProgress, StringComparison.Ordinal)
+                || string.Equals(name, WorkerPrCommentPreflightConstants.Labels.IntentPrApproved, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void WriteText(TextWriter writer, WorkerPrCommentPreflightResult result)
