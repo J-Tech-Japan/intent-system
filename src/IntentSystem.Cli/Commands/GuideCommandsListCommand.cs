@@ -42,7 +42,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationPrimary,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Operator-facing guidance: collaboration model, rules-by-topic, workflow suggestion, one-shot/automation/review prompts."
+            Purpose = "Operator-facing guidance: collaboration model, rules-by-topic, workflow suggestion, prompt-template catalog, one-shot/automation/review prompts."
         },
         new CommandGroupEntry
         {

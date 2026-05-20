@@ -205,6 +205,12 @@ internal static class GuideHelpCommand
         },
         new GuideSubcommandEntry
         {
+            Name = "prompt-template",
+            Purpose = "Short outer-prompt catalog for common automation requests. Detailed conditions still come from intent-cli at execution time.",
+            Example = "intent-cli guide prompt-template --kind implementation-loop --domain intent-cli --target-repo J-Tech-Japan/intent-system --format json"
+        },
+        new GuideSubcommandEntry
+        {
             Name = "host-ownership",
             Purpose = "G326 role-scoped host ownership model: which role owns which durable-state slice.",
             Example = "intent-cli guide host-ownership --format json"
