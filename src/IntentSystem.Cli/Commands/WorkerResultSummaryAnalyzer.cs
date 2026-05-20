@@ -144,9 +144,12 @@ internal static class WorkerResultSummaryAnalyzer
 
         // Common cleanup: when PR-comment-fix work ended on a non-cleanup
         // terminal outcome, the worker's claim label on the PR
-        // (intent-pr-update-in-progress) should be released.
+        // (intent-pr-update-in-progress) should be released. The convergent
+        // rereview outcomes (repair-pushed, already-resolved) handle that
+        // release via the explicit swap below, so they are excluded here to
+        // avoid a duplicate remove action (G372).
         if (kind == WorkerResultSummaryConstants.Kinds.PrCommentFix
-            && outcome != WorkerResultSummaryConstants.Outcomes.RepairPushed)
+            && !IsConvergentRereviewOutcome(outcome))
         {
             actions.Add(MakeAction(
                 WorkerResultSummaryConstants.LabelActionVerbs.Remove,
@@ -167,6 +170,12 @@ internal static class WorkerResultSummaryAnalyzer
                 break;
 
             case WorkerResultSummaryConstants.Outcomes.RepairPushed:
+            // G372: already-resolved converges identically to repair-pushed
+            // — the requested fix is on the branch, so the PR is handed back
+            // to host re-review. Sharing this branch keeps the recommended
+            // label actions aligned with the worker-complete transition.
+            case WorkerResultSummaryConstants.Outcomes.AlreadyResolved
+                when kind == WorkerResultSummaryConstants.Kinds.PrCommentFix:
                 // The PR claim label and the old request-update state both
                 // clear as the PR becomes rereview-ready. Keep the primary
                 // in-progress -> rereview-ready transition as a swap, and
@@ -224,9 +233,14 @@ internal static class WorkerResultSummaryAnalyzer
         // explicitly so the host loop can ready-for-review or stop the
         // closeout. Repaired-via-pr-comment-fix on a still-draft PR is also
         // host-merge-blocked; surface the same warning for that path.
+        // G372: already-resolved on a pr-comment-fix now converges to
+        // rereview-ready (like repair-pushed), so a still-draft PR carries
+        // the same host-merge-blocking risk and must surface the warning.
         if (prDraft == true
             && (outcome == WorkerResultSummaryConstants.Outcomes.PrCreated
-                || outcome == WorkerResultSummaryConstants.Outcomes.RepairPushed))
+                || outcome == WorkerResultSummaryConstants.Outcomes.RepairPushed
+                || (outcome == WorkerResultSummaryConstants.Outcomes.AlreadyResolved
+                    && kind == WorkerResultSummaryConstants.Kinds.PrCommentFix)))
         {
             warnings.Add(
                 "draft PR: automation-created PRs default to ready-for-review (G296). A draft PR will block host merge — ready it for review or document why draft is intentional.");
@@ -279,7 +293,9 @@ internal static class WorkerResultSummaryAnalyzer
                 $"Clarification required — worker stopped without changing scope ({Identifier(repo, issue ?? pr, "#")}).",
 
             WorkerResultSummaryConstants.Outcomes.AlreadyResolved =>
-                $"Already resolved on origin/main — no further action needed ({Identifier(repo, issue ?? pr, "#")}).",
+                kind == WorkerResultSummaryConstants.Kinds.PrCommentFix
+                    ? $"Requested fix already present on the PR branch — marked ready for re-review{draftSuffix} ({Identifier(repo, pr, "#")})."
+                    : $"Already resolved — no further action needed ({Identifier(repo, issue ?? pr, "#")}).",
 
             WorkerResultSummaryConstants.Outcomes.NoActionableComments =>
                 $"No actionable review comments remain on PR ({Identifier(repo, pr, "#")}).",
@@ -304,4 +320,16 @@ internal static class WorkerResultSummaryAnalyzer
             Target = target,
             Label = label,
         };
+
+    /// <summary>
+    /// G372: pr-comment-fix outcomes that converge a PR to the
+    /// host-reviewable <c>intent-pr-rereview-ready</c> state. Both
+    /// <c>repair-pushed</c> and <c>already-resolved</c> hand the PR back to
+    /// the host review loop and clear the child-actionable update labels;
+    /// keeping them in one set keeps the recommended label actions aligned
+    /// with <see cref="WorkerCompleteAnalyzer"/>.
+    /// </summary>
+    private static bool IsConvergentRereviewOutcome(string outcome) =>
+        string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.RepairPushed, StringComparison.Ordinal)
+        || string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.AlreadyResolved, StringComparison.Ordinal);
 }

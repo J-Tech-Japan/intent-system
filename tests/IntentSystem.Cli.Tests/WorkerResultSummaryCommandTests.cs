@@ -109,6 +109,51 @@ public sealed class WorkerResultSummaryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenPrCommentFixAlreadyResolved_EmitsSwapActionToRereviewReady()
+    {
+        // G372: already-resolved on a pr-comment-fix now recommends the
+        // SAME convergent label actions as repair-pushed (swap
+        // update-in-progress -> rereview-ready, remove request-update) so
+        // an agent that reports "fix already present" hands the PR back to
+        // host re-review instead of leaving request-update behind for the
+        // selector to re-pick.
+        using var workspace = new WorkerResultSummaryWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = WorkerResultSummaryCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--kind", "pr-comment-fix",
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "842",
+                "--outcome", "already-resolved",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerResultSummaryResult>(writer.ToString())!;
+        Assert.Equal(WorkerResultSummaryConstants.Statuses.Completed, result.Status);
+        Assert.Contains("ready for re-review", result.Summary, StringComparison.Ordinal);
+
+        Assert.Contains(result.RecommendedLabelActions, a =>
+            a.Action == "swap"
+            && a.Target == "pr"
+            && a.Label.Contains(WorkerResultSummaryConstants.Labels.IntentPrUpdateInProgress, StringComparison.Ordinal)
+            && a.Label.Contains(WorkerResultSummaryConstants.Labels.IntentPrRereviewReady, StringComparison.Ordinal));
+        Assert.Contains(result.RecommendedLabelActions, a =>
+            a.Action == "remove"
+            && a.Target == "pr"
+            && a.Label == WorkerResultSummaryConstants.Labels.IntentPrRequestUpdate);
+
+        // No spurious standalone "remove in-progress" action — the swap covers it.
+        Assert.DoesNotContain(result.RecommendedLabelActions, a =>
+            a.Action == "remove"
+            && a.Label == WorkerResultSummaryConstants.Labels.IntentPrUpdateInProgress);
+    }
+
+    [Fact]
     public void Execute_GivenIssueToPrDeclinedContractIncomplete_EmitsDeclinedStatus()
     {
         using var workspace = new WorkerResultSummaryWorkspace();

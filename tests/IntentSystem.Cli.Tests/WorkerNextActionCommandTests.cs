@@ -63,6 +63,42 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenPrConvergedToRereviewReadyAfterAlreadyResolved_ReturnsNone()
+    {
+        // G372 selector regression: after a pr-comment-fix completes with
+        // `already-resolved`, the PR carries intent-pr-rereview-ready and no
+        // longer carries intent-pr-request-update / intent-pr-update-in-progress
+        // (see WorkerCompleteAnalyzer). The selector MUST NOT re-pick such a
+        // PR — this is the exact state PR #842 was stuck oscillating on
+        // before the convergence fix. With no other candidates the action
+        // must be `none`, not pr-comment-fix.
+        using var workspace = new WorkerNextActionWorkspace();
+        var lister = new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(842, "Converged PR (fix already present)",
+                    "https://github.com/J-Tech-Japan/intent-system/pull/842",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-rereview-ready" }),
+            },
+            Issues = Array.Empty<GitHubAutomationIssueCandidate>(),
+        };
+        WorkerNextActionCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.None, result.Action);
+        Assert.Null(result.Number);
+    }
+
+    [Fact]
     public void Execute_GivenPrInUpdateInProgress_SurfacesWaitLease()
     {
         // G325 replaces the previous "fall through to issue-to-pr"

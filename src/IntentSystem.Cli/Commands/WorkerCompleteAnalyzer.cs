@@ -140,10 +140,9 @@ internal static class WorkerCompleteAnalyzer
         }
 
         // Stale: rereview-ready already present means the PR's repair
-        // was already completed; refuse to re-add for a successful
-        // repair-pushed completion.
-        if (hasRereviewReady
-            && string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.RepairPushed, StringComparison.Ordinal))
+        // was already completed; refuse to re-add for any convergent
+        // rereview outcome (repair-pushed or, per G372, already-resolved).
+        if (hasRereviewReady && IsConvergentRereviewOutcome(outcome))
         {
             errors.Add(
                 $"{WorkerClaimCompleteConstants.ErrorCodes.CompleteAlreadyCompleted}: PR already carries '{WorkerNextActionConstants.Labels.IntentPrRereviewReady}'.");
@@ -160,9 +159,17 @@ internal static class WorkerCompleteAnalyzer
             // All terminal pr-comment-fix outcomes release the in-progress claim.
             removeLabels.Add(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress);
 
-            // repair-pushed success path clears the old request-update state
-            // and marks the PR as ready for re-review.
-            if (string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.RepairPushed, StringComparison.Ordinal))
+            // G372: convergent rereview outcomes (repair-pushed and
+            // already-resolved) clear the old request-update state and mark
+            // the PR ready for re-review. Without this, `already-resolved`
+            // used to remove only intent-pr-update-in-progress, leaving
+            // intent-pr-request-update behind so `worker next-action`
+            // re-selected the same PR on every wake — a 5-minute
+            // oscillation even though the requested fix was already on the
+            // branch. Treating "fix already present" as a host-reviewable
+            // terminal state (like repair-pushed, but without a new commit)
+            // breaks that loop.
+            if (IsConvergentRereviewOutcome(outcome))
             {
                 removeLabels.Add(WorkerNextActionConstants.Labels.IntentPrRequestUpdate);
                 addLabels.Add(WorkerNextActionConstants.Labels.IntentPrRereviewReady);
@@ -182,6 +189,21 @@ internal static class WorkerCompleteAnalyzer
                 : "Refusing to complete PR: stale or already-completed target.",
         };
     }
+
+    /// <summary>
+    /// G372: pr-comment-fix completion outcomes that converge a PR to the
+    /// host-reviewable <c>intent-pr-rereview-ready</c> state by clearing the
+    /// child-actionable <c>intent-pr-request-update</c> /
+    /// <c>intent-pr-update-in-progress</c> labels. Both <c>repair-pushed</c>
+    /// (a new commit was pushed) and <c>already-resolved</c> (the requested
+    /// fix was already on the branch, no new commit) are terminal review
+    /// hand-offs; the only difference is whether a commit landed. Keeping
+    /// them in one set guarantees the selector cannot re-pick the PR after
+    /// either outcome.
+    /// </summary>
+    private static bool IsConvergentRereviewOutcome(string outcome) =>
+        string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.RepairPushed, StringComparison.Ordinal)
+        || string.Equals(outcome, WorkerResultSummaryConstants.Outcomes.AlreadyResolved, StringComparison.Ordinal);
 
     private static CompleteDecision Refuse(string errorMessage, string summary)
     {
