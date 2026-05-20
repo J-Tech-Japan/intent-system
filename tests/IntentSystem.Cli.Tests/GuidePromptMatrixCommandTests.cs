@@ -1554,6 +1554,15 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("review-release", prompt, StringComparison.Ordinal);
         Assert.Contains("--pr-merged $IS_MERGED", prompt, StringComparison.Ordinal);
         Assert.Contains("Stage 2 (next-slice publish) is gated on `closeout pr --write` succeeding", prompt, StringComparison.Ordinal);
+        // G376: the host-loop draft guidance must follow the draft-aware
+        // decision rather than unconditionally releasing the lease. A
+        // review-ready, non-operator-intended draft is promoted and the
+        // approval flow continues instead of looping in lease-release.
+        Assert.Contains("draft-ready-to-promote", prompt, StringComparison.Ordinal);
+        Assert.Contains("draft-request-update", prompt, StringComparison.Ordinal);
+        Assert.Contains("host-review-diagnostics", prompt, StringComparison.Ordinal);
+        Assert.Contains("--draft-review-ready", prompt, StringComparison.Ordinal);
+        Assert.Contains("gh pr ready", prompt, StringComparison.Ordinal);
     }
 
     [Fact]
