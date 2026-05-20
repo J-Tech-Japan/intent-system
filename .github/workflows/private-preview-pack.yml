@@ -74,16 +74,30 @@ jobs:
             echo "short_sha=${SHORT_SHA}"
           } | tee -a "${GITHUB_OUTPUT}"
 
+      # G371: each phase carries a stable `id` so the failure-summary
+      # step below can classify which phase failed from
+      # `steps.<id>.outcome` without scraping logs.
       - name: Restore
+        id: restore
         run: dotnet restore IntentSystem.sln
 
       - name: Build (source contract, no preview properties)
+        id: build
         run: dotnet build IntentSystem.sln --configuration Release --no-restore
 
+      # G371: route TRX results to a known directory so the
+      # always()-gated diagnostics upload can preserve them even when
+      # the test phase fails (the logger writes the TRX regardless of
+      # the test exit code).
       - name: Test (source contract)
-        run: dotnet test IntentSystem.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+        id: test
+        run: |
+          dotnet test IntentSystem.sln --configuration Release --no-build \
+            --logger "trx;LogFileName=test-results.trx" \
+            --results-directory "${GITHUB_WORKSPACE}/.artifacts/test-results"
 
       - name: Pack private-preview .nupkg (recompiles with preview properties active)
+        id: pack_preview
         run: |
           dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
             --configuration Release \
@@ -95,12 +109,14 @@ jobs:
             -p:PrivatePreviewSourceCommit=${{ github.sha }}
 
       - name: Pack source baseline (no preview properties)
+        id: pack_baseline
         run: |
           dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
             --configuration Release \
             -o .artifacts/source-baseline
 
       - name: Verify preview pack embeds AssemblyMetadata
+        id: verify
         run: |
           PREVIEW_NUPKG="$(ls .artifacts/private-preview/intent-cli.*.nupkg | head -n 1)"
           SOURCE_NUPKG="$(ls .artifacts/source-baseline/intent-cli.*.nupkg | head -n 1)"
@@ -259,10 +275,103 @@ jobs:
           EOF
           echo "wrote INSTALL.md (${PACKAGE_VERSION})"
 
+      # G371: the preview package upload stays fail-closed — it only
+      # runs when every prior phase succeeded, so a failed source-test
+      # or verification run can never publish a broken bundle.
       - name: Upload preview artifact
+        id: upload
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: intent-cli-private-preview-${{ steps.meta.outputs.package_version }}
           path: .artifacts/private-preview/**
           retention-days: 14
           if-no-files-found: error
+
+      # G371: preserve test result / diagnostic artifacts on EVERY run
+      # (always()), so a failed run keeps the TRX files for triage
+      # without manual log scraping. This never uploads the preview
+      # package — only diagnostics — and tolerates a missing results
+      # dir (e.g. a restore/build failure before tests ran).
+      - name: Upload diagnostic artifacts (test results)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-preview-pack-diagnostics-${{ steps.meta.outputs.package_version }}
+          path: |
+            .artifacts/test-results/**
+            **/*.trx
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # G371: classify which phase failed into the run's job summary so
+      # operators can immediately tell a source-test failure apart from
+      # a packaging / upload failure.
+      - name: Write failure summary
+        if: failure()
+        shell: bash
+        env:
+          OUTCOME_RESTORE: ${{ steps.restore.outcome }}
+          OUTCOME_BUILD: ${{ steps.build.outcome }}
+          OUTCOME_TEST: ${{ steps.test.outcome }}
+          OUTCOME_PACK_PREVIEW: ${{ steps.pack_preview.outcome }}
+          OUTCOME_PACK_BASELINE: ${{ steps.pack_baseline.outcome }}
+          OUTCOME_VERIFY: ${{ steps.verify.outcome }}
+          OUTCOME_UPLOAD: ${{ steps.upload.outcome }}
+        run: |
+          set -euo pipefail
+          phase="unknown"
+          detail="See the step logs above for the failing command."
+          if [ "${OUTCOME_RESTORE}" = "failure" ] || [ "${OUTCOME_BUILD}" = "failure" ]; then
+            phase="restore/build"
+            detail="Dependency restore or compilation failed before any packaging ran. No package was produced."
+          elif [ "${OUTCOME_TEST}" = "failure" ]; then
+            phase="source contract tests"
+            detail="Source contract tests failed. This is a TEST failure, NOT a packaging failure: no preview package was produced or uploaded. Download the \`private-preview-pack-diagnostics-*\` artifact for the TRX test results."
+          elif [ "${OUTCOME_PACK_PREVIEW}" = "failure" ]; then
+            phase="private-preview pack"
+            detail="dotnet pack of the private-preview .nupkg failed after tests passed."
+          elif [ "${OUTCOME_PACK_BASELINE}" = "failure" ]; then
+            phase="source baseline pack"
+            detail="dotnet pack of the source baseline .nupkg failed."
+          elif [ "${OUTCOME_VERIFY}" = "failure" ]; then
+            phase="metadata verification"
+            detail="The PreviewArtifactVerify metadata check failed; the produced package may be missing PrivatePreview AssemblyMetadata, or the source baseline unexpectedly carried it."
+          elif [ "${OUTCOME_UPLOAD}" = "failure" ]; then
+            phase="artifact upload"
+            detail="Packaging and verification succeeded, but uploading the preview artifact failed."
+          fi
+          {
+            echo "## private-preview-pack FAILED"
+            echo ""
+            echo "- **Failing phase**: \`${phase}\`"
+            echo "- ${detail}"
+            echo ""
+            echo "| Phase | Outcome |"
+            echo "| --- | --- |"
+            echo "| restore/build | ${OUTCOME_RESTORE} / ${OUTCOME_BUILD} |"
+            echo "| source contract tests | ${OUTCOME_TEST} |"
+            echo "| private-preview pack | ${OUTCOME_PACK_PREVIEW} |"
+            echo "| source baseline pack | ${OUTCOME_PACK_BASELINE} |"
+            echo "| metadata verification | ${OUTCOME_VERIFY} |"
+            echo "| artifact upload | ${OUTCOME_UPLOAD} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # G371: on success, summarize the produced bundle so the run page
+      # shows what was published without opening the artifact.
+      - name: Write success summary
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .artifacts/private-preview
+          NUPKG_FILE="$(basename "$(ls intent-cli.*.nupkg | head -n 1)")"
+          {
+            echo "## private-preview-pack succeeded"
+            echo ""
+            echo "- **Failing phase**: none — all phases (restore/build, source contract tests, private-preview pack, source baseline pack, metadata verification, artifact upload) passed."
+            echo "- **Package**: \`${NUPKG_FILE}\`"
+            echo "- **Version**: \`${{ steps.meta.outputs.package_version }}\`"
+            echo "- **Expires (UTC)**: \`${{ steps.meta.outputs.expires_at }}\`"
+            echo "- Uploaded as artifact \`intent-cli-private-preview-${{ steps.meta.outputs.package_version }}\` (nupkg + .sha256 + preview-metadata.json + INSTALL.md)."
+          } >> "${GITHUB_STEP_SUMMARY}"
