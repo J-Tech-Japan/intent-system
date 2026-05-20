@@ -9,7 +9,7 @@ namespace IntentSystem.Cli.Commands;
 internal static class GuideWorkerCommand
 {
     private const string UsageLine =
-        "Usage: intent-cli guide worker <issue-to-pr|pr-comment-fix> [--repo <owner/repo>] [--domain <name>] [--format markdown|json]";
+        "Usage: intent-cli guide worker <issue-to-pr|pr-comment-fix|signal> [--repo <owner/repo>] [--domain <name>] [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -33,6 +33,11 @@ internal static class GuideWorkerCommand
             return GuideWorkerPrCommentFixCommand.Execute(context, args[1..], writer);
         }
 
+        if (args.Length >= 1 && string.Equals(args[0], "signal", StringComparison.Ordinal))
+        {
+            return GuideWorkerSignalCommand.Execute(context, args[1..], writer);
+        }
+
         writer.WriteLine("A subcommand is required for 'guide worker'.");
         writer.WriteLine(UsageLine);
         return 1;
@@ -42,6 +47,6 @@ internal static class GuideWorkerCommand
     {
         writer.WriteLine("guide worker");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Subcommands: issue-to-pr, pr-comment-fix");
+        writer.WriteLine("Subcommands: issue-to-pr, pr-comment-fix, signal");
     }
 }

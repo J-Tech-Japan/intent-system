@@ -88,7 +88,10 @@ internal static class CommandRouter
                 ["run"] = ReviewRunCommand.Execute,
                 ["comment"] = ReviewCommentCommand.Execute,
                 ["accept"] = ReviewAcceptCommand.Execute,
-                ["closeout-plan"] = ReviewCloseoutPlanCommand.Execute
+                ["closeout-plan"] = ReviewCloseoutPlanCommand.Execute,
+                // G374: host-side structured worker-signal collection / convergence.
+                ["collect-signals"] = ReviewCollectSignalsCommand.Execute,
+                ["signal-handled"] = ReviewSignalHandledCommand.Execute
             },
             ["interview"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -200,7 +203,9 @@ internal static class CommandRouter
                 ["result-summary"] = WorkerResultSummaryCommand.Execute,
                 ["next-action"] = WorkerNextActionCommand.Execute,
                 ["claim"] = WorkerClaimCommand.Execute,
-                ["complete"] = WorkerCompleteCommand.Execute
+                ["complete"] = WorkerCompleteCommand.Execute,
+                // G374: child-side structured worker-signal raising.
+                ["signal"] = WorkerSignalCommand.Execute
             },
             ["metadata"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
