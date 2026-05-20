@@ -67,11 +67,24 @@ jobs:
           BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           EXPIRES_AT="$(date -u -d '+14 days' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
           SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          # G378: derive the latest implemented execution unit from
+          # source-controlled git history (checkout uses fetch-depth: 0)
+          # and pass it explicitly to pack so the preview/baseline
+          # artifacts can never report a stale completed unit. The csproj
+          # also derives this automatically, but pinning it here keeps the
+          # CI artifact metadata deterministic regardless of the MSBuild
+          # target. Falls back to `unknown` (never a stale G-number) when
+          # no `G<n>:` subject is found.
+          LATEST_EXECUTION_UNIT="$(git log -n 300 --format=%s | sed -n 's/^\(G[0-9][0-9]*\)[: ].*/\1/p' | sort -t G -k2 -n | tail -1)"
+          if [ -z "${LATEST_EXECUTION_UNIT}" ]; then
+            LATEST_EXECUTION_UNIT="unknown"
+          fi
           {
             echo "package_version=${PACKAGE_VERSION}"
             echo "build_timestamp=${BUILD_TIMESTAMP}"
             echo "expires_at=${EXPIRES_AT}"
             echo "short_sha=${SHORT_SHA}"
+            echo "latest_execution_unit=${LATEST_EXECUTION_UNIT}"
           } | tee -a "${GITHUB_OUTPUT}"
 
       # G371: each phase carries a stable `id` so the failure-summary
@@ -103,6 +116,7 @@ jobs:
             --configuration Release \
             -o .artifacts/private-preview \
             -p:Version=${{ steps.meta.outputs.package_version }} \
+            -p:IntentSystemLatestExecutionUnit=${{ steps.meta.outputs.latest_execution_unit }} \
             -p:PrivatePreviewChannel=private-preview \
             -p:PrivatePreviewBuildTimestamp=${{ steps.meta.outputs.build_timestamp }} \
             -p:PrivatePreviewExpiresAt=${{ steps.meta.outputs.expires_at }} \
@@ -113,7 +127,8 @@ jobs:
         run: |
           dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
             --configuration Release \
-            -o .artifacts/source-baseline
+            -o .artifacts/source-baseline \
+            -p:IntentSystemLatestExecutionUnit=${{ steps.meta.outputs.latest_execution_unit }}
 
       - name: Verify preview pack embeds AssemblyMetadata
         id: verify
