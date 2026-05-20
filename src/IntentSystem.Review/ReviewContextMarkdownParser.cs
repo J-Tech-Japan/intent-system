@@ -5,10 +5,26 @@ namespace IntentSystem.Review;
 public static class ReviewContextMarkdownParser
 {
     public static ReviewContextSnapshot Parse(string markdown)
+        => Parse(markdown, fallbackExecutionUnit: null);
+
+    /// <summary>
+    /// G373: parse a review-context markdown using a caller-supplied
+    /// canonical fallback execution-unit identity (resolved from
+    /// <c>packet.yaml</c> / the queue item / the <c>review run</c> command
+    /// argument). When the markdown omits the legacy <c># Execution Unit</c>
+    /// section — as newer, intentionally minimal packet review-context
+    /// files do — the fallback is used instead of throwing. This keeps
+    /// <c>review run</c> from failing solely because the section is absent
+    /// while <c>closeout-plan</c> and <c>guide review</c> already resolve the
+    /// unit from canonical packet artifacts. Passing a <c>null</c>/blank
+    /// fallback preserves the original "section is required" behavior for
+    /// callers that have no canonical identity to fall back on.
+    /// </summary>
+    public static ReviewContextSnapshot Parse(string markdown, string? fallbackExecutionUnit)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(markdown);
 
-        var executionUnit = ParseExecutionUnit(markdown);
+        var executionUnit = ParseExecutionUnit(markdown, fallbackExecutionUnit);
         var sections = ParseSections(markdown);
 
         return new ReviewContextSnapshot
@@ -20,7 +36,7 @@ public static class ReviewContextMarkdownParser
         };
     }
 
-    private static string ParseExecutionUnit(string markdown)
+    private static string ParseExecutionUnit(string markdown, string? fallbackExecutionUnit)
     {
         using var reader = new StringReader(markdown);
         string? line;
@@ -47,6 +63,14 @@ public static class ReviewContextMarkdownParser
             {
                 return trimmed[1..^1];
             }
+        }
+
+        // G373: the legacy `# Execution Unit` section is absent. Fall back
+        // to the canonical identity the caller resolved from packet.yaml /
+        // the queue item / the command argument, when one was supplied.
+        if (!string.IsNullOrWhiteSpace(fallbackExecutionUnit))
+        {
+            return fallbackExecutionUnit;
         }
 
         throw new InvalidOperationException("Review context markdown must contain an Execution Unit section.");
