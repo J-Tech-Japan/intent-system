@@ -149,7 +149,7 @@ public sealed class AutomationLabelPaletteCommandsTests
             {
                 new GitHubLabelMetadata { Name = canonical0.Name, Color = "FFFFFF", Description = canonical0.Description },
                 new GitHubLabelMetadata { Name = canonical1.Name, Color = canonical1.Color, Description = canonical1.Description },
-                // canonical[2..7] missing → create.
+                // Every canonical entry after the first two is missing → create.
             });
         var mutator = new RecordingMutator();
         AutomationLabelPaletteSyncCommand.LabelPaletteMutatorFactory = () => mutator;
@@ -163,8 +163,8 @@ public sealed class AutomationLabelPaletteCommandsTests
                 writer);
 
             Assert.Equal(0, exit);
-            // canonical0 → edit (wrong color); canonical[2..7] → create.
-            Assert.Equal(6, mutator.Creates.Count);
+            // canonical0 → edit (wrong color); all entries after canonical1 → create.
+            Assert.Equal(WorkflowLabelPaletteContract.Canonical.Count - 2, mutator.Creates.Count);
             Assert.Single(mutator.Edits);
             Assert.Equal(canonical0.Name, mutator.Edits[0].name);
             Assert.Equal(canonical0.Color, mutator.Edits[0].color);
@@ -179,7 +179,7 @@ public sealed class AutomationLabelPaletteCommandsTests
             using var doc = JsonDocument.Parse(writer.ToString());
             var root = doc.RootElement;
             Assert.Equal("write", root.GetProperty("mode").GetString());
-            Assert.Equal(7, root.GetProperty("applied_count").GetInt32());
+            Assert.Equal(WorkflowLabelPaletteContract.Canonical.Count - 1, root.GetProperty("applied_count").GetInt32());
         }
         finally
         {
