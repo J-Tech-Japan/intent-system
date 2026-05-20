@@ -86,7 +86,17 @@ internal static class ReviewRunCommand
             throw new InvalidOperationException($"Run log was not found at {runLogPath}");
         }
 
-        var reviewContext = ReviewContextMarkdownParser.Parse(File.ReadAllText(reviewContextPath));
+        // G373: the queue item's execution unit is the canonical identity
+        // (derived from packet.yaml at publish and matched to the command
+        // argument above). Pass it as the fallback so a minimal
+        // review-context.md that omits the legacy `# Execution Unit`
+        // section still resolves to the canonical unit instead of failing
+        // after a review lease was taken. A review-context.md that DOES
+        // declare an execution unit must still match the queue item — the
+        // guard below preserves that integrity check.
+        var reviewContext = ReviewContextMarkdownParser.Parse(
+            File.ReadAllText(reviewContextPath),
+            fallbackExecutionUnit: queueItem.ExecutionUnit);
         if (!string.Equals(reviewContext.SourceExecutionUnit, queueItem.ExecutionUnit, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(

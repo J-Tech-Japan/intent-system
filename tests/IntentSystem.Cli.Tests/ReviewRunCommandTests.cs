@@ -215,6 +215,56 @@ public sealed class ReviewRunCommandTests
     }
 
     [Fact]
+    public void Execute_GivenMinimalReviewContextWithoutExecutionUnitSection_ResolvesFromQueueItemAndSucceeds()
+    {
+        // G373 / PR #844 shape: a newer minimal review-context.md omits the
+        // legacy `# Execution Unit` section and relies on packet.yaml /
+        // queue-state as the canonical identity. `review run` must resolve
+        // the unit from the queue item (which closeout-plan and guide review
+        // already use) instead of failing after a review lease was taken.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G9", "review-context.md"),
+            CreateMinimalReviewContextMarkdownWithoutExecutionUnit());
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "runs.jsonl"),
+            CreateRunLog());
+        using var writer = new StringWriter();
+        var originalLauncherFactory = ReviewRunCommand.DirectRunLauncherFactory;
+
+        try
+        {
+            ReviewRunCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:9999",
+                "ReviewBot",
+                "gpt-5.4-mini",
+                "grpc",
+                "reviewbot",
+                ["launch", "--model", "{model}", "--artifact", "{request_artifact_path}"],
+                "grpc transport launched.");
+
+            var exitCode = ReviewRunCommand.Execute(CreateContext(repoRoot), ["G9"], writer);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Review request artifact generated for G9", writer.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("must contain an Execution Unit section", writer.ToString(), StringComparison.Ordinal);
+
+            var artifactPath = Path.Combine(repoRoot, ".intent-cli", "reviews", "G9.request.json");
+            Assert.True(File.Exists(artifactPath));
+            var request = ReviewRequestSerializer.Deserialize(File.ReadAllText(artifactPath));
+            Assert.Equal("G9", request.ExecutionUnit);
+        }
+        finally
+        {
+            ReviewRunCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
+    }
+
+    [Fact]
     public void Execute_GivenMissingLinkedPr_ReturnsExitCodeOne()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -1433,6 +1483,24 @@ public sealed class ReviewRunCommandTests
 
         - dotnet test IntentSystem.sln
         - review run command tests
+        """;
+    }
+
+    // G373: a newer minimal review-context.md that intentionally omits the
+    // legacy `# Execution Unit` section, relying on packet.yaml / queue
+    // state as the canonical identity. The required Deterministic Review
+    // Checks section is still present.
+    private static string CreateMinimalReviewContextMarkdownWithoutExecutionUnit()
+    {
+        return """
+        # Goal
+
+        Minimal review-context relying on packet.yaml as the canonical
+        execution-unit identity.
+
+        # Deterministic Review Checks
+
+        - review run resolves the execution unit from the queue item
         """;
     }
 
