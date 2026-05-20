@@ -77,6 +77,24 @@ internal static class WorkflowLabelPaletteContract
             Color = "0E8A16",
             Description = "PR is approved by intent automation review; ready to merge + close out."
         },
+        // G374: structured worker-signal protocol. These two labels are
+        // the durable pending/handled markers a child implementation
+        // worker uses to hand a blocker / follow-up / scope-warning back
+        // to host review/design automation without touching host intent
+        // metadata. They sit outside the linear target→review→approval
+        // lane, so they appear last in the canonical palette.
+        new()
+        {
+            Name = "intent-signal-sent",
+            Color = "B60205",
+            Description = "Item has an unhandled structured worker signal comment awaiting host review."
+        },
+        new()
+        {
+            Name = "intent-signal-handled",
+            Color = "C2E0C6",
+            Description = "Host/review side processed the current worker signal set."
+        },
     ];
 }
 
