@@ -56,6 +56,9 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 out var allowWipCapOverride,
                 out var prDraft,
                 out var workspaceSafeDirty,
+                out var draftReviewReady,
+                out var draftFindingsPresent,
+                out var operatorIntendedDraft,
                 out var format,
                 out var error))
         {
@@ -266,7 +269,10 @@ internal static class AutomationHostReviewDiagnosticsCommand
             prDraft,
             publishRecoveryRepairsAvailable,
             workspaceSafeDirty,
-            closeoutDriftRepairsAvailable);
+            closeoutDriftRepairsAvailable,
+            draftReviewReady,
+            draftFindingsPresent,
+            operatorIntendedDraft);
 
         Emit(writer, result, format);
         return 0;
@@ -350,6 +356,9 @@ internal static class AutomationHostReviewDiagnosticsCommand
         out bool allowWipCapOverride,
         out bool? prDraft,
         out bool workspaceSafeDirty,
+        out bool draftReviewReady,
+        out bool draftFindingsPresent,
+        out bool operatorIntendedDraft,
         out string format,
         out string error)
     {
@@ -367,6 +376,9 @@ internal static class AutomationHostReviewDiagnosticsCommand
         allowWipCapOverride = false;
         prDraft = null;
         workspaceSafeDirty = false;
+        draftReviewReady = false;
+        draftFindingsPresent = false;
+        operatorIntendedDraft = false;
         format = FormatText;
         error = string.Empty;
 
@@ -465,6 +477,20 @@ internal static class AutomationHostReviewDiagnosticsCommand
                 case "--workspace-safe-dirty":
                     workspaceSafeDirty = true;
                     break;
+                // G376: draft-aware host review decision signals. The host
+                // loop passes these after positively verifying review state
+                // (closeout-plan ready, guide review ready, base on policy,
+                // diff check passed, findings). Absent flags preserve the
+                // pre-G376 fail-closed draft-merge-blocked default.
+                case "--draft-review-ready":
+                    draftReviewReady = true;
+                    break;
+                case "--draft-findings-present":
+                    draftFindingsPresent = true;
+                    break;
+                case "--operator-intended-draft":
+                    operatorIntendedDraft = true;
+                    break;
                 case "--pr-draft":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -504,7 +530,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
                     index++;
                     break;
                 default:
-                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--publish-recovery-repairs-available <N>] [--closeout-drift-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--format text|json].";
+                    error = $"Unknown argument '{argument}'. Supported: [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind>] [--reconcile-repairs-available <N>] [--publish-recovery-repairs-available <N>] [--closeout-drift-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--draft-review-ready] [--draft-findings-present] [--operator-intended-draft] [--format text|json].";
                     return false;
             }
         }
@@ -573,7 +599,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation host-review-diagnostics");
-        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--domain <name>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--format text|json]");
-        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, draft-merge-blocked (G297), and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. With `--pr-draft true` and a selected review PR (G297), the diagnostic returns `draft-merge-blocked` so the host loop can release the review lease and surface the gap. Never mutates GitHub or local state.");
+        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--domain <name>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--draft-review-ready] [--draft-findings-present] [--operator-intended-draft] [--format text|json]");
+        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, draft-merge-blocked (G297), draft-ready-to-promote / draft-request-update (G376), and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. With `--pr-draft true` and a selected review PR, the draft decision is draft-aware (G376): pass `--draft-review-ready` (host verified closeout/guide/base/diff and no findings) to get `draft-ready-to-promote` (mark ready + continue) instead of releasing the lease; `--draft-findings-present` yields `draft-request-update`; `--operator-intended-draft` (or no readiness signal) stays fail-closed at `draft-merge-blocked` (G297). Never mutates GitHub or local state.");
     }
 }
