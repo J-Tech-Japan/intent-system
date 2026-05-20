@@ -127,6 +127,138 @@ jobs:
           }
           EOF
 
+      # G369: generate a SHA256 checksum sidecar so testers can verify
+      # the bundle they received matches what CI produced before
+      # `dotnet tool install` consumes it. The `<nupkg-filename>` form
+      # (relative path) keeps `shasum -a 256 -c` / `sha256sum -c` happy
+      # when the tester runs the check from inside the unzipped bundle
+      # directory.
+      - name: Generate SHA256 checksum for .nupkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .artifacts/private-preview
+          NUPKG_FILE="$(basename "$(ls intent-cli.*.nupkg | head -n 1)")"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${NUPKG_FILE}" > "${NUPKG_FILE}.sha256"
+          else
+            shasum -a 256 "${NUPKG_FILE}" > "${NUPKG_FILE}.sha256"
+          fi
+          echo "wrote ${NUPKG_FILE}.sha256:"
+          cat "${NUPKG_FILE}.sha256"
+
+      # G369: generate an in-bundle INSTALL.md so a tester who received
+      # the zip via private email / file share has self-contained
+      # install / update / verify / uninstall steps without needing
+      # access to this repo's README. The template fills in this
+      # build's exact version, expiry, and commit so the commands a
+      # tester copy-pastes are correct as-is (no `<run_number>`
+      # placeholders to substitute).
+      - name: Generate install bundle README (INSTALL.md)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .artifacts/private-preview
+          NUPKG_FILE="$(basename "$(ls intent-cli.*.nupkg | head -n 1)")"
+          PACKAGE_VERSION="${{ steps.meta.outputs.package_version }}"
+          BUILD_TIMESTAMP="${{ steps.meta.outputs.build_timestamp }}"
+          EXPIRES_AT="${{ steps.meta.outputs.expires_at }}"
+          SOURCE_COMMIT="${{ github.sha }}"
+          SHORT_SHA="${{ steps.meta.outputs.short_sha }}"
+          cat > INSTALL.md <<EOF
+          # intent-cli private-preview bundle
+
+          - **Package version**: \`${PACKAGE_VERSION}\`
+          - **Built (UTC)**: \`${BUILD_TIMESTAMP}\`
+          - **Expires (UTC)**: \`${EXPIRES_AT}\` (14 days after build; refresh
+            from a newer workflow run when this passes)
+          - **Source commit**: \`${SOURCE_COMMIT}\` (short: \`${SHORT_SHA}\`)
+          - **Channel**: \`private-preview\`
+
+          This bundle is a self-contained private-preview drop of the
+          \`intent-cli\` .NET global tool. No PAT, source checkout, or
+          public NuGet feed is required to install it -- only a
+          compatible .NET SDK / runtime and the files in this folder.
+
+          ## Bundle contents
+
+          | File | Purpose |
+          | --- | --- |
+          | \`${NUPKG_FILE}\` | The signed-into-place NuGet package consumed by \`dotnet tool install\`. |
+          | \`${NUPKG_FILE}.sha256\` | SHA-256 checksum; verify before installing. |
+          | \`preview-metadata.json\` | Machine-readable build provenance (channel, version, build/expiry timestamps, commit, CI run identifiers). |
+          | \`INSTALL.md\` | This file. |
+
+          ## 1. Verify the download
+
+          From inside the unzipped bundle folder:
+
+          \`\`\`bash
+          # macOS:
+          shasum -a 256 -c "${NUPKG_FILE}.sha256"
+          # Linux:
+          sha256sum -c "${NUPKG_FILE}.sha256"
+          \`\`\`
+
+          Both forms print \`${NUPKG_FILE}: OK\` on success. Do not
+          install if verification fails.
+
+          ## 2. Install (fresh)
+
+          \`\`\`bash
+          dotnet tool install --global --add-source . \\
+            --version ${PACKAGE_VERSION} intent-cli
+          \`\`\`
+
+          \`--add-source .\` tells \`dotnet tool install\` to look for
+          \`intent-cli\` in the current folder instead of a NuGet feed.
+
+          ## 3. Update (replace a previous preview)
+
+          Drop the new bundle in a folder, then:
+
+          \`\`\`bash
+          dotnet tool update --global --add-source . \\
+            --version ${PACKAGE_VERSION} intent-cli
+          \`\`\`
+
+          \`update\` is the right command even when moving forward by a
+          single CI run.
+
+          ## 4. Verify the install
+
+          \`\`\`bash
+          intent-cli --version
+          \`\`\`
+
+          Expected (two lines):
+
+          \`\`\`text
+          intent-cli ${PACKAGE_VERSION}-${SHORT_SHA}-G<unit>
+          channel=private-preview built=${BUILD_TIMESTAMP} expires=${EXPIRES_AT} commit=${SOURCE_COMMIT}
+          \`\`\`
+
+          The \`channel=private-preview\` trailer is your confirmation
+          that the embedded preview metadata loaded successfully. If
+          the trailer is missing, the wrong package was installed.
+
+          ## 5. Uninstall
+
+          \`\`\`bash
+          dotnet tool uninstall --global intent-cli
+          \`\`\`
+
+          ## Expiry behaviour
+
+          When the wall clock passes \`expires=${EXPIRES_AT}\`, the
+          installed tool refuses to run and exits with code \`78\`
+          (G368 private-preview expiry gate). Refresh by installing a
+          newer bundle following step 3 above. Local source builds
+          (\`dotnet pack\` without the CI properties) carry no expiry
+          trailer and are not affected.
+          EOF
+          echo "wrote INSTALL.md (${PACKAGE_VERSION})"
+
       - name: Upload preview artifact
         uses: actions/upload-artifact@v4
         with:

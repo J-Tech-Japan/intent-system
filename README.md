@@ -43,26 +43,48 @@ Equivalent `dnx` path:
 (cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" intent-cli project status)
 ```
 
-## Private-preview install (G367)
+## Private-preview install (G367 / G369)
 
 The `private-preview-pack` GitHub Actions workflow runs on every merge to
-`main` and uploads an `intent-cli` `.nupkg` plus a `preview-metadata.json`
-descriptor as a workflow artifact named
-`intent-cli-private-preview-<version>`. The package version pattern is
-`0.2.0-preview.<run_number>.<run_attempt>`, so every CI run produces a
-distinct version.
+`main` and uploads a self-contained install bundle as a workflow artifact
+named `intent-cli-private-preview-<version>`. The bundle contains:
+
+| File | Purpose |
+| --- | --- |
+| `intent-cli.<version>.nupkg` | The NuGet package consumed by `dotnet tool install`. |
+| `intent-cli.<version>.nupkg.sha256` | SHA-256 checksum sidecar; verify before installing (G369). |
+| `preview-metadata.json` | Machine-readable build provenance (channel, version, build/expiry timestamps, commit, CI run identifiers). |
+| `INSTALL.md` | Per-build install / update / verify / uninstall guide with this build's exact version, expiry, and commit pre-filled (G369). |
+
+The package version pattern is `0.2.0-preview.<run_number>.<run_attempt>`,
+so every CI run produces a distinct version. No PAT, source checkout, or
+public NuGet feed is required to install -- only a compatible .NET SDK /
+runtime and the unzipped bundle.
 
 Install or update from a downloaded artifact:
 
 ```bash
 # 1. Download and unzip the workflow artifact from the GitHub Actions
-#    run page, e.g. into ./private-preview-package.
-# 2. Install (or update) the .NET tool from that local folder:
-dotnet tool install --global --add-source ./private-preview-package \
+#    run page, e.g. into ./private-preview-package. Then `cd` into it.
+cd ./private-preview-package
+
+# 2. Verify the checksum (macOS: shasum; Linux: sha256sum). Prints
+#    `intent-cli.<version>.nupkg: OK` on success. Do not install if
+#    verification fails.
+shasum -a 256 -c intent-cli.*.nupkg.sha256
+
+# 3. Install (or update) the .NET tool from this local folder:
+dotnet tool install --global --add-source . \
   --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
 # Or for an upgrade-in-place:
-dotnet tool update --global --add-source ./private-preview-package \
+dotnet tool update --global --add-source . \
   --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
+```
+
+To uninstall:
+
+```bash
+dotnet tool uninstall --global intent-cli
 ```
 
 The installed binary exposes the preview metadata via `intent-cli --version`:
@@ -72,11 +94,19 @@ intent-cli 0.2.0-preview.<run_number>.<run_attempt>-<short-sha>-G<unit>
 channel=private-preview built=<iso-utc> expires=<iso-utc> commit=<full-sha>
 ```
 
+The `channel=private-preview` trailer is the confirmation that the
+embedded preview metadata loaded successfully; missing trailer means the
+wrong package was installed.
+
 CI-built private-preview packages expire 14 days after their build
 timestamp; refresh the install from a newer workflow run when the
-`expires=` line moves into the past. Local source builds
-(`dotnet pack` without the CI properties) carry no expiry trailer and
-remain unrestricted.
+`expires=` line moves into the past. After expiry the installed tool
+exits with code `78` (G368 private-preview expiry gate). Local source
+builds (`dotnet pack` without the CI properties) carry no expiry trailer
+and remain unrestricted. Each bundle's `INSTALL.md` contains the full
+copy-pasteable step list with this build's exact version, expiry, and
+commit pre-filled, so a tester who only received the zip via a private
+share can install without referring back to this README.
 
 ## CLI command roles
 
