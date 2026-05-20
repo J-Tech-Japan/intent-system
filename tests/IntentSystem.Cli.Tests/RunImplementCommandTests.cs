@@ -198,12 +198,45 @@ public sealed class RunImplementCommandTests
             Path.Combine("repo", ".intent-cli", "runs.jsonl"),
             """{"ts":"2026-04-08T08:00:00Z","execution_unit":"G19","event":"fix-requested","by":"intent-cli"}""" + Environment.NewLine);
         using var writer = new StringWriter();
+        var originalTimestampFactory = RunImplementCommand.TimestampFactory;
+        var originalLauncherFactory = RunImplementCommand.DirectRunLauncherFactory;
 
-        var exitCode = RunImplementCommand.Execute(CreateContext(repoRoot), ["G19"], writer);
+        try
+        {
+            // G377: exercise the fixing-without-latest-pr contract hermetically.
+            // The artifact is written (RunImplementCommand.ExecuteCore) BEFORE the
+            // direct-run launch; the absence of a latest PR is non-terminal. Without
+            // an injected launcher this test fell through to the real
+            // DirectRunLauncher, which only exits 0 when a provider binary (e.g.
+            // `claude`) happens to be on PATH — true on a dev macOS box, false on the
+            // GitHub Actions Linux runner — so the launch threw, the command returned
+            // exit 1, and the `Test (source contract)` step blocked preview packaging.
+            // Injecting the fake launcher (like every other test here) makes the
+            // contract deterministic across platforms.
+            RunImplementCommand.TimestampFactory = () => DateTimeOffset.Parse("2026-04-09T10:15:00Z");
+            RunImplementCommand.DirectRunLauncherFactory = () => new FakeDirectRunLauncher(
+                "pid:4321",
+                "Claude",
+                "default",
+                "stdio",
+                "stdio transport launched via 'claude' in '/repo/.intent-cli/worktrees/G19' for provider 'Claude'.");
 
-        Assert.Equal(0, exitCode);
-        Assert.DoesNotContain("Latest linked PR:", writer.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("latest_linked_pr", File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "implement", "G19.request.md")), StringComparison.Ordinal);
+            var exitCode = RunImplementCommand.Execute(CreateContext(repoRoot), ["G19"], writer);
+
+            Assert.Equal(0, exitCode);
+            var output = writer.ToString();
+            // The artifact IS generated even though the fixing item has no latest PR.
+            Assert.Contains("Implementation handoff artifact generated for G19", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Latest linked PR:", output, StringComparison.Ordinal);
+            var requestMarkdownPath = Path.Combine(repoRoot, ".intent-cli", "implement", "G19.request.md");
+            Assert.True(File.Exists(requestMarkdownPath));
+            Assert.DoesNotContain("latest_linked_pr", File.ReadAllText(requestMarkdownPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            RunImplementCommand.TimestampFactory = originalTimestampFactory;
+            RunImplementCommand.DirectRunLauncherFactory = originalLauncherFactory;
+        }
     }
 
     [Fact]
