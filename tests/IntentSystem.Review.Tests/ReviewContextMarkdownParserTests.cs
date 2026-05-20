@@ -82,6 +82,31 @@ public sealed class ReviewContextMarkdownParserTests
     }
 
     [Fact]
+    public void Parse_GivenMalformedExecutionUnitSectionWithFallback_StillThrows()
+    {
+        // G373 reviewer follow-up: a PRESENT-but-malformed `# Execution Unit`
+        // section (heading exists, but no valid backticked value) must NOT
+        // silently fall back to the queue-item identity — that would weaken
+        // the downstream mismatch guard. The fallback only applies when the
+        // heading is truly absent.
+        var markdown = """
+        # Execution Unit
+
+        this line has no backticked execution unit value
+
+        # Deterministic Review Checks
+
+        - malformed execution unit section must not fall back
+        """;
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => ReviewContextMarkdownParser.Parse(markdown, fallbackExecutionUnit: "G369"));
+
+        Assert.Contains("Execution Unit", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("G369", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Parse_GivenExecutionUnitSectionAndFallback_PrefersTheDeclaredSection()
     {
         // When the markdown DOES declare an execution unit, the declared

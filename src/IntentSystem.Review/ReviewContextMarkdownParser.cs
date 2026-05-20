@@ -41,6 +41,7 @@ public static class ReviewContextMarkdownParser
         using var reader = new StringReader(markdown);
         string? line;
         var inExecutionUnitSection = false;
+        var sawExecutionUnitHeading = false;
 
         while ((line = reader.ReadLine()) is not null)
         {
@@ -50,6 +51,10 @@ public static class ReviewContextMarkdownParser
                     line[2..],
                     "Execution Unit",
                     StringComparison.Ordinal);
+                if (inExecutionUnitSection)
+                {
+                    sawExecutionUnitHeading = true;
+                }
                 continue;
             }
 
@@ -65,9 +70,21 @@ public static class ReviewContextMarkdownParser
             }
         }
 
-        // G373: the legacy `# Execution Unit` section is absent. Fall back
-        // to the canonical identity the caller resolved from packet.yaml /
-        // the queue item / the command argument, when one was supplied.
+        // G373 (reviewer follow-up): only fall back when the legacy
+        // `# Execution Unit` heading is TRULY ABSENT. If the heading was
+        // present but carried no valid backticked execution-unit value, the
+        // section is malformed — keep throwing rather than silently
+        // substituting the queue-item identity, so the downstream mismatch
+        // guard is not weakened.
+        if (sawExecutionUnitHeading)
+        {
+            throw new InvalidOperationException(
+                "Review context markdown 'Execution Unit' section must contain a backticked execution unit value.");
+        }
+
+        // The section heading is absent. Fall back to the canonical identity
+        // the caller resolved from packet.yaml / the queue item / the
+        // command argument, when one was supplied.
         if (!string.IsNullOrWhiteSpace(fallbackExecutionUnit))
         {
             return fallbackExecutionUnit;
