@@ -294,6 +294,7 @@ jobs:
       # package — only diagnostics — and tolerates a missing results
       # dir (e.g. a restore/build failure before tests ran).
       - name: Upload diagnostic artifacts (test results)
+        id: upload_diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -318,10 +319,16 @@ jobs:
           OUTCOME_PACK_BASELINE: ${{ steps.pack_baseline.outcome }}
           OUTCOME_VERIFY: ${{ steps.verify.outcome }}
           OUTCOME_UPLOAD: ${{ steps.upload.outcome }}
+          OUTCOME_UPLOAD_DIAGNOSTICS: ${{ steps.upload_diagnostics.outcome }}
         run: |
           set -euo pipefail
           phase="unknown"
           detail="See the step logs above for the failing command."
+          # Real-phase checks come first so that, e.g., a test failure
+          # that ALSO trips the always()-gated diagnostic upload still
+          # reports the test failure as the root cause. The diagnostic
+          # upload check is last and only wins when every other phase
+          # succeeded/skipped (G371 reviewer follow-up).
           if [ "${OUTCOME_RESTORE}" = "failure" ] || [ "${OUTCOME_BUILD}" = "failure" ]; then
             phase="restore/build"
             detail="Dependency restore or compilation failed before any packaging ran. No package was produced."
@@ -338,8 +345,11 @@ jobs:
             phase="metadata verification"
             detail="The PreviewArtifactVerify metadata check failed; the produced package may be missing PrivatePreview AssemblyMetadata, or the source baseline unexpectedly carried it."
           elif [ "${OUTCOME_UPLOAD}" = "failure" ]; then
-            phase="artifact upload"
-            detail="Packaging and verification succeeded, but uploading the preview artifact failed."
+            phase="artifact upload (preview package)"
+            detail="Packaging and verification succeeded, but uploading the preview package artifact failed."
+          elif [ "${OUTCOME_UPLOAD_DIAGNOSTICS}" = "failure" ]; then
+            phase="artifact upload (diagnostics)"
+            detail="All build/test/pack/verify phases succeeded (the preview package may have uploaded), but uploading the diagnostic test-results artifact failed."
           fi
           {
             echo "## private-preview-pack FAILED"
@@ -354,7 +364,8 @@ jobs:
             echo "| private-preview pack | ${OUTCOME_PACK_PREVIEW} |"
             echo "| source baseline pack | ${OUTCOME_PACK_BASELINE} |"
             echo "| metadata verification | ${OUTCOME_VERIFY} |"
-            echo "| artifact upload | ${OUTCOME_UPLOAD} |"
+            echo "| artifact upload (preview package) | ${OUTCOME_UPLOAD} |"
+            echo "| artifact upload (diagnostics) | ${OUTCOME_UPLOAD_DIAGNOSTICS} |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       # G371: on success, summarize the produced bundle so the run page
