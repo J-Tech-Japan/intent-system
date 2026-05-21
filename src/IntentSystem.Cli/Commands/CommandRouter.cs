@@ -296,6 +296,8 @@ internal static class CommandRouter
                 ["prompt-template"] = GuidePromptTemplateCommand.Execute,
                 // G380: direct clarification-question-style guide surface.
                 ["question-style"] = GuideQuestionStyleCommand.Execute,
+                // G381: persistent goal-seeking interview-mode guide surface.
+                ["interview-mode"] = GuideInterviewModeCommand.Execute,
                 // G326: role-scoped host ownership model.
                 ["host-ownership"] = GuideHostOwnershipCommand.Execute,
                 // G334: self-discovery help surface for external users.
