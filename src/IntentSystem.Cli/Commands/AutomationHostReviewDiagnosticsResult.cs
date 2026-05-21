@@ -196,6 +196,24 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     public const string DraftRequestUpdate = "draft-request-update";
 
     /// <summary>
+    /// G383: terminal class returned when a PR is blocked only by a
+    /// visible/manual/runtime-gated verification AC whose missing piece is
+    /// a host-owned policy/design decision (not a PR implementation
+    /// finding). The host loop records it ONCE as a durable clarification/
+    /// signal and reports this stable classification so later wakes do not
+    /// re-ask the operator the same standing A/B/C policy question.
+    /// </summary>
+    public const string ReviewPolicyGap = "review-policy-gap";
+
+    /// <summary>
+    /// G383: terminal class returned when a visible-verification AC gap is
+    /// implementation-actionable — the implementer can add the missing
+    /// evidence on the PR branch. Route it as an intent-cli-managed PR
+    /// feedback comment + <c>request-update</c>, never a chat question.
+    /// </summary>
+    public const string ImplementationFinding = "implementation-finding";
+
+    /// <summary>
     /// G356: terminal class returned when one or more queue items are not
     /// marked Completed even though their linked GitHub PR is already
     /// merged. The host loop should run

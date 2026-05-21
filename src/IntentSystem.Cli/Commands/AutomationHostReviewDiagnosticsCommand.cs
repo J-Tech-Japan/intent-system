@@ -41,6 +41,18 @@ internal static class AutomationHostReviewDiagnosticsCommand
             return 0;
         }
 
+        // G383: visible/manual/runtime-gated verification-AC decision lane.
+        // Isolated early-return so the rest of host-review-diagnostics is
+        // untouched. When `--review-verification-ac` is passed, run the
+        // verification-policy classifier and emit the stable
+        // `review-policy-gap` / `implementation-finding` classification (or
+        // a proceed verdict) so the host loop converges instead of
+        // re-asking the operator the same standing A/B/C policy question.
+        if (Array.IndexOf(args, "--review-verification-ac") >= 0)
+        {
+            return HandleReviewVerificationPolicy(args, writer);
+        }
+
         if (!TryParseArguments(
                 args,
                 out var repo,
@@ -596,10 +608,142 @@ internal static class AutomationHostReviewDiagnosticsCommand
         }
     }
 
+    /// <summary>
+    /// G383: classify a visible/manual/runtime-gated verification AC via
+    /// <see cref="ReviewVerificationPolicyClassifier"/> and emit the stable
+    /// host-review-diagnostics classification so the host loop converges
+    /// (approve / request-update / record-policy-gap-once) instead of
+    /// re-asking the operator. Read-only; no host state, no GitHub mutation.
+    /// </summary>
+    private static int HandleReviewVerificationPolicy(string[] args, TextWriter writer)
+    {
+        var standingPolicy = false;
+        var falseRuntimeClaim = false;
+        var implementationActionable = false;
+        var evidence = ReviewVerificationPolicyClassifier.Evidence.None;
+        string? repo = null;
+        var pr = "<n>";
+        var format = FormatText;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            var argument = args[index];
+            switch (argument)
+            {
+                case "--review-verification-ac":
+                    break;
+                case "--standing-policy":
+                    standingPolicy = true;
+                    break;
+                case "--false-runtime-claim":
+                    falseRuntimeClaim = true;
+                    break;
+                case "--implementation-actionable":
+                    implementationActionable = true;
+                    break;
+                case "--evidence":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        writer.WriteLine("--evidence requires a value (source-mapping | documented-observation | static-screenshot | none).");
+                        return 1;
+                    }
+                    evidence = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--repo":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        writer.WriteLine("--repo requires a value (e.g. owner/repo).");
+                        return 1;
+                    }
+                    repo = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--pr":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        writer.WriteLine("--pr requires a positive integer.");
+                        return 1;
+                    }
+                    pr = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--format":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        writer.WriteLine("--format requires a value (text or json).");
+                        return 1;
+                    }
+                    var requested = args[index + 1];
+                    if (!string.Equals(requested, FormatText, StringComparison.Ordinal)
+                        && !string.Equals(requested, FormatJson, StringComparison.Ordinal))
+                    {
+                        writer.WriteLine($"--format must be 'text' or 'json' (got '{requested}').");
+                        return 1;
+                    }
+                    format = requested;
+                    index++;
+                    break;
+                default:
+                    writer.WriteLine($"Unknown argument '{argument}' for --review-verification-ac. Supported: --review-verification-ac [--standing-policy] [--evidence <kind>] [--false-runtime-claim] [--implementation-actionable] [--repo <owner/repo>] [--pr <n>] [--format text|json].");
+                    return 1;
+            }
+        }
+
+        var repoValue = string.IsNullOrWhiteSpace(repo) ? "<owner/repo>" : repo!;
+        var decision = ReviewVerificationPolicyClassifier.Classify(
+            standingPolicy, evidence, falseRuntimeClaim, implementationActionable);
+
+        string classification;
+        string? recommended;
+        switch (decision.Decision)
+        {
+            case ReviewVerificationPolicyClassifier.Decisions.StandingPolicyApprove:
+                classification = AutomationHostReviewDiagnosticsClassifications.ReviewPrActionable;
+                recommended = $"intent-cli automation host-review-preflight --repo {repoValue} --format json";
+                break;
+            case ReviewVerificationPolicyClassifier.Decisions.ImplementationFinding:
+                classification = AutomationHostReviewDiagnosticsClassifications.ImplementationFinding;
+                recommended = $"intent-cli automation pr-transition --transition request-update --repo {repoValue} --pr {pr} --write --format json";
+                break;
+            default:
+                classification = AutomationHostReviewDiagnosticsClassifications.ReviewPolicyGap;
+                recommended = $"intent-cli clarify open --domain <domain> --question \"visible-verification policy for {repoValue}#{pr}\" --format json";
+                break;
+        }
+
+        var result = new AutomationHostReviewDiagnosticsResult
+        {
+            Repo = repoValue,
+            Classification = classification,
+            Summary = $"G383 visible-verification AC: {decision.Reason} The review summary MUST state exactly what was verified and what was NOT run.",
+            ReadOnly = true,
+            RecommendedNextCommand = recommended,
+            StructuredClarification = null,
+            Details =
+            [
+                new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = classification,
+                    TargetKind = null,
+                    TargetNumber = null,
+                    TargetUrl = null,
+                    Description = $"decision={decision.Decision}; route={decision.Route}; record_host_gap_once={decision.RecordHostGapOnce.ToString().ToLowerInvariant()}; post_pr_feedback={decision.PostPrFeedback.ToString().ToLowerInvariant()}",
+                }
+            ],
+            Warnings = Array.Empty<string>(),
+            SafeRepairAvailable = false,
+            SafeRepairCategory = null,
+        };
+
+        Emit(writer, result, format);
+        return 0;
+    }
+
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation host-review-diagnostics");
-        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--domain <name>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--draft-review-ready] [--draft-findings-present] [--operator-intended-draft] [--format text|json]");
-        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, draft-merge-blocked (G297), draft-ready-to-promote / draft-request-update (G376), and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. With `--pr-draft true` and a selected review PR, the draft decision is draft-aware (G376): pass `--draft-review-ready` (host verified closeout/guide/base/diff and no findings) to get `draft-ready-to-promote` (mark ready + continue) instead of releasing the lease; `--draft-findings-present` yields `draft-request-update`; `--operator-intended-draft` (or no readiness signal) stays fail-closed at `draft-merge-blocked` (G297). Never mutates GitHub or local state.");
+        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--domain <name>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--draft-review-ready] [--draft-findings-present] [--operator-intended-draft] [--review-verification-ac [--standing-policy] [--evidence <kind>] [--false-runtime-claim] [--implementation-actionable] [--pr <n>]] [--format text|json]");
+        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, draft-merge-blocked (G297), draft-ready-to-promote / draft-request-update (G376), and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. With `--pr-draft true` and a selected review PR, the draft decision is draft-aware (G376): pass `--draft-review-ready` (host verified closeout/guide/base/diff and no findings) to get `draft-ready-to-promote` (mark ready + continue) instead of releasing the lease; `--draft-findings-present` yields `draft-request-update`; `--operator-intended-draft` (or no readiness signal) stays fail-closed at `draft-merge-blocked` (G297). With `--review-verification-ac` (G383) the diagnostic classifies a visible/manual/runtime-gated verification AC into `review-pr-actionable` (standing policy permits approval; proceed), `implementation-finding` (route a PR feedback comment + request-update), or `review-policy-gap` (record a host-owned policy decision once; do not re-ask) — pass `--standing-policy` / `--evidence <kind>` / `--false-runtime-claim` / `--implementation-actionable` to drive the classification. Never mutates GitHub or local state.");
     }
 }

@@ -845,6 +845,90 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Contains("operator-intended", result.Summary, StringComparison.Ordinal);
     }
 
+    // ── G383 visible-verification AC decision lane ──────────────────────
+
+    [Fact]
+    public void Execute_ReviewVerificationAc_StandingPolicyWithEvidence_ClassifiesActionableProceed()
+    {
+        // No lister needed: the verification-policy lane is an isolated
+        // early-return that never lists candidates.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--review-verification-ac", "--repo", "owner/repo", "--pr", "259",
+             "--standing-policy", "--evidence", "source-mapping", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("review-pr-actionable", result.Classification);
+        Assert.Contains("what was NOT run", result.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ReviewVerificationAc_ImplementationActionable_ClassifiesImplementationFinding_RoutesRequestUpdate()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--review-verification-ac", "--repo", "owner/repo", "--pr", "259",
+             "--evidence", "none", "--implementation-actionable", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("implementation-finding", result.Classification);
+        Assert.NotNull(result.RecommendedNextCommand);
+        Assert.Contains("request-update", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ReviewVerificationAc_NoNormNotActionable_ClassifiesReviewPolicyGap_RecordsOnce()
+    {
+        // The Zero4Racer #259 shape: only a visible-verification policy is
+        // unresolved, no encoded norm, not implementation-actionable → record
+        // a host-owned policy gap once instead of re-asking the operator.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--review-verification-ac", "--repo", "owner/repo", "--pr", "259",
+             "--evidence", "none", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("review-policy-gap", result.Classification);
+        // Routed to a durable host clarification recorded once (not the child PR).
+        Assert.NotNull(result.RecommendedNextCommand);
+        Assert.Contains("clarify open", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Contains(result.Details, d => d.Description.Contains("record_host_gap_once=true", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_ReviewVerificationAc_FalseRuntimeClaim_NeverProceedsToApprove()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--review-verification-ac", "--repo", "owner/repo", "--pr", "259",
+             "--standing-policy", "--evidence", "source-mapping", "--false-runtime-claim", "--implementation-actionable", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        // Never the proceed verdict when a false runtime claim would be required.
+        Assert.NotEqual("review-pr-actionable", result.Classification);
+        Assert.Equal("implementation-finding", result.Classification);
+    }
+
     [Fact]
     public void Execute_NextSliceProbe_AutoPopulatesCandidate_WhenDomainFlagOrConfigPresent()
     {
