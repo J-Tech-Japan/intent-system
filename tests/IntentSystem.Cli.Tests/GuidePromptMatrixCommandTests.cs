@@ -1566,6 +1566,36 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoop_DoesNotRepeatOperatorPolicyQuestion_AndRoutesVerificationGaps()
+    {
+        // G383: a visible/manual/runtime-gated verification AC must not make
+        // the review loop re-ask the operator the same A/B/C policy question
+        // every wake. The host-loop prompt routes deterministically:
+        // standing-policy-approve, implementation-finding → PR feedback +
+        // request-update, review-policy-gap → durable host signal recorded
+        // once. The summary must state what was verified vs not run.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("Visible / manual / runtime-gated verification ACs (G383)", prompt, StringComparison.Ordinal);
+        // Repeated-operator-question regression: explicitly forbids re-asking.
+        Assert.Contains("do NOT ask the operator the same standing A/B/C", prompt, StringComparison.Ordinal);
+        Assert.Contains("guide review-verification-policy", prompt, StringComparison.Ordinal);
+        // Feedback-routing regression: impl gaps → PR feedback + request-update;
+        // host-policy gaps → durable host clarification/signal recorded once.
+        Assert.Contains("implementation-finding", prompt, StringComparison.Ordinal);
+        Assert.Contains("review-policy-gap", prompt, StringComparison.Ordinal);
+        Assert.Contains("record the host-owned policy decision ONCE", prompt, StringComparison.Ordinal);
+        Assert.Contains("what was NOT run", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HostOneshot_TellsAgentToCheckDraftBeforeApproval()
     {
         using var writer = new StringWriter();

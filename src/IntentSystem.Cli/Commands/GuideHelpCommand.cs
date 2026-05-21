@@ -232,6 +232,12 @@ internal static class GuideHelpCommand
             Name = "interview-readiness",
             Purpose = "G382 interview readiness checklist + scoring: pass --resolved <dimensions> to classify packet-ready / issue-ready / clarification-required / remaining-gaps, list missing dimensions, and get the next highest-value question.",
             Example = "intent-cli guide interview-readiness --resolved goal,scope,target,acceptance,verification --format json"
+        },
+        new GuideSubcommandEntry
+        {
+            Name = "review-verification-policy",
+            Purpose = "G383 deterministic route for visible/manual/runtime-gated verification ACs so the review loop never re-asks the operator: standing-policy-approve / implementation-finding (PR feedback) / review-policy-gap (durable host signal recorded once).",
+            Example = "intent-cli guide review-verification-policy --standing-policy --evidence source-mapping --format json"
         }
     };
 
