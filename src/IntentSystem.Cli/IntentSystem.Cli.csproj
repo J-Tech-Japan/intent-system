@@ -22,20 +22,61 @@
       runtime.
 
       IntentSystemLatestExecutionUnit is the latest implemented
-      intent-system G-number at pack/build time. Bump it as new
-      slices land. CI may override via the MSBuild property of the
-      same name.
+      intent-system G-number at pack/build time. G378: it is derived
+      automatically from source-controlled git history by the
+      ResolveIntentCliLatestExecutionUnit target below, so a normal
+      `dotnet pack` from a checkout reports the latest merged unit
+      without a manual property. A controlled CI/release build may still
+      pin it explicitly via -p:IntentSystemLatestExecutionUnit=Gxxx, in
+      which case the derivation is skipped. When no explicit value is
+      given the neutral `unknown` fallback below applies until the
+      derivation target replaces it — a stale hard-coded completed unit
+      (the previous `G360`) is worse than an explicit `unknown`.
 
       The git short SHA is captured from SourceRevisionId
       (set by Microsoft.SourceLink.GitHub or any CI that exports
       SourceRevisionId). When neither is available the SHA segment
       is omitted gracefully.
     -->
-    <IntentSystemLatestExecutionUnit Condition="'$(IntentSystemLatestExecutionUnit)' == ''">G360</IntentSystemLatestExecutionUnit>
+    <!-- G378: record an explicit operator/CI override BEFORE applying the
+         neutral default so the derivation target only fills in an
+         automatically-derived unit when nothing was pinned. -->
+    <IntentSystemLatestExecutionUnitExplicit Condition="'$(IntentSystemLatestExecutionUnit)' != ''">true</IntentSystemLatestExecutionUnitExplicit>
+    <IntentSystemLatestExecutionUnit Condition="'$(IntentSystemLatestExecutionUnit)' == ''">unknown</IntentSystemLatestExecutionUnit>
     <SourceRevisionShortId Condition="'$(SourceRevisionId)' != ''">$(SourceRevisionId.Substring(0, 7))</SourceRevisionShortId>
     <InformationalVersion Condition="'$(SourceRevisionShortId)' != ''">$(Version)-$(SourceRevisionShortId)-$(IntentSystemLatestExecutionUnit)</InformationalVersion>
     <InformationalVersion Condition="'$(SourceRevisionShortId)' == ''">$(Version)-$(IntentSystemLatestExecutionUnit)</InformationalVersion>
   </PropertyGroup>
+
+  <!--
+    G378: derive the latest implemented intent-system execution unit from
+    source-controlled git history at build time, replacing the previous
+    stale hard-coded `G360` fallback. The latest merged unit is the
+    highest `G<n>` that appears as a commit-subject prefix (both squash
+    merges `G377: ... (#858)` and the per-branch commits brought in by a
+    merge commit carry that prefix). Best-effort: when git is unavailable,
+    the checkout has no `G<n>:` subjects, or no match is found, the value
+    stays at the neutral `unknown` fallback rather than a misleading
+    completed unit. Skipped when the operator/CI pinned the unit
+    explicitly via -p:IntentSystemLatestExecutionUnit=... (controlled
+    release builds keep that override). Runs before
+    ResolveIntentCliSourceRevision so the SHA target's
+    InformationalVersion recompute observes the derived unit; the
+    PropertyGroup here also recomputes InformationalVersion so the value
+    is correct even when SourceRevisionId was already supplied (and the
+    SHA target is skipped).
+  -->
+  <Target Name="ResolveIntentCliLatestExecutionUnit" BeforeTargets="ResolveIntentCliSourceRevision;GetAssemblyAttributes;CoreCompile" Condition="'$(IntentSystemLatestExecutionUnitExplicit)' != 'true'">
+    <Exec Command="git log -n 300 --format=%s | sed -n 's/^\(G[0-9][0-9]*\)[: ].*/\1/p' | sort -t G -k2 -n | tail -1" WorkingDirectory="$(MSBuildProjectDirectory)" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="IntentSystemLatestExecutionUnitFromGit" />
+      <Output TaskParameter="ExitCode" PropertyName="IntentSystemLatestExecutionUnitGitExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(IntentSystemLatestExecutionUnitGitExitCode)' == '0' AND '$(IntentSystemLatestExecutionUnitFromGit.Trim())' != ''">
+      <IntentSystemLatestExecutionUnit>$(IntentSystemLatestExecutionUnitFromGit.Trim())</IntentSystemLatestExecutionUnit>
+      <InformationalVersion Condition="'$(SourceRevisionShortId)' != ''">$(Version)-$(SourceRevisionShortId)-$(IntentSystemLatestExecutionUnit)</InformationalVersion>
+      <InformationalVersion Condition="'$(SourceRevisionShortId)' == ''">$(Version)-$(IntentSystemLatestExecutionUnit)</InformationalVersion>
+    </PropertyGroup>
+  </Target>
 
   <!--
     G360: capture the current git short SHA at build time so the

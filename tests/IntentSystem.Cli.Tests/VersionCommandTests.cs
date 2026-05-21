@@ -77,10 +77,12 @@ public sealed class VersionCommandTests : IDisposable
         Assert.StartsWith("intent-cli ", result, StringComparison.Ordinal);
         // Package version segment must be present.
         Assert.Matches(@"intent-cli \d+\.\d+\.\d+", result);
-        // Latest implemented execution unit segment must be present;
-        // the csproj sets G360 by default, but allow any G-number to
-        // future-proof against bumps.
-        Assert.Matches(@"-G\d+$", result);
+        // Latest implemented execution unit segment must be present.
+        // G378: the unit is derived from git history at build time
+        // (e.g. `-G378`); when derivation cannot resolve a unit the
+        // contract uses the neutral `-unknown` marker rather than a
+        // stale hard-coded G-number. Accept either form.
+        Assert.Matches(@"-(G\d+|unknown)$", result);
         // The `+commit` SourceLink suffix must be stripped — the
         // canonical form uses dash-separated segments only.
         Assert.DoesNotContain('+', result);
