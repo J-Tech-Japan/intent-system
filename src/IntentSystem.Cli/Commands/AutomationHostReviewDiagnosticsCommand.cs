@@ -53,6 +53,16 @@ internal static class AutomationHostReviewDiagnosticsCommand
             return HandleReviewVerificationPolicy(args, writer);
         }
 
+        // G384: internal-submodule-edit redundancy decision lane. Isolated
+        // early-return: classifies a dirty internal submodule edit as
+        // redundant-safe vs protected-operator-work, deduplicates repeated
+        // wakes (--prior-fingerprint), and keeps a failing required CI
+        // visible as the implementation blocker (--required-ci-failing).
+        if (Array.IndexOf(args, "--in-submodule-edit") >= 0)
+        {
+            return HandleInSubmoduleEdit(args, writer);
+        }
+
         if (!TryParseArguments(
                 args,
                 out var repo,
@@ -747,10 +757,168 @@ internal static class AutomationHostReviewDiagnosticsCommand
         return 0;
     }
 
+    /// <summary>
+    /// G384: classify a dirty internal submodule edit via
+    /// <see cref="WorkspaceGuardSubmoduleEditClassifier"/> and emit a stable
+    /// diagnostics classification — `redundant-in-submodule-edit` (bounded
+    /// safe repair), `protected-operator-work` (hard-stop), or, when the
+    /// workspace is safe/redundant-safe and required CI is failing,
+    /// `required-ci-failing` (implementation-actionable). Deduplicates a
+    /// repeated unchanged report via `--prior-fingerprint`. Read-only.
+    /// </summary>
+    private static int HandleInSubmoduleEdit(string[] args, TextWriter writer)
+    {
+        var uniqueLocalContent = false;
+        var requiredCiFailing = false;
+        string submodulePath = "(submodule)";
+        var localFingerprint = string.Empty;
+        var headFingerprint = string.Empty;
+        string? priorFingerprint = null;
+        string? repo = null;
+        int? pr = null;
+        var format = FormatText;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            var argument = args[index];
+            switch (argument)
+            {
+                case "--in-submodule-edit":
+                    break;
+                case "--unique-local-content":
+                    uniqueLocalContent = true;
+                    break;
+                case "--required-ci-failing":
+                    requiredCiFailing = true;
+                    break;
+                case "--path":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        writer.WriteLine("--path requires a value (the dirty submodule path).");
+                        return 1;
+                    }
+                    submodulePath = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--local-fingerprint":
+                    if (index + 1 >= args.Length) { writer.WriteLine("--local-fingerprint requires a value."); return 1; }
+                    localFingerprint = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--pr-head-fingerprint":
+                    if (index + 1 >= args.Length) { writer.WriteLine("--pr-head-fingerprint requires a value."); return 1; }
+                    headFingerprint = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--prior-fingerprint":
+                    if (index + 1 >= args.Length) { writer.WriteLine("--prior-fingerprint requires a value."); return 1; }
+                    priorFingerprint = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--repo":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--repo requires a value (e.g. owner/repo)."); return 1; }
+                    repo = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--pr":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var prValue)
+                        || prValue <= 0)
+                    {
+                        writer.WriteLine("--pr requires a positive integer.");
+                        return 1;
+                    }
+                    pr = prValue;
+                    index++;
+                    break;
+                case "--format":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--format requires a value (text or json)."); return 1; }
+                    var requested = args[index + 1];
+                    if (!string.Equals(requested, FormatText, StringComparison.Ordinal) && !string.Equals(requested, FormatJson, StringComparison.Ordinal))
+                    {
+                        writer.WriteLine($"--format must be 'text' or 'json' (got '{requested}').");
+                        return 1;
+                    }
+                    format = requested;
+                    index++;
+                    break;
+                default:
+                    writer.WriteLine($"Unknown argument '{argument}' for --in-submodule-edit. Supported: --in-submodule-edit [--path <p>] [--local-fingerprint <f>] [--pr-head-fingerprint <f>] [--unique-local-content] [--required-ci-failing] [--prior-fingerprint <f>] [--repo <owner/repo>] [--pr <n>] [--format text|json].");
+                    return 1;
+            }
+        }
+
+        var decision = WorkspaceGuardSubmoduleEditClassifier.Classify(
+            isInternalSubmoduleEdit: true,
+            submodulePath,
+            localFingerprint,
+            headFingerprint,
+            uniqueLocalContent,
+            pr);
+
+        var deduplicated = WorkspaceGuardSubmoduleEditClassifier.IsDuplicateReport(priorFingerprint, decision.DedupeFingerprint);
+        var primaryBlocker = WorkspaceGuardSubmoduleEditClassifier.ResolvePrimaryBlocker(requiredCiFailing, decision.Classification);
+
+        // Required CI failing takes precedence as the implementation blocker
+        // when the workspace edit is redundant-safe (or not blocking).
+        string classification;
+        string? recommended;
+        if (string.Equals(primaryBlocker, WorkspaceGuardSubmoduleEditClassifier.Blockers.RequiredCiFailing, StringComparison.Ordinal))
+        {
+            classification = AutomationHostReviewDiagnosticsClassifications.RequiredCiFailing;
+            recommended = repo is not null && pr is not null
+                ? $"intent-cli automation pr-transition --transition request-update --repo {repo} --pr {pr} --write --format json"
+                : null;
+        }
+        else if (string.Equals(decision.Classification, WorkspaceGuardSubmoduleEditClassifier.Classifications.RedundantInSubmoduleEdit, StringComparison.Ordinal))
+        {
+            classification = AutomationHostReviewDiagnosticsClassifications.RedundantInSubmoduleEdit;
+            recommended = decision.RecommendedRepair;
+        }
+        else
+        {
+            classification = AutomationHostReviewDiagnosticsClassifications.ProtectedOperatorWork;
+            recommended = null;
+        }
+
+        var warnings = deduplicated ? new[] { "deduplicated-unchanged-report" } : Array.Empty<string>();
+        var summaryPrefix = deduplicated
+            ? "G384 (deduplicated — unchanged dirty fingerprint since last wake): "
+            : "G384: ";
+
+        var result = new AutomationHostReviewDiagnosticsResult
+        {
+            Repo = repo ?? "(repo)",
+            Classification = classification,
+            Summary = summaryPrefix + decision.Reason
+                + (requiredCiFailing ? " Required CI is failing and remains the visible implementation blocker." : string.Empty),
+            ReadOnly = true,
+            RecommendedNextCommand = recommended,
+            StructuredClarification = null,
+            Details =
+            [
+                new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = decision.Classification,
+                    TargetKind = null,
+                    TargetNumber = pr,
+                    TargetUrl = null,
+                    Description = $"path={submodulePath}; safe_repair_available={decision.SafeRepairAvailable.ToString().ToLowerInvariant()}; primary_blocker={primaryBlocker}; required_ci_failing={requiredCiFailing.ToString().ToLowerInvariant()}; dedupe_fingerprint={decision.DedupeFingerprint}",
+                }
+            ],
+            Warnings = warnings,
+            SafeRepairAvailable = decision.SafeRepairAvailable,
+            SafeRepairCategory = decision.SafeRepairAvailable ? SafeRepairCategories.WorkspaceSafeDirty : null,
+        };
+
+        Emit(writer, result, format);
+        return 0;
+    }
+
     private static void WriteHelp(TextWriter writer)
     {
         writer.WriteLine("automation host-review-diagnostics");
-        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--domain <name>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--draft-review-ready] [--draft-findings-present] [--operator-intended-draft] [--review-verification-ac [--standing-policy] [--evidence <kind>] [--false-runtime-claim] [--implementation-actionable] [--pr <n>]] [--format text|json]");
-        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, draft-merge-blocked (G297), draft-ready-to-promote / draft-request-update (G376), and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. With `--pr-draft true` and a selected review PR, the draft decision is draft-aware (G376): pass `--draft-review-ready` (host verified closeout/guide/base/diff and no findings) to get `draft-ready-to-promote` (mark ready + continue) instead of releasing the lease; `--draft-findings-present` yields `draft-request-update`; `--operator-intended-draft` (or no readiness signal) stays fail-closed at `draft-merge-blocked` (G297). With `--review-verification-ac` (G383) the diagnostic classifies a visible/manual/runtime-gated verification AC into `review-pr-actionable` (standing policy permits approval; proceed), `implementation-finding` (route a PR feedback comment + request-update), or `review-policy-gap` (record a host-owned policy decision once; do not re-ask) — pass `--standing-policy` / `--evidence <kind>` / `--false-runtime-claim` / `--implementation-actionable` to drive the classification. Never mutates GitHub or local state.");
+        writer.WriteLine("Usage: intent-cli automation host-review-diagnostics [--repo <owner/repo>] [--workdir <path>] [--candidate <execution-unit>] [--domain <name>] [--clarification-required] [--stale-clarification-metadata] [--reconcile-unsafe-stop <kind> ...] [--reconcile-repairs-available <N>] [--allow-wip-cap-override] [--workspace-safe-dirty] [--pr-draft true|false] [--draft-review-ready] [--draft-findings-present] [--operator-intended-draft] [--review-verification-ac [--standing-policy] [--evidence <kind>] [--false-runtime-claim] [--implementation-actionable] [--pr <n>]] [--in-submodule-edit [--path <p>] [--local-fingerprint <f>] [--pr-head-fingerprint <f>] [--unique-local-content] [--required-ci-failing] [--prior-fingerprint <f>] [--pr <n>]] [--format text|json]");
+        writer.WriteLine("Read-only host-loop convergence diagnostic. Classifies stuck-reviewing, missing-target-on-pr, request-update-rereview-conflict, wip-cap-blocked, clarification-required, stale-host-cli, review-pr-actionable, issue-publish-ready, unsafe-metadata, repaired-and-retry, draft-merge-blocked (G297), draft-ready-to-promote / draft-request-update (G376), and true-idle (G286). Stale clarification metadata surfaces in `warnings` without flipping the terminal class. With `--allow-wip-cap-override` (G288) and a complete candidate, an in-flight intent-target item is bypassed for one publish; the override surfaces as `wip-cap-overridden` in `warnings`. With `--pr-draft true` and a selected review PR, the draft decision is draft-aware (G376): pass `--draft-review-ready` (host verified closeout/guide/base/diff and no findings) to get `draft-ready-to-promote` (mark ready + continue) instead of releasing the lease; `--draft-findings-present` yields `draft-request-update`; `--operator-intended-draft` (or no readiness signal) stays fail-closed at `draft-merge-blocked` (G297). With `--review-verification-ac` (G383) the diagnostic classifies a visible/manual/runtime-gated verification AC into `review-pr-actionable` (standing policy permits approval; proceed), `implementation-finding` (route a PR feedback comment + request-update), or `review-policy-gap` (record a host-owned policy decision once; do not re-ask) — pass `--standing-policy` / `--evidence <kind>` / `--false-runtime-claim` / `--implementation-actionable` to drive the classification. With `--in-submodule-edit` (G384) the diagnostic classifies a dirty internal submodule edit into `redundant-in-submodule-edit` (bounded safe repair when `--local-fingerprint` matches `--pr-head-fingerprint` and no `--unique-local-content`), `protected-operator-work` (unique/unproven — hard-stop), or `required-ci-failing` (when `--required-ci-failing` and the workspace is redundant-safe); `--prior-fingerprint` deduplicates an unchanged repeat. Never mutates GitHub or local state.");
     }
 }
