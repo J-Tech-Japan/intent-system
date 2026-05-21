@@ -214,6 +214,30 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     public const string ImplementationFinding = "implementation-finding";
 
     /// <summary>
+    /// G384: terminal class returned when an internal submodule working-tree
+    /// edit is provably redundant with the selected PR head (matching diff
+    /// fingerprints, no unique local content). A bounded safe repair clears
+    /// the stale edit so the wake proceeds instead of repeating the
+    /// dirty-unrelated-submodule operator stop every wake.
+    /// </summary>
+    public const string RedundantInSubmoduleEdit = "redundant-in-submodule-edit";
+
+    /// <summary>
+    /// G384: terminal class returned when an internal submodule edit has
+    /// unique or unproven local content. intent-cli refuses auto-repair and
+    /// reports a protected-operator-work blocker (never silently discards
+    /// operator work).
+    /// </summary>
+    public const string ProtectedOperatorWork = "protected-operator-work";
+
+    /// <summary>
+    /// G384: terminal class returned when the selected PR's required CI is
+    /// failing — an implementation-actionable blocker that must stay visible
+    /// even when host-sync also sees a redundant-safe local submodule edit.
+    /// </summary>
+    public const string RequiredCiFailing = "required-ci-failing";
+
+    /// <summary>
     /// G356: terminal class returned when one or more queue items are not
     /// marked Completed even though their linked GitHub PR is already
     /// merged. The host loop should run

@@ -949,6 +949,86 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Equal("implementation-finding", result.Classification);
     }
 
+    // ── G384 redundant in-submodule-edit decision lane ─────────────────
+
+    [Fact]
+    public void Execute_InSubmoduleEdit_RedundantPrHeadMatch_ClassifiesRedundant_WithSafeRepair()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--in-submodule-edit", "--path", "submodules/X/.github/workflows/ci.yml",
+             "--local-fingerprint", "abc123", "--pr-head-fingerprint", "abc123", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("redundant-in-submodule-edit", result.Classification);
+        Assert.True(result.SafeRepairAvailable);
+        Assert.NotNull(result.RecommendedNextCommand);
+    }
+
+    [Fact]
+    public void Execute_InSubmoduleEdit_UniqueLocalContent_ClassifiesProtectedOperatorWork()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--in-submodule-edit", "--path", "submodules/X/f.cs",
+             "--local-fingerprint", "abc", "--pr-head-fingerprint", "abc", "--unique-local-content", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("protected-operator-work", result.Classification);
+        Assert.False(result.SafeRepairAvailable);
+    }
+
+    [Fact]
+    public void Execute_InSubmoduleEdit_RedundantButRequiredCiFailing_SurfacesCiBlocker()
+    {
+        // Required CI failing must stay the visible implementation blocker
+        // even when the local submodule edit is redundant-safe.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--in-submodule-edit", "--path", "submodules/X/ci.yml",
+             "--local-fingerprint", "abc", "--pr-head-fingerprint", "abc",
+             "--required-ci-failing", "--repo", "owner/repo", "--pr", "1090", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("required-ci-failing", result.Classification);
+        Assert.NotNull(result.RecommendedNextCommand);
+        Assert.Contains("request-update", result.RecommendedNextCommand!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_InSubmoduleEdit_SameFingerprintAcrossWakes_DeduplicatesReport()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--in-submodule-edit", "--path", "submodules/X/ci.yml",
+             "--local-fingerprint", "abc", "--pr-head-fingerprint", "abc", "--pr", "1090",
+             "--prior-fingerprint", "submodules/X/ci.yml|local=abc|pr=1090|head=abc", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Contains("deduplicated-unchanged-report", result.Warnings);
+        Assert.Contains("deduplicated", result.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Execute_NextSliceProbe_AutoPopulatesCandidate_WhenDomainFlagOrConfigPresent()
     {
