@@ -214,6 +214,12 @@ internal static class GuideHelpCommand
             Name = "host-ownership",
             Purpose = "G326 role-scoped host ownership model: which role owns which durable-state slice.",
             Example = "intent-cli guide host-ownership --format json"
+        },
+        new GuideSubcommandEntry
+        {
+            Name = "question-style",
+            Purpose = "G380 direct answer to how to ask product-owner clarification/interview questions: required elements + copyable template (one focused question, options, tradeoffs, recommendation, recording, stop-on-ambiguity).",
+            Example = "intent-cli guide question-style --format json"
         }
     };
 
