@@ -15,39 +15,74 @@ namespace IntentSystem.Cli.Tests;
 public sealed class CommandRouterTests
 {
     [Fact]
-    public void Execute_GivenNoArguments_WritesHelpIncludingAllCommandGroups()
+    public void Execute_GivenNoArguments_DefaultHelpIsChatFirst_ShowsPrimaryGroups_HidesLegacy()
     {
+        // G379: the default `intent-cli --help` is chat-first. It leads with
+        // the workflow guides and lists only the primary command groups a
+        // routine agent reaches for; it must NOT dump the advanced/legacy
+        // surfaces (`run`, concept-intake `intake`, projection, etc.) or the
+        // RunRoleNote, so an agent never mistakes `intent-cli run` for the
+        // implementation/review loop. The full catalog moves to `--help --all`.
         using var writer = new StringWriter();
 
         var exitCode = CommandRouter.Execute(Array.Empty<string>(), CreateContext("/tmp/intent-system"), writer);
 
         var output = writer.ToString();
         Assert.Equal(0, exitCode);
-        Assert.Contains("project", output, StringComparison.Ordinal);
-        Assert.Contains("projection", output, StringComparison.Ordinal);
-        Assert.Contains("queue", output, StringComparison.Ordinal);
-        Assert.Contains("issue", output, StringComparison.Ordinal);
-        Assert.Contains("run", output, StringComparison.Ordinal);
-        Assert.Contains("review", output, StringComparison.Ordinal);
-        Assert.Contains("interview", output, StringComparison.Ordinal);
-        Assert.Contains("clarify", output, StringComparison.Ordinal);
-        Assert.Contains("intake", output, StringComparison.Ordinal);
-        Assert.Contains("generate-from-current", output, StringComparison.Ordinal);
+
+        // Chat-first lead: workflow guides + the primary group list.
+        Assert.Contains("Workflow guides:", output, StringComparison.Ordinal);
+        Assert.Contains("Primary command groups", output, StringComparison.Ordinal);
+        foreach (var group in CommandRouter.PrimaryCommandGroups)
+        {
+            Assert.Contains($"- {group}", output, StringComparison.Ordinal);
+        }
+
+        // Advanced/legacy groups are NOT listed in the default view, and the
+        // RunRoleNote (which belongs to the full `--all` view) is absent.
+        Assert.DoesNotContain("- run", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("- intake", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("- projection", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("- generate-from-current", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("not the primary production orchestrator", output, StringComparison.Ordinal);
+
+        // The default points at the explicit full-catalog discovery paths.
+        Assert.Contains("intent-cli --help --all", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli guide commands list", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Execute_GivenNoArguments_HelpDescribesRunAsIntegrationSmokeNotPrimaryOrchestrator()
+    public void Execute_GivenHelpAll_ListsEveryCommandGroup_AndGenerateFromCurrent()
     {
-        // G188 — `intent-cli run` is for integration smoke, deterministic
-        // replay, and local dogfooding; production automation lives in the
-        // host-side review/next-slice loop with provider-neutral labels and
-        // durable parent state. The root help output must say so explicitly,
-        // and the canonical wording must come from the shared
-        // CommandRouter.RunRoleNote constant so the docs/help surface cannot
-        // drift from the test assertion.
+        // G379: `intent-cli --help --all` restores the full group catalog,
+        // including the advanced/legacy surfaces hidden from the default.
         using var writer = new StringWriter();
 
-        var exitCode = CommandRouter.Execute(Array.Empty<string>(), CreateContext("/tmp/intent-system"), writer);
+        var exitCode = CommandRouter.Execute(["--help", "--all"], CreateContext("/tmp/intent-system"), writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("All command groups:", output, StringComparison.Ordinal);
+        Assert.Contains("- run", output, StringComparison.Ordinal);
+        Assert.Contains("- intake", output, StringComparison.Ordinal);
+        Assert.Contains("- projection", output, StringComparison.Ordinal);
+        Assert.Contains("- generate-from-current", output, StringComparison.Ordinal);
+        // Workflow guides remain present in the full view too.
+        Assert.Contains("Workflow guides:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenHelpAll_DescribesRunAsIntegrationSmokeNotPrimaryOrchestrator()
+    {
+        // G188 / G379 — `intent-cli run` is for integration smoke, deterministic
+        // replay, and local dogfooding; production automation lives in the
+        // host-side review/next-slice loop. The RunRoleNote now lives in the
+        // full `--help --all` view (the chat-first default omits it), and the
+        // canonical wording must come from the shared CommandRouter.RunRoleNote
+        // constant so the help surface cannot drift from the test assertion.
+        using var writer = new StringWriter();
+
+        var exitCode = CommandRouter.Execute(["--help", "--all"], CreateContext("/tmp/intent-system"), writer);
 
         Assert.Equal(0, exitCode);
         var output = writer.ToString();
@@ -65,6 +100,21 @@ public sealed class CommandRouterTests
         foreach (var line in CommandRouter.RunRoleNote)
         {
             Assert.Contains(line, output, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void PrimaryCommandGroups_AreAllRegisteredCommandGroups()
+    {
+        // G379: every chat-first primary group must be a real command group
+        // so the default help never advertises a group the router can't reach.
+        var groups = typeof(CommandRouter)
+            .GetField("CommandGroups", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?.GetValue(null) as string[];
+        Assert.NotNull(groups);
+        foreach (var primary in CommandRouter.PrimaryCommandGroups)
+        {
+            Assert.Contains(primary, groups!);
         }
     }
 

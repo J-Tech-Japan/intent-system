@@ -34,6 +34,29 @@ internal static class CommandRouter
         "migrate"
     ];
 
+    /// <summary>
+    /// G379: the chat-first subset shown by the default <c>intent-cli --help</c>.
+    /// These are the routine implementation / review / next-slice surfaces from
+    /// the issue's Accepted Baseline. The remaining groups — advanced
+    /// (<c>run</c>) and experimental / legacy (concept-intake <c>intake</c>,
+    /// projection, bug-intent, tasking, safety, etc.) — are classified in
+    /// <c>guide commands list</c> and shown only by <c>intent-cli --help --all</c>,
+    /// so a routine agent does not mistake <c>intent-cli run</c> for the
+    /// implementation/review loop. Every entry must also appear in
+    /// <see cref="CommandGroups"/> (asserted by tests).
+    /// </summary>
+    internal static readonly IReadOnlyList<string> PrimaryCommandGroups = new[]
+    {
+        "guide",
+        "automation",
+        "worker",
+        "review",
+        "issue",
+        "packet",
+        "intent",
+        "closeout"
+    };
+
     private static readonly IReadOnlyList<string> AutomationCommandHelp =
     [
         "automation base-branch-check --repo <r> --pr <n> --actual-base <branch> [--policy direct-main|main-ai]",
@@ -302,10 +325,23 @@ internal static class CommandRouter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(writer);
 
+        // G379: `intent-cli --help --all` (and the `--help-all` synonym) shows
+        // every command group, including the advanced/legacy/provider-runtime
+        // surfaces hidden from the chat-first default. Checked before the
+        // plain-`--help` branch so the `--all` modifier is honored.
+        if ((args.Length == 2
+                && string.Equals(args[0], "--help", StringComparison.Ordinal)
+                && string.Equals(args[1], "--all", StringComparison.Ordinal))
+            || (args.Length == 1 && string.Equals(args[0], "--help-all", StringComparison.Ordinal)))
+        {
+            WriteHelp(writer, includeAll: true);
+            return 0;
+        }
+
         if (args.Length == 0
             || (args.Length == 1 && string.Equals(args[0], "--help", StringComparison.Ordinal)))
         {
-            WriteHelp(writer);
+            WriteHelp(writer, includeAll: false);
             return 0;
         }
 
@@ -473,29 +509,61 @@ internal static class CommandRouter
             ["run"] = "`intent-cli run ...` is integration smoke / replay / dogfooding — NOT the primary chat-first path."
         };
 
-    private static void WriteHelp(TextWriter writer)
-    {
-        writer.WriteLine("Available command groups:");
-        foreach (var group in CommandGroups)
-        {
-            writer.WriteLine($"- {group}");
-        }
+    private static void WriteHelp(TextWriter writer) => WriteHelp(writer, includeAll: false);
 
-        writer.WriteLine("Additional top-level commands:");
-        writer.WriteLine($"- {GenerateFromCurrentCommandName}");
+    /// <summary>
+    /// G379: the default <c>intent-cli --help</c> is chat-first. It leads with
+    /// the workflow guides and lists only the primary command groups
+    /// (<see cref="PrimaryCommandGroups"/>) a coding agent reaches for in
+    /// routine implementation / review / next-slice work. Advanced / legacy /
+    /// provider-runtime surfaces (<c>run</c>, concept-intake <c>intake</c>,
+    /// projection, bug-intent, tasking, safety, <c>generate-from-current</c>)
+    /// are NOT shown by default so agents do not mistake <c>intent-cli run</c>
+    /// for the implementation/review loop. They remain fully available via
+    /// <c>intent-cli --help --all</c> and the classified
+    /// <c>intent-cli guide commands list</c> catalog. With
+    /// <paramref name="includeAll"/> the full group list and the
+    /// <see cref="RunRoleNote"/> are emitted.
+    /// </summary>
+    private static void WriteHelp(TextWriter writer, bool includeAll)
+    {
+        writer.WriteLine("intent-cli — chat-first intent workflow CLI.");
+        writer.WriteLine("Routine model: human <-> coding agent (Claude / Codex / Copilot) <-> intent-cli calls <-> GitHub / host metadata.");
+        writer.WriteLine("Ask `intent-cli guide workflow task <task> --format json` or `intent-cli guide prompt-template ...` for current paste-ready instructions rather than probing legacy command surfaces.");
+        writer.WriteLine();
 
         // G334: top-level help must point an external agent at the
         // canonical workflow entries (init / interview / packet /
         // issue / automation / bug repair) so self-discovery does not
-        // depend on local rules or copied skill prompts.
-        writer.WriteLine();
+        // depend on local rules or copied skill prompts. G379 keeps these
+        // first so the chat-first discovery path is the prominent default.
         writer.WriteLine("Workflow guides:");
         foreach (var line in WorkflowGuidePointersHelp)
         {
             writer.WriteLine($"- {line}");
         }
-
         writer.WriteLine();
+
+        if (includeAll)
+        {
+            writer.WriteLine("All command groups:");
+            foreach (var group in CommandGroups)
+            {
+                writer.WriteLine($"- {group}");
+            }
+            writer.WriteLine("Additional top-level commands:");
+            writer.WriteLine($"- {GenerateFromCurrentCommandName}");
+        }
+        else
+        {
+            writer.WriteLine("Primary command groups (chat-first workflow):");
+            foreach (var group in PrimaryCommandGroups)
+            {
+                writer.WriteLine($"- {group}");
+            }
+        }
+        writer.WriteLine();
+
         writer.WriteLine("Per-group help:");
         writer.WriteLine("- `intent-cli <group> --help` (e.g. `intent-cli guide --help`, `intent-cli metadata --help`, `intent-cli migrate --help`) — list the group's subcommands.");
         writer.WriteLine("- `intent-cli guide help [--format markdown|json]` — external-user self-discovery surface with examples + workflow guide pointers.");
@@ -509,9 +577,18 @@ internal static class CommandRouter
         }
 
         writer.WriteLine();
-        foreach (var line in RunRoleNote)
+        if (includeAll)
         {
-            writer.WriteLine(line);
+            foreach (var line in RunRoleNote)
+            {
+                writer.WriteLine(line);
+            }
+        }
+        else
+        {
+            writer.WriteLine("Advanced / legacy surfaces (`run`, concept-intake `intake`, projection, bug-intent, tasking, safety, generate-from-current) are hidden from this chat-first view.");
+            writer.WriteLine("- `intent-cli --help --all` — show every command group, including advanced / legacy ones.");
+            writer.WriteLine("- `intent-cli run` is integration smoke / deterministic replay / local dogfooding only — NOT the implementation/review loop; do not route routine work through it.");
         }
     }
 
