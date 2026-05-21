@@ -648,6 +648,13 @@ internal static class AutomationHostReviewDiagnosticsCommand
                         return 1;
                     }
                     evidence = args[index + 1].Trim();
+                    // G383 (review follow-up): reject unknown/misspelled evidence
+                    // so an input-contract error is not routed as a host policy gap.
+                    if (!ReviewVerificationPolicyClassifier.Evidence.IsKnown(evidence))
+                    {
+                        writer.WriteLine($"--evidence must be one of {string.Join(" | ", ReviewVerificationPolicyClassifier.Evidence.All)} (got '{evidence}').");
+                        return 1;
+                    }
                     index++;
                     break;
                 case "--repo":

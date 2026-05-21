@@ -206,6 +206,14 @@ Never approve a path that would require falsely claiming runtime/manual verifica
                         return false;
                     }
                     evidence = args[index + 1].Trim();
+                    // G383 (review follow-up): reject unknown/misspelled evidence
+                    // tokens rather than silently classifying them as a host
+                    // policy gap.
+                    if (!ReviewVerificationPolicyClassifier.Evidence.IsKnown(evidence))
+                    {
+                        error = $"--evidence must be one of {string.Join(" | ", ReviewVerificationPolicyClassifier.Evidence.All)} (got '{evidence}').";
+                        return false;
+                    }
                     hasEvidence = true;
                     index++;
                     break;

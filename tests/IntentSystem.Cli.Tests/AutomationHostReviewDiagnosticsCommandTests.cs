@@ -911,6 +911,26 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_ReviewVerificationAc_UnknownEvidence_RejectsInsteadOfSilentReviewPolicyGap()
+    {
+        // G383 (review follow-up): the diagnostics lane must also reject an
+        // unknown/misspelled evidence token rather than silently classifying
+        // it as review-policy-gap.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--review-verification-ac", "--repo", "owner/repo", "--pr", "259", "--evidence", "typo", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("--evidence must be one of", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("review-policy-gap", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_ReviewVerificationAc_FalseRuntimeClaim_NeverProceedsToApprove()
     {
         using var workspace = new HostReviewDiagnosticsWorkspace();

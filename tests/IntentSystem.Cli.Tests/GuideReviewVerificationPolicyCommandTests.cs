@@ -97,6 +97,27 @@ public sealed class GuideReviewVerificationPolicyCommandTests
         Assert.Contains("## Decision: `review-policy-gap`", writer.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("typo")]
+    [InlineData("runtime")]
+    [InlineData("screenshot")]
+    public void Execute_UnknownEvidence_RejectsInsteadOfSilentlyClassifying(string badEvidence)
+    {
+        // G383 (review follow-up): an unknown/misspelled --evidence value must
+        // fail clearly, NOT silently become a `review-policy-gap`, so an
+        // input-contract error is never routed as host-policy work.
+        using var writer = new StringWriter();
+        var exit = GuideReviewVerificationPolicyCommand.Execute(
+            CreateContext(),
+            new[] { "--standing-policy", "--evidence", badEvidence, "--format", "json" },
+            writer);
+
+        Assert.Equal(1, exit);
+        var output = writer.ToString();
+        Assert.Contains("--evidence must be one of", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("review-policy-gap", output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Router_DispatchesGuideReviewVerificationPolicy_ExitZero()
     {

@@ -52,6 +52,20 @@ internal static class ReviewVerificationPolicyClassifier
         public const string DocumentedObservation = "documented-observation";
         public const string StaticScreenshot = "static-screenshot";
         public const string None = "none";
+
+        /// <summary>
+        /// G383 (review follow-up): the closed set of accepted evidence
+        /// tokens. An unknown / misspelled value must be rejected by the
+        /// command surfaces, never silently classified as a host policy
+        /// gap — otherwise an input-contract problem masquerades as
+        /// host-policy work and weakens the feedback-routing guarantee.
+        /// </summary>
+        public static readonly IReadOnlyList<string> All =
+            new[] { SourceMapping, DocumentedObservation, StaticScreenshot, None };
+
+        public static bool IsKnown(string? value) =>
+            !string.IsNullOrWhiteSpace(value)
+            && All.Any(known => string.Equals(known, value.Trim(), StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsAcceptableVisibleEvidence(string evidence) =>
