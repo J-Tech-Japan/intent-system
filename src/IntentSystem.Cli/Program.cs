@@ -224,12 +224,21 @@ internal static class Program
         if (args.Length == 1)
         {
             // `intent-cli --help` reaches the top-level help; bare
-            // `intent-cli <group>` reaches per-group help.
+            // `intent-cli <group>` reaches per-group help. G379:
+            // `intent-cli --help-all` is the read-only full-catalog help.
             return string.Equals(args[0], "--help", StringComparison.Ordinal)
+                || string.Equals(args[0], "--help-all", StringComparison.Ordinal)
                 || !args[0].StartsWith('-');
         }
         if (args.Length == 2)
         {
+            // G379: `intent-cli --help --all` is a read-only help shape that
+            // must reach CommandRouter from any cwd (no host state needed).
+            if (string.Equals(args[0], "--help", StringComparison.Ordinal)
+                && string.Equals(args[1], "--all", StringComparison.Ordinal))
+            {
+                return true;
+            }
             return !args[0].StartsWith('-')
                 && (string.Equals(args[1], "--help", StringComparison.Ordinal)
                     || string.Equals(args[1], "help", StringComparison.Ordinal));

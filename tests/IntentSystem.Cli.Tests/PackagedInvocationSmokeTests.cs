@@ -134,7 +134,10 @@ public sealed class PackagedInvocationSmokeTests
             var topLevelHelpOutput = File.ReadAllText(topLevelHelpOutputPath);
 
             Assert.Equal(0, topLevelHelpResult.ExitCode);
-            Assert.Contains("Available command groups", topLevelHelpOutput, StringComparison.Ordinal);
+            // G379: the default top-level help is chat-first — it leads with
+            // workflow guides + the primary command groups (the full catalog
+            // moved behind `intent-cli --help --all`).
+            Assert.Contains("Primary command groups", topLevelHelpOutput, StringComparison.Ordinal);
         }
     }
 
