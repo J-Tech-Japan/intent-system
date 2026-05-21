@@ -298,6 +298,8 @@ internal static class CommandRouter
                 ["question-style"] = GuideQuestionStyleCommand.Execute,
                 // G381: persistent goal-seeking interview-mode guide surface.
                 ["interview-mode"] = GuideInterviewModeCommand.Execute,
+                // G382: interview readiness checklist + classification.
+                ["interview-readiness"] = GuideInterviewReadinessCommand.Execute,
                 // G326: role-scoped host ownership model.
                 ["host-ownership"] = GuideHostOwnershipCommand.Execute,
                 // G334: self-discovery help surface for external users.

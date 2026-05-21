@@ -163,6 +163,7 @@ internal static class Program
                 || string.Equals(args[1], "prompt-template", StringComparison.Ordinal)
                 || string.Equals(args[1], "question-style", StringComparison.Ordinal)
                 || string.Equals(args[1], "interview-mode", StringComparison.Ordinal)
+                || string.Equals(args[1], "interview-readiness", StringComparison.Ordinal)
                 || string.Equals(args[1], "review", StringComparison.Ordinal)
                 // G334: external-user self-discovery surface. Read-only,
                 // no host state required, so the bootstrap allow-list

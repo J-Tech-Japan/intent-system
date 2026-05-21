@@ -226,6 +226,12 @@ internal static class GuideHelpCommand
             Name = "interview-mode",
             Purpose = "G381 persistent goal-seeking interview protocol: research-first, one question at a time in dependency order, definition-of-ready stop conditions (packet-ready / issue-ready / clarification-required / blocked-by-user-decision / insufficient-context-after-research), decision-record output.",
             Example = "intent-cli guide interview-mode --format json"
+        },
+        new GuideSubcommandEntry
+        {
+            Name = "interview-readiness",
+            Purpose = "G382 interview readiness checklist + scoring: pass --resolved <dimensions> to classify packet-ready / issue-ready / clarification-required / remaining-gaps, list missing dimensions, and get the next highest-value question.",
+            Example = "intent-cli guide interview-readiness --resolved goal,scope,target,acceptance,verification --format json"
         }
     };
 
