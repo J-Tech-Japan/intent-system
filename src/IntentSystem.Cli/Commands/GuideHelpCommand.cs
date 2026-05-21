@@ -220,6 +220,12 @@ internal static class GuideHelpCommand
             Name = "question-style",
             Purpose = "G380 direct answer to how to ask product-owner clarification/interview questions: required elements + copyable template (one focused question, options, tradeoffs, recommendation, recording, stop-on-ambiguity).",
             Example = "intent-cli guide question-style --format json"
+        },
+        new GuideSubcommandEntry
+        {
+            Name = "interview-mode",
+            Purpose = "G381 persistent goal-seeking interview protocol: research-first, one question at a time in dependency order, definition-of-ready stop conditions (packet-ready / issue-ready / clarification-required / blocked-by-user-decision / insufficient-context-after-research), decision-record output.",
+            Example = "intent-cli guide interview-mode --format json"
         }
     };
 
