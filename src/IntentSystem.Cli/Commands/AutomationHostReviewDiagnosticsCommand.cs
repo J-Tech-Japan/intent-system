@@ -771,6 +771,7 @@ internal static class AutomationHostReviewDiagnosticsCommand
         var uniqueLocalContent = false;
         var requiredCiFailing = false;
         string submodulePath = "(submodule)";
+        string? submoduleRoot = null;
         var localFingerprint = string.Empty;
         var headFingerprint = string.Empty;
         string? priorFingerprint = null;
@@ -798,6 +799,15 @@ internal static class AutomationHostReviewDiagnosticsCommand
                         return 1;
                     }
                     submodulePath = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--submodule-root":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        writer.WriteLine("--submodule-root requires a value (the submodule worktree root, e.g. submodules/X).");
+                        return 1;
+                    }
+                    submoduleRoot = args[index + 1].Trim();
                     index++;
                     break;
                 case "--local-fingerprint":
@@ -848,8 +858,16 @@ internal static class AutomationHostReviewDiagnosticsCommand
             }
         }
 
+        // Derive the submodule worktree root from the path when not supplied
+        // (convention: `submodules/<name>/...`), so the bounded repair points
+        // `git -C` at the submodule root and clears only the relative file.
+        var resolvedRoot = string.IsNullOrWhiteSpace(submoduleRoot)
+            ? DeriveSubmoduleRoot(submodulePath)
+            : submoduleRoot!;
+
         var decision = WorkspaceGuardSubmoduleEditClassifier.Classify(
             isInternalSubmoduleEdit: true,
+            resolvedRoot,
             submodulePath,
             localFingerprint,
             headFingerprint,
@@ -913,6 +931,24 @@ internal static class AutomationHostReviewDiagnosticsCommand
 
         Emit(writer, result, format);
         return 0;
+    }
+
+    /// <summary>
+    /// G384: best-effort submodule worktree root from a dirty path. For the
+    /// `submodules/&lt;name&gt;/...` convention this returns
+    /// `submodules/&lt;name&gt;`; otherwise it falls back to the path's first
+    /// segment (or the path itself). Callers should pass `--submodule-root`
+    /// explicitly when the layout differs.
+    /// </summary>
+    private static string DeriveSubmoduleRoot(string dirtyPath)
+    {
+        var normalized = dirtyPath.Replace('\\', '/').TrimStart('/');
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length >= 2 && string.Equals(segments[0], "submodules", StringComparison.Ordinal))
+        {
+            return $"{segments[0]}/{segments[1]}";
+        }
+        return segments.Length >= 1 ? segments[0] : normalized;
     }
 
     private static void WriteHelp(TextWriter writer)

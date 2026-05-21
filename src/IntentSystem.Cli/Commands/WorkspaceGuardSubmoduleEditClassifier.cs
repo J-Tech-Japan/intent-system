@@ -49,24 +49,33 @@ internal static class WorkspaceGuardSubmoduleEditClassifier
     /// Classify an internal-submodule dirty edit.
     /// </summary>
     /// <param name="isInternalSubmoduleEdit">The dirty path is an internal (working-tree) edit inside a submodule, not a gitlink-only change.</param>
-    /// <param name="submodulePath">The dirty path (used in the dedupe fingerprint + repair command).</param>
+    /// <param name="submoduleRoot">The submodule worktree root (e.g. <c>submodules/X</c>) — used as <c>git -C</c> in the bounded repair.</param>
+    /// <param name="dirtyPath">The dirty path, either full (under the root) or relative to the root; the relative form is used in the repair so only the proven file is cleared.</param>
     /// <param name="localDiffFingerprint">A fingerprint (e.g. blob hash) of the local working-tree edit.</param>
     /// <param name="prHeadFingerprint">The fingerprint of the same path on the selected PR head / remote commit.</param>
     /// <param name="hasUniqueLocalContent">True when the local edit contains content not present on the PR head — protects operator work.</param>
     /// <param name="selectedPr">The selected PR number (or null) — part of the dedupe key.</param>
     public static WorkspaceGuardSubmoduleEditDecision Classify(
         bool isInternalSubmoduleEdit,
-        string submodulePath,
+        string submoduleRoot,
+        string dirtyPath,
         string localDiffFingerprint,
         string prHeadFingerprint,
         bool hasUniqueLocalContent,
         int? selectedPr)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(submodulePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(submoduleRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(dirtyPath);
+        var root = submoduleRoot.Replace('\\', '/').TrimEnd('/');
+        // The dirty path may arrive full (under the root) or already relative;
+        // derive the path RELATIVE to the submodule root so the repair clears
+        // only the proven-redundant file, never the whole submodule.
+        var relativePath = RelativeToRoot(root, dirtyPath);
+        var fullPath = $"{root}/{relativePath}";
         var local = (localDiffFingerprint ?? string.Empty).Trim();
         var head = (prHeadFingerprint ?? string.Empty).Trim();
         var prText = selectedPr is { } pr ? pr.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none";
-        var dedupeFingerprint = $"{submodulePath}|local={local}|pr={prText}|head={head}";
+        var dedupeFingerprint = $"{fullPath}|local={local}|pr={prText}|head={head}";
 
         if (!isInternalSubmoduleEdit)
         {
@@ -103,7 +112,10 @@ internal static class WorkspaceGuardSubmoduleEditClassifier
             {
                 Classification = Classifications.RedundantInSubmoduleEdit,
                 SafeRepairAvailable = true,
-                RecommendedRepair = $"git -C {submodulePath} checkout -- . (clears the redundant edit; it is byte-identical to the selected PR head, so no unique content is lost)",
+                // -C points at the submodule WORKTREE ROOT; the pathspec is the
+                // single relative file, so only the proven-redundant file is
+                // cleared, never arbitrary submodule content.
+                RecommendedRepair = $"git -C {root} checkout -- {relativePath} (clears only the redundant file; it is byte-identical to the selected PR head, so no unique content is lost)",
                 DedupeFingerprint = dedupeFingerprint,
                 Reason = "Internal submodule edit is byte-identical to the selected PR head (matching diff fingerprints) with no unique local content; it is redundant/stale and can be cleared safely so the wake proceeds.",
             };
@@ -117,6 +129,25 @@ internal static class WorkspaceGuardSubmoduleEditClassifier
             DedupeFingerprint = dedupeFingerprint,
             Reason = "Internal submodule edit redundancy is unproven (missing or non-matching fingerprints); refuse auto-repair and keep the protected-operator-work hard-stop until redundancy is proven against the PR head.",
         };
+    }
+
+    /// <summary>
+    /// G384: derive the path relative to the submodule worktree root. The
+    /// dirty path may arrive full (e.g.
+    /// <c>submodules/X/.github/workflows/ci.yml</c> with root
+    /// <c>submodules/X</c>) or already relative
+    /// (<c>.github/workflows/ci.yml</c>); both yield the relative form so the
+    /// bounded repair (<c>git -C &lt;root&gt; checkout -- &lt;relative&gt;</c>)
+    /// targets exactly the redundant file.
+    /// </summary>
+    internal static string RelativeToRoot(string submoduleRoot, string dirtyPath)
+    {
+        var root = submoduleRoot.Replace('\\', '/').TrimEnd('/');
+        var path = dirtyPath.Replace('\\', '/').TrimStart('/');
+        var prefix = root + "/";
+        return path.StartsWith(prefix, StringComparison.Ordinal)
+            ? path[prefix.Length..]
+            : path;
     }
 
     /// <summary>
