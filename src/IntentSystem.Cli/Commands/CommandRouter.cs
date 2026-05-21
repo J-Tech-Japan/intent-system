@@ -300,6 +300,8 @@ internal static class CommandRouter
                 ["interview-mode"] = GuideInterviewModeCommand.Execute,
                 // G382: interview readiness checklist + classification.
                 ["interview-readiness"] = GuideInterviewReadinessCommand.Execute,
+                // G383: host review visible-verification policy classification.
+                ["review-verification-policy"] = GuideReviewVerificationPolicyCommand.Execute,
                 // G326: role-scoped host ownership model.
                 ["host-ownership"] = GuideHostOwnershipCommand.Execute,
                 // G334: self-discovery help surface for external users.
