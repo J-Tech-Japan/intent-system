@@ -1,0 +1,263 @@
+# G386: release-driven distribution for intent-cli.
+#
+# Triggered by publishing a GitHub Release (or manually via
+# workflow_dispatch for a dry run). It does three things:
+#
+#   1. Builds and packs the official `intent-cli` .nupkg (release build —
+#      NO PrivatePreview* / expiry properties, so the artifact carries no
+#      build-time expiry contract; see IntentSystem.Cli.csproj G367 block
+#      and PrivatePreviewExpiryGate). When `NUGET_API_KEY` is present and
+#      the run was triggered by a real release, the package is pushed to
+#      NuGet.org. On forks / missing secrets the publish step is skipped
+#      cleanly so the workflow still builds and attaches artifacts.
+#
+#   2. Builds SDK-free self-contained single-file binaries for
+#      osx-arm64, win-x64, and linux-x64 on matching runners, smoke-tests
+#      `intent-cli --version`, and archives each with a SHA-256 sidecar.
+#
+#   3. Attaches the .nupkg and the per-platform binary archives (plus
+#      checksums) to the triggering GitHub Release.
+#
+# Non-SDK users install by downloading a release binary; SDK users run
+# `dotnet tool install -g intent-cli`. See README.md "Install".
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build for a dry run (e.g. 0.2.0). Defaults to a dryrun suffix. Real releases derive the version from the release tag."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nupkg:
+    name: NuGet package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: preview
+
+      - name: Resolve release version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RAW="${{ github.event.release.tag_name }}"
+          else
+            RAW="${{ github.event.inputs.version }}"
+          fi
+          # Strip a leading v from tags like v0.2.0.
+          VERSION="${RAW#v}"
+          if [ -z "${VERSION}" ]; then
+            VERSION="0.2.0-dryrun.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          fi
+          echo "version=${VERSION}" | tee -a "${GITHUB_OUTPUT}"
+
+      - name: Restore
+        run: dotnet restore IntentSystem.sln
+
+      - name: Build
+        run: dotnet build IntentSystem.sln --configuration Release --no-restore
+
+      - name: Test
+        run: |
+          dotnet test IntentSystem.sln --configuration Release --no-build \
+            --logger "trx;LogFileName=test-results.trx" \
+            --results-directory "${GITHUB_WORKSPACE}/.artifacts/test-results"
+
+      - name: Pack release .nupkg (no preview/expiry properties)
+        run: |
+          dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
+            --configuration Release \
+            -o .artifacts/release \
+            -p:Version=${{ steps.ver.outputs.version }}
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .artifacts/release
+          for f in intent-cli.*.nupkg; do
+            sha256sum "${f}" > "${f}.sha256"
+          done
+          cat ./*.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: intent-cli-nupkg-${{ steps.ver.outputs.version }}
+          path: .artifacts/release/*
+
+      - name: Attach .nupkg to GitHub Release
+        if: ${{ github.event_name == 'release' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            .artifacts/release/intent-cli.*.nupkg \
+            .artifacts/release/intent-cli.*.nupkg.sha256 \
+            --repo "${{ github.repository }}" --clobber
+
+      - name: Publish to NuGet.org (guarded; skips on forks / missing secret)
+        if: ${{ github.event_name == 'release' }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${NUGET_API_KEY:-}" ]; then
+            echo "NUGET_API_KEY is not set (fork or missing secret); skipping NuGet publish."
+            echo "Artifacts were still built and attached to the release."
+            exit 0
+          fi
+          dotnet nuget push .artifacts/release/intent-cli.*.nupkg \
+            --api-key "${NUGET_API_KEY}" \
+            --source "https://api.nuget.org/v3/index.json" \
+            --skip-duplicate
+
+  binaries:
+    name: Self-contained ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: osx-arm64
+            os: macos-latest
+          - rid: win-x64
+            os: windows-latest
+          - rid: linux-x64
+            os: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: preview
+
+      - name: Resolve release version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RAW="${{ github.event.release.tag_name }}"
+          else
+            RAW="${{ github.event.inputs.version }}"
+          fi
+          VERSION="${RAW#v}"
+          if [ -z "${VERSION}" ]; then
+            VERSION="0.2.0-dryrun.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          fi
+          echo "version=${VERSION}" | tee -a "${GITHUB_OUTPUT}"
+
+      # Self-contained single-file publish bundles the .NET runtime, so the
+      # produced binary runs without a preinstalled .NET SDK. No
+      # PrivatePreview* properties are passed, so there is no build-time
+      # expiry contract on release binaries.
+      - name: Publish self-contained single-file binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish src/IntentSystem.Cli/IntentSystem.Cli.csproj \
+            --configuration Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:Version=${{ steps.ver.outputs.version }} \
+            -o "publish/${{ matrix.rid }}"
+
+      # The published apphost is named after the assembly
+      # (IntentSystem.Cli); stage it under the user-facing `intent-cli`
+      # command name for the release asset.
+      - name: Stage binary as intent-cli
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          RID="${{ matrix.rid }}"
+          SRCDIR="publish/${RID}"
+          mkdir -p stage
+          if [ "${RID}" = "win-x64" ]; then
+            cp "${SRCDIR}/IntentSystem.Cli.exe" "stage/intent-cli.exe"
+            echo "bin=stage/intent-cli.exe" | tee -a "${GITHUB_OUTPUT}"
+          else
+            cp "${SRCDIR}/IntentSystem.Cli" "stage/intent-cli"
+            chmod +x "stage/intent-cli"
+            echo "bin=stage/intent-cli" | tee -a "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Smoke test --version (no .NET SDK needed by the self-contained binary)
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.stage.outputs.bin }}" --version
+
+      - name: Archive + checksum
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          RID="${{ matrix.rid }}"
+          NAME="intent-cli-${VERSION}-${RID}"
+          mkdir -p dist
+          if [ "${RID}" = "win-x64" ]; then
+            ASSET="dist/${NAME}.zip"
+            7z a -tzip "${ASSET}" "./stage/intent-cli.exe" >/dev/null
+          else
+            ASSET="dist/${NAME}.tar.gz"
+            tar -czf "${ASSET}" -C stage "intent-cli"
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${ASSET}" > "${ASSET}.sha256"
+          else
+            shasum -a 256 "${ASSET}" > "${ASSET}.sha256"
+          fi
+          echo "asset=${ASSET}" | tee -a "${GITHUB_OUTPUT}"
+          cat "${ASSET}.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: intent-cli-${{ matrix.rid }}-${{ steps.ver.outputs.version }}
+          path: dist/*
+
+      - name: Attach binary to GitHub Release
+        if: ${{ github.event_name == 'release' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "${{ steps.pack.outputs.asset }}" \
+            "${{ steps.pack.outputs.asset }}.sha256" \
+            --repo "${{ github.repository }}" --clobber
