@@ -1,5 +1,57 @@
 # intent-system
 
+## Install
+
+`intent-cli` is published from GitHub Releases (G386). Each release publishes the
+NuGet package and attaches SDK-free self-contained binaries for macOS, Windows,
+and Linux.
+
+### With a .NET SDK (NuGet)
+
+If you have a .NET 10 SDK, install the global tool from NuGet.org:
+
+```bash
+dotnet tool install -g intent-cli
+# later, to upgrade:
+dotnet tool update -g intent-cli
+```
+
+Then run `intent-cli --version` to confirm the install.
+
+### Without a .NET SDK (self-contained binary)
+
+Download the archive for your platform from the
+[latest GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/latest)
+and run it directly — the .NET runtime is bundled, so no SDK is required.
+
+| Platform | Asset |
+| --- | --- |
+| macOS (Apple Silicon) | `intent-cli-<version>-osx-arm64.tar.gz` |
+| Windows (x64) | `intent-cli-<version>-win-x64.zip` |
+| Linux (x64) | `intent-cli-<version>-linux-x64.tar.gz` |
+
+Each archive ships with a `.sha256` sidecar; verify it before use. Example for
+macOS / Linux:
+
+```bash
+# 1. Verify the checksum (run from the folder containing both files).
+shasum -a 256 -c intent-cli-<version>-osx-arm64.tar.gz.sha256
+
+# 2. Extract and place the binary on your PATH.
+tar -xzf intent-cli-<version>-osx-arm64.tar.gz
+chmod +x intent-cli
+sudo mv intent-cli /usr/local/bin/
+
+# 3. Confirm.
+intent-cli --version
+```
+
+On Windows, verify with `CertUtil -hashfile intent-cli-<version>-win-x64.zip SHA256`,
+unzip, and place `intent-cli.exe` on your `PATH`.
+
+Release binaries carry no build-time expiry (unlike the
+`private-preview-pack` artifacts described below).
+
 ## Project-local best-practice inputs
 
 Project-local best-practice and model-registry starter docs live under:
