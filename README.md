@@ -4,7 +4,8 @@
 
 `intent-cli` is published from GitHub Releases (G386). Each release publishes the
 NuGet package and attaches SDK-free self-contained binaries for macOS, Windows,
-and Linux.
+and Linux. The project is licensed under [Apache-2.0](#license), and the
+published NuGet package reports `Apache-2.0` license metadata.
 
 ### With a .NET SDK (NuGet)
 
@@ -201,3 +202,15 @@ make explicit that:
 - `intent-cli` is deterministic support tooling — it MUST NOT launch
   Claude, Codex, or any AI provider, and prompts must NOT call
   `intent-cli run` from this local coding-automation path.
+
+## License
+
+This project is licensed under the Apache License, Version 2.0 — see the
+[`LICENSE`](./LICENSE) file for the full text and [`NOTICE`](./NOTICE) for
+attribution. The published `intent-cli` NuGet package declares
+`Apache-2.0` via SPDX license metadata.
+
+Release artifacts (the NuGet package and self-contained binaries described
+under [Install](#install)) carry no expiration or private-use gating; the
+build-time expiry contract applies only to the separate `private-preview`
+channel artifacts.
