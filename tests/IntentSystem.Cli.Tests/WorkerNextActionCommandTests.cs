@@ -417,6 +417,43 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Adapter_DeserializeList_ValidStdout_MapsToTypedCandidates()
+    {
+        // G385: clean stdout still yields the same candidates after the
+        // hardened boundary (no behavior change for legitimate output).
+        const string stdout =
+            "[{\"number\":78,\"title\":\"x\",\"url\":\"https://example.com/issue/78\","
+            + "\"labels\":[{\"name\":\"intent-target\"}],\"state\":\"OPEN\"}]";
+
+        var candidates = GhCliGitHubAutomationCandidateLister.DeserializeList<GitHubAutomationIssueCandidate>(
+            stdout, "`gh issue list` for J-Tech-Japan/intent-system");
+
+        var candidate = Assert.Single(candidates);
+        Assert.Equal(78, candidate.Number);
+    }
+
+    [Fact]
+    public void Adapter_DeserializeList_ContaminatedStdout_ThrowsClassifiedDiagnostic()
+    {
+        // G385: the JTJ_Estivo byte-366 shape — a valid array followed by a gh
+        // update notice — must raise a classified, sanitized diagnostic, not a
+        // raw JsonException.
+        const string stdout =
+            "[{\"number\":78}]A new release of gh is available: 2.40.0 → 2.50.0";
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => GhCliGitHubAutomationCandidateLister.DeserializeList<GitHubAutomationIssueCandidate>(
+                stdout, "`gh issue list` for J-Tech-Japan/JTJ_Estivo"));
+
+        Assert.Contains(
+            $"[{GitHubCliJsonBoundary.Classifications.GithubJsonInvalid}]",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("J-Tech-Japan/JTJ_Estivo", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("worker next-action --github-only", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_NeverInvokesNestedProviderLauncher()
     {
         using var workspace = new WorkerNextActionWorkspace();

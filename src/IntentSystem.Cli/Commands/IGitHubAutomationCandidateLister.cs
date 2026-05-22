@@ -245,25 +245,52 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
 
         if (exitCode != 0)
         {
+            // G385: classify the failure (auth vs generic) and surface a
+            // sanitized preview instead of the raw, possibly secret-bearing
+            // gh output.
+            var classification = GitHubCliJsonBoundary.ClassifyProcessFailure(stderr, stdout);
             var errorBody = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
             throw new InvalidOperationException(
-                $"`gh` failed to {description} with exit {exitCode}: {errorBody.Trim()}");
+                $"[{classification}] `gh` failed to {description} with exit {exitCode}: "
+                + GitHubCliJsonBoundary.SanitizePreview(errorBody));
         }
 
         return stdout;
     }
 
-    private static IReadOnlyList<T> DeserializeList<T>(string stdout, string callDescription)
+    /// <summary>
+    /// G385: deserialize the candidate list through the hardened JSON boundary.
+    /// Internal so adapter tests can lock the contamination contract without a
+    /// real <c>gh</c> subprocess.
+    /// </summary>
+    internal static IReadOnlyList<T> DeserializeList<T>(string stdout, string callDescription)
     {
+        // G385: harden the parser boundary against contaminated stdout (BOM,
+        // trailing update notices, warning lines printed alongside the array —
+        // observed under Windows PowerShell native-command capture). Parse only
+        // the validated JSON array; on genuine failure raise a structured,
+        // sanitized diagnostic rather than a raw JsonException.
+        var extraction = GitHubCliJsonBoundary.ExtractJsonArray(stdout, callDescription);
+        if (!extraction.Succeeded)
+        {
+            throw new InvalidOperationException(
+                $"[{extraction.Classification}] {extraction.DiagnosticMessage}");
+        }
+
         try
         {
-            var result = JsonSerializer.Deserialize<List<T>>(stdout);
+            var result = JsonSerializer.Deserialize<List<T>>(extraction.Json);
             return (IReadOnlyList<T>?)result ?? Array.Empty<T>();
         }
         catch (JsonException exception)
         {
+            // The array shape was already validated, so a typed-deserialize
+            // failure here is a schema mismatch, not contamination — still
+            // surface a sanitized, classified diagnostic.
             throw new InvalidOperationException(
-                $"could not parse {callDescription} JSON: {exception.Message}",
+                $"[{GitHubCliJsonBoundary.Classifications.GithubJsonInvalid}] could not map {callDescription} "
+                + $"JSON to the expected shape: {exception.Message}; sanitized preview: "
+                + $"\"{GitHubCliJsonBoundary.SanitizePreview(extraction.Json)}\"",
                 exception);
         }
     }
