@@ -14,6 +14,15 @@
     <PackageTags>intent-cli;dotnet-tool</PackageTags>
     <RepositoryUrl>https://github.com/J-Tech-Japan/intent-system</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!--
+      G387: OSS license metadata. Use the modern SPDX expression so NuGet
+      surfaces the license without packing a license file; the repository
+      root LICENSE/NOTICE carry the full Apache-2.0 text. PackageProjectUrl
+      points consumers at the repo, and Copyright records the owner.
+    -->
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/J-Tech-Japan/intent-system</PackageProjectUrl>
+    <Copyright>Copyright 2026 J-Tech-Japan</Copyright>
 
     <!--
       G360: build-time metadata baked into the assembly's
