@@ -33,6 +33,24 @@ internal static class WorkerNextActionCommand
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
     /// <summary>
+    /// G392 test seam: PR comments / reviews / review-threads lookup used by the
+    /// shared pr-comment-preflight consult on a selected <c>pr-comment-fix</c>
+    /// candidate. Tests inject a fake <see cref="IGitHubPrCommentsLookup"/>;
+    /// production callers leave this null and the default
+    /// <see cref="GhCliGitHubPrCommentsLookup"/> is used. Reused from the G204
+    /// preflight command so both surfaces share one classifier on one data shape.
+    /// </summary>
+    public static Func<IGitHubPrCommentsLookup>? CommentsLookupFactory { get; set; }
+
+    /// <summary>
+    /// G392 test seam: source-issue lookup used by the shared
+    /// pr-comment-preflight consult. Tests inject a fake
+    /// <see cref="IGitHubIssueLookup"/>; production callers leave this null and
+    /// the default <see cref="GhCliGitHubIssueLookup"/> is used.
+    /// </summary>
+    public static Func<IGitHubIssueLookup>? IssueLookupFactory { get; set; }
+
+    /// <summary>
     /// Test sentinel: must NEVER be invoked. Tests assert it remains
     /// uninvoked across all command paths to lock the "no nested provider
     /// launch" guarantee.
@@ -104,6 +122,20 @@ internal static class WorkerNextActionCommand
             return 1;
         }
 
+        // G392: when the label/closing-ref selector picked a `pr-comment-fix`
+        // target, consult the shared `worker pr-comment-preflight` classifier on
+        // that one PR (fetching the comments + source issue the label selector
+        // cannot see). If preflight reports actionable:false the two surfaces
+        // would otherwise disagree — so the selector downgrades its own choice
+        // to a stable `wait` rather than handing the child loop a PR that
+        // preflight would refuse to claim. Fail-open: any lookup/analyze error
+        // keeps the analyzer's decision (the consult can only ever make the
+        // selection MORE conservative, never less).
+        var resolvedWorkdir = string.IsNullOrWhiteSpace(workdir)
+            ? Directory.GetCurrentDirectory()
+            : workdir!;
+        result = ConsultPreflightForPrCommentFix(result, repo!, resolvedWorkdir, prs);
+
         // G281: --workdir is child worktree CONTEXT only — selection runs against
         // GitHub state for --repo, never against the workdir's local filesystem.
         // We surface diagnostic warnings when workdir is supplied but does not
@@ -139,6 +171,126 @@ internal static class WorkerNextActionCommand
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// G392: shared-actionability consult. When the label/closing-ref selector
+    /// chose <c>pr-comment-fix</c>, run the canonical
+    /// <see cref="WorkerPrCommentPreflightAnalyzer"/> on that single PR — the
+    /// same classifier <c>worker pr-comment-preflight</c> uses — and downgrade
+    /// the result to a stable <c>wait</c> if preflight reports
+    /// <c>actionable:false</c>. This guarantees the two surfaces never disagree
+    /// on whether a PR is child-claimable.
+    ///
+    /// Fail-open by design: the consult only ever turns a <c>pr-comment-fix</c>
+    /// into a <c>wait</c> when a SUCCESSFUL preflight analysis says the PR is
+    /// not actionable. Any lookup or analyze error (transient <c>gh</c> failure,
+    /// missing candidate) leaves the analyzer's decision untouched, so the
+    /// consult can only make the selection more conservative, never less — and a
+    /// transient comment-fetch failure cannot abort the selector.
+    /// </summary>
+    private static WorkerNextActionResult ConsultPreflightForPrCommentFix(
+        WorkerNextActionResult result,
+        string repo,
+        string resolvedWorkdir,
+        IReadOnlyList<GitHubAutomationPrCandidate> prs)
+    {
+        if (!string.Equals(result.Action, WorkerNextActionConstants.Actions.PrCommentFix, StringComparison.Ordinal)
+            || result.Number is not { } prNumber)
+        {
+            return result;
+        }
+
+        var candidate = prs.FirstOrDefault(pr => pr.Number == prNumber);
+        if (candidate is null)
+        {
+            return result;
+        }
+
+        WorkerPrCommentPreflightResult preflight;
+        try
+        {
+            var prPayload = BuildPrLookupResult(candidate);
+
+            var commentsLookup = CommentsLookupFactory?.Invoke() ?? new GhCliGitHubPrCommentsLookup();
+            var commentsPayload = commentsLookup.Lookup(repo, prNumber);
+            if (commentsPayload is null)
+            {
+                return result;
+            }
+
+            var sourceCandidate = WorkerPrReviewPreflightAnalyzer.TraceSourceIssue(prPayload, repo);
+            GitHubIssueLookupResult? sourceIssuePayload = null;
+            if (sourceCandidate is { } traced)
+            {
+                var issueLookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueLookup();
+                sourceIssuePayload = issueLookup.Lookup(traced.Repo, traced.Number);
+            }
+
+            preflight = WorkerPrCommentPreflightAnalyzer.Analyze(
+                prPayload,
+                commentsPayload,
+                repo,
+                prNumber,
+                resolvedWorkdir,
+                sourceCandidate,
+                sourceIssuePayload);
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+            or IOException
+            or ArgumentException
+            or FormatException)
+        {
+            // Fail-open: keep the analyzer's pr-comment-fix decision. The worker
+            // will still surface a non-actionable PR post-claim via its G372
+            // terminal outcomes (already-resolved / host-artifact-repair).
+            return result;
+        }
+
+        if (preflight.Actionable)
+        {
+            return result;
+        }
+
+        return result with
+        {
+            Action = WorkerNextActionConstants.Actions.Wait,
+            Reason = $"label/closing-ref selector picked PR #{prNumber} as pr-comment-fix, but the shared "
+                + $"worker pr-comment-preflight classifier reports actionable=false "
+                + $"(classification={preflight.Classification}); the child loop must not claim it. "
+                + "Route per the preflight classification (e.g. wait for actionable review feedback, or "
+                + "escalate host-metadata-only feedback to the host repair lane).",
+            SourceClassification = WorkerNextActionConstants.SourceClassifications.PrCommentPreflightNotActionable,
+            MustCreatePr = null,
+            AllowedTerminalOutcomes = null,
+            ForbiddenTerminalOutcomes = null,
+        };
+    }
+
+    /// <summary>
+    /// G392: project a <see cref="GitHubAutomationPrCandidate"/> (already
+    /// fetched by the label selector with body / labels / closing-ref / state /
+    /// draft fields) into the <see cref="GitHubPrLookupResult"/> shape the
+    /// shared preflight classifier consumes — so the consult needs no extra PR
+    /// lookup, only the comments + source-issue fetches the selector lacks.
+    /// </summary>
+    private static GitHubPrLookupResult BuildPrLookupResult(GitHubAutomationPrCandidate candidate)
+    {
+        return new GitHubPrLookupResult
+        {
+            Number = candidate.Number,
+            State = candidate.State,
+            Title = candidate.Title,
+            Body = candidate.Body,
+            IsDraft = candidate.IsDraft,
+            Closed = string.Equals(candidate.State, "CLOSED", StringComparison.OrdinalIgnoreCase),
+            Merged = string.Equals(candidate.State, "MERGED", StringComparison.OrdinalIgnoreCase),
+            Labels = candidate.Labels
+                .Select(label => new GitHubPrLabel { Name = label.Name })
+                .ToArray(),
+            ClosingIssuesReferences = candidate.ClosingIssuesReferences,
+        };
     }
 
     /// <summary>

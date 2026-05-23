@@ -246,8 +246,44 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_GivenPrWithIntentPrRequestUpdate_ClassifiesAsRequestUpdatePending()
+    public void Execute_GivenRequestUpdateWithNoActionableComments_ClassifiesAsRequestUpdatePending()
     {
+        // G392: a request-update PR with NO actionable comment is still the
+        // genuine "reviewer set the label but there's no comment to act on yet"
+        // wait — request-update-pending/actionable:false.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        WorkerPrCommentPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(
+            number: 605, state: "OPEN", title: "request-update, no actionable comment",
+            body: "Closes #100",
+            labelNames: new[] { "intent-target", "intent-pr-request-update" },
+            closingIssueNumbers: new[] { 100 }));
+        WorkerPrCommentPreflightCommand.IssueLookupFactory = () => new FakeIssueLookup(BuildIssue(
+            number: 100, state: "OPEN", title: "Source", body: string.Empty,
+            labelNames: new[] { "intent-target", "intent-pr-created" }));
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments());
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "605", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.RequestUpdatePending, result.Classification);
+        Assert.False(result.Actionable);
+        Assert.Equal(WorkerPrCommentPreflightConstants.RecommendedActions.WaitForWorkerUpdate, result.RecommendedAction);
+    }
+
+    [Fact]
+    public void Execute_GivenRequestUpdateWithActionableComment_ClassifiesAsRepairRequired()
+    {
+        // G392: the contract change. A request-update PR that ALSO carries an
+        // actionable review comment is genuinely repairable — preflight must no
+        // longer short-circuit to a non-actionable request-update-pending wait,
+        // but fall through to repair-required/actionable:true. This is what lets
+        // `worker next-action` and `worker pr-comment-preflight` agree that such
+        // a PR IS claimable child work.
         using var workspace = new WorkerPrCommentPreflightWorkspace();
         WorkerPrCommentPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(
             number: 605, state: "OPEN", title: "request-update + actionable",
@@ -274,8 +310,10 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
-        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.RequestUpdatePending, result.Classification);
-        Assert.Equal(WorkerPrCommentPreflightConstants.RecommendedActions.WaitForWorkerUpdate, result.RecommendedAction);
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.RepairRequired, result.Classification);
+        Assert.True(result.Actionable);
+        Assert.Equal(WorkerPrCommentPreflightConstants.RecommendedActions.RepairPr, result.RecommendedAction);
+        Assert.Single(result.ActionableComments);
     }
 
     [Fact]

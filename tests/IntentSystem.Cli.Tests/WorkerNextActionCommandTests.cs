@@ -18,12 +18,22 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     {
         WorkerNextActionCommand.CandidateListerFactory = null;
         WorkerNextActionCommand.NestedProviderLauncher = null;
+        // G392: install hermetic defaults for the shared pr-comment-preflight
+        // consult so every Execute-based pr-comment-fix test stays offline. The
+        // defaults return one genuinely-actionable (non-host-metadata) review
+        // comment plus a properly-labeled source issue, so preflight reports
+        // actionable:true and the selector keeps its pr-comment-fix choice.
+        // Downgrade tests override CommentsLookupFactory locally.
+        WorkerNextActionCommand.CommentsLookupFactory = () => new FakeCommentsLookup();
+        WorkerNextActionCommand.IssueLookupFactory = () => new FakeIssueLookup();
     }
 
     public void Dispose()
     {
         WorkerNextActionCommand.CandidateListerFactory = null;
         WorkerNextActionCommand.NestedProviderLauncher = null;
+        WorkerNextActionCommand.CommentsLookupFactory = null;
+        WorkerNextActionCommand.IssueLookupFactory = null;
     }
 
     [Fact]
@@ -123,8 +133,13 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     [Fact]
     public void Execute_G392_RequestUpdatePrWithSourceIssue_StillSelectsPrCommentFix()
     {
-        // A request-update PR WITH a Closes reference in the body is a genuine
-        // narrow child repair — still selected as pr-comment-fix.
+        // Pure label/closing-ref selector layer: a request-update PR WITH a
+        // Closes reference in the body is a candidate for narrow child repair,
+        // so the analyzer selects pr-comment-fix. Whether that selection is
+        // ACTUALLY claimable is reconciled at the command layer, which consults
+        // `worker pr-comment-preflight` on the comments the selector cannot see
+        // (covered by Execute_G392_PrCommentFixWith*_* below). This test pins
+        // the analyzer's first-pass choice only.
         var pr = new GitHubAutomationPrCandidate
         {
             Number = 700,
@@ -161,6 +176,165 @@ public sealed class WorkerNextActionCommandTests : IDisposable
 
         Assert.Equal(WorkerNextActionConstants.Actions.IssueToPr, result.Action);
         Assert.Equal(900, result.Number);
+    }
+
+    // ── G392: command-level shared pr-comment-preflight consult ─────────────
+    // The label/closing-ref analyzer picks pr-comment-fix; the command then
+    // consults the SAME classifier `worker pr-comment-preflight` uses (fetching
+    // the comments + source issue the selector cannot see) and downgrades to a
+    // stable `wait` whenever preflight reports actionable:false — so the two
+    // surfaces never disagree on child-claimability.
+
+    [Fact]
+    public void Execute_G392_PrCommentFixWithActionableComment_StaysPrCommentFix()
+    {
+        // A source-issue-present request-update PR that ALSO has a genuine
+        // (non-host-metadata) actionable review comment: preflight is
+        // actionable:true, so the selector keeps pr-comment-fix and the two
+        // surfaces agree.
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "Repair me", "https://github.com/J-Tech-Japan/intent-system/pull/514",
+                    createdAt: "2026-05-23T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+        // default FakeCommentsLookup returns one actionable comment.
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+        Assert.Equal(514, result.Number);
+        Assert.Equal(WorkerNextActionConstants.SourceClassifications.RepairRequired, result.SourceClassification);
+    }
+
+    [Fact]
+    public void Execute_G392_PrCommentFixWithNoActionableComments_DowngradesToWait()
+    {
+        // Reviewer set intent-pr-request-update but there is no actionable
+        // comment yet — preflight reports request-update-pending/actionable:false.
+        // The selector must NOT hand the child loop a claimable pr-comment-fix;
+        // it downgrades to a stable wait keyed to the preflight verdict.
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "Label set, no comment yet",
+                    "https://github.com/J-Tech-Japan/intent-system/pull/514",
+                    createdAt: "2026-05-23T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+        WorkerNextActionCommand.CommentsLookupFactory = () => new FakeCommentsLookup
+        {
+            Result = FakeCommentsLookup.NoActionableComments(),
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.Wait, result.Action);
+        Assert.Equal(514, result.Number);
+        Assert.Equal(
+            WorkerNextActionConstants.SourceClassifications.PrCommentPreflightNotActionable,
+            result.SourceClassification);
+        Assert.Contains("actionable=false", result.Reason, StringComparison.Ordinal);
+        Assert.Contains(
+            WorkerPrCommentPreflightConstants.Classifications.RequestUpdatePending,
+            result.Reason,
+            StringComparison.Ordinal);
+        // The repair lane is still the recommended workflow for the held PR.
+        Assert.Equal(WorkerNextActionConstants.RecommendedWorkflows.PrCommentFix, result.RecommendedWorkflow);
+        // pr-comment-fix-only terminal-outcome fields are cleared for a wait.
+        Assert.Null(result.MustCreatePr);
+        Assert.Null(result.AllowedTerminalOutcomes);
+        Assert.Null(result.ForbiddenTerminalOutcomes);
+    }
+
+    [Fact]
+    public void Execute_G392_PrCommentFixWithHostMetadataOnlyComments_DowngradesToWait()
+    {
+        // Every actionable comment targets host metadata (intents/** or
+        // .intent-cli/**): preflight reports host-artifact-repair-required/
+        // actionable:false. The child loop must not claim it as pr-comment-fix.
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "Host-artifact feedback",
+                    "https://github.com/J-Tech-Japan/intent-system/pull/514",
+                    createdAt: "2026-05-23T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+        WorkerNextActionCommand.CommentsLookupFactory = () => new FakeCommentsLookup
+        {
+            Result = FakeCommentsLookup.HostMetadataOnly(),
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.Wait, result.Action);
+        Assert.Equal(
+            WorkerNextActionConstants.SourceClassifications.PrCommentPreflightNotActionable,
+            result.SourceClassification);
+        Assert.Contains(
+            WorkerPrCommentPreflightConstants.Classifications.HostArtifactRepairRequired,
+            result.Reason,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G392_PreflightConsultLookupFailure_KeepsPrCommentFix()
+    {
+        // Fail-open: a transient comment-fetch failure must NOT abort the
+        // selector nor flip its verdict. The analyzer's pr-comment-fix decision
+        // (already source-issue-gated) stands; the worker still catches a
+        // non-actionable PR post-claim via its terminal outcomes.
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "Repair me", "https://github.com/J-Tech-Japan/intent-system/pull/514",
+                    createdAt: "2026-05-23T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+        WorkerNextActionCommand.CommentsLookupFactory = () => new ThrowingCommentsLookup();
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+        Assert.Equal(514, result.Number);
     }
 
     [Fact]
@@ -1172,6 +1346,100 @@ public sealed class WorkerNextActionCommandTests : IDisposable
         public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
             string repo, IReadOnlyCollection<string> requiredLabels) =>
             throw new InvalidOperationException(message);
+    }
+
+    // ── G392: fakes for the shared pr-comment-preflight consult ─────────────
+
+    /// <summary>
+    /// G392 fake comments lookup. Defaults to a single genuinely-actionable,
+    /// non-host-metadata review-thread comment (so preflight reaches
+    /// repair-required/actionable:true). Tests pass a different
+    /// <see cref="GitHubPrCommentsLookupResult"/> via <see cref="Result"/> to
+    /// exercise the downgrade paths.
+    /// </summary>
+    private sealed class FakeCommentsLookup : IGitHubPrCommentsLookup
+    {
+        public GitHubPrCommentsLookupResult Result { get; init; } = ActionableReviewThread();
+
+        public GitHubPrCommentsLookupResult Lookup(string repo, int prNumber) => Result;
+
+        public static GitHubPrCommentsLookupResult ActionableReviewThread() =>
+            new()
+            {
+                ReviewThreads = new[]
+                {
+                    new GitHubPrReviewThread
+                    {
+                        Id = "RT_actionable",
+                        IsResolved = false,
+                        Comments = new[]
+                        {
+                            new GitHubPrReviewThreadComment
+                            {
+                                Id = "C_actionable",
+                                Author = "human-reviewer",
+                                Body = "Please add a null check before dereferencing config in Foo().",
+                            },
+                        },
+                    },
+                },
+            };
+
+        public static GitHubPrCommentsLookupResult NoActionableComments() =>
+            new();
+
+        public static GitHubPrCommentsLookupResult HostMetadataOnly() =>
+            new()
+            {
+                ReviewThreads = new[]
+                {
+                    new GitHubPrReviewThread
+                    {
+                        Id = "RT_host",
+                        IsResolved = false,
+                        Comments = new[]
+                        {
+                            new GitHubPrReviewThreadComment
+                            {
+                                Id = "C_host",
+                                Author = "human-reviewer",
+                                Body = "Please update intents/G392.md to reflect the new contract.",
+                            },
+                        },
+                    },
+                },
+            };
+    }
+
+    private sealed class ThrowingCommentsLookup : IGitHubPrCommentsLookup
+    {
+        public GitHubPrCommentsLookupResult Lookup(string repo, int prNumber) =>
+            throw new InvalidOperationException("simulated gh pr view --comments transport failure");
+    }
+
+    /// <summary>
+    /// G392 fake source-issue lookup. Returns an issue carrying the
+    /// intent-target + intent-pr-created labels the preflight classifier expects
+    /// on a properly-linked source issue, so step 8 does not flag the PR.
+    /// </summary>
+    private sealed class FakeIssueLookup : IGitHubIssueLookup
+    {
+        public GitHubIssueLookupResult Result { get; init; } = TargetCreatedIssue();
+
+        public GitHubIssueLookupResult Lookup(string repo, int issueNumber) => Result;
+
+        public static GitHubIssueLookupResult TargetCreatedIssue() =>
+            new()
+            {
+                Number = 0,
+                State = "OPEN",
+                Title = "source issue",
+                Labels = new[]
+                {
+                    new GitHubIssueLabel { Name = "intent-target" },
+                    new GitHubIssueLabel { Name = "intent-pr-created" },
+                },
+            };
     }
 
     private sealed class WorkerNextActionWorkspace : IDisposable

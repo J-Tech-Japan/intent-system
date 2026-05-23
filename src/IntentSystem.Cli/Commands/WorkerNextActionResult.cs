@@ -186,6 +186,22 @@ internal static class WorkerNextActionConstants
         /// wake (the AIC #3648 contradiction).
         /// </summary>
         public const string RequestUpdateNotChildActionable = "request-update-pending-not-child-actionable";
+
+        /// <summary>
+        /// G392: emitted with <see cref="Actions.Wait"/> when the label/closing-ref
+        /// selector picked a request-update PR as a <c>pr-comment-fix</c>
+        /// candidate but the shared <c>worker pr-comment-preflight</c> classifier
+        /// — consulted on that one selected PR (it fetches the PR comments + the
+        /// source issue the label selector cannot see) — reports
+        /// <c>actionable:false</c> (e.g. no actionable review comments yet, or
+        /// every actionable comment targets host metadata
+        /// <c>.intent-cli/**</c>/<c>intents/**</c>). The two surfaces MUST agree
+        /// on child-actionability, so the selector downgrades its own choice to a
+        /// stable wait instead of handing the child loop a PR that preflight
+        /// would refuse to claim. The downgrade reason names the underlying
+        /// preflight classification so an operator can route it.
+        /// </summary>
+        public const string PrCommentPreflightNotActionable = "pr-comment-preflight-not-actionable";
     }
 
     public static class Labels
