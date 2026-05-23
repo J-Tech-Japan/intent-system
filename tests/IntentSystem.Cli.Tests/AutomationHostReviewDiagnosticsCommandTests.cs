@@ -1791,6 +1791,53 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
             throw new InvalidOperationException("lister should not be invoked when surface probe rejects");
     }
 
+    // ── G390 review-lease preservation lane ────────────────────────────────
+
+    [Fact]
+    public void Execute_ReviewLeasePreservation_MetadataBlockedBeforeVerdict_RestoresRereviewReady()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--review-lease-preservation", "--rereview-ready-consumed", "--host-metadata-blocker",
+             "--repo", "J-Tech-Japan/intent-system", "--pr", "3639", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("metadata-blocked-review-preserved", result.Classification);
+        Assert.True(result.SafeRepairAvailable);
+        Assert.Equal("stale-review-lease", result.SafeRepairCategory);
+        Assert.NotNull(result.RecommendedNextCommand);
+        // The recommended repair must use a SUPPORTED automation pr-transition
+        // (review-release), not the non-existent `rereview-ready` transition.
+        Assert.Contains("--transition review-release", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.DoesNotContain("--transition rereview-ready", result.RecommendedNextCommand!, StringComparison.Ordinal);
+        Assert.Matches(@"--transition (review-start|request-update|approved|review-release)\b", result.RecommendedNextCommand!);
+        // The host metadata blocker must not become an implementation comment.
+        Assert.Contains("must NOT be posted as an implementation request-update comment", result.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ReviewLeasePreservation_ReviewVerdictProduced_NoRestore()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--review-lease-preservation", "--rereview-ready-consumed", "--review-verdict-produced",
+             "--repo", "J-Tech-Japan/intent-system", "--pr", "3639", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.NotEqual("metadata-blocked-review-preserved", result.Classification);
+        Assert.False(result.SafeRepairAvailable);
+    }
+
     private sealed class HostReviewDiagnosticsWorkspace : IDisposable
     {
         public HostReviewDiagnosticsWorkspace()

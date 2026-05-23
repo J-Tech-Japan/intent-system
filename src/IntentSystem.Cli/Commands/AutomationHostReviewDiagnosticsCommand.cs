@@ -63,6 +63,15 @@ internal static class AutomationHostReviewDiagnosticsCommand
             return HandleInSubmoduleEdit(args, writer);
         }
 
+        // G390: isolated lane — classify whether a review wake that stopped on
+        // a host metadata blocker must restore intent-pr-rereview-ready so the
+        // PR stays review-actionable (a stale-review-lease safe repair) and
+        // suppress an implementation request-update comment.
+        if (Array.IndexOf(args, "--review-lease-preservation") >= 0)
+        {
+            return HandleReviewLeasePreservation(args, writer);
+        }
+
         if (!TryParseArguments(
                 args,
                 out var repo,
@@ -927,6 +936,131 @@ internal static class AutomationHostReviewDiagnosticsCommand
             Warnings = warnings,
             SafeRepairAvailable = decision.SafeRepairAvailable,
             SafeRepairCategory = decision.SafeRepairAvailable ? SafeRepairCategories.WorkspaceSafeDirty : null,
+        };
+
+        Emit(writer, result, format);
+        return 0;
+    }
+
+    /// <summary>
+    /// G390: classify whether a review wake that stopped on a host metadata
+    /// blocker must restore <c>intent-pr-rereview-ready</c> (keeping the PR
+    /// review-actionable) and suppress an implementation request-update
+    /// comment. Read-only — the host loop applies the stale-review-lease
+    /// restore based on the emitted decision.
+    /// </summary>
+    private static int HandleReviewLeasePreservation(string[] args, TextWriter writer)
+    {
+        var rereviewReadyConsumed = false;
+        var reviewVerdictProduced = false;
+        var hostMetadataBlocker = false;
+        string? repo = null;
+        int? pr = null;
+        var format = FormatText;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            var argument = args[index];
+            switch (argument)
+            {
+                case "--review-lease-preservation":
+                    break;
+                case "--rereview-ready-consumed":
+                    rereviewReadyConsumed = true;
+                    break;
+                case "--review-verdict-produced":
+                    reviewVerdictProduced = true;
+                    break;
+                case "--host-metadata-blocker":
+                    hostMetadataBlocker = true;
+                    break;
+                case "--repo":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--repo requires a value (e.g. owner/repo)."); return 1; }
+                    repo = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--pr":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var prValue)
+                        || prValue <= 0)
+                    {
+                        writer.WriteLine("--pr requires a positive integer.");
+                        return 1;
+                    }
+                    pr = prValue;
+                    index++;
+                    break;
+                case "--format":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--format requires a value (text or json)."); return 1; }
+                    var requested = args[index + 1];
+                    if (!string.Equals(requested, FormatText, StringComparison.Ordinal) && !string.Equals(requested, FormatJson, StringComparison.Ordinal))
+                    {
+                        writer.WriteLine($"--format must be 'text' or 'json' (got '{requested}').");
+                        return 1;
+                    }
+                    format = requested;
+                    index++;
+                    break;
+                default:
+                    writer.WriteLine($"Unknown argument '{argument}' for --review-lease-preservation. Supported: --review-lease-preservation [--rereview-ready-consumed] [--review-verdict-produced] [--host-metadata-blocker] [--repo <owner/repo>] [--pr <n>] [--format text|json].");
+                    return 1;
+            }
+        }
+
+        var decision = ReviewLeasePreservationClassifier.Classify(
+            reviewStartConsumedRereviewReady: rereviewReadyConsumed,
+            reviewVerdictProduced: reviewVerdictProduced,
+            stoppedOnHostMetadataBlocker: hostMetadataBlocker);
+
+        var classification = decision.RestoreRereviewReady
+            ? AutomationHostReviewDiagnosticsClassifications.MetadataBlockedReviewPreserved
+            : AutomationHostReviewDiagnosticsClassifications.ReviewPrActionable;
+        // Recover via the supported `review-release` transition: it removes the
+        // `intent-pr-reviewing` lease (and stale leftovers) without adding any
+        // review-side label, so the next host wake reselects the PR for review.
+        // This restores review actionability after a metadata-blocked abort
+        // WITHOUT creating an implementation request-update. (`automation
+        // pr-transition` supports review-start / request-update / approved /
+        // review-release only — there is intentionally no `rereview-ready`
+        // transition.)
+        var recommended = decision.RestoreRereviewReady && repo is not null && pr is not null
+            ? $"intent-cli automation pr-transition --transition review-release --repo {repo} --pr {pr} --write --format json"
+            : null;
+
+        var result = new AutomationHostReviewDiagnosticsResult
+        {
+            Repo = repo ?? "(repo)",
+            Classification = classification,
+            Summary = "G390: " + decision.Reason
+                + (decision.RestoreRereviewReady
+                    ? " Recover with the `review-release` transition so the host reselects the PR for review (keeps it review-actionable)."
+                    : string.Empty)
+                + (decision.SuppressRequestUpdateComment
+                    ? " A host metadata blocker is host-owned and must NOT be posted as an implementation request-update comment."
+                    : string.Empty),
+            ReadOnly = true,
+            RecommendedNextCommand = recommended,
+            StructuredClarification = null,
+            Details =
+            [
+                new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = classification,
+                    TargetKind = pr is not null ? "pr" : null,
+                    TargetNumber = pr,
+                    TargetUrl = null,
+                    Description = $"restore_rereview_ready={decision.RestoreRereviewReady.ToString().ToLowerInvariant()}; "
+                        + $"suppress_request_update_comment={decision.SuppressRequestUpdateComment.ToString().ToLowerInvariant()}; "
+                        + $"rereview_ready_consumed={rereviewReadyConsumed.ToString().ToLowerInvariant()}; "
+                        + $"review_verdict_produced={reviewVerdictProduced.ToString().ToLowerInvariant()}; "
+                        + $"host_metadata_blocker={hostMetadataBlocker.ToString().ToLowerInvariant()}",
+                }
+            ],
+            Warnings = Array.Empty<string>(),
+            // Restoring a consumed rereview-ready label is a stale-review-lease
+            // recovery the host loop already knows how to apply.
+            SafeRepairAvailable = decision.RestoreRereviewReady,
+            SafeRepairCategory = decision.RestoreRereviewReady ? SafeRepairCategories.StaleReviewLease : null,
         };
 
         Emit(writer, result, format);

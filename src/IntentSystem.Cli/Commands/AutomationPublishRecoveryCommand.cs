@@ -36,6 +36,9 @@ internal static class AutomationPublishRecoveryCommand
     private const string ModeDryRun = "dry-run";
     private const string ModeWrite = "write";
 
+    /// <summary>G390: append-only run-log event name recorded when a --write recovery fills a missing linked_pr.</summary>
+    internal const string RecoveryRunEventName = "linked-pr-recovered";
+
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -109,7 +112,7 @@ internal static class AutomationPublishRecoveryCommand
         {
             try
             {
-                ApplyRepairs(queueStatePath, analysis.SafeRepairs);
+                ApplyRepairs(context, queueStatePath, analysis.SafeRepairs);
                 applied.AddRange(analysis.SafeRepairs);
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
@@ -128,7 +131,8 @@ internal static class AutomationPublishRecoveryCommand
             UnsafeStops = analysis.UnsafeStops,
             AppliedCount = applied.Count,
             Warnings = failures,
-            Summary = BuildSummary(analysis, applied.Count, write)
+            Summary = BuildSummary(analysis, applied.Count, write),
+            SameRepoMetadataLinkageClassification = ClassifySameRepoLinkage(context, analysis),
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -141,6 +145,31 @@ internal static class AutomationPublishRecoveryCommand
             WriteMarkdown(writer, result);
         }
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// G390: classify the recovery for same-repo metadata-branch topology. A
+    /// safe (G315 unique-closing-PR, only-linked_pr-missing) repair maps to the
+    /// high-confidence repair-ready case; otherwise advisory-only. Returns
+    /// <c>not-applicable</c> in single-root topology. The wrong-branch hazard is
+    /// a follow-up that requires resolving the recovery target branch against
+    /// the configured metadata branch.
+    /// </summary>
+    private static string ClassifySameRepoLinkage(CliContext context, PublishRecoveryAnalysis analysis)
+    {
+        var project = context.Config.Project;
+        var sameRepoMetadataBranchConfigured = project.SameRepoTopology
+            && (!string.IsNullOrWhiteSpace(project.MetadataWriteBranch)
+                || !string.IsNullOrWhiteSpace(project.MetadataBranch));
+        var hasSafeLinkedPrRepair = analysis.SafeRepairs.Count > 0;
+
+        return SameRepoMetadataLinkageDiagnostics.Classify(
+            sameRepoMetadataBranchConfigured: sameRepoMetadataBranchConfigured,
+            recoveryTargetsImplementationBranch: false,
+            selectedPrInTargetRepo: hasSafeLinkedPrRepair,
+            prUniquelyClosesLinkedIssue: hasSafeLinkedPrRepair,
+            executionUnitIdentified: hasSafeLinkedPrRepair,
+            onlyLinkedPrMissing: hasSafeLinkedPrRepair).Classification;
     }
 
     private static IReadOnlyList<PublishRecoveryCandidate> BuildCandidates(CliContext context, QueueState queueState)
@@ -186,7 +215,7 @@ internal static class AutomationPublishRecoveryCommand
         return candidates;
     }
 
-    private static void ApplyRepairs(string queueStatePath, IReadOnlyList<PublishRecoveryRepair> repairs)
+    private static void ApplyRepairs(CliContext context, string queueStatePath, IReadOnlyList<PublishRecoveryRepair> repairs)
     {
         var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
         var items = queueState.Items.ToArray();
@@ -237,6 +266,47 @@ internal static class AutomationPublishRecoveryCommand
             UpdatedAt = DateTimeOffset.UtcNow
         };
         File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updated));
+
+        // G390 (review follow-up, Finding 1): a --write recovery must record a
+        // durable run event so the repair is auditable and closeout-plan can
+        // observe the linked_pr fill. Append one append-only `runs.jsonl` event
+        // per applied repair, mirroring the queue-seed/closeout run-log pattern.
+        AppendRecoveryRunEvents(context, repairs);
+    }
+
+    /// <summary>
+    /// G390: append an append-only <c>linked-pr-recovered</c> run event to
+    /// <c>.intent-cli/runs.jsonl</c> for each applied publish-recovery repair.
+    /// </summary>
+    private static void AppendRecoveryRunEvents(CliContext context, IReadOnlyList<PublishRecoveryRepair> repairs)
+    {
+        if (repairs.Count == 0)
+        {
+            return;
+        }
+
+        var runsPath = Path.Combine(context.RepoRoot, ".intent-cli", "runs.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(runsPath)!);
+
+        var lines = new System.Text.StringBuilder();
+        foreach (var repair in repairs)
+        {
+            var runEvent = new RunEvent
+            {
+                Ts = DateTimeOffset.UtcNow,
+                ExecutionUnit = repair.ExecutionUnit,
+                Event = RecoveryRunEventName,
+                By = "automation publish-recovery (G390)",
+                LinkedIssue = repair.LinkedIssueNumber is { } issueNumber
+                    ? $"https://github.com/{repair.LinkedIssueRepo}/issues/{issueNumber}"
+                    : repair.LinkedIssueUrl,
+                LinkedPr = repair.LinkedPrUrl ?? $"https://github.com/{repair.LinkedIssueRepo}/pull/{repair.LinkedPrNumber}",
+                Reason = $"recovered missing linked_pr (#{repair.LinkedPrNumber}) for '{repair.ExecutionUnit}'.",
+            };
+            lines.Append(RunLogSerializer.SerializeLine(runEvent)).Append('\n');
+        }
+
+        File.AppendAllText(runsPath, lines.ToString());
     }
 
     private static string BuildSummary(PublishRecoveryAnalysis analysis, int appliedCount, bool write)
@@ -405,4 +475,15 @@ internal sealed record AutomationPublishRecoveryResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    /// <summary>
+    /// G390: same-repo metadata-branch linkage recovery classification
+    /// (<c>same-repo-metadata-linkage-repair-ready</c> / <c>advisory-only</c> /
+    /// <c>wrong-branch-unsafe</c> / <c>not-applicable</c>). Lets the host review
+    /// loop tell a deterministic, writeable metadata-branch repair apart from
+    /// advisory-only / unsafe states. <c>not-applicable</c> in single-root
+    /// (non-same-repo) topology.
+    /// </summary>
+    [JsonPropertyName("same_repo_metadata_linkage_classification")]
+    public string? SameRepoMetadataLinkageClassification { get; init; }
 }
