@@ -128,7 +128,8 @@ internal static class AutomationPublishRecoveryCommand
             UnsafeStops = analysis.UnsafeStops,
             AppliedCount = applied.Count,
             Warnings = failures,
-            Summary = BuildSummary(analysis, applied.Count, write)
+            Summary = BuildSummary(analysis, applied.Count, write),
+            SameRepoMetadataLinkageClassification = ClassifySameRepoLinkage(context, analysis),
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -141,6 +142,31 @@ internal static class AutomationPublishRecoveryCommand
             WriteMarkdown(writer, result);
         }
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// G390: classify the recovery for same-repo metadata-branch topology. A
+    /// safe (G315 unique-closing-PR, only-linked_pr-missing) repair maps to the
+    /// high-confidence repair-ready case; otherwise advisory-only. Returns
+    /// <c>not-applicable</c> in single-root topology. The wrong-branch hazard is
+    /// a follow-up that requires resolving the recovery target branch against
+    /// the configured metadata branch.
+    /// </summary>
+    private static string ClassifySameRepoLinkage(CliContext context, PublishRecoveryAnalysis analysis)
+    {
+        var project = context.Config.Project;
+        var sameRepoMetadataBranchConfigured = project.SameRepoTopology
+            && (!string.IsNullOrWhiteSpace(project.MetadataWriteBranch)
+                || !string.IsNullOrWhiteSpace(project.MetadataBranch));
+        var hasSafeLinkedPrRepair = analysis.SafeRepairs.Count > 0;
+
+        return SameRepoMetadataLinkageDiagnostics.Classify(
+            sameRepoMetadataBranchConfigured: sameRepoMetadataBranchConfigured,
+            recoveryTargetsImplementationBranch: false,
+            selectedPrInTargetRepo: hasSafeLinkedPrRepair,
+            prUniquelyClosesLinkedIssue: hasSafeLinkedPrRepair,
+            executionUnitIdentified: hasSafeLinkedPrRepair,
+            onlyLinkedPrMissing: hasSafeLinkedPrRepair).Classification;
     }
 
     private static IReadOnlyList<PublishRecoveryCandidate> BuildCandidates(CliContext context, QueueState queueState)
@@ -405,4 +431,15 @@ internal sealed record AutomationPublishRecoveryResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    /// <summary>
+    /// G390: same-repo metadata-branch linkage recovery classification
+    /// (<c>same-repo-metadata-linkage-repair-ready</c> / <c>advisory-only</c> /
+    /// <c>wrong-branch-unsafe</c> / <c>not-applicable</c>). Lets the host review
+    /// loop tell a deterministic, writeable metadata-branch repair apart from
+    /// advisory-only / unsafe states. <c>not-applicable</c> in single-root
+    /// (non-same-repo) topology.
+    /// </summary>
+    [JsonPropertyName("same_repo_metadata_linkage_classification")]
+    public string? SameRepoMetadataLinkageClassification { get; init; }
 }

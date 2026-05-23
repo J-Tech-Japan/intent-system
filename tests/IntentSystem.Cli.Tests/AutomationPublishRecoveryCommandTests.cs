@@ -167,6 +167,63 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G390_SameRepoMetadata_UniqueLinkedPrRepair_IsRepairReady()
+    {
+        // G390: same-repo metadata topology + a PR #3639-style fixture where the
+        // PR uniquely closes the linked issue and only linked_pr is missing →
+        // a high-confidence writeable metadata-branch repair.
+        using var workspace = new RecoveryWorkspace(sameRepoMetadata: true);
+        var li = new LinkedIssue
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            Number = 558,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/558"
+        };
+        workspace.WriteQueueState(BuildQueueState("SKS-G219", linkedIssue: li, linkedPr: null));
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(559, "Closes #558") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            "same-repo-metadata-linkage-repair-ready",
+            doc.RootElement.GetProperty("same_repo_metadata_linkage_classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_G390_SingleRootTopology_ClassificationIsNotApplicable()
+    {
+        using var workspace = new RecoveryWorkspace();
+        var li = new LinkedIssue
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            Number = 558,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/558"
+        };
+        workspace.WriteQueueState(BuildQueueState("SKS-G219", linkedIssue: li, linkedPr: null));
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(559, "Closes #558") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            "not-applicable",
+            doc.RootElement.GetProperty("same_repo_metadata_linkage_classification").GetString());
+    }
+
+    [Fact]
     public void Execute_LinkedIssuePresentNoPr_Write_FillsLinkedPr_PreservesLinkedIssue()
     {
         using var workspace = new RecoveryWorkspace();
@@ -491,7 +548,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
 
     private sealed class RecoveryWorkspace : IDisposable
     {
-        public RecoveryWorkspace()
+        public RecoveryWorkspace(bool sameRepoMetadata = false)
         {
             RootPath = Directory.CreateTempSubdirectory("publish-recovery-tests-").FullName;
             Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
@@ -504,7 +561,12 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
                     {
                         Domain = "intent-cli",
                         ArtifactRoot = ".intent-cli",
-                        WorktreeRoot = ".intent-cli/worktrees"
+                        WorktreeRoot = ".intent-cli/worktrees",
+                        // G390: same-repo metadata topology (metadata on a
+                        // dedicated branch) so the linkage classification is
+                        // exercised at the command level.
+                        SameRepoTopology = sameRepoMetadata,
+                        MetadataWriteBranch = sameRepoMetadata ? "intent-metadata" : string.Empty,
                     }
                 }
             };
