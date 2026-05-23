@@ -499,6 +499,99 @@ public sealed class PublishRecoveryAnalyzerTests
         Assert.Empty(result.UnsafeStops);
     }
 
+    // ----- G391: promote publish-artifact selected-PR evidence under --pr -----
+
+    [Fact]
+    public void AnalyzeScopedToPr_G391_PublishArtifactCreatedIssueMatches_LinkedIssueNull_PromotesToHighConfidenceRepair()
+    {
+        // AIC #3642 / #3641 shape: the queue item has linked_issue = null, but
+        // its publish.yaml records created_issue_number = 3641 and PR #3642
+        // uniquely closes #3641. Before G391, AnalyzeScopedToPr scoped only by
+        // linked_issue and returned a no-op; now the artifact evidence is
+        // promoted to a high-confidence writeable repair.
+        var artifact = BuildPublishArtifact("G391", createdIssueNumber: 3641,
+            createdIssueUrl: "https://github.com/J-Tech-Japan/intent-system/issues/3641");
+        var candidate = NewCandidate("G391", artifact);
+        var pr3642 = BuildPr(3642, "G391 implement", "Closes #3641");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate },
+            new[] { pr3642 },
+            prNumber: 3642);
+
+        Assert.Single(result.SafeRepairs);
+        Assert.Empty(result.UnsafeStops);
+        var repair = result.SafeRepairs[0];
+        Assert.Equal("G391", repair.ExecutionUnit);
+        Assert.Equal(3641, repair.LinkedIssueNumber);
+        Assert.Equal(3642, repair.LinkedPrNumber);
+        Assert.Equal("high", repair.Confidence);
+    }
+
+    [Fact]
+    public void AnalyzeScopedToPr_G391_MultipleClosingPrsForArtifactIssue_RefusesWithConcreteReason()
+    {
+        // Promotion must refuse with a concrete reason (not a silent no-op)
+        // when more than one open PR closes the artifact's created issue.
+        var artifact = BuildPublishArtifact("G391", createdIssueNumber: 3641,
+            createdIssueUrl: "https://github.com/J-Tech-Japan/intent-system/issues/3641");
+        var candidate = NewCandidate("G391", artifact);
+        var pr3642 = BuildPr(3642, "first", "Closes #3641");
+        var pr3643 = BuildPr(3643, "second", "Closes #3641");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate },
+            new[] { pr3642, pr3643 },
+            prNumber: 3642);
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Single(result.UnsafeStops);
+        Assert.Equal(PublishRecoveryAnalyzer.UnsafeMultipleClosingPrs, result.UnsafeStops[0].Kind);
+    }
+
+    [Fact]
+    public void AnalyzeScopedToPr_G391_ArtifactUrlForDifferentRepo_RefusesWithRepoMismatch()
+    {
+        // Wrong-repo guard: when the artifact's created issue URL belongs to a
+        // different repo, promotion is refused (not silently applied).
+        var artifact = BuildPublishArtifact("G391", createdIssueNumber: 3641,
+            createdIssueUrl: "https://github.com/other-org/other-repo/issues/3641");
+        var candidate = NewCandidate("G391", artifact);
+        var pr3642 = BuildPr(3642, "G391", "Closes #3641");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate },
+            new[] { pr3642 },
+            prNumber: 3642);
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Single(result.UnsafeStops);
+        Assert.Equal(PublishRecoveryAnalyzer.UnsafeRepoMismatch, result.UnsafeStops[0].Kind);
+    }
+
+    [Fact]
+    public void AnalyzeScopedToPr_G391_ArtifactCreatedIssueDoesNotMatchPr_RemainsNoOp()
+    {
+        // Negative guard: an artifact whose created issue does NOT match the
+        // selected PR's closing issue must not be promoted.
+        var artifact = BuildPublishArtifact("G391", createdIssueNumber: 9999,
+            createdIssueUrl: "https://github.com/J-Tech-Japan/intent-system/issues/9999");
+        var candidate = NewCandidate("G391", artifact);
+        var pr3642 = BuildPr(3642, "G391", "Closes #3641");
+
+        var result = PublishRecoveryAnalyzer.AnalyzeScopedToPr(
+            "J-Tech-Japan/intent-system",
+            new[] { candidate },
+            new[] { pr3642 },
+            prNumber: 3642);
+
+        Assert.Empty(result.SafeRepairs);
+        Assert.Empty(result.UnsafeStops);
+    }
+
     private static PublishRecoveryCandidate NewLinkedIssueCandidate(
         string executionUnit,
         string linkedIssueRepo,

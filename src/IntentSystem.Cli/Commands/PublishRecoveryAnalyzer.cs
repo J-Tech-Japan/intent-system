@@ -99,10 +99,22 @@ internal static class PublishRecoveryAnalyzer
             };
         }
 
-        // Filter candidates to only those whose linked_issue matches a
-        // closing-issue reference of the selected PR.
+        // Filter candidates to those tied to the selected PR's closing issue.
+        // Two evidence sources qualify:
+        //   1. queue-state linked_issue already matches (Lane B / G315); or
+        //   2. G391: the queue item's publish-artifact created_issue matches,
+        //      even when linked_issue is still null. This is the same
+        //      deterministic selected-PR evidence `reconcile` reports as
+        //      advisory; including it lets the G303 publish-artifact lane in
+        //      Analyze promote it to a high-confidence writeable repair (with
+        //      its existing repo / unique-closing-PR / single-unit guards),
+        //      instead of `publish-recovery --pr` silently returning no repair.
         var scopedCandidates = candidates
-            .Where(c => c.LinkedIssueNumber is int n && closingIssues.Contains(n))
+            .Where(c =>
+                (c.LinkedIssueNumber is int n && closingIssues.Contains(n))
+                || (c.LinkedIssueNumber is null
+                    && c.PublishArtifact?.CreatedIssueNumber is int created
+                    && closingIssues.Contains(created)))
             .ToArray();
 
         if (scopedCandidates.Length == 0)
