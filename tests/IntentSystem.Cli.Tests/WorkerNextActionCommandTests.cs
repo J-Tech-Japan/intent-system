@@ -63,6 +63,107 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G392_RequestUpdatePrWithoutSourceIssue_IsNotSelectedAsPrCommentFix()
+    {
+        // AIC #3648 shape: intent-pr-request-update but no source issue (no
+        // closing reference / no Closes ref). next-action must NOT return it as
+        // claimable pr-comment-fix; instead a stable not-child-actionable wait.
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(3648, "G5/G6 dependency PR", "https://github.com/J-Tech-Japan/intent-system/pull/3648",
+                    createdAt: "2026-05-23T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" },
+                    hasSourceIssue: false),
+            },
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.NotEqual(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+        Assert.Equal(WorkerNextActionConstants.Actions.Wait, result.Action);
+        Assert.Equal(3648, result.Number);
+        Assert.Equal(
+            WorkerNextActionConstants.SourceClassifications.RequestUpdateNotChildActionable,
+            result.SourceClassification);
+        Assert.Contains("no resolvable source issue", result.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G392_RequestUpdatePrWithoutSourceIssue_IsStableAcrossWakes()
+    {
+        // Repeated wakes for the #3648 shape must return the same stable
+        // non-actionable classification (deterministic), never claimable work.
+        var pr = BuildPr(3648, "dep PR", "https://github.com/J-Tech-Japan/intent-system/pull/3648",
+            createdAt: "2026-05-23T00:00:00Z",
+            labels: new[] { "intent-target", "intent-pr-request-update" },
+            hasSourceIssue: false);
+
+        var first = WorkerNextActionAnalyzer.Analyze(
+            "J-Tech-Japan/intent-system", new[] { pr }, Array.Empty<GitHubAutomationIssueCandidate>());
+        var second = WorkerNextActionAnalyzer.Analyze(
+            "J-Tech-Japan/intent-system", new[] { pr }, Array.Empty<GitHubAutomationIssueCandidate>());
+
+        Assert.Equal(WorkerNextActionConstants.Actions.Wait, first.Action);
+        Assert.Equal(first.Action, second.Action);
+        Assert.Equal(first.SourceClassification, second.SourceClassification);
+        Assert.Equal(
+            WorkerNextActionConstants.SourceClassifications.RequestUpdateNotChildActionable,
+            first.SourceClassification);
+    }
+
+    [Fact]
+    public void Execute_G392_RequestUpdatePrWithSourceIssue_StillSelectsPrCommentFix()
+    {
+        // A request-update PR WITH a Closes reference in the body is a genuine
+        // narrow child repair — still selected as pr-comment-fix.
+        var pr = new GitHubAutomationPrCandidate
+        {
+            Number = 700,
+            Title = "G300 narrow repair",
+            Url = "https://github.com/J-Tech-Japan/intent-system/pull/700",
+            CreatedAt = "2026-05-23T00:00:00Z",
+            Body = "Addresses the review. Closes #699",
+            Labels = new[] { "intent-target", "intent-pr-request-update" }
+                .Select(n => new GitHubAutomationLabel { Name = n }).ToArray(),
+        };
+
+        var result = WorkerNextActionAnalyzer.Analyze(
+            "J-Tech-Japan/intent-system", new[] { pr }, Array.Empty<GitHubAutomationIssueCandidate>());
+
+        Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+        Assert.Equal(700, result.Number);
+    }
+
+    [Fact]
+    public void Execute_G392_IssueWorkStillWinsOverNotChildActionablePr()
+    {
+        // A non-child-actionable request-update PR must not starve genuine
+        // issue-to-pr work — issue-to-pr keeps priority over the wait surfacing.
+        var pr = BuildPr(3648, "dep PR", "https://github.com/J-Tech-Japan/intent-system/pull/3648",
+            createdAt: "2026-05-23T00:00:00Z",
+            labels: new[] { "intent-target", "intent-pr-request-update" },
+            hasSourceIssue: false);
+        var issue = BuildIssue(900, "Eligible", "https://github.com/J-Tech-Japan/intent-system/issues/900",
+            createdAt: "2026-05-23T01:00:00Z",
+            labels: new[] { "intent-target" });
+
+        var result = WorkerNextActionAnalyzer.Analyze(
+            "J-Tech-Japan/intent-system", new[] { pr }, new[] { issue });
+
+        Assert.Equal(WorkerNextActionConstants.Actions.IssueToPr, result.Action);
+        Assert.Equal(900, result.Number);
+    }
+
+    [Fact]
     public void Execute_GivenPrConvergedToRereviewReadyAfterAlreadyResolved_ReturnsNone()
     {
         // G372 selector regression: after a pr-comment-fix completes with
@@ -988,7 +1089,8 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     private static GitHubAutomationPrCandidate BuildPr(
-        int number, string title, string url, string createdAt, string[] labels)
+        int number, string title, string url, string createdAt, string[] labels,
+        bool hasSourceIssue = true)
     {
         return new GitHubAutomationPrCandidate
         {
@@ -997,6 +1099,12 @@ public sealed class WorkerNextActionCommandTests : IDisposable
             Url = url,
             CreatedAt = createdAt,
             Labels = labels.Select(n => new GitHubAutomationLabel { Name = n }).ToArray(),
+            // G392: a real intent PR closes its source issue (G311 mandatory),
+            // so fixtures default to one closing reference; the
+            // not-child-actionable case passes hasSourceIssue: false.
+            ClosingIssuesReferences = hasSourceIssue
+                ? new[] { new GitHubPrClosingIssueReference { Number = number - 1 } }
+                : Array.Empty<GitHubPrClosingIssueReference>(),
         };
     }
 

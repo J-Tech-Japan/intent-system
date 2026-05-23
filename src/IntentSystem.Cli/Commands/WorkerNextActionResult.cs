@@ -173,6 +173,19 @@ internal static class WorkerNextActionConstants
         /// fallback.
         /// </summary>
         public const string PrUpdateInProgress = "pr-update-in-progress";
+
+        /// <summary>
+        /// G392: emitted with <see cref="Actions.Wait"/> when a PR carries
+        /// <c>intent-pr-request-update</c> but has no resolvable source issue
+        /// (no closing reference / no <c>Closes/Fixes/Resolves #N</c>). The
+        /// requested update is host-owned (missing source issue / broader
+        /// dependency or contract gap), not a narrow child PR-branch repair, so
+        /// the selector must not return it as claimable <c>pr-comment-fix</c> —
+        /// matching what <c>worker pr-comment-preflight</c> would reject. This
+        /// stops the child loop re-selecting the same non-actionable PR every
+        /// wake (the AIC #3648 contradiction).
+        /// </summary>
+        public const string RequestUpdateNotChildActionable = "request-update-pending-not-child-actionable";
     }
 
     public static class Labels

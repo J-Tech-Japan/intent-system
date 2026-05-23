@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
@@ -41,14 +43,23 @@ internal static class WorkerNextActionAnalyzer
         // Eligible: open PR with intent-target + intent-pr-request-update,
         // and NOT intent-pr-update-in-progress (already claimed) and NOT
         // intent-pr-created (misplaced — already warned above).
+        // G392: a request-update PR is only a child-actionable `pr-comment-fix`
+        // when it has a resolvable source issue (a GitHub closing reference or a
+        // `Closes/Fixes/Resolves #N` in the body). This mirrors
+        // `worker pr-comment-preflight`'s source-issue-missing gate: a PR with
+        // `intent-pr-request-update` but no linked source issue is host-owned /
+        // not a narrow child PR-branch repair, so the selector must not return it
+        // as claimable work (the AIC #3648 next-action↔preflight contradiction).
+        bool IsRequestUpdateCandidate(GitHubAutomationPrCandidate pr)
+        {
+            var labels = LabelNames(pr.Labels);
+            return labels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate, StringComparer.Ordinal)
+                && !labels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress, StringComparer.Ordinal)
+                && !labels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal);
+        }
+
         var prRepair = intentTargetPrs
-            .Where(pr =>
-            {
-                var labels = LabelNames(pr.Labels);
-                return labels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate, StringComparer.Ordinal)
-                    && !labels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress, StringComparer.Ordinal)
-                    && !labels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal);
-            })
+            .Where(pr => IsRequestUpdateCandidate(pr) && HasResolvableSourceIssue(pr))
             .OrderBy(pr => pr.CreatedAt, StringComparer.Ordinal)
             .FirstOrDefault();
 
@@ -148,6 +159,36 @@ internal static class WorkerNextActionAnalyzer
             };
         }
 
+        // Priority 3.5 (G392): surface a request-update PR that is NOT
+        // child-actionable (carries intent-pr-request-update but has no
+        // resolvable source issue) as a stable `wait` with a
+        // request-update-pending-not-child-actionable classification, instead of
+        // a bare `none`. This stops the child loop from re-selecting the same PR
+        // as claimable `pr-comment-fix` every wake and tells the operator the
+        // PR's feedback is host-owned (missing source issue → route to the
+        // host/review/design lane, not a child PR-branch repair).
+        var notChildActionable = intentTargetPrs
+            .Where(pr => IsRequestUpdateCandidate(pr) && !HasResolvableSourceIssue(pr))
+            .OrderBy(pr => pr.CreatedAt, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (notChildActionable is not null)
+        {
+            return new WorkerNextActionResult
+            {
+                Action = WorkerNextActionConstants.Actions.Wait,
+                Repo = repo,
+                Number = notChildActionable.Number,
+                Url = notChildActionable.Url,
+                Reason = "PR carries intent-pr-request-update but has no resolvable source issue "
+                    + "(no closing reference / no Closes/Fixes/Resolves #N in body); the requested update is "
+                    + "not a narrow child PR-branch repair. Route to the host/review/design lane — the child "
+                    + "implementation loop must not claim it.",
+                RecommendedWorkflow = WorkerNextActionConstants.RecommendedWorkflows.PrCommentFix,
+                Warnings = warnings,
+                SourceClassification = WorkerNextActionConstants.SourceClassifications.RequestUpdateNotChildActionable,
+            };
+        }
+
         // Priority 4: no actionable target.
         return new WorkerNextActionResult
         {
@@ -156,6 +197,27 @@ internal static class WorkerNextActionAnalyzer
             Reason = "no actionable coding automation target",
             Warnings = warnings,
         };
+    }
+
+    private static readonly Regex BodyClosesIssueRegex = new(
+        @"(?i)\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#\d+\b",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// G392: true when a PR has a resolvable source issue — a GitHub
+    /// <c>closingIssuesReferences</c> entry or a <c>Closes/Fixes/Resolves #N</c>
+    /// reference in the body. Aligns with <c>worker pr-comment-preflight</c>'s
+    /// source-issue resolution so the selector and the preflight agree on
+    /// child-actionability.
+    /// </summary>
+    private static bool HasResolvableSourceIssue(GitHubAutomationPrCandidate pr)
+    {
+        if (pr.ClosingIssuesReferences is { Count: > 0 })
+        {
+            return true;
+        }
+
+        return !string.IsNullOrEmpty(pr.Body) && BodyClosesIssueRegex.IsMatch(pr.Body);
     }
 
     private static IReadOnlyCollection<string> LabelNames(IReadOnlyList<GitHubAutomationLabel>? labels)
