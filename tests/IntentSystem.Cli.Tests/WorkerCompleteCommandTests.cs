@@ -29,11 +29,12 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         // G311-focused tests override this factory to exercise the
         // gate's failure paths.
         WorkerCompleteCommand.PrLookupFactory = () => new PermissivePrLookup();
-        // G347: permissive default — pre-existing tests don't set a baseRefName
-        // on the fake PR lookup (empty string), so the G347 check is skipped
-        // entirely for them. Set the factory to null here; G347-focused tests
-        // set it explicitly.
-        WorkerCompleteCommand.IssueLookupFactory = null;
+        // G347/G389: permissive default — a single-unit stub issue (no
+        // baseRefName-driven mismatch, no multi-packet ambiguity) so the
+        // G347 base-branch and G389 ambiguous-contract gates are hermetic and
+        // pass for pre-existing tests. G347/G389-focused tests override this
+        // factory to exercise the failure paths.
+        WorkerCompleteCommand.IssueLookupFactory = () => new StubIssueLookup();
     }
 
     public void Dispose()
@@ -1339,6 +1340,50 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<WorkerCompleteResult>(writer.ToString())!;
         Assert.True(result.Proceed);
+    }
+
+    [Fact]
+    public void Execute_G389_RefusesPrCreatedWhenIssueContractBundlesMultipleUnits()
+    {
+        // G389 AC: an issue whose body declares multiple execution-unit
+        // identities (multiple H1 packets) must be refused as ambiguous-contract,
+        // with no label mutation applied.
+        using var workspace = new WorkerCompleteWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-issue-in-progress" },
+        };
+        WorkerCompleteCommand.MutatorFactory = () => mutator;
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Closes #797",
+            ClosingIssuesReferences = new[]
+            {
+                new GitHubPrClosingIssueReference { Number = 797, Repository = null },
+            },
+        };
+        WorkerCompleteCommand.IssueLookupFactory = () => new StubIssueLookup
+        {
+            Body = "# G390 First packet\n\n## Goal\nA.\n\n# G391 Second packet\n\n## Goal\nB.\n",
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerCompleteCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "issue",
+                "--number", "797",
+                "--outcome", WorkerResultSummaryConstants.Outcomes.PrCreated,
+                "--pr", "800",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("ambiguous-contract", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(mutator.AppliedTransitions);
     }
 
     [Fact]
