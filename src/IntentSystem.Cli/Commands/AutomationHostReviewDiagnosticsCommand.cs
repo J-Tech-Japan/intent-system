@@ -1015,8 +1015,16 @@ internal static class AutomationHostReviewDiagnosticsCommand
         var classification = decision.RestoreRereviewReady
             ? AutomationHostReviewDiagnosticsClassifications.MetadataBlockedReviewPreserved
             : AutomationHostReviewDiagnosticsClassifications.ReviewPrActionable;
+        // Recover via the supported `review-release` transition: it removes the
+        // `intent-pr-reviewing` lease (and stale leftovers) without adding any
+        // review-side label, so the next host wake reselects the PR for review.
+        // This restores review actionability after a metadata-blocked abort
+        // WITHOUT creating an implementation request-update. (`automation
+        // pr-transition` supports review-start / request-update / approved /
+        // review-release only — there is intentionally no `rereview-ready`
+        // transition.)
         var recommended = decision.RestoreRereviewReady && repo is not null && pr is not null
-            ? $"intent-cli automation pr-transition --transition rereview-ready --repo {repo} --pr {pr} --write --format json"
+            ? $"intent-cli automation pr-transition --transition review-release --repo {repo} --pr {pr} --write --format json"
             : null;
 
         var result = new AutomationHostReviewDiagnosticsResult
@@ -1024,6 +1032,9 @@ internal static class AutomationHostReviewDiagnosticsCommand
             Repo = repo ?? "(repo)",
             Classification = classification,
             Summary = "G390: " + decision.Reason
+                + (decision.RestoreRereviewReady
+                    ? " Recover with the `review-release` transition so the host reselects the PR for review (keeps it review-actionable)."
+                    : string.Empty)
                 + (decision.SuppressRequestUpdateComment
                     ? " A host metadata blocker is host-owned and must NOT be posted as an implementation request-update comment."
                     : string.Empty),
