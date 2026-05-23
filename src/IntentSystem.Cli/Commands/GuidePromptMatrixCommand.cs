@@ -130,7 +130,7 @@ internal static class GuidePromptMatrixCommand
         var branchDecision = ImplementationBaseBranchResolver.Resolve(
             explicitBranch: implementationBase,
             configuredBranch: context.Config.Project.ImplementationBaseBranch,
-            sameRepoTopologyBranch: null,
+            sameRepoTopologyBranch: ResolveSameRepoTopologyBranch(context, topology),
             policyDefaultBranch: policyDefaultBranch,
             allowOverride: allowBaseBranchOverride);
         if (branchDecision.HasConflict)
@@ -171,6 +171,37 @@ internal static class GuidePromptMatrixCommand
         => string.IsNullOrWhiteSpace(baseBranchPolicy)
             ? context.Config.Project.BaseBranchPolicy
             : baseBranchPolicy;
+
+    /// <summary>
+    /// G388 (review follow-up): the same-repo-topology precedence tier of
+    /// <see cref="ImplementationBaseBranchResolver"/>. When same-repo topology
+    /// is in effect — via <c>--topology same-repo</c> or the persisted
+    /// <see cref="ProjectConfig.SameRepoTopology"/> flag — the same-repo
+    /// integration branch (the metadata write branch, falling back to the
+    /// single-field metadata branch) is supplied so the guide resolves a
+    /// topology-derived branch instead of silently defaulting to <c>main</c>
+    /// when no explicit / domain-config branch is set. Returns null when
+    /// same-repo topology is not active or no metadata branch is configured,
+    /// which leaves the resolver to fall through to the policy default.
+    /// </summary>
+    private static string? ResolveSameRepoTopologyBranch(CliContext context, string? topology)
+    {
+        var sameRepo = string.Equals(topology, TopologySameRepo, StringComparison.Ordinal)
+            || context.Config.Project.SameRepoTopology;
+        if (!sameRepo)
+        {
+            return null;
+        }
+
+        var writeBranch = context.Config.Project.MetadataWriteBranch;
+        if (!string.IsNullOrWhiteSpace(writeBranch))
+        {
+            return writeBranch.Trim();
+        }
+
+        var metadataBranch = context.Config.Project.MetadataBranch;
+        return string.IsNullOrWhiteSpace(metadataBranch) ? null : metadataBranch.Trim();
+    }
 
     private static IReadOnlyList<GuidePromptMatrixEntry> BuildEntries(
         CliContext context,

@@ -2567,6 +2567,44 @@ public sealed class GuidePromptMatrixCommandTests
         }
     }
 
+    [Fact]
+    public void Execute_G388_SameRepoTopology_ResolvesMetadataWriteBranch_WhenNoExplicitOrConfig()
+    {
+        // Review follow-up: the same-repo topology precedence tier must be
+        // reachable at the command level — with same-repo topology active and
+        // no explicit/domain-config branch, the guide resolves the same-repo
+        // integration (metadata write) branch instead of defaulting to main.
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContextWithSameRepoTopology(metadataWriteBranch: "main-metadata"),
+            ["--mode", "child-loop", "--topology", "same-repo", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("main-metadata", root.GetProperty("expected_base_branch").GetString());
+        Assert.Equal("same-repo-topology", root.GetProperty("implementation_base_branch_source").GetString());
+        Assert.False(root.GetProperty("implementation_base_branch_is_default").GetBoolean());
+        Assert.Contains("expected base branch: `main-metadata`", root.GetProperty("prompt").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G388_DomainConfig_WinsOverSameRepoTopologyBranch()
+    {
+        // Precedence: domain config (implementation_base_branch) outranks the
+        // same-repo topology tier.
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContextWithSameRepoTopology(metadataWriteBranch: "main-metadata", implementationBaseBranch: "develop-v2"),
+            ["--mode", "child-loop", "--topology", "same-repo", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("develop-v2", root.GetProperty("expected_base_branch").GetString());
+        Assert.Equal("domain-config", root.GetProperty("implementation_base_branch_source").GetString());
+    }
+
     private static CliContext CreateContextWithImplementationBaseBranch(string implementationBaseBranch)
     {
         return new CliContext
@@ -2579,6 +2617,28 @@ public sealed class GuidePromptMatrixCommandTests
                     Domain = "aic",
                     ArtifactRoot = ".intent-cli",
                     WorktreeRoot = ".intent-cli/worktrees",
+                    ImplementationBaseBranch = implementationBaseBranch
+                }
+            }
+        };
+    }
+
+    private static CliContext CreateContextWithSameRepoTopology(
+        string metadataWriteBranch,
+        string implementationBaseBranch = "")
+    {
+        return new CliContext
+        {
+            RepoRoot = Path.GetTempPath(),
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "aic",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    SameRepoTopology = true,
+                    MetadataWriteBranch = metadataWriteBranch,
                     ImplementationBaseBranch = implementationBaseBranch
                 }
             }
