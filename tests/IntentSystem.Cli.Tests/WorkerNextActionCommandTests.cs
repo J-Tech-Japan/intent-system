@@ -417,6 +417,67 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G389_IssueToPr_CarriesMustCreatePrAndTerminalOutcomes()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Issues = new[]
+            {
+                BuildIssue(517, "Eligible", "https://github.com/J-Tech-Japan/intent-system/issues/517",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target" }),
+            },
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("issue-to-pr", root.GetProperty("action").GetString());
+        Assert.True(root.GetProperty("must_create_pr").GetBoolean());
+        var allowed = root.GetProperty("allowed_terminal_outcomes").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("pr-created", allowed);
+        Assert.Contains("ambiguous-contract", allowed);
+        var forbidden = root.GetProperty("forbidden_terminal_outcomes").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("local-commits-only", forbidden);
+        Assert.Contains("lease-released-without-pr", forbidden);
+    }
+
+    [Fact]
+    public void Execute_G389_PrCommentFix_MustCreatePrIsFalse_WithRepairTerminalOutcomes()
+    {
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "Repair me", "https://github.com/J-Tech-Japan/intent-system/pull/514",
+                    createdAt: "2026-04-30T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("pr-comment-fix", root.GetProperty("action").GetString());
+        Assert.False(root.GetProperty("must_create_pr").GetBoolean());
+        var allowed = root.GetProperty("allowed_terminal_outcomes").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("repair-pushed", allowed);
+        Assert.Contains("host-artifact-repair-required", allowed);
+    }
+
+    [Fact]
     public void Adapter_DeserializeList_ValidStdout_MapsToTypedCandidates()
     {
         // G385: clean stdout still yields the same candidates after the

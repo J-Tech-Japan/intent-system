@@ -118,6 +118,17 @@ internal static class WorkerCompleteCommand
             return 1;
         }
 
+        // G389: refuse to complete an issue whose contract bundles multiple
+        // execution-unit / packet identities — `issue-to-pr` requires a single
+        // self-contained unit of work, not a multi-packet issue. Best-effort:
+        // an inconclusive issue lookup allows completion so a transient `gh`
+        // failure never blocks a valid single-unit PR.
+        if (isPrCreatedOutcome
+            && TryCheckIssueContractAmbiguity(repo!, number, writer) == IssueContractCheckOutcome.Ambiguous)
+        {
+            return 1;
+        }
+
         // G311: gate `--kind issue --outcome pr-created` on a deterministic
         // GitHub closing reference (`Closes/Fixes/Resolves #<source-issue>`)
         // in the PR body. Refuse to mark complete when the reference is
@@ -460,6 +471,61 @@ internal static class WorkerCompleteCommand
     /// returns <see cref="BaseBranchCheckOutcome.Ok"/> on match or when the check is
     /// inconclusive (lookup error, section absent).
     /// </summary>
+    /// <summary>
+    /// G389: outcome of the multi-packet contract-ambiguity gate.
+    /// </summary>
+    private enum IssueContractCheckOutcome
+    {
+        /// <summary>Single-unit contract (or inconclusive lookup) — completion may proceed.</summary>
+        Ok,
+        /// <summary>Issue declares multiple execution-unit / packet identities — refuse.</summary>
+        Ambiguous,
+    }
+
+    /// <summary>
+    /// G389: fetch the source issue and refuse completion when its contract
+    /// declares more than one execution-unit / packet identity (see
+    /// <see cref="IssueContractAmbiguityAnalyzer"/>). Best-effort: an
+    /// inconclusive lookup returns <see cref="IssueContractCheckOutcome.Ok"/>
+    /// so transient GitHub failures do not block a valid single-unit PR.
+    /// </summary>
+    private static IssueContractCheckOutcome TryCheckIssueContractAmbiguity(
+        string repo,
+        int issueNumber,
+        TextWriter writer)
+    {
+        IGitHubIssueLookup issueLookup;
+        try
+        {
+            issueLookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueLookup();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            return IssueContractCheckOutcome.Ok;
+        }
+
+        GitHubIssueLookupResult issueResult;
+        try
+        {
+            issueResult = issueLookup.Lookup(repo, issueNumber);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            _ = exception;
+            return IssueContractCheckOutcome.Ok;
+        }
+
+        var ambiguity = IssueContractAmbiguityAnalyzer.Analyze(issueResult.Title, issueResult.Body);
+        if (!ambiguity.IsAmbiguous)
+        {
+            return IssueContractCheckOutcome.Ok;
+        }
+
+        writer.WriteLine(
+            $"refused to complete issue #{issueNumber} as `pr-created`: ambiguous-contract — {ambiguity.Diagnostic}");
+        return IssueContractCheckOutcome.Ambiguous;
+    }
+
     private static BaseBranchCheckOutcome TryCheckBaseBranchFromIssue(
         string repo,
         int issueNumber,

@@ -64,6 +64,9 @@ internal static class WorkerNextActionAnalyzer
                 RecommendedWorkflow = WorkerNextActionConstants.RecommendedWorkflows.PrCommentFix,
                 Warnings = warnings,
                 SourceClassification = WorkerNextActionConstants.SourceClassifications.RepairRequired,
+                MustCreatePr = false,
+                AllowedTerminalOutcomes = WorkerNextActionConstants.TerminalOutcomes.PrCommentFixAllowed,
+                ForbiddenTerminalOutcomes = WorkerNextActionConstants.TerminalOutcomes.PrCommentFixForbidden,
             };
         }
 
@@ -139,6 +142,9 @@ internal static class WorkerNextActionAnalyzer
                 RecommendedWorkflow = WorkerNextActionConstants.RecommendedWorkflows.GhIssueToPr,
                 Warnings = warnings,
                 SourceClassification = WorkerNextActionConstants.SourceClassifications.ReadyToImplement,
+                MustCreatePr = true,
+                AllowedTerminalOutcomes = WorkerNextActionConstants.TerminalOutcomes.IssueToPrAllowed,
+                ForbiddenTerminalOutcomes = WorkerNextActionConstants.TerminalOutcomes.IssueToPrForbidden,
             };
         }
 

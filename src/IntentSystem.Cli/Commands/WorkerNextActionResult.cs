@@ -45,6 +45,21 @@ internal sealed record WorkerNextActionResult
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }
 
+    /// <summary>
+    /// G389: true for <c>issue-to-pr</c> — the terminal output must be a GitHub
+    /// PR, not local commits. Null for actions where it does not apply.
+    /// </summary>
+    [JsonPropertyName("must_create_pr")]
+    public bool? MustCreatePr { get; init; }
+
+    /// <summary>G389: the outcome values a wake on this action may legitimately end in.</summary>
+    [JsonPropertyName("allowed_terminal_outcomes")]
+    public IReadOnlyList<string>? AllowedTerminalOutcomes { get; init; }
+
+    /// <summary>G389: outcome states that are never a valid terminal result (e.g. local commits with no PR).</summary>
+    [JsonPropertyName("forbidden_terminal_outcomes")]
+    public IReadOnlyList<string>? ForbiddenTerminalOutcomes { get; init; }
+
     [JsonPropertyName("source_classification")]
     public string? SourceClassification { get; init; }
 
@@ -97,6 +112,50 @@ internal static class WorkerNextActionConstants
     {
         public const string PrCommentFix = "pr-comment-fix";
         public const string GhIssueToPr = "gh-issue-to-pr";
+    }
+
+    /// <summary>
+    /// G389: explicit allowed / forbidden terminal outcomes per action, so an
+    /// AI agent cannot finish a wake in an invalid state (e.g. local commits
+    /// with no PR). Surfaced on <see cref="WorkerNextActionResult"/> alongside
+    /// <see cref="WorkerNextActionResult.MustCreatePr"/>.
+    /// </summary>
+    public static class TerminalOutcomes
+    {
+        public static readonly IReadOnlyList<string> IssueToPrAllowed = new[]
+        {
+            "pr-created",
+            "declined-contract-incomplete",
+            "clarification-required",
+            "already-resolved",
+            "ambiguous-contract",
+            "failed",
+            "label-cleanup-required",
+        };
+
+        public static readonly IReadOnlyList<string> IssueToPrForbidden = new[]
+        {
+            "local-commits-only",
+            "partial-work-no-pr",
+            "lease-released-without-pr",
+        };
+
+        public static readonly IReadOnlyList<string> PrCommentFixAllowed = new[]
+        {
+            "repair-pushed",
+            "no-actionable-comments",
+            "already-resolved",
+            "clarification-required",
+            "host-artifact-repair-required",
+            "failed",
+            "label-cleanup-required",
+        };
+
+        public static readonly IReadOnlyList<string> PrCommentFixForbidden = new[]
+        {
+            "local-commits-only",
+            "lease-released-without-push",
+        };
     }
 
     public static class SourceClassifications
