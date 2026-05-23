@@ -174,8 +174,23 @@ internal static class WorkerPrCommentPreflightAnalyzer
                 WorkerPrCommentPreflightConstants.RecommendedActions.WaitForWorkerUpdate);
         }
 
-        // Step 4: request-update-pending.
-        if (labelsSet.Contains(WorkerPrCommentPreflightConstants.Labels.IntentPrRequestUpdate))
+        // Step 4: request-update-pending — only a non-actionable wait when the
+        // PR has NO actionable comments. (G392) A request-update PR that ALSO
+        // carries actionable review feedback must fall through to the
+        // source-issue / source-issue-not-target / host-artifact / repair
+        // steps so that `worker next-action` and `worker pr-comment-preflight`
+        // share the same child-actionability decision. Previously this step
+        // short-circuited EVERY intent-pr-request-update PR to
+        // request-update-pending/actionable:false before the comment-content
+        // steps ran — which meant `next-action` could select a source-issue-
+        // present request-update PR as claimable `pr-comment-fix` even though
+        // preflight reported actionable:false for the same PR (the AIC #3648
+        // next-action↔preflight contradiction). Gating on
+        // actionableComments.Count == 0 keeps the genuine "reviewer set the
+        // label but no actionable comment yet" wait while letting a repairable
+        // request-update PR reach repair-required/actionable:true at step 9.
+        if (labelsSet.Contains(WorkerPrCommentPreflightConstants.Labels.IntentPrRequestUpdate)
+            && actionableComments.Count == 0)
         {
             return Build(
                 pr,
