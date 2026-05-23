@@ -315,6 +315,80 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G391_SameRepoArtifactOnly_WriteThenCloseoutPlanBecomesReady()
+    {
+        // G391 review follow-up: end-to-end AC evidence for the AIC-style
+        // same-repo (intent-metadata) topology. An artifact-only queue item
+        // (linked_issue = null, linked_pr = null) plus a publish.yaml whose
+        // created issue (#3641) is uniquely closed by PR #3642:
+        //   1. `publish-recovery --pr 3642 --write` promotes the artifact
+        //      evidence to a high-confidence repair, writes linked_pr (and
+        //      linked_issue) to the same-repo metadata root, and appends a run
+        //      event; then
+        //   2. `review closeout-plan --pr 3642` becomes ready.
+        using var workspace = new RecoveryWorkspace(sameRepoMetadata: true);
+        workspace.WriteQueueState(BuildQueueState("G391", linkedIssue: null, linkedPr: null));
+        workspace.WritePublishArtifact("G391", createdIssueNumber: 3641);
+        // Complete child-issue contract so closeout-plan has no packet gaps.
+        File.WriteAllText(
+            Path.Combine(workspace.RootPath, ".intent-cli", "issues", "G391", "github-body.md"),
+            BuildCompleteContractBodyForCloseout());
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(3642, "Closes #3641") });
+
+        using var recoveryWriter = new StringWriter();
+        var recoveryExit = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "3642", "--write", "--format", "json"],
+            recoveryWriter);
+
+        Assert.Equal(0, recoveryExit);
+        using (var recoveryDoc = JsonDocument.Parse(recoveryWriter.ToString()))
+        {
+            Assert.Equal(1, recoveryDoc.RootElement.GetProperty("applied_count").GetInt32());
+            Assert.Equal(
+                "same-repo-metadata-linkage-repair-ready",
+                recoveryDoc.RootElement.GetProperty("same_repo_metadata_linkage_classification").GetString());
+        }
+        // linked_pr (and linked_issue) written to the same-repo metadata root.
+        var queueAfter = QueueStateSerializer.Deserialize(
+            File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        Assert.Contains("/pull/3642", queueAfter.Items[0].LinkedPr!, StringComparison.Ordinal);
+        Assert.NotNull(queueAfter.Items[0].LinkedIssue);
+        Assert.Equal(3641, queueAfter.Items[0].LinkedIssue!.Number);
+        // Durable run event appended (G390).
+        Assert.Contains(
+            AutomationPublishRecoveryCommand.RecoveryRunEventName,
+            File.ReadAllText(Path.Combine(workspace.RootPath, ".intent-cli", "runs.jsonl")),
+            StringComparison.Ordinal);
+
+        // closeout-plan retry now becomes ready.
+        using var closeoutWriter = new StringWriter();
+        var closeoutExit = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "3642", "--format", "json"],
+            closeoutWriter);
+
+        Assert.Equal(0, closeoutExit);
+        using var closeoutDoc = JsonDocument.Parse(closeoutWriter.ToString());
+        Assert.True(closeoutDoc.RootElement.GetProperty("ready").GetBoolean());
+    }
+
+    private static string BuildCompleteContractBodyForCloseout() =>
+        "## Goal\nx\n\n"
+        + "## Why This Slice Exists Now\nx\n\n"
+        + "## Current Observed State\nx\n\n"
+        + "## Accepted Baseline You May Assume\nx\n\n"
+        + "## Target Repo / Path / Part\nx\n\n"
+        + "## In Scope\n- x\n\n"
+        + "## Out Of Scope\n- x\n\n"
+        + "## Acceptance Criteria\n- x\n\n"
+        + "## Verification\nx\n\n"
+        + "## Related Links\n- x\n\n"
+        + "## Base Branch Policy\nPolicy: `direct-main`\nExpected PR base branch: `main`\n";
+
+    [Fact]
     public void Execute_LinkedIssuePresentNoPr_NoClosingPr_StaysUnsafe_NoMutation()
     {
         using var workspace = new RecoveryWorkspace();
