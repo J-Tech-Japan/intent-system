@@ -36,6 +36,9 @@ internal static class AutomationPublishRecoveryCommand
     private const string ModeDryRun = "dry-run";
     private const string ModeWrite = "write";
 
+    /// <summary>G390: append-only run-log event name recorded when a --write recovery fills a missing linked_pr.</summary>
+    internal const string RecoveryRunEventName = "linked-pr-recovered";
+
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -109,7 +112,7 @@ internal static class AutomationPublishRecoveryCommand
         {
             try
             {
-                ApplyRepairs(queueStatePath, analysis.SafeRepairs);
+                ApplyRepairs(context, queueStatePath, analysis.SafeRepairs);
                 applied.AddRange(analysis.SafeRepairs);
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
@@ -212,7 +215,7 @@ internal static class AutomationPublishRecoveryCommand
         return candidates;
     }
 
-    private static void ApplyRepairs(string queueStatePath, IReadOnlyList<PublishRecoveryRepair> repairs)
+    private static void ApplyRepairs(CliContext context, string queueStatePath, IReadOnlyList<PublishRecoveryRepair> repairs)
     {
         var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
         var items = queueState.Items.ToArray();
@@ -263,6 +266,47 @@ internal static class AutomationPublishRecoveryCommand
             UpdatedAt = DateTimeOffset.UtcNow
         };
         File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updated));
+
+        // G390 (review follow-up, Finding 1): a --write recovery must record a
+        // durable run event so the repair is auditable and closeout-plan can
+        // observe the linked_pr fill. Append one append-only `runs.jsonl` event
+        // per applied repair, mirroring the queue-seed/closeout run-log pattern.
+        AppendRecoveryRunEvents(context, repairs);
+    }
+
+    /// <summary>
+    /// G390: append an append-only <c>linked-pr-recovered</c> run event to
+    /// <c>.intent-cli/runs.jsonl</c> for each applied publish-recovery repair.
+    /// </summary>
+    private static void AppendRecoveryRunEvents(CliContext context, IReadOnlyList<PublishRecoveryRepair> repairs)
+    {
+        if (repairs.Count == 0)
+        {
+            return;
+        }
+
+        var runsPath = Path.Combine(context.RepoRoot, ".intent-cli", "runs.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(runsPath)!);
+
+        var lines = new System.Text.StringBuilder();
+        foreach (var repair in repairs)
+        {
+            var runEvent = new RunEvent
+            {
+                Ts = DateTimeOffset.UtcNow,
+                ExecutionUnit = repair.ExecutionUnit,
+                Event = RecoveryRunEventName,
+                By = "automation publish-recovery (G390)",
+                LinkedIssue = repair.LinkedIssueNumber is { } issueNumber
+                    ? $"https://github.com/{repair.LinkedIssueRepo}/issues/{issueNumber}"
+                    : repair.LinkedIssueUrl,
+                LinkedPr = repair.LinkedPrUrl ?? $"https://github.com/{repair.LinkedIssueRepo}/pull/{repair.LinkedPrNumber}",
+                Reason = $"recovered missing linked_pr (#{repair.LinkedPrNumber}) for '{repair.ExecutionUnit}'.",
+            };
+            lines.Append(RunLogSerializer.SerializeLine(runEvent)).Append('\n');
+        }
+
+        File.AppendAllText(runsPath, lines.ToString());
     }
 
     private static string BuildSummary(PublishRecoveryAnalysis analysis, int appliedCount, bool write)

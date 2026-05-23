@@ -258,6 +258,63 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G390_Write_AppendsLinkedPrRecoveredRunEvent()
+    {
+        // G390 review Finding 1: a --write recovery must record a durable
+        // runs.jsonl event so the linked_pr repair is auditable and
+        // closeout-plan can observe it.
+        using var workspace = new RecoveryWorkspace(sameRepoMetadata: true);
+        var li = new LinkedIssue
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            Number = 558,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/558"
+        };
+        workspace.WriteQueueState(BuildQueueState("SKS-G219", linkedIssue: li, linkedPr: null));
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(559, "Closes #558") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var runsPath = Path.Combine(workspace.RootPath, ".intent-cli", "runs.jsonl");
+        Assert.True(File.Exists(runsPath), "expected runs.jsonl to be appended on --write recovery");
+        var runs = File.ReadAllText(runsPath);
+        Assert.Contains(AutomationPublishRecoveryCommand.RecoveryRunEventName, runs, StringComparison.Ordinal);
+        Assert.Contains("SKS-G219", runs, StringComparison.Ordinal);
+        Assert.Contains("559", runs, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G390_DryRun_DoesNotAppendRunEvent()
+    {
+        using var workspace = new RecoveryWorkspace(sameRepoMetadata: true);
+        var li = new LinkedIssue
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            Number = 558,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/558"
+        };
+        workspace.WriteQueueState(BuildQueueState("SKS-G219", linkedIssue: li, linkedPr: null));
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(559, "Closes #558") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var runsPath = Path.Combine(workspace.RootPath, ".intent-cli", "runs.jsonl");
+        Assert.False(File.Exists(runsPath), "dry-run must not append a run event");
+    }
+
+    [Fact]
     public void Execute_LinkedIssuePresentNoPr_NoClosingPr_StaysUnsafe_NoMutation()
     {
         using var workspace = new RecoveryWorkspace();

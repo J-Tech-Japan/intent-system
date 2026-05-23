@@ -238,6 +238,15 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     public const string RequiredCiFailing = "required-ci-failing";
 
     /// <summary>
+    /// G390: a host metadata blocker (e.g. a missing same-repo <c>linked_pr</c>)
+    /// stopped a review wake before a verdict, after review-start consumed
+    /// <c>intent-pr-rereview-ready</c>. The label must be restored (a
+    /// <c>stale-review-lease</c> safe repair) so the PR stays review-actionable;
+    /// the blocker must NOT become an implementation request-update comment.
+    /// </summary>
+    public const string MetadataBlockedReviewPreserved = "metadata-blocked-review-preserved";
+
+    /// <summary>
     /// G356: terminal class returned when one or more queue items are not
     /// marked Completed even though their linked GitHub PR is already
     /// merged. The host loop should run
