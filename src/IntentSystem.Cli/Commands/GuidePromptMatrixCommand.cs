@@ -79,7 +79,7 @@ internal static class GuidePromptMatrixCommand
     private const string TopologySameRepo = "same-repo";
 
     private const string UsageLine =
-        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--topology same-repo] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic|copilot|copilot-cloud|copilot-local] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--format markdown|json]";
+        "Usage: intent-cli guide prompt-matrix [--mode child-loop|host-loop|child-oneshot|host-oneshot] [--topology same-repo] [--domain <name>] [--target-repo <owner/repo>] [--agent claude|codex|generic|copilot|copilot-cloud|copilot-local] [--frequency <NNm|NNh>] [--base-branch-policy direct-main|main-ai] [--implementation-base <branch>] [--allow-base-branch-override] [--format markdown|json]";
 
     private static readonly string[] ForbiddenSources =
     [
@@ -112,14 +112,34 @@ internal static class GuidePromptMatrixCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var targetRepo, out var agent, out var frequency, out var baseBranchPolicy, out var topology, out var error))
+        if (!TryParseArguments(args, out var mode, out var format, out var domain, out var targetRepo, out var agent, out var frequency, out var baseBranchPolicy, out var topology, out var implementationBase, out var allowBaseBranchOverride, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var entries = BuildEntries(context, mode, domain, targetRepo, agent, frequency, baseBranchPolicy, topology);
+        // G388: resolve the effective implementation / PR base branch via the
+        // shared precedence resolver (explicit arg > domain config > same-repo
+        // topology > policy default) so the guide is the deterministic source
+        // of the branch and agrees with `automation summary`. A conflict
+        // between an explicit branch and the configured branch is a hard stop
+        // unless --allow-base-branch-override was passed.
+        var resolvedPolicy = ResolveEffectivePolicy(context, baseBranchPolicy);
+        var policyDefaultBranch = BaseBranchPolicyContract.ResolveExpectedBaseBranch(resolvedPolicy);
+        var branchDecision = ImplementationBaseBranchResolver.Resolve(
+            explicitBranch: implementationBase,
+            configuredBranch: context.Config.Project.ImplementationBaseBranch,
+            sameRepoTopologyBranch: ResolveSameRepoTopologyBranch(context, topology),
+            policyDefaultBranch: policyDefaultBranch,
+            allowOverride: allowBaseBranchOverride);
+        if (branchDecision.HasConflict)
+        {
+            writer.WriteLine(branchDecision.Diagnostic);
+            return 1;
+        }
+
+        var entries = BuildEntries(context, mode, domain, targetRepo, agent, frequency, baseBranchPolicy, topology, branchDecision, policyDefaultBranch);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -142,6 +162,47 @@ internal static class GuidePromptMatrixCommand
         return 0;
     }
 
+    /// <summary>
+    /// G346/G388: when <c>--base-branch-policy</c> is omitted, fall back to the
+    /// persisted host/domain config value (default <c>direct-main</c> when not
+    /// configured).
+    /// </summary>
+    private static string ResolveEffectivePolicy(CliContext context, string? baseBranchPolicy)
+        => string.IsNullOrWhiteSpace(baseBranchPolicy)
+            ? context.Config.Project.BaseBranchPolicy
+            : baseBranchPolicy;
+
+    /// <summary>
+    /// G388 (review follow-up): the same-repo-topology precedence tier of
+    /// <see cref="ImplementationBaseBranchResolver"/>. When same-repo topology
+    /// is in effect — via <c>--topology same-repo</c> or the persisted
+    /// <see cref="ProjectConfig.SameRepoTopology"/> flag — the same-repo
+    /// integration branch (the metadata write branch, falling back to the
+    /// single-field metadata branch) is supplied so the guide resolves a
+    /// topology-derived branch instead of silently defaulting to <c>main</c>
+    /// when no explicit / domain-config branch is set. Returns null when
+    /// same-repo topology is not active or no metadata branch is configured,
+    /// which leaves the resolver to fall through to the policy default.
+    /// </summary>
+    private static string? ResolveSameRepoTopologyBranch(CliContext context, string? topology)
+    {
+        var sameRepo = string.Equals(topology, TopologySameRepo, StringComparison.Ordinal)
+            || context.Config.Project.SameRepoTopology;
+        if (!sameRepo)
+        {
+            return null;
+        }
+
+        var writeBranch = context.Config.Project.MetadataWriteBranch;
+        if (!string.IsNullOrWhiteSpace(writeBranch))
+        {
+            return writeBranch.Trim();
+        }
+
+        var metadataBranch = context.Config.Project.MetadataBranch;
+        return string.IsNullOrWhiteSpace(metadataBranch) ? null : metadataBranch.Trim();
+    }
+
     private static IReadOnlyList<GuidePromptMatrixEntry> BuildEntries(
         CliContext context,
         string? mode,
@@ -150,15 +211,13 @@ internal static class GuidePromptMatrixCommand
         string? agent,
         string? frequency,
         string? baseBranchPolicy,
-        string? topology)
+        string? topology,
+        ImplementationBaseBranchDecision branchDecision,
+        string policyDefaultBranch)
     {
         var domainPlaceholder = string.IsNullOrWhiteSpace(domain) ? "<DOMAIN>" : domain;
         var targetRepoPlaceholder = string.IsNullOrWhiteSpace(targetRepo) ? "<TARGET-REPO>" : targetRepo;
-        // G346: when --base-branch-policy is omitted, fall back to the persisted
-        // host/domain config value (default direct-main when not configured).
-        var resolvedPolicy = string.IsNullOrWhiteSpace(baseBranchPolicy)
-            ? context.Config.Project.BaseBranchPolicy
-            : baseBranchPolicy;
+        var resolvedPolicy = ResolveEffectivePolicy(context, baseBranchPolicy);
 
         var isSameRepo = string.Equals(topology, TopologySameRepo, StringComparison.Ordinal);
 
@@ -200,18 +259,66 @@ internal static class GuidePromptMatrixCommand
                     : BuildHostOneshot(domainPlaceholder, targetRepoPlaceholder, resolvedPolicy)
         };
 
-        if (mode is null)
+        IReadOnlyList<GuidePromptMatrixEntry> selected = mode is null
+            ? all
+            : mode switch
+            {
+                ModeChildLoop => [all[0]],
+                ModeHostLoop => [all[1]],
+                ModeChildOneshot => [all[2]],
+                ModeHostOneshot => [all[3]],
+                _ => all
+            };
+
+        // G388: apply the resolved effective implementation/PR base branch so
+        // every entry reports the same branch as `automation summary`. For the
+        // policy default (no config/explicit override) this is a no-op and the
+        // entries are byte-identical to the pre-G388 output.
+        return selected
+            .Select(entry => ApplyEffectiveBaseBranch(entry, branchDecision, policyDefaultBranch))
+            .ToList();
+    }
+
+    /// <summary>
+    /// G388: rewrite an entry's expected base branch to the resolved effective
+    /// branch. When the effective branch differs from the policy default (a
+    /// configured / explicit / topology override) the rendered
+    /// <c>expected base branch: `&lt;default&gt;`</c> token and the
+    /// <c>expected_base_branch</c> field are updated and an override note is
+    /// appended. The resolution source / default-note are always recorded as
+    /// structured fields so the guide states whether the branch is a default
+    /// and where to configure a different one.
+    /// </summary>
+    private static GuidePromptMatrixEntry ApplyEffectiveBaseBranch(
+        GuidePromptMatrixEntry entry,
+        ImplementationBaseBranchDecision decision,
+        string policyDefaultBranch)
+    {
+        var prompt = entry.Prompt;
+        var expected = entry.ExpectedBaseBranch;
+
+        var isOverride = !string.IsNullOrEmpty(expected)
+            && !string.Equals(decision.Branch, policyDefaultBranch, StringComparison.Ordinal);
+        if (isOverride)
         {
-            return all;
+            prompt = prompt.Replace(
+                $"expected base branch: `{policyDefaultBranch}`",
+                $"expected base branch: `{decision.Branch}`",
+                StringComparison.Ordinal);
+            prompt +=
+                $"\n\n> Effective implementation / PR base branch: `{decision.Branch}` "
+                + $"(source: {decision.Source}). This overrides the `{policyDefaultBranch}` "
+                + $"base-branch-policy default; open the PR against `{decision.Branch}`.";
+            expected = decision.Branch;
         }
 
-        return mode switch
+        return entry with
         {
-            ModeChildLoop => [all[0]],
-            ModeHostLoop => [all[1]],
-            ModeChildOneshot => [all[2]],
-            ModeHostOneshot => [all[3]],
-            _ => all
+            ExpectedBaseBranch = expected,
+            ImplementationBaseBranchSource = decision.Source,
+            ImplementationBaseBranchIsDefault = decision.IsDefault,
+            ImplementationBaseBranchNote = string.IsNullOrEmpty(decision.Note) ? null : decision.Note,
+            Prompt = prompt,
         };
     }
 
@@ -1271,6 +1378,8 @@ Hard rules:
         out string? frequency,
         out string? baseBranchPolicy,
         out string? topology,
+        out string? implementationBase,
+        out bool allowBaseBranchOverride,
         out string error)
     {
         mode = null;
@@ -1281,6 +1390,8 @@ Hard rules:
         frequency = null;
         baseBranchPolicy = null;
         topology = null;
+        implementationBase = null;
+        allowBaseBranchOverride = false;
         error = string.Empty;
 
         for (var index = 0; index < args.Length; index++)
@@ -1403,6 +1514,25 @@ Hard rules:
                     index++;
                     break;
 
+                case "--implementation-base":
+                    // G388: explicit operator-supplied implementation / PR base
+                    // branch. Highest precedence; validated against the
+                    // configured branch unless --allow-base-branch-override.
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--implementation-base requires a value (e.g. develop-v2).";
+                        return false;
+                    }
+                    implementationBase = args[index + 1].Trim();
+                    index++;
+                    break;
+
+                case "--allow-base-branch-override":
+                    // G388: let an explicit --implementation-base win over a
+                    // differing configured branch instead of producing a conflict.
+                    allowBaseBranchOverride = true;
+                    break;
+
                 case "--topology":
                     // G348: only 'same-repo' is a recognized topology value.
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
@@ -1446,6 +1576,8 @@ Hard rules:
         writer.WriteLine("--agent values: claude (same-thread `/loop`), codex (current-thread heartbeat), generic, copilot / copilot-cloud (G345 — cloud/assignment-oriented; supported for child-oneshot, returns structured unsupported-loop guidance for child-loop, structured host-oneshot-human-driven guidance for host-oneshot, and structured unsupported-mode-agent-combination for host-loop), copilot-local (G349 — local Copilot coding-agent in a host cwd; can exec intent-cli for host operations; child cwd usage remains host-state-free).");
         writer.WriteLine("--frequency examples: 5m, 20m, 1h. Omit to keep the rendered prompt's ask-the-operator instruction.");
         writer.WriteLine($"--base-branch-policy values: {CliRuntimeContracts.DirectMainBaseBranchPolicy} (default; child PRs target `{CliRuntimeContracts.DirectMainBaseBranch}`), {CliRuntimeContracts.MainAiBaseBranchPolicy} (child PRs target `{CliRuntimeContracts.MainAiIntegrationBaseBranch}`).");
+        writer.WriteLine("--implementation-base <branch> (G388): explicit implementation/PR base branch. Highest precedence; resolution order is explicit > domain config (`implementation_base_branch`) > same-repo topology > policy default. A configured branch (e.g. `develop-v2`) is emitted as the expected base branch instead of the policy default. An explicit value conflicting with the configured branch is a hard stop unless --allow-base-branch-override is passed.");
+        writer.WriteLine("--allow-base-branch-override (G388): let --implementation-base win over a differing configured branch instead of erroring with a conflict diagnostic.");
         writer.WriteLine($"--topology values: {TopologySameRepo} (G348 — adds same-repo forbidden-path guidance to child prompts; host intent metadata paths `.intent-cli/**` and `intents/**` are visible but forbidden for implementation agents).");
     }
 
@@ -1491,6 +1623,28 @@ internal sealed record GuidePromptMatrixEntry
 
     [JsonPropertyName("expected_base_branch")]
     public string? ExpectedBaseBranch { get; init; }
+
+    /// <summary>
+    /// G388: which precedence tier resolved the expected base branch
+    /// (<c>explicit-argument</c> / <c>domain-config</c> /
+    /// <c>same-repo-topology</c> / <c>policy-default</c>).
+    /// </summary>
+    [JsonPropertyName("implementation_base_branch_source")]
+    public string? ImplementationBaseBranchSource { get; init; }
+
+    /// <summary>
+    /// G388: true when the expected base branch is the policy default rather
+    /// than a configured / explicit value.
+    /// </summary>
+    [JsonPropertyName("implementation_base_branch_is_default")]
+    public bool? ImplementationBaseBranchIsDefault { get; init; }
+
+    /// <summary>
+    /// G388: operator-facing note stating that the branch is a default and
+    /// where to configure a different one; null when not defaulting.
+    /// </summary>
+    [JsonPropertyName("implementation_base_branch_note")]
+    public string? ImplementationBaseBranchNote { get; init; }
 
     /// <summary>
     /// G348: topology hint; <c>"same-repo"</c> when <c>--topology same-repo</c>

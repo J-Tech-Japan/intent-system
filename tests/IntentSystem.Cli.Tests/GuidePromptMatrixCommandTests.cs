@@ -2480,4 +2480,168 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("stale-review-lease", prompt, StringComparison.Ordinal);
         Assert.Contains("workspace-safe-dirty", prompt, StringComparison.Ordinal);
     }
+
+    // ── G388 implementation base branch resolution ──────────────────────────
+
+    [Fact]
+    public void Execute_G388_DomainConfigDevelopV2_EmitsDevelopV2AsExpectedBaseBranch()
+    {
+        // AC: domain config implementation_base_branch=develop-v2 must make the
+        // guide emit develop-v2, not the direct-main/main default.
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContextWithImplementationBaseBranch("develop-v2"),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("develop-v2", root.GetProperty("expected_base_branch").GetString());
+        Assert.Equal("domain-config", root.GetProperty("implementation_base_branch_source").GetString());
+        Assert.False(root.GetProperty("implementation_base_branch_is_default").GetBoolean());
+        Assert.Contains("expected base branch: `develop-v2`", root.GetProperty("prompt").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G388_NoConfig_DefaultsToMain_AndStatesItIsADefault()
+    {
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "child-loop", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("main", root.GetProperty("expected_base_branch").GetString());
+        Assert.Equal("policy-default", root.GetProperty("implementation_base_branch_source").GetString());
+        Assert.True(root.GetProperty("implementation_base_branch_is_default").GetBoolean());
+        // Must state where to configure a different branch.
+        Assert.Contains("implementation_base_branch", root.GetProperty("implementation_base_branch_note").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G388_ExplicitImplementationBaseOverride_WinsOverConfig()
+    {
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContextWithImplementationBaseBranch("main"),
+            ["--mode", "child-loop", "--implementation-base", "develop-v2", "--allow-base-branch-override", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("develop-v2", root.GetProperty("expected_base_branch").GetString());
+        Assert.Equal("explicit-argument", root.GetProperty("implementation_base_branch_source").GetString());
+    }
+
+    [Fact]
+    public void Execute_G388_ExplicitConflictsWithConfig_NoOverride_FailsWithDiagnostic()
+    {
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContextWithImplementationBaseBranch("develop-v2"),
+            ["--mode", "child-loop", "--implementation-base", "main", "--format", "json"],
+            writer);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("conflict", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("develop-v2", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G388_DevelopV2_AllModesAgreeOnExpectedBaseBranch()
+    {
+        // AC: prompt-matrix entries agree on the same effective branch for the
+        // same cwd/domain/repo (consistency with automation summary).
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContextWithImplementationBaseBranch("develop-v2"),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        foreach (var entry in JsonDocument.Parse(writer.ToString()).RootElement.EnumerateArray())
+        {
+            Assert.Equal("develop-v2", entry.GetProperty("expected_base_branch").GetString());
+        }
+    }
+
+    [Fact]
+    public void Execute_G388_SameRepoTopology_ResolvesMetadataWriteBranch_WhenNoExplicitOrConfig()
+    {
+        // Review follow-up: the same-repo topology precedence tier must be
+        // reachable at the command level — with same-repo topology active and
+        // no explicit/domain-config branch, the guide resolves the same-repo
+        // integration (metadata write) branch instead of defaulting to main.
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContextWithSameRepoTopology(metadataWriteBranch: "main-metadata"),
+            ["--mode", "child-loop", "--topology", "same-repo", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("main-metadata", root.GetProperty("expected_base_branch").GetString());
+        Assert.Equal("same-repo-topology", root.GetProperty("implementation_base_branch_source").GetString());
+        Assert.False(root.GetProperty("implementation_base_branch_is_default").GetBoolean());
+        Assert.Contains("expected base branch: `main-metadata`", root.GetProperty("prompt").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G388_DomainConfig_WinsOverSameRepoTopologyBranch()
+    {
+        // Precedence: domain config (implementation_base_branch) outranks the
+        // same-repo topology tier.
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContextWithSameRepoTopology(metadataWriteBranch: "main-metadata", implementationBaseBranch: "develop-v2"),
+            ["--mode", "child-loop", "--topology", "same-repo", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        var root = JsonDocument.Parse(writer.ToString()).RootElement;
+        Assert.Equal("develop-v2", root.GetProperty("expected_base_branch").GetString());
+        Assert.Equal("domain-config", root.GetProperty("implementation_base_branch_source").GetString());
+    }
+
+    private static CliContext CreateContextWithImplementationBaseBranch(string implementationBaseBranch)
+    {
+        return new CliContext
+        {
+            RepoRoot = Path.GetTempPath(),
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "aic",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    ImplementationBaseBranch = implementationBaseBranch
+                }
+            }
+        };
+    }
+
+    private static CliContext CreateContextWithSameRepoTopology(
+        string metadataWriteBranch,
+        string implementationBaseBranch = "")
+    {
+        return new CliContext
+        {
+            RepoRoot = Path.GetTempPath(),
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "aic",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    SameRepoTopology = true,
+                    MetadataWriteBranch = metadataWriteBranch,
+                    ImplementationBaseBranch = implementationBaseBranch
+                }
+            }
+        };
+    }
 }
