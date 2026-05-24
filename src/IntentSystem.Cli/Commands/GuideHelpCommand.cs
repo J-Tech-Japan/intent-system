@@ -121,6 +121,12 @@ internal static class GuideHelpCommand
     {
         new GuideSubcommandEntry
         {
+            Name = "start",
+            Purpose = "Guide-first entrypoint (G393): the single command to run before intent/packet/issue/review/loop work. Points at the per-phase guide command, states the host/design vs metadata-free child-implementation roles, and emits short AGENTS.md/CLAUDE.md guide-first snippets.",
+            Example = "intent-cli guide start --format json"
+        },
+        new GuideSubcommandEntry
+        {
             Name = "help",
             Purpose = "List guide subcommands with examples and workflow-guide pointers (this surface).",
             Example = "intent-cli guide help --format json"
