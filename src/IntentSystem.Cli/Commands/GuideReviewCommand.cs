@@ -269,6 +269,10 @@ internal static class GuideReviewCommand
             ReviewBoundaries = ReviewBoundaries,
             ApprovalSummaryRequirements = ApprovalSummaryRequirements,
             RequestUpdateRequirements = RequestUpdateRequirements,
+            ReviewBlockerProtocol = ReviewBlockerProtocol.ProtocolRules,
+            PrBlockerCommentTemplate = ReviewBlockerProtocol.BlockerCommentTemplateSections,
+            ReviewBlockerRoutingExamples = BuildBlockerRoutingExamples(),
+            ChatIsNotDurableWorkflowState = ReviewBlockerProtocol.ChatIsNotDurableWorkflowState,
             ValidationSuggestions = DefaultValidationSuggestions,
             TestsPassIsNecessaryNotSufficient = true,
             Gaps = gaps,
@@ -353,6 +357,29 @@ internal static class GuideReviewCommand
         }
 
         return ordered;
+    }
+
+    // G394: render the canonical blocker shapes through the shared classifier
+    // so the guidance's worked routing examples cannot drift from the
+    // decision procedure the unit tests pin (ReviewBlockerProtocol.Classify).
+    private static IReadOnlyList<GuideReviewBlockerRoutingExample> BuildBlockerRoutingExamples()
+    {
+        var examples = new List<GuideReviewBlockerRoutingExample>(ReviewBlockerProtocol.CanonicalScenarios.Count);
+        foreach (var (scenario, signal) in ReviewBlockerProtocol.CanonicalScenarios)
+        {
+            var classification = ReviewBlockerProtocol.Classify(signal);
+            examples.Add(new GuideReviewBlockerRoutingExample
+            {
+                Scenario = scenario,
+                Category = classification.Category.ToString(),
+                RequiresDurablePrComment = classification.RequiresDurablePrComment,
+                MustNotBePrComment = classification.MustNotBePrComment,
+                RequiresFollowUpIssue = classification.RequiresFollowUpIssue,
+                RecommendedOutcome = classification.RecommendedOutcome,
+                Rationale = classification.Rationale,
+            });
+        }
+        return examples;
     }
 
     private static bool MatchesLinkedPr(string? linkedPr, string repo, string prToken)
@@ -484,6 +511,35 @@ internal static class GuideReviewCommand
         foreach (var item in result.RequestUpdateRequirements)
         {
             writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+
+        // G394: durable blocker protocol + PR blocker comment template +
+        // worked routing examples. Record current-PR blockers on the PR, not
+        // only in chat, before completing as request-update / clarification.
+        writer.WriteLine("## Review blocker protocol");
+        writer.WriteLine($"- chat_is_not_durable_workflow_state: {(result.ChatIsNotDurableWorkflowState ? "yes" : "no")}");
+        foreach (var item in result.ReviewBlockerProtocol)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## PR blocker comment template");
+        foreach (var item in result.PrBlockerCommentTemplate)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## Review blocker routing examples");
+        foreach (var example in result.ReviewBlockerRoutingExamples)
+        {
+            writer.WriteLine($"- {example.Scenario}");
+            writer.WriteLine(
+                $"  - category: {example.Category}; durable_pr_comment: {(example.RequiresDurablePrComment ? "yes" : "no")}; "
+                + $"follow_up_issue: {(example.RequiresFollowUpIssue ? "yes" : "no")}; "
+                + $"never_pr_comment: {(example.MustNotBePrComment ? "yes" : "no")}; outcome: {example.RecommendedOutcome}");
         }
         writer.WriteLine();
 
@@ -686,6 +742,34 @@ internal sealed record GuideReviewResult
     [JsonPropertyName("request_update_requirements")]
     public required IReadOnlyList<string> RequestUpdateRequirements { get; init; }
 
+    /// <summary>
+    /// G394: durable-routing rules for review clarification stops — record
+    /// current-PR blockers on the PR (not only in chat) before completing.
+    /// </summary>
+    [JsonPropertyName("review_blocker_protocol")]
+    public required IReadOnlyList<string> ReviewBlockerProtocol { get; init; }
+
+    /// <summary>
+    /// G394: required sections of a durable PR blocker comment.
+    /// </summary>
+    [JsonPropertyName("pr_blocker_comment_template")]
+    public required IReadOnlyList<string> PrBlockerCommentTemplate { get; init; }
+
+    /// <summary>
+    /// G394: worked routing examples (one per canonical blocker shape) so the
+    /// reviewer sees PR-comment vs follow-up-issue vs host-metadata routing
+    /// concretely, including the Zero4Racer PR #406 canonical-flow case.
+    /// </summary>
+    [JsonPropertyName("review_blocker_routing_examples")]
+    public required IReadOnlyList<GuideReviewBlockerRoutingExample> ReviewBlockerRoutingExamples { get; init; }
+
+    /// <summary>
+    /// G394: explicit signal that chat is not durable workflow state for a
+    /// blocked PR. Always true.
+    /// </summary>
+    [JsonPropertyName("chat_is_not_durable_workflow_state")]
+    public required bool ChatIsNotDurableWorkflowState { get; init; }
+
     [JsonPropertyName("validation_suggestions")]
     public required IReadOnlyList<string> ValidationSuggestions { get; init; }
 
@@ -736,4 +820,32 @@ internal sealed record GuideReviewIntentReferencePath
 
     [JsonPropertyName("exists")]
     public required bool Exists { get; init; }
+}
+
+/// <summary>
+/// G394: a single worked review-blocker routing example, generated by
+/// <see cref="ReviewBlockerProtocol.Classify"/> over a canonical blocker shape.
+/// </summary>
+internal sealed record GuideReviewBlockerRoutingExample
+{
+    [JsonPropertyName("scenario")]
+    public required string Scenario { get; init; }
+
+    [JsonPropertyName("category")]
+    public required string Category { get; init; }
+
+    [JsonPropertyName("requires_durable_pr_comment")]
+    public required bool RequiresDurablePrComment { get; init; }
+
+    [JsonPropertyName("must_not_be_pr_comment")]
+    public required bool MustNotBePrComment { get; init; }
+
+    [JsonPropertyName("requires_follow_up_issue")]
+    public required bool RequiresFollowUpIssue { get; init; }
+
+    [JsonPropertyName("recommended_outcome")]
+    public required string RecommendedOutcome { get; init; }
+
+    [JsonPropertyName("rationale")]
+    public required string Rationale { get; init; }
 }

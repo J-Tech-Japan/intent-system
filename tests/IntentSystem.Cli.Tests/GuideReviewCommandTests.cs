@@ -378,6 +378,93 @@ public sealed class GuideReviewCommandTests
         Assert.Contains("(none referenced by packet)", output, StringComparison.Ordinal);
     }
 
+    // --- G394: durable PR blocker comments + follow-up split -----------------
+
+    [Fact]
+    public void Execute_G394_JsonIncludesBlockerProtocolTemplateAndRoutingExamples()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G394", "review", title: "durable blocker comments", linkedPr: "889"));
+        workspace.WriteFile(".intent-cli/issues/G394/packet.yaml", "execution_unit: G394");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "889", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+
+        // Chat is not durable workflow state.
+        Assert.True(root.GetProperty("chat_is_not_durable_workflow_state").GetBoolean());
+
+        // Protocol: mandatory durable PR comment before request-update/clarification;
+        // PR-comment-vs-follow-up split; host-metadata never a PR comment.
+        var protocol = root.GetProperty("review_blocker_protocol")
+            .EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Contains(protocol, r =>
+            r.Contains("PR blocker comment", StringComparison.Ordinal)
+            && r.Contains("BEFORE", StringComparison.Ordinal));
+        Assert.Contains(protocol, r => r.Contains("Chat-only", StringComparison.Ordinal)
+            || r.Contains("chat-only", StringComparison.Ordinal));
+        Assert.Contains(protocol, r => r.Contains("follow-up issue/packet/signal", StringComparison.Ordinal));
+        Assert.Contains(protocol, r => r.Contains("host-metadata", StringComparison.OrdinalIgnoreCase)
+            || r.Contains(".intent-cli/**", StringComparison.Ordinal));
+
+        // Blocker comment template covers failed AC, insufficient evidence,
+        // required unblock action, false-claim boundaries, and follow-up links.
+        var template = root.GetProperty("pr_blocker_comment_template")
+            .EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Contains(template, t => t.Contains("Failed acceptance criterion", StringComparison.Ordinal));
+        Assert.Contains(template, t => t.Contains("insufficient", StringComparison.Ordinal));
+        Assert.Contains(template, t => t.Contains("Required unblock action", StringComparison.Ordinal));
+        Assert.Contains(template, t => t.Contains("False-claim boundaries", StringComparison.Ordinal));
+        Assert.Contains(template, t => t.Contains("Follow-up", StringComparison.Ordinal));
+
+        // Routing examples: the Zero4Racer #406 case → current-PR blocker,
+        // durable PR comment, clarification-required, follow-up issue.
+        var examples = root.GetProperty("review_blocker_routing_examples").EnumerateArray().ToArray();
+        Assert.True(examples.Length >= 4);
+        var z4r = examples[0];
+        Assert.Contains("Zero4Racer PR #406", z4r.GetProperty("scenario").GetString()!, StringComparison.Ordinal);
+        Assert.Equal("CurrentPrAcBlocker", z4r.GetProperty("category").GetString());
+        Assert.True(z4r.GetProperty("requires_durable_pr_comment").GetBoolean());
+        Assert.True(z4r.GetProperty("requires_follow_up_issue").GetBoolean());
+        Assert.False(z4r.GetProperty("must_not_be_pr_comment").GetBoolean());
+        Assert.Equal("clarification-required", z4r.GetProperty("recommended_outcome").GetString());
+
+        // A host-metadata example must never be an implementation-PR comment.
+        Assert.Contains(examples, e =>
+            e.GetProperty("category").GetString() == "HostMetadataBlocker"
+            && e.GetProperty("must_not_be_pr_comment").GetBoolean()
+            && !e.GetProperty("requires_durable_pr_comment").GetBoolean());
+    }
+
+    [Fact]
+    public void Execute_G394_MarkdownIncludesBlockerSections()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G394", "review", title: "durable blocker comments", linkedPr: "889"));
+        workspace.WriteFile(".intent-cli/issues/G394/packet.yaml", "x");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "889"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("## Review blocker protocol", output, StringComparison.Ordinal);
+        Assert.Contains("chat_is_not_durable_workflow_state: yes", output, StringComparison.Ordinal);
+        Assert.Contains("## PR blocker comment template", output, StringComparison.Ordinal);
+        Assert.Contains("## Review blocker routing examples", output, StringComparison.Ordinal);
+        Assert.Contains("Zero4Racer PR #406", output, StringComparison.Ordinal);
+        Assert.Contains("outcome: clarification-required", output, StringComparison.Ordinal);
+    }
+
     // --- G316 review-fix: PR-specific intent_reference_paths -----------------
 
     [Fact]
