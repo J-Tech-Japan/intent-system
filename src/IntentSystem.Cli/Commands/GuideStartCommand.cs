@@ -149,10 +149,65 @@ internal static class GuideStartCommand
                         + "metadata or labels.",
                 },
             },
+            OnboardingGuidance = new GuideStartOnboarding
+            {
+                InstallAndVerify =
+                    "Install the `intent-cli` .NET tool, then verify with `intent-cli --version` and "
+                    + "`intent-cli automation doctor --format json` (reports CLI freshness / host-state). SDK and tool "
+                    + "install steps for macOS / Windows / Linux: `docs/en/01-install.md` (`docs/ja/01-install.md`).",
+                ProjectStart =
+                    "Stand up a new host project / domain with `intent-cli guide workflow task init-host --format json`; "
+                    + "for the zero-local-rules first-call sequence run `intent-cli guide onboarding --format json`.",
+                AskIntentCliFirst =
+                    "After install, ask intent-cli — not memory or copied prompts — for each next step: re-run "
+                    + "`intent-cli guide start` whenever you resume, and use the per-phase guide command it points at.",
+            },
+            AskIntentCliTemplates = new[]
+            {
+                new GuideStartTemplate
+                {
+                    Name = "implementation-loop",
+                    Side = "child-implementation",
+                    When = "Run a recurring loop that turns intent-target issues into PRs and applies PR-comment fixes.",
+                    Template =
+                        "Run the intent-cli child implementation loop for `<owner>/<repo>` (domain `<domain>`) using "
+                        + "agent `<agent>` at `<frequency>` cadence, from child worktree cwd `<cwd>`. Each wake, process "
+                        + "at most one action:\n"
+                        + "1. Confirm `<cwd>` is the worktree root and the repo is `<owner>/<repo>`; `git fetch --all --prune`.\n"
+                        + "2. Run `intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>` and "
+                        + "follow it verbatim.\n"
+                        + "3. Choose work ONLY via `intent-cli worker next-action --repo <owner>/<repo> --github-only "
+                        + "--format json`; make every label transition through `intent-cli worker` / `intent-cli "
+                        + "automation`, never raw `gh` label edits.\n"
+                        + "Child implementation agents are GitHub-contract-only and do NOT need host metadata: the issue/PR "
+                        + "body and repo-local code are the only source of truth; never read or mutate host `.intent-cli/`, "
+                        + "queue-state, or `intents/**`.",
+                },
+                new GuideStartTemplate
+                {
+                    Name = "review-next-slice-loop",
+                    Side = "host/design",
+                    When = "Run a recurring loop that reviews PRs against the contract, approves/merges, and cuts the next slice.",
+                    Template =
+                        "Run the intent-cli host review / next-slice loop for `<owner>/<repo>` (domain `<domain>`) using "
+                        + "agent `<agent>` at `<frequency>` cadence, from host worktree cwd `<cwd>`. Each wake:\n"
+                        + "1. Run `intent-cli guide oneshot --kind host-review-next-slice --repo <owner>/<repo>` and follow "
+                        + "it verbatim.\n"
+                        + "2. Review the open PR against the packet/intent contract with `intent-cli guide review --pr <n> "
+                        + "--repo <owner>/<repo> --format json`.\n"
+                        + "3. Apply review label transitions ONLY via `intent-cli automation pr-transition`; approve on "
+                        + "packet/intent evidence (green tests are necessary but not sufficient), then cut the next slice "
+                        + "once merged.\n"
+                        + "Host/review agents may touch metadata, but ask intent-cli for the current supported transition "
+                        + "before hand-editing labels or queue-state.",
+                },
+            },
             MultiAgentNote =
                 "Every agent family — Codex, Claude, Copilot, Cursor, OpenCode, Antigravity, and other local/host "
                 + "agents — uses this same `intent-cli guide start` entrypoint. Repositories carry only a short "
-                + "guide-first rule (see the snippets below); they do not embed a full workflow spec that can drift.",
+                + "guide-first rule (see the snippets below); they do not embed a full workflow spec that can drift. "
+                + "Fill the `<domain>` / `<agent>` / `<frequency>` / `<cwd>` / `<owner>/<repo>` placeholders in the "
+                + "ask-intent-cli templates from your local bindings before scheduling a loop.",
             RepositoryInstructionSnippets = new GuideStartSnippets
             {
                 AgentsMd =
@@ -203,6 +258,27 @@ internal static class GuideStartCommand
             writer.WriteLine($"### {role.Role}");
             writer.WriteLine($"- source of truth: {role.SourceOfTruth}");
             writer.WriteLine($"- rule: {role.Rule}");
+            writer.WriteLine();
+        }
+
+        writer.WriteLine("## Install & onboarding");
+        writer.WriteLine($"- install / verify: {result.OnboardingGuidance.InstallAndVerify}");
+        writer.WriteLine($"- project start: {result.OnboardingGuidance.ProjectStart}");
+        writer.WriteLine($"- ask intent-cli first: {result.OnboardingGuidance.AskIntentCliFirst}");
+        writer.WriteLine();
+
+        writer.WriteLine("## Ask-intent-cli loop prompt templates");
+        writer.WriteLine();
+        writer.WriteLine("Fill the `<domain>` / `<agent>` / `<frequency>` / `<cwd>` / `<owner>/<repo>` placeholders before scheduling.");
+        writer.WriteLine();
+        foreach (var template in result.AskIntentCliTemplates)
+        {
+            writer.WriteLine($"### {template.Name} ({template.Side})");
+            writer.WriteLine($"- when: {template.When}");
+            writer.WriteLine();
+            writer.WriteLine("```text");
+            writer.WriteLine(template.Template);
+            writer.WriteLine("```");
             writer.WriteLine();
         }
 
@@ -291,6 +367,12 @@ internal sealed record GuideStartResult
     [JsonPropertyName("agent_roles")]
     public required IReadOnlyList<GuideStartRole> AgentRoles { get; init; }
 
+    [JsonPropertyName("onboarding_guidance")]
+    public required GuideStartOnboarding OnboardingGuidance { get; init; }
+
+    [JsonPropertyName("ask_intent_cli_templates")]
+    public required IReadOnlyList<GuideStartTemplate> AskIntentCliTemplates { get; init; }
+
     [JsonPropertyName("multi_agent_note")]
     public required string MultiAgentNote { get; init; }
 
@@ -335,4 +417,31 @@ internal sealed record GuideStartSnippets
 
     [JsonPropertyName("claude_md")]
     public required string ClaudeMd { get; init; }
+}
+
+internal sealed record GuideStartOnboarding
+{
+    [JsonPropertyName("install_and_verify")]
+    public required string InstallAndVerify { get; init; }
+
+    [JsonPropertyName("project_start")]
+    public required string ProjectStart { get; init; }
+
+    [JsonPropertyName("ask_intent_cli_first")]
+    public required string AskIntentCliFirst { get; init; }
+}
+
+internal sealed record GuideStartTemplate
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("side")]
+    public required string Side { get; init; }
+
+    [JsonPropertyName("when")]
+    public required string When { get; init; }
+
+    [JsonPropertyName("template")]
+    public required string Template { get; init; }
 }
