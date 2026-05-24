@@ -64,7 +64,10 @@ internal static class AutomationHostSyncPreflightCommand
             probe.Branch,
             probe.BehindOriginCommits,
             probe.WorkingTreeEntries,
-            probe.SubmoduleGitlinkMismatchPaths);
+            probe.SubmoduleGitlinkMismatchPaths,
+            probe.AheadOriginCommits,
+            probe.LocalOnlyCommits,
+            probe.OriginAheadCommits);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -84,6 +87,7 @@ internal static class AutomationHostSyncPreflightCommand
         writer.WriteLine();
         writer.WriteLine($"- Classification: **{result.Classification}**");
         writer.WriteLine($"- Behind origin: {result.BehindOriginCommits} commit(s)");
+        writer.WriteLine($"- Ahead of origin: {result.AheadOriginCommits} commit(s)");
         writer.WriteLine($"- Dirty durable-state paths: {result.DirtyDurableStatePaths.Count}");
         writer.WriteLine($"- Dirty unrelated paths: {result.DirtyUnrelatedPaths.Count}");
         writer.WriteLine($"- Proceed allowed: {(result.ProceedAllowed ? "yes" : "**no**")}");
@@ -106,6 +110,31 @@ internal static class AutomationHostSyncPreflightCommand
             foreach (var entry in result.DirtyUnrelatedPaths)
             {
                 writer.WriteLine($"- `{entry.Status}` `{entry.Path}`");
+            }
+        }
+        if (string.Equals(result.Classification, HostSyncPreflightAnalyzer.ClassificationFfBlocked, StringComparison.Ordinal))
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Diverged commits (G400 — ff-blocked)");
+            writer.WriteLine();
+            writer.WriteLine("Local-only commit(s):");
+            if (result.LocalOnlyCommits.Count == 0)
+            {
+                writer.WriteLine("- (details unavailable)");
+            }
+            foreach (var commit in result.LocalOnlyCommits)
+            {
+                writer.WriteLine($"- `{commit.Sha}` {commit.Title}");
+            }
+            writer.WriteLine();
+            writer.WriteLine("Origin-ahead commit(s):");
+            if (result.OriginAheadCommits.Count == 0)
+            {
+                writer.WriteLine("- (details unavailable)");
+            }
+            foreach (var commit in result.OriginAheadCommits)
+            {
+                writer.WriteLine($"- `{commit.Sha}` {commit.Title}");
             }
         }
         if (result.SubmoduleCheckoutMismatchPaths.Count > 0)
@@ -144,6 +173,21 @@ internal static class AutomationHostSyncPreflightCommand
             behindCommits = 0;
         }
 
+        // G400: capture the ahead count and the diverged commit details so an
+        // ff-blocked (local-ahead + origin-ahead) divergence is named precisely.
+        var aheadOutput = RunGit(repoRoot, $"rev-list --count origin/{branch}..HEAD").Trim();
+        if (!int.TryParse(aheadOutput, out var aheadCommits) || aheadCommits < 0)
+        {
+            aheadCommits = 0;
+        }
+
+        var localOnlyCommits = aheadCommits > 0
+            ? CaptureCommitInfos(repoRoot, $"origin/{branch}..HEAD")
+            : Array.Empty<HostSyncCommitInfo>();
+        var originAheadCommits = behindCommits > 0
+            ? CaptureCommitInfos(repoRoot, $"HEAD..origin/{branch}")
+            : Array.Empty<HostSyncCommitInfo>();
+
         var statusOutput = RunGit(repoRoot, "status --porcelain").Replace("\r\n", "\n");
         var entries = new List<HostSyncWorkingTreeEntry>();
         foreach (var rawLine in statusOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -172,9 +216,38 @@ internal static class AutomationHostSyncPreflightCommand
         {
             Branch = branch,
             BehindOriginCommits = behindCommits,
+            AheadOriginCommits = aheadCommits,
+            LocalOnlyCommits = localOnlyCommits,
+            OriginAheadCommits = originAheadCommits,
             WorkingTreeEntries = entries,
             SubmoduleGitlinkMismatchPaths = submoduleGitlinkMismatchPaths
         };
+    }
+
+    /// <summary>
+    /// G400: capture short SHA + subject for each commit in a revision range
+    /// (e.g. <c>origin/main..HEAD</c>) so ff-blocked diagnostics name the exact
+    /// local-only and origin-ahead commits. Capped to keep output bounded.
+    /// </summary>
+    private static IReadOnlyList<HostSyncCommitInfo> CaptureCommitInfos(string repoRoot, string range)
+    {
+        var output = RunGit(repoRoot, $"log --max-count=20 --format=%h%x09%s {range}").Replace("\r\n", "\n");
+        var commits = new List<HostSyncCommitInfo>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var tabIndex = line.IndexOf('\t', StringComparison.Ordinal);
+            if (tabIndex <= 0)
+            {
+                continue;
+            }
+            var sha = line[..tabIndex].Trim();
+            var title = line[(tabIndex + 1)..].Trim();
+            if (!string.IsNullOrEmpty(sha))
+            {
+                commits.Add(new HostSyncCommitInfo { Sha = sha, Title = title });
+            }
+        }
+        return commits;
     }
 
     /// <summary>
@@ -307,6 +380,16 @@ internal sealed record HostSyncGitProbe
 {
     public required string Branch { get; init; }
     public required int BehindOriginCommits { get; init; }
+
+    /// <summary>G400: local commits not yet on origin (origin/&lt;branch&gt;..HEAD).</summary>
+    public int AheadOriginCommits { get; init; }
+
+    /// <summary>G400: local-only commit details when ahead &gt; 0.</summary>
+    public IReadOnlyList<HostSyncCommitInfo> LocalOnlyCommits { get; init; } = Array.Empty<HostSyncCommitInfo>();
+
+    /// <summary>G400: origin-ahead commit details when behind &gt; 0.</summary>
+    public IReadOnlyList<HostSyncCommitInfo> OriginAheadCommits { get; init; } = Array.Empty<HostSyncCommitInfo>();
+
     public required IReadOnlyList<HostSyncWorkingTreeEntry> WorkingTreeEntries { get; init; }
 
     /// <summary>

@@ -28,6 +28,20 @@ internal static class HostSyncPreflightAnalyzer
 {
     public const string ClassificationClean = "clean";
     public const string ClassificationBehindOrigin = "behind-origin";
+
+    /// <summary>
+    /// G400: local <c>main</c> has a local-only commit AND <c>origin/main</c>
+    /// has advanced — the branches have diverged, so <c>git pull --ff-only</c>
+    /// is blocked. This is a PRE-MUTATION operator stop: no review/closeout/
+    /// publish mutation occurred, so the wake must NOT append a durable abort
+    /// summary to <c>.intent-cli/runs.jsonl</c>. Repeated wakes in the same
+    /// diverged state are idempotent w.r.t. durable host-state. Resolution
+    /// requires an operator decision (push, relocate, or explicitly authorize
+    /// discard of the local-only commit) — automation never resets or discards
+    /// the foreign commit.
+    /// </summary>
+    public const string ClassificationFfBlocked = "ff-blocked";
+
     public const string ClassificationDirtyDurableState = "dirty-host-durable-state";
     public const string ClassificationDirtyUnrelatedSubmodule = "dirty-unrelated-submodule";
     public const string ClassificationDirtyMixed = "dirty-mixed";
@@ -58,7 +72,10 @@ internal static class HostSyncPreflightAnalyzer
         string branch,
         int behindOriginCommits,
         IReadOnlyList<HostSyncWorkingTreeEntry> workingTreeEntries,
-        IReadOnlyList<string>? submoduleGitlinkMismatchPaths = null)
+        IReadOnlyList<string>? submoduleGitlinkMismatchPaths = null,
+        int aheadOriginCommits = 0,
+        IReadOnlyList<HostSyncCommitInfo>? localOnlyCommits = null,
+        IReadOnlyList<HostSyncCommitInfo>? originAheadCommits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(branch);
         ArgumentNullException.ThrowIfNull(workingTreeEntries);
@@ -66,6 +83,13 @@ internal static class HostSyncPreflightAnalyzer
         {
             throw new ArgumentOutOfRangeException(nameof(behindOriginCommits), "behind-origin count must be non-negative.");
         }
+        if (aheadOriginCommits < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(aheadOriginCommits), "ahead-origin count must be non-negative.");
+        }
+
+        var localOnly = localOnlyCommits ?? Array.Empty<HostSyncCommitInfo>();
+        var originAhead = originAheadCommits ?? Array.Empty<HostSyncCommitInfo>();
 
         var mismatchSet = submoduleGitlinkMismatchPaths is { Count: > 0 }
             ? new HashSet<string>(submoduleGitlinkMismatchPaths, StringComparer.Ordinal)
@@ -93,7 +117,7 @@ internal static class HostSyncPreflightAnalyzer
 
         var clean = behindOriginCommits == 0 && dirtyDurable.Count == 0 && dirtyOther.Count == 0;
         var classification = ClassifyTerminal(
-            behindOriginCommits, dirtyDurable.Count, dirtyOther.Count, allOtherAreGitlinkMismatches);
+            behindOriginCommits, aheadOriginCommits, dirtyDurable.Count, dirtyOther.Count, allOtherAreGitlinkMismatches);
 
         // G306: when ONLY unrelated dirty paths are present (no dirty
         // durable host-state, no `dirty-mixed`, no submodule-checkout-mismatch),
@@ -115,14 +139,24 @@ internal static class HostSyncPreflightAnalyzer
             ? dirtyOther.Select(e => e.Path).ToArray()
             : Array.Empty<string>();
 
-        var nextSteps = BuildNextSteps(classification, behindOriginCommits, dirtyDurable, dirtyOther, mismatchPathsList);
+        var isFfBlocked = string.Equals(classification, ClassificationFfBlocked, StringComparison.Ordinal);
+        var nextSteps = BuildNextSteps(
+            classification, behindOriginCommits, aheadOriginCommits, dirtyDurable, dirtyOther, mismatchPathsList, localOnly, originAhead);
 
         return new HostSyncPreflightResult
         {
             Branch = branch,
             BehindOriginCommits = behindOriginCommits,
+            AheadOriginCommits = aheadOriginCommits,
             Classification = classification,
             ProceedAllowed = proceedAllowed,
+            // G400: ff-blocked is a PRE-MUTATION abort — the wake stops before any
+            // review/closeout/publish mutation, so it must NOT append a durable
+            // abort summary to .intent-cli/runs.jsonl. Repeated wakes therefore
+            // produce no additional durable state. Other non-proceed
+            // classifications keep their existing behaviour (default allowed).
+            PreMutationAbort = isFfBlocked,
+            DurableRunsSummaryAllowed = !isFfBlocked,
             SafeStashRequired = safeStashAllowed,
             // G306: SafeStashPaths only populated when the safe-stash lane is active.
             // G357: submodule-checkout-mismatch uses the update lane, not safe-stash.
@@ -130,7 +164,10 @@ internal static class HostSyncPreflightAnalyzer
             DirtyDurableStatePaths = dirtyDurable,
             DirtyUnrelatedPaths = dirtyOther,
             SubmoduleCheckoutMismatchPaths = mismatchPathsList,
-            Summary = BuildSummary(classification, branch, behindOriginCommits, dirtyDurable.Count, dirtyOther.Count, mismatchPathsList),
+            LocalOnlyCommits = localOnly,
+            OriginAheadCommits = originAhead,
+            Summary = BuildSummary(
+                classification, branch, behindOriginCommits, aheadOriginCommits, dirtyDurable.Count, dirtyOther.Count, mismatchPathsList),
             NextSteps = nextSteps
         };
     }
@@ -154,6 +191,7 @@ internal static class HostSyncPreflightAnalyzer
 
     private static string ClassifyTerminal(
         int behindOriginCommits,
+        int aheadOriginCommits,
         int dirtyDurableCount,
         int dirtyOtherCount,
         bool allOtherAreGitlinkMismatches)
@@ -174,6 +212,15 @@ internal static class HostSyncPreflightAnalyzer
                 ? ClassificationSubmoduleCheckoutMismatch
                 : ClassificationDirtyUnrelatedSubmodule;
         }
+        // G400: divergence — local has unpushed commit(s) AND origin advanced.
+        // `git pull --ff-only` is blocked; this is a pre-mutation operator stop,
+        // distinct from a plain behind-origin fast-forward. Local-ahead-only
+        // (origin not advanced) is NOT ff-blocked: the host can push, so the
+        // wake is not stopped here.
+        if (behindOriginCommits > 0 && aheadOriginCommits > 0)
+        {
+            return ClassificationFfBlocked;
+        }
         if (behindOriginCommits > 0)
         {
             return ClassificationBehindOrigin;
@@ -185,6 +232,7 @@ internal static class HostSyncPreflightAnalyzer
         string classification,
         string branch,
         int behindCount,
+        int aheadCount,
         int dirtyDurableCount,
         int dirtyOtherCount,
         IReadOnlyList<string> mismatchPaths)
@@ -195,6 +243,8 @@ internal static class HostSyncPreflightAnalyzer
                 $"Host repo on `{branch}` is clean and up to date with origin. Pre-wake sync boundary satisfied.",
             ClassificationBehindOrigin =>
                 $"Host repo on `{branch}` is behind origin by {behindCount} commit(s). Run `git pull --ff-only` before any read-only preflight (G304).",
+            ClassificationFfBlocked =>
+                $"Host repo on `{branch}` has DIVERGED from origin: {aheadCount} local-only commit(s) and {behindCount} origin-ahead commit(s), so `git pull --ff-only` is blocked (G400). This is a pre-mutation operator stop — do NOT append an abort summary to `.intent-cli/runs.jsonl`; report the divergence and let the operator push, relocate, or explicitly authorize discarding the local-only commit(s). Automation never resets or discards the foreign commit(s).",
             ClassificationDirtyDurableState =>
                 $"Host repo on `{branch}` has {dirtyDurableCount} uncommitted change(s) to durable host-state files. Refusing to proceed (G304); commit/push or revert before the wake continues.",
             ClassificationDirtyUnrelatedSubmodule =>
@@ -210,9 +260,12 @@ internal static class HostSyncPreflightAnalyzer
     private static IReadOnlyList<string> BuildNextSteps(
         string classification,
         int behindCommits,
+        int aheadCommits,
         IReadOnlyList<HostSyncWorkingTreeEntry> dirtyDurable,
         IReadOnlyList<HostSyncWorkingTreeEntry> dirtyOther,
-        IReadOnlyList<string> mismatchPaths)
+        IReadOnlyList<string> mismatchPaths,
+        IReadOnlyList<HostSyncCommitInfo> localOnlyCommits,
+        IReadOnlyList<HostSyncCommitInfo> originAheadCommits)
     {
         return classification switch
         {
@@ -222,6 +275,7 @@ internal static class HostSyncPreflightAnalyzer
                 $"Run `git pull --ff-only` to fast-forward (host repo is {behindCommits} commit(s) behind).",
                 "Re-run the host-loop read-only preflight (`automation doctor`, `host-review-preflight`) after the pull lands."
             },
+            ClassificationFfBlocked => BuildFfBlockedSteps(behindCommits, aheadCommits, localOnlyCommits, originAheadCommits),
             ClassificationDirtyDurableState => BuildDirtyDurableSteps(dirtyDurable),
             ClassificationDirtyUnrelatedSubmodule => new[]
             {
@@ -253,6 +307,28 @@ internal static class HostSyncPreflightAnalyzer
         };
     }
 
+    private static IReadOnlyList<string> BuildFfBlockedSteps(
+        int behindCommits,
+        int aheadCommits,
+        IReadOnlyList<HostSyncCommitInfo> localOnlyCommits,
+        IReadOnlyList<HostSyncCommitInfo> originAheadCommits)
+    {
+        static string Describe(IReadOnlyList<HostSyncCommitInfo> commits) =>
+            commits.Count == 0
+                ? "(commit details unavailable)"
+                : string.Join("; ", commits.Select(c => $"{c.Sha} {c.Title}"));
+
+        return new[]
+        {
+            $"STOP: host `main` has diverged from origin ({aheadCommits} local-only commit(s), {behindCommits} origin-ahead commit(s)); `git pull --ff-only` is blocked. This is a pre-mutation operator stop (G400).",
+            $"Local-only commit(s): {Describe(localOnlyCommits)}.",
+            $"Origin-ahead commit(s): {Describe(originAheadCommits)}.",
+            "Do NOT append an abort wake-summary to `.intent-cli/runs.jsonl`: no review/closeout/publish mutation occurred, and repeated wakes must leave durable host-state untouched. Report diagnostics in stdout only.",
+            "Operator must resolve the divergence: push the local-only commit(s) to a branch/PR, relocate the work, or explicitly authorize discarding the local-only commit(s). Automation must NOT reset, discard, or overwrite the foreign commit(s) without that authorization.",
+            "After the operator resolves the divergence, re-run `intent-cli automation host-sync-preflight --format json` to confirm `classification: clean` before resuming the wake."
+        };
+    }
+
     private static IReadOnlyList<string> BuildDirtyDurableSteps(IReadOnlyList<HostSyncWorkingTreeEntry> dirtyDurable)
     {
         return new[]
@@ -276,6 +352,20 @@ internal sealed record HostSyncWorkingTreeEntry
     public required string Status { get; init; }
 }
 
+/// <summary>
+/// G400: a single commit on one side of an ff-blocked divergence, identified by
+/// short SHA and subject line so the diagnostics name exactly which local-only
+/// and origin-ahead commits the operator must reconcile.
+/// </summary>
+internal sealed record HostSyncCommitInfo
+{
+    [JsonPropertyName("sha")]
+    public required string Sha { get; init; }
+
+    [JsonPropertyName("title")]
+    public required string Title { get; init; }
+}
+
 internal sealed record HostSyncPreflightResult
 {
     [JsonPropertyName("branch")]
@@ -284,11 +374,32 @@ internal sealed record HostSyncPreflightResult
     [JsonPropertyName("behind_origin_commits")]
     public required int BehindOriginCommits { get; init; }
 
+    /// <summary>G400: local commits not yet on origin/&lt;branch&gt; (origin/&lt;branch&gt;..HEAD).</summary>
+    [JsonPropertyName("ahead_origin_commits")]
+    public int AheadOriginCommits { get; init; }
+
     [JsonPropertyName("classification")]
     public required string Classification { get; init; }
 
     [JsonPropertyName("proceed_allowed")]
     public required bool ProceedAllowed { get; init; }
+
+    /// <summary>
+    /// G400: true when the classification is a pre-mutation operator stop
+    /// (currently <c>ff-blocked</c>) reached before any review/closeout/publish
+    /// mutation. The wake must report diagnostics only and must NOT append a
+    /// durable abort summary to <c>.intent-cli/runs.jsonl</c>.
+    /// </summary>
+    [JsonPropertyName("pre_mutation_abort")]
+    public bool PreMutationAbort { get; init; }
+
+    /// <summary>
+    /// G400: false when the wake must NOT append a durable run summary for this
+    /// classification (pre-mutation abort). Defaults true so successful
+    /// mutations and other classifications keep their existing behaviour.
+    /// </summary>
+    [JsonPropertyName("durable_runs_summary_allowed")]
+    public bool DurableRunsSummaryAllowed { get; init; } = true;
 
     /// <summary>
     /// G306: true when the wake must run through the safe-stash lane
@@ -321,6 +432,14 @@ internal sealed record HostSyncPreflightResult
     /// </summary>
     [JsonPropertyName("submodule_checkout_mismatch_paths")]
     public IReadOnlyList<string> SubmoduleCheckoutMismatchPaths { get; init; } = Array.Empty<string>();
+
+    /// <summary>G400: local-only commits (origin/&lt;branch&gt;..HEAD) when ff-blocked. Empty otherwise.</summary>
+    [JsonPropertyName("local_only_commits")]
+    public IReadOnlyList<HostSyncCommitInfo> LocalOnlyCommits { get; init; } = Array.Empty<HostSyncCommitInfo>();
+
+    /// <summary>G400: origin-ahead commits (HEAD..origin/&lt;branch&gt;) when ff-blocked. Empty otherwise.</summary>
+    [JsonPropertyName("origin_ahead_commits")]
+    public IReadOnlyList<HostSyncCommitInfo> OriginAheadCommits { get; init; } = Array.Empty<HostSyncCommitInfo>();
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }

@@ -260,6 +260,119 @@ public sealed class HostSyncPreflightAnalyzerTests
         Assert.Empty(result.SubmoduleCheckoutMismatchPaths);
     }
 
+    // ── G400 ff-blocked (diverged) pre-mutation operator stop ───────────
+
+    [Fact]
+    public void Analyze_G400_LocalAheadAndOriginAhead_ReturnsFfBlocked_NoDurableSummary()
+    {
+        // Local main has a local-only commit AND origin advanced → diverged,
+        // so `git pull --ff-only` is blocked. This is a pre-mutation operator
+        // stop: proceed_allowed false, pre_mutation_abort true, and the wake
+        // must NOT append a durable runs.jsonl summary.
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 2,
+            workingTreeEntries: Array.Empty<HostSyncWorkingTreeEntry>(),
+            submoduleGitlinkMismatchPaths: null,
+            aheadOriginCommits: 1,
+            localOnlyCommits: new[] { Commit("abc1234", "G399 local-only packet commit") },
+            originAheadCommits: new[]
+            {
+                Commit("def5678", "Merge PR #900"),
+                Commit("9990abc", "Merge PR #901")
+            });
+
+        Assert.Equal("ff-blocked", result.Classification);
+        Assert.False(result.ProceedAllowed);
+        Assert.True(result.PreMutationAbort);
+        Assert.False(result.DurableRunsSummaryAllowed);
+        Assert.Equal(1, result.AheadOriginCommits);
+        Assert.Equal(2, result.BehindOriginCommits);
+        Assert.Contains("DIVERGED", result.Summary, StringComparison.Ordinal);
+        // Diagnostics include local-only and origin-ahead commit sha/title.
+        Assert.Contains(result.NextSteps, s => s.Contains("abc1234", StringComparison.Ordinal) && s.Contains("G399 local-only packet commit", StringComparison.Ordinal));
+        Assert.Contains(result.NextSteps, s => s.Contains("def5678", StringComparison.Ordinal));
+        // Guidance: stop, no durable abort summary, operator must push/relocate/authorize discard.
+        Assert.Contains(result.NextSteps, s => s.Contains("runs.jsonl", StringComparison.Ordinal) && s.Contains("Do NOT", StringComparison.Ordinal));
+        Assert.Contains(result.NextSteps, s =>
+            s.Contains("push", StringComparison.OrdinalIgnoreCase)
+            && s.Contains("authorize", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Analyze_G400_RepeatedWakeSameDivergedState_IsIdempotent()
+    {
+        // The analyzer is pure: re-running the same ff-blocked input produces an
+        // identical result with no durable mutation, so repeated 5-minute wakes
+        // in the same diverged state never dirty durable host-state.
+        HostSyncPreflightResult Run() => HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 1,
+            workingTreeEntries: Array.Empty<HostSyncWorkingTreeEntry>(),
+            submoduleGitlinkMismatchPaths: null,
+            aheadOriginCommits: 1,
+            localOnlyCommits: new[] { Commit("abc1234", "local-only") },
+            originAheadCommits: new[] { Commit("def5678", "origin-ahead") });
+
+        var first = Run();
+        var second = Run();
+
+        Assert.Equal("ff-blocked", first.Classification);
+        Assert.Equal(first.Classification, second.Classification);
+        Assert.Equal(first.Summary, second.Summary);
+        Assert.Equal(first.NextSteps, second.NextSteps);
+        Assert.False(first.DurableRunsSummaryAllowed);
+        Assert.False(second.DurableRunsSummaryAllowed);
+    }
+
+    [Fact]
+    public void Analyze_G400_BehindOnly_NoLocalCommit_StaysBehindOrigin()
+    {
+        // Pure behind-origin (no local-only commit) is a fast-forwardable pull,
+        // NOT ff-blocked.
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 3,
+            workingTreeEntries: Array.Empty<HostSyncWorkingTreeEntry>(),
+            aheadOriginCommits: 0);
+
+        Assert.Equal("behind-origin", result.Classification);
+        Assert.False(result.PreMutationAbort);
+        Assert.True(result.DurableRunsSummaryAllowed);
+    }
+
+    [Fact]
+    public void Analyze_G400_LocalAheadOnly_OriginNotAdvanced_StaysCleanProceed()
+    {
+        // Local-ahead-only (origin not advanced) is not ff-blocked: the host can
+        // push, so the wake is not stopped on this gate.
+        var result = HostSyncPreflightAnalyzer.Analyze(
+            "main",
+            behindOriginCommits: 0,
+            workingTreeEntries: Array.Empty<HostSyncWorkingTreeEntry>(),
+            aheadOriginCommits: 2,
+            localOnlyCommits: new[] { Commit("abc1234", "unpushed durable commit") });
+
+        Assert.Equal("clean", result.Classification);
+        Assert.True(result.ProceedAllowed);
+        Assert.False(result.PreMutationAbort);
+        Assert.Equal(2, result.AheadOriginCommits);
+    }
+
+    [Fact]
+    public void Analyze_G400_RejectsNegativeAheadCount()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            HostSyncPreflightAnalyzer.Analyze(
+                "main",
+                behindOriginCommits: 0,
+                workingTreeEntries: Array.Empty<HostSyncWorkingTreeEntry>(),
+                aheadOriginCommits: -1));
+    }
+
+    private static HostSyncCommitInfo Commit(string sha, string title) =>
+        new() { Sha = sha, Title = title };
+
     private static HostSyncWorkingTreeEntry Entry(string path, string status) =>
         new() { Path = path, Status = status };
 }
