@@ -1,29 +1,196 @@
-# intent-system
+# intent-system / `intent-cli`
 
-## Install
+`intent-cli` is **deterministic support tooling** for running an intent-driven
+development workflow on top of GitHub. It helps you organize intents, prepare
+and publish Child Issue Contracts, drive implementation and review loops, and
+recover when a loop looks wrong — all through explicit, inspectable commands.
 
-`intent-cli` is published from GitHub Releases (G386). Each release publishes the
-NuGet package and attaches SDK-free self-contained binaries for macOS, Windows,
-and Linux. The project is licensed under [Apache-2.0](#license), and the
-published NuGet package reports `Apache-2.0` license metadata.
+> `intent-cli` never launches Claude, Codex, or any other AI provider. It emits
+> guidance, validates contracts, and performs bounded GitHub/metadata
+> transitions. The AI agent (you, or your coding assistant) stays in the driver's
+> seat and **asks `intent-cli` what to do next**.
 
-### With a .NET SDK (NuGet)
+- Package id / command: `intent-cli`
+- License: [Apache-2.0](#license)
+- Repository: <https://github.com/J-Tech-Japan/intent-system>
 
-If you have a .NET 10 SDK, install the global tool from NuGet.org:
+---
+
+## Quickstart (public / OSS)
+
+New to `intent-cli`? Follow this path top to bottom. Every step has a
+`intent-cli ...` command that tells you what to do next, so you rarely need to
+memorize anything.
+
+1. [Install](#1-install)
+2. [Verify](#2-verify)
+3. [Ask intent-cli first](#3-ask-intent-cli-first) ← the core habit
+4. [Start a project](#4-start-a-project)
+5. [Organize intents](#5-organize-intents)
+6. [Create packets / publish GitHub issues](#6-create-packets--publish-github-issues)
+7. [Set up implementation & review loops](#7-set-up-implementation--review-loops)
+8. [Recover when a loop looks wrong](#8-recover-when-a-loop-looks-wrong)
+
+### 1. Install
+
+The basic path is the .NET global tool from NuGet.org. You need a **.NET 10
+SDK** (`dotnet --version` should report `10.x`).
+
+**macOS, Windows, and Linux (same commands):**
 
 ```bash
+# Install
 dotnet tool install -g intent-cli
-# later, to upgrade:
+
+# Later, upgrade in place
 dotnet tool update -g intent-cli
 ```
 
-Then run `intent-cli --version` to confirm the install.
+If the global tools directory is not yet on your `PATH`, the `dotnet tool
+install` output prints the exact line to add (commonly `~/.dotnet/tools` on
+macOS/Linux, `%USERPROFILE%\.dotnet\tools` on Windows).
 
-### Without a .NET SDK (self-contained binary)
+> No .NET SDK? Use the self-contained binary instead — see
+> [Install without a .NET SDK](#install-without-a-net-sdk). Need the internal
+> testing channel? See [Private-preview install](#private-preview-install).
 
-Download the archive for your platform from the
-[latest GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/latest)
-and run it directly — the .NET runtime is bundled, so no SDK is required.
+### 2. Verify
+
+```bash
+intent-cli --version
+```
+
+A released build prints just the version line. (Private-preview builds add a
+`channel=private-preview … expires=…` trailer — see
+[Private-preview install](#private-preview-install).)
+
+### 3. Ask intent-cli first
+
+**This is the operating rule of the whole system.** Before you edit metadata,
+move a workflow label, hand-write a packet, or tweak an automation prompt — ask
+`intent-cli` for the current guidance and let it own the transition. Guessing at
+label/metadata behavior is the most common cause of broken automation; the CLI
+exists so you never have to guess.
+
+Copy-paste starting points:
+
+```bash
+# What can intent-cli do, and which command owns which transition?
+intent-cli guide help
+intent-cli guide commands list --format json
+
+# The exact step-by-step prompt for a given loop/role:
+intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>
+intent-cli guide oneshot --kind host-review-next-slice    --repo <owner>/<repo>
+
+# The provider-neutral automation/label contract for your domain:
+intent-cli automation summary --domain <domain> --format json
+
+# Any command's current flags:
+intent-cli <group> <command> --help
+```
+
+Rules of thumb the docs and guidance enforce:
+
+- **Use `intent-cli` transition commands, not raw edits.** Do not directly edit
+  queue-state, workflow labels, packet publish metadata, or other host artifacts
+  when an `intent-cli automation` / `intent-cli worker` command owns that
+  transition. Apply labels through those commands, never `gh ... edit
+  --add-label`.
+- **Ask, don't read-and-guess.** Prefer `intent-cli guide ...` over reading
+  local rule files; the guidance reflects the installed CLI's current contract.
+- **Never ask `intent-cli` to launch an AI provider**, and never call
+  `intent-cli run` as a production orchestrator (it is smoke/replay/dogfooding
+  tooling only — see [CLI command roles](#cli-command-roles)).
+
+### 4. Start a project
+
+Initialize a host domain and inspect its state (read-only without `--write`):
+
+```bash
+intent-cli intent init --domain <name> [--target-repo <owner>/<repo>] --write
+intent-cli intent status
+intent-cli guide intent-work --format json   # what the work surfaces expect
+```
+
+### 5. Organize intents
+
+Capture and compile durable intent before cutting work:
+
+```bash
+intent-cli interview next-question        # durable per-domain Q/A
+intent-cli interview record-answer ...
+intent-cli interview compile
+intent-cli guide workflow                 # suggested end-to-end flow
+```
+
+### 6. Create packets / publish GitHub issues
+
+Scaffold the canonical packet (read-only without `--write`) and publish a
+reviewed Child Issue Contract. The publish boundary applies host labels through
+`intent-cli` — you never hand-apply `intent-target`:
+
+```bash
+intent-cli packet ...                     # packet.yaml / implementation.md / review-context.md / github-body.md
+intent-cli issue validate-body ...        # enforce the Standalone Child Issue Contract
+intent-cli issue prepare ...
+intent-cli issue publish-reviewed ...     # reviewed-issue publish boundary
+```
+
+### 7. Set up implementation & review loops
+
+Two cooperating loops, each with a ready-made prompt from
+`intent-cli guide oneshot`:
+
+- **Child implementation loop** (`--kind child-implement-or-update`): selects one
+  GitHub target via `intent-cli worker next-action`, claims it, implements the
+  smallest change, opens a ready-for-review PR (with a mandatory
+  `Closes #<issue>` reference), and records the outcome via
+  `intent-cli worker result-summary` + `intent-cli worker complete`.
+- **Host review / next-slice loop** (`--kind host-review-next-slice`): reviews PRs
+  against the packet/intent contract, requests updates, approves/merges, and cuts
+  the next slice.
+
+Operator-dogfooding prompt templates that wire these loops entirely through the
+deterministic worker/metadata commands live under
+[`docs/automation-templates/`](./docs/automation-templates/README.md).
+
+### 8. Recover when a loop looks wrong
+
+Don't hand-fix state — ask the CLI to classify and (where safe) repair:
+
+```bash
+intent-cli worker issue-preflight       --repo <owner>/<repo> --issue <n> --format json
+intent-cli worker pr-comment-preflight  --repo <owner>/<repo> --pr <n>    --format json
+intent-cli automation doctor --format json      # CLI freshness / host-state resolution
+```
+
+These read-only surfaces tell you whether a safe, in-scope repair is available
+and which command owns it, instead of guessing.
+
+---
+
+## Host agents vs. child implementation agents
+
+The workflow distinguishes two agent roles, and the docs/guidance keep them
+separate on purpose:
+
+| Agent | Source of truth | Owns |
+| --- | --- | --- |
+| **Host / review agent** | parent host `.intent-cli/` state + intent tree | publishing issues, applying `intent-target`, review/approve/merge, next-slice planning, label transitions via `intent-cli automation` |
+| **Child implementation agent** | the **GitHub issue/PR + repo-local code** (NOT host metadata) | implementing the issue contract, opening/updating the PR, recording outcomes via `intent-cli worker` |
+
+Child implementation agents operate GitHub-contract-only: they must not read or
+mutate the parent host's queue-state, runs logs, packet directories, or intent
+tree, and they treat the GitHub issue body as the standalone contract.
+
+---
+
+## Install without a .NET SDK
+
+Each [GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/latest)
+attaches SDK-free, self-contained binaries (the .NET runtime is bundled, so no
+SDK is required).
 
 | Platform | Asset |
 | --- | --- |
@@ -31,8 +198,7 @@ and run it directly — the .NET runtime is bundled, so no SDK is required.
 | Windows (x64) | `intent-cli-<version>-win-x64.zip` |
 | Linux (x64) | `intent-cli-<version>-linux-x64.tar.gz` |
 
-Each archive ships with a `.sha256` sidecar; verify it before use. Example for
-macOS / Linux:
+Each archive ships with a `.sha256` sidecar; verify it before use.
 
 ```bash
 # 1. Verify the checksum (run from the folder containing both files).
@@ -50,31 +216,25 @@ intent-cli --version
 On Windows, verify with `CertUtil -hashfile intent-cli-<version>-win-x64.zip SHA256`,
 unzip, and place `intent-cli.exe` on your `PATH`.
 
-Release binaries carry no build-time expiry (unlike the
-`private-preview-pack` artifacts described below).
+Release binaries carry no build-time expiry (unlike the private-preview
+artifacts described below).
 
-## Project-local best-practice inputs
+---
 
-Project-local best-practice and model-registry starter docs live under:
+## Documentation
 
-- `.intent/best-practices/`
-- `.intent/model-registry/`
+- Bilingual onboarding docs (installation, project start, intent organization,
+  loop setup, recovery) are organized under **`docs/ja/`** (日本語) and
+  **`docs/en/`** (English), introduced by slice **G396**.
+- Local coding-automation prompt templates:
+  [`docs/automation-templates/`](./docs/automation-templates/README.md).
 
-The first starter set is intentionally explicit:
+---
 
-- best practices: engineering, AI-assisted delivery, Azure, Sekiban
-- model registry: aggregate, read-model, API, auth-model
+## Packaged invocation (local smoke)
 
-Use these as the child-repo knowledge base for `generate-from-current best-practice`. They are bounded repo-local inputs, not a replacement for parent intent refs or runtime command logic.
-
-## Packaged invocation
-
-The CLI is packaged as a .NET tool with:
-
-- package id: `intent-cli`
-- command name: `intent-cli`
-
-Local package smoke path:
+The CLI is packaged as a .NET tool (package id `intent-cli`, command
+`intent-cli`). To smoke-test a locally built package:
 
 ```bash
 export INTENT_CLI_LOCAL_VERSION="0.2.0-local.$(date -u +%Y%m%d%H%M%S)"
@@ -96,70 +256,12 @@ Equivalent `dnx` path:
 (cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" intent-cli project status)
 ```
 
-## Private-preview install (G367 / G369)
+Project-local best-practice and model-registry starter docs live under
+`.intent/best-practices/` and `.intent/model-registry/` as bounded child-repo
+knowledge-base inputs for `generate-from-current best-practice` — not a
+replacement for parent intent refs or runtime command logic.
 
-The `private-preview-pack` GitHub Actions workflow runs on every merge to
-`main` and uploads a self-contained install bundle as a workflow artifact
-named `intent-cli-private-preview-<version>`. The bundle contains:
-
-| File | Purpose |
-| --- | --- |
-| `intent-cli.<version>.nupkg` | The NuGet package consumed by `dotnet tool install`. |
-| `intent-cli.<version>.nupkg.sha256` | SHA-256 checksum sidecar; verify before installing (G369). |
-| `preview-metadata.json` | Machine-readable build provenance (channel, version, build/expiry timestamps, commit, CI run identifiers). |
-| `INSTALL.md` | Per-build install / update / verify / uninstall guide with this build's exact version, expiry, and commit pre-filled (G369). |
-
-The package version pattern is `0.2.0-preview.<run_number>.<run_attempt>`,
-so every CI run produces a distinct version. No PAT, source checkout, or
-public NuGet feed is required to install -- only a compatible .NET SDK /
-runtime and the unzipped bundle.
-
-Install or update from a downloaded artifact:
-
-```bash
-# 1. Download and unzip the workflow artifact from the GitHub Actions
-#    run page, e.g. into ./private-preview-package. Then `cd` into it.
-cd ./private-preview-package
-
-# 2. Verify the checksum (macOS: shasum; Linux: sha256sum). Prints
-#    `intent-cli.<version>.nupkg: OK` on success. Do not install if
-#    verification fails.
-shasum -a 256 -c intent-cli.*.nupkg.sha256
-
-# 3. Install (or update) the .NET tool from this local folder:
-dotnet tool install --global --add-source . \
-  --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
-# Or for an upgrade-in-place:
-dotnet tool update --global --add-source . \
-  --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
-```
-
-To uninstall:
-
-```bash
-dotnet tool uninstall --global intent-cli
-```
-
-The installed binary exposes the preview metadata via `intent-cli --version`:
-
-```text
-intent-cli 0.2.0-preview.<run_number>.<run_attempt>-<short-sha>-G<unit>
-channel=private-preview built=<iso-utc> expires=<iso-utc> commit=<full-sha>
-```
-
-The `channel=private-preview` trailer is the confirmation that the
-embedded preview metadata loaded successfully; missing trailer means the
-wrong package was installed.
-
-CI-built private-preview packages expire 14 days after their build
-timestamp; refresh the install from a newer workflow run when the
-`expires=` line moves into the past. After expiry the installed tool
-exits with code `78` (G368 private-preview expiry gate). Local source
-builds (`dotnet pack` without the CI properties) carry no expiry trailer
-and remain unrestricted. Each bundle's `INSTALL.md` contains the full
-copy-pasteable step list with this build's exact version, expiry, and
-commit pre-filled, so a tester who only received the zip via a private
-share can install without referring back to this README.
+---
 
 ## CLI command roles
 
@@ -171,11 +273,12 @@ companion to that loop, not a replacement.
 
 | Surface | Role |
 |---------|------|
+| `intent-cli guide …` | Ask-first guidance: command roles, oneshot prompts, review/worker/workflow help |
 | `intent-cli status brief` / `context collect` | Compact / richer AI-thread inputs |
 | `intent-cli clarify draft` / `clarify record` | Owner clarification flow |
 | `intent-cli issue validate-body` | Standalone Child Issue Contract enforcement |
 | `intent-cli issue prepare` / `issue publish-reviewed` | Reviewed issue body publish boundary (never applies `intent-target`) |
-| `intent-cli next-slice classify` | Local read-only continuation classifier |
+| `intent-cli worker next-action` / `claim` / `result-summary` / `complete` | Child implementation loop selector + bounded label transitions |
 | `intent-cli automation summary` | Provider-neutral label-driven automation contract emitter |
 | `intent-cli safety nested-provider-handoff` | Artifact-only nested-provider safety guard (never spawns providers) |
 | `intent-cli run …` | **Integration smoke, deterministic replay, and local dogfooding only** — not the primary production orchestrator |
@@ -186,31 +289,73 @@ review/next-slice loop and the provider-neutral label set described by
 `intent-cli safety nested-provider-handoff` to emit a deterministic artifact
 instead of recursively launching providers from inside `run`.
 
-## Local coding automation prompt templates
+---
 
-Operator-dogfooding prompt templates that drive a local Claude/Codex coding
-automation loop entirely through the deterministic `intent-cli` worker and
-metadata commands (G202–G208) live under
-[`docs/automation-templates/`](./docs/automation-templates/README.md). They
-make explicit that:
+## Private-preview install
 
-- target selection runs through `intent-cli worker next-action`; prompts
-  never reimplement label-walking;
-- post-run outcomes go through `intent-cli worker result-summary`;
-- parent-host metadata is touched only via `metadata validate` and the
-  bounded `metadata update` transition modes;
-- `intent-cli` is deterministic support tooling — it MUST NOT launch
-  Claude, Codex, or any AI provider, and prompts must NOT call
-  `intent-cli run` from this local coding-automation path.
+> Internal/testing channel. Public users should use the
+> [Quickstart install](#1-install) above; this section is for testers consuming
+> the `private-preview-pack` artifact.
+
+The `private-preview-pack` GitHub Actions workflow runs on every merge to
+`main` and uploads a self-contained install bundle as a workflow artifact named
+`intent-cli-private-preview-<version>`. The bundle contains:
+
+| File | Purpose |
+| --- | --- |
+| `intent-cli.<version>.nupkg` | The NuGet package consumed by `dotnet tool install`. |
+| `intent-cli.<version>.nupkg.sha256` | SHA-256 checksum sidecar; verify before installing. |
+| `preview-metadata.json` | Machine-readable build provenance (channel, version, build/expiry timestamps, commit, CI run identifiers). |
+| `INSTALL.md` | Per-build install / update / verify / uninstall guide with this build's exact version, expiry, and commit pre-filled. |
+
+The package version pattern is `0.2.0-preview.<run_number>.<run_attempt>`, so
+every CI run produces a distinct version. No PAT, source checkout, or public
+NuGet feed is required to install — only a compatible .NET SDK / runtime and the
+unzipped bundle.
+
+```bash
+# 1. Download and unzip the workflow artifact, then cd into it.
+cd ./private-preview-package
+
+# 2. Verify the checksum (macOS: shasum; Linux: sha256sum). Prints
+#    `intent-cli.<version>.nupkg: OK` on success. Do not install if it fails.
+shasum -a 256 -c intent-cli.*.nupkg.sha256
+
+# 3. Install (or update) the .NET tool from this local folder:
+dotnet tool install --global --add-source . \
+  --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
+# Upgrade-in-place:
+dotnet tool update --global --add-source . \
+  --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
+
+# Uninstall:
+dotnet tool uninstall --global intent-cli
+```
+
+The installed binary exposes the preview metadata via `intent-cli --version`:
+
+```text
+intent-cli 0.2.0-preview.<run_number>.<run_attempt>-<short-sha>-G<unit>
+channel=private-preview built=<iso-utc> expires=<iso-utc> commit=<full-sha>
+```
+
+The `channel=private-preview` trailer confirms the embedded preview metadata
+loaded successfully; a missing trailer means the wrong package was installed.
+CI-built private-preview packages expire 14 days after their build timestamp;
+after expiry the installed tool exits with code `78`. Refresh from a newer
+workflow run when the `expires=` line moves into the past. Local source builds
+(`dotnet pack` without the CI properties) carry no expiry trailer and remain
+unrestricted.
+
+---
 
 ## License
 
 This project is licensed under the Apache License, Version 2.0 — see the
 [`LICENSE`](./LICENSE) file for the full text and [`NOTICE`](./NOTICE) for
-attribution. The published `intent-cli` NuGet package declares
-`Apache-2.0` via SPDX license metadata.
+attribution. The published `intent-cli` NuGet package declares `Apache-2.0` via
+SPDX license metadata.
 
-Release artifacts (the NuGet package and self-contained binaries described
-under [Install](#install)) carry no expiration or private-use gating; the
-build-time expiry contract applies only to the separate `private-preview`
-channel artifacts.
+Release artifacts (the NuGet package and self-contained binaries) carry no
+expiration or private-use gating; the build-time expiry contract applies only to
+the separate `private-preview` channel artifacts.
