@@ -112,6 +112,81 @@ public sealed class GuideStartCommandTests
     }
 
     [Fact]
+    public void Execute_Json_EmitsLoopPromptTemplatesWithRequiredPlaceholders()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideStartCommand.Execute(CreateContext(), ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var templates = document.RootElement.GetProperty("ask_intent_cli_templates").EnumerateArray().ToArray();
+        var names = templates.Select(t => t.GetProperty("name").GetString()!).ToArray();
+
+        // G397 AC: implementation loop AND review/next-slice loop prompt templates.
+        Assert.Contains("implementation-loop", names);
+        Assert.Contains("review-next-slice-loop", names);
+
+        // G397 AC: every template pins domain, agent, frequency, cwd, and target-repo placeholders.
+        string[] requiredPlaceholders =
+        [
+            "<domain>", "<agent>", "<frequency>", "<cwd>", "<owner>/<repo>"
+        ];
+        Assert.All(templates, t =>
+        {
+            var body = t.GetProperty("template").GetString()!;
+            Assert.All(requiredPlaceholders, ph =>
+                Assert.Contains(ph, body, StringComparison.Ordinal));
+        });
+    }
+
+    [Fact]
+    public void Execute_Json_ImplementationTemplateSaysChildDoesNotNeedHostMetadata()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideStartCommand.Execute(CreateContext(), ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var templates = document.RootElement.GetProperty("ask_intent_cli_templates").EnumerateArray().ToArray();
+
+        var impl = templates.Single(t => t.GetProperty("name").GetString() == "implementation-loop");
+        var body = impl.GetProperty("template").GetString()!;
+        // G397 AC: guidance says child implementation agents do not need host metadata.
+        Assert.Contains("do NOT need host metadata", body, StringComparison.Ordinal);
+        Assert.Equal("child-implementation", impl.GetProperty("side").GetString());
+    }
+
+    [Fact]
+    public void Execute_Json_EmitsInstallAndOnboardingGuidance()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideStartCommand.Execute(CreateContext(), ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var onboarding = document.RootElement.GetProperty("onboarding_guidance");
+
+        // G397 AC: a user can ask intent-cli for install/onboarding guidance.
+        Assert.Contains("install", onboarding.GetProperty("install_and_verify").GetString()!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-cli", onboarding.GetProperty("project_start").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("intent-cli guide start", onboarding.GetProperty("ask_intent_cli_first").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_DefaultMarkdown_RendersTemplatesAndOnboardingSections()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideStartCommand.Execute(CreateContext(), [], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("## Install & onboarding", output, StringComparison.Ordinal);
+        Assert.Contains("## Ask-intent-cli loop prompt templates", output, StringComparison.Ordinal);
+        Assert.Contains("implementation-loop", output, StringComparison.Ordinal);
+        Assert.Contains("review-next-slice-loop", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownArgument_ReturnsUsageError()
     {
         using var writer = new StringWriter();
