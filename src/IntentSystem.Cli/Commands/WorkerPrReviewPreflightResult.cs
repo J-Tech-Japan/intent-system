@@ -79,6 +79,14 @@ internal static class WorkerPrReviewPreflightConstants
     public static class Classifications
     {
         public const string ReadyToReview = "ready-to-review";
+
+        /// <summary>
+        /// G398: an intent-target PR that is otherwise ready to review but is
+        /// still a GitHub draft. Actionable — draft state alone is not an
+        /// operator stop; review eligibility is separate from merge eligibility.
+        /// </summary>
+        public const string DraftReadyToReview = "draft-ready-to-review";
+
         public const string AlreadyReviewing = "already-reviewing";
         public const string RequestUpdatePending = "request-update-pending";
         public const string UpdateInProgress = "update-in-progress";
@@ -93,6 +101,14 @@ internal static class WorkerPrReviewPreflightConstants
     public static class RecommendedActions
     {
         public const string Review = "review";
+
+        /// <summary>
+        /// G398: review a draft intent-target PR now (review eligibility), and
+        /// ready it via the sanctioned path before merge (merge eligibility).
+        /// Draft is not a reason to skip intent/packet-aware review.
+        /// </summary>
+        public const string DraftAwareReview = "draft-aware-review";
+
         public const string NoAction = "no-action";
         public const string WaitForWorkerUpdate = "wait-for-worker-update";
         public const string DeclineWithSummary = "decline-with-summary";

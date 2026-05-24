@@ -184,7 +184,18 @@ internal static class WorkerPrReviewPreflightAnalyzer
                 WorkerPrReviewPreflightConstants.RecommendedActions.DeclineWithSummary);
         }
 
-        if (pr.IsDraft && !HasAnyReviewLabel())
+        // G398: draft state ALONE is not an operator stop. A draft PR that is
+        // neither under review nor an intent-target automation target is truly
+        // unpromoted and stays non-actionable. But a draft that carries
+        // intent-target (or a review label) is a genuine review candidate — it
+        // must flow through the precedence so the host loop runs intent/packet-
+        // aware review instead of reporting a normal hold solely because the PR
+        // is draft (the Zero4Racer PR #410 drift). Review eligibility is
+        // distinct from merge eligibility; the draft flag is resolved at the
+        // ready-to-review step below.
+        if (pr.IsDraft
+            && !HasAnyReviewLabel()
+            && !labelsSet.Contains(WorkerPrReviewPreflightConstants.Labels.IntentTarget))
         {
             return Build(
                 pr,
@@ -196,7 +207,7 @@ internal static class WorkerPrReviewPreflightAnalyzer
                 sourceIssueCandidate?.Number,
                 sourceIssueLabels,
                 WorkerPrReviewPreflightConstants.Classifications.NonActionable,
-                ["pr is draft and not yet promoted for review"],
+                ["pr is draft, carries no intent-target label, and is not yet promoted for review"],
                 actionable: false,
                 WorkerPrReviewPreflightConstants.RecommendedActions.DeclineWithSummary);
         }
@@ -394,7 +405,31 @@ internal static class WorkerPrReviewPreflightAnalyzer
             }
         }
 
-        // Step 10: ready-to-review.
+        // Step 10: ready-to-review. G398: when the eligible target PR is draft,
+        // emit a draft-aware-review action that explicitly separates review
+        // eligibility (proceed now) from merge eligibility (ready the PR via the
+        // sanctioned path before merge). The PR is still actionable — draft is
+        // not a reason to skip intent/packet-aware review.
+        if (pr.IsDraft)
+        {
+            return Build(
+                pr,
+                repo,
+                prNumber,
+                title,
+                displayState,
+                labels,
+                sourceIssueCandidate?.Number,
+                sourceIssueLabels,
+                WorkerPrReviewPreflightConstants.Classifications.DraftReadyToReview,
+                [
+                    "pr is draft but carries intent-target with a linked source issue: draft state alone is not an operator stop",
+                    "review eligibility is independent of merge eligibility — run intent/packet-aware review now; if approved, ready the PR before merge via the sanctioned path; if findings, leave an actionable PR blocker comment and transition request-update",
+                ],
+                actionable: true,
+                WorkerPrReviewPreflightConstants.RecommendedActions.DraftAwareReview);
+        }
+
         return Build(
             pr,
             repo,

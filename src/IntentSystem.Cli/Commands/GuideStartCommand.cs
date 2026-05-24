@@ -170,15 +170,18 @@ internal static class GuideStartCommand
                     Side = "child-implementation",
                     When = "Run a recurring loop that turns intent-target issues into PRs and applies PR-comment fixes.",
                     Template =
-                        "Run the intent-cli child implementation loop for `<owner>/<repo>` (domain `<domain>`) using "
-                        + "agent `<agent>` at `<frequency>` cadence, from child worktree cwd `<cwd>`. Each wake, process "
-                        + "at most one action:\n"
+                        "Run the intent-cli child implementation loop for `<owner>/<repo>` (domain `<domain>`, implementation "
+                        + "PR base `<base-branch>`) using agent `<agent>` at `<frequency>` cadence, from child worktree cwd "
+                        + "`<cwd>`. Each wake, process at most one action:\n"
                         + "1. Confirm `<cwd>` is the worktree root and the repo is `<owner>/<repo>`; `git fetch --all --prune`.\n"
                         + "2. Run `intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>` and "
                         + "follow it verbatim.\n"
                         + "3. Choose work ONLY via `intent-cli worker next-action --repo <owner>/<repo> --github-only "
-                        + "--format json`; make every label transition through `intent-cli worker` / `intent-cli "
-                        + "automation`, never raw `gh` label edits.\n"
+                        + "--format json`; start implementation from `<base-branch>`; make every workflow-label transition "
+                        + "through `intent-cli worker` / `intent-cli automation`, never raw `gh` label edits.\n"
+                        + "4. Open PRs ready-for-review (non-draft) by DEFAULT; only pass `--draft` when the operator "
+                        + "explicitly requests it, and report the actual draft state via `worker result-summary "
+                        + "--pr-draft true|false`.\n"
                         + "Child implementation agents are GitHub-contract-only and do NOT need host metadata: the issue/PR "
                         + "body and repo-local code are the only source of truth; never read or mutate host `.intent-cli/`, "
                         + "queue-state, or `intents/**`.",
@@ -189,8 +192,9 @@ internal static class GuideStartCommand
                     Side = "host/design",
                     When = "Run a recurring loop that reviews PRs against the contract, approves/merges, and cuts the next slice.",
                     Template =
-                        "Run the intent-cli host review / next-slice loop for `<owner>/<repo>` (domain `<domain>`) using "
-                        + "agent `<agent>` at `<frequency>` cadence, from host worktree cwd `<cwd>`. Each wake:\n"
+                        "Run the intent-cli host review / next-slice loop for `<owner>/<repo>` (domain `<domain>`, "
+                        + "implementation PR base `<base-branch>`) using agent `<agent>` at `<frequency>` cadence, from host "
+                        + "worktree cwd `<cwd>`. Each wake, process at most one action:\n"
                         + "1. Run `intent-cli guide oneshot --kind host-review-next-slice --repo <owner>/<repo>` and follow "
                         + "it verbatim.\n"
                         + "2. Review the open PR against the packet/intent contract with `intent-cli guide review --pr <n> "
@@ -198,6 +202,10 @@ internal static class GuideStartCommand
                         + "3. Apply review label transitions ONLY via `intent-cli automation pr-transition`; approve on "
                         + "packet/intent evidence (green tests are necessary but not sufficient), then cut the next slice "
                         + "once merged.\n"
+                        + "4. Draft-aware review: a selected draft PR is still review-eligible — draft state alone is NOT an "
+                        + "operator stop and NOT a reason to skip intent/packet-aware review. Review eligibility is distinct "
+                        + "from merge eligibility: run the review now, then ready the PR via the sanctioned path before merge "
+                        + "(or request-update / surface the gap); never report a normal hold solely because the PR is draft.\n"
                         + "Host/review agents may touch metadata, but ask intent-cli for the current supported transition "
                         + "before hand-editing labels or queue-state.",
                 },
@@ -206,8 +214,8 @@ internal static class GuideStartCommand
                 "Every agent family — Codex, Claude, Copilot, Cursor, OpenCode, Antigravity, and other local/host "
                 + "agents — uses this same `intent-cli guide start` entrypoint. Repositories carry only a short "
                 + "guide-first rule (see the snippets below); they do not embed a full workflow spec that can drift. "
-                + "Fill the `<domain>` / `<agent>` / `<frequency>` / `<cwd>` / `<owner>/<repo>` placeholders in the "
-                + "ask-intent-cli templates from your local bindings before scheduling a loop.",
+                + "Fill the `<domain>` / `<agent>` / `<frequency>` / `<cwd>` / `<owner>/<repo>` / `<base-branch>` "
+                + "placeholders in the ask-intent-cli templates from your local bindings before scheduling a loop.",
             RepositoryInstructionSnippets = new GuideStartSnippets
             {
                 AgentsMd =
