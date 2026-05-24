@@ -280,6 +280,9 @@ internal static class CommandRouter
             },
             ["guide"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
+                // G393: guide-first entrypoint — the single obvious command an
+                // agent runs before intent/packet/issue/review/loop work.
+                ["start"] = GuideStartCommand.Execute,
                 ["oneshot"] = GuideOneshotCommand.Execute,
                 ["automation"] = GuideAutomationCommand.Execute,
                 ["review"] = GuideReviewCommand.Execute,

@@ -3,6 +3,22 @@
 このリポジトリで agent が作業するときは、Issue 本文を主入力としつつ、
 このファイルを repo 全体の baseline guide として使う。
 
+## Ask intent-cli first (guide-first)
+
+intent / packet / issue / review / implementation-loop の作業を始める前に、まず
+`intent-cli guide start` を実行し、そのフェーズ向けの `intent-cli guide …`
+コマンドに従う。記憶やコピーした prompt から始めない。label / metadata の遷移は
+intent-cli のコマンド経由で行い、手編集しない。詳細ルールは intent-cli の guidance
+が source of truth（このファイルに長い spec を写経しない）。
+
+- Implementation 側 agent は **GitHub-contract-only / metadata-free**：host の
+  `.intent-cli` / queue-state / metadata branch / `intents/**` は読まない。Issue
+  本文を standalone contract として扱う。
+- Host / design 側 agent は metadata を扱ってよいが、手編集の前に intent-cli へ
+  現在のコマンド・guidance を尋ねる。
+- どの agent (Codex / Claude / Copilot / Cursor / OpenCode / Antigravity など) でも
+  同じ `intent-cli guide start` を入口にする。
+
 ## Baseline
 
 - 実装言語は `C# / .NET`

@@ -3,6 +3,15 @@
 このリポジトリで Claude Code が作業するときは、Issue 本文を主入力としつつ、
 repo 全体の baseline は [AGENTS.md](./AGENTS.md) に従う。
 
+## Ask intent-cli first (guide-first)
+
+このリポジトリの workflow は `intent-cli` が権威。intent / packet / issue / review /
+implementation-loop を始める前に `intent-cli guide start` を実行し、フェーズ向けの
+`intent-cli guide …` コマンドに従う。metadata / label の挙動を推測したり、長いルールを
+ここに写経しない（intent-cli の guidance が source of truth）。implementation 作業は
+**GitHub-contract-only**（issue/PR + repo code のみ、host の `.intent-cli` metadata は
+読まない）。詳しい役割分担は `intent-cli guide start` を参照。
+
 ## Reading Order
 
 1. GitHub Issue 本文
