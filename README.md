@@ -224,8 +224,8 @@ artifacts described below).
 ## Documentation
 
 - Bilingual onboarding docs (installation, project start, intent organization,
-  loop setup, recovery) are organized under **`docs/ja/`** (日本語) and
-  **`docs/en/`** (English), introduced by slice **G396**.
+  packet/issue creation, implementation & review loop setup, recovery) —
+  **English: [`docs/en/`](./docs/en/index.md)**, **日本語: [`docs/ja/`](./docs/ja/index.md)**.
 - Local coding-automation prompt templates:
   [`docs/automation-templates/`](./docs/automation-templates/README.md).
 
