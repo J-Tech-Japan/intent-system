@@ -423,15 +423,17 @@ public sealed class WorkerPrReviewPreflightCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_GivenFreshDraftPrNoReviewLabel_ClassifiesAsNonActionable()
+    public void Execute_GivenDraftPrWithoutIntentTarget_ClassifiesAsNonActionable()
     {
+        // G398: a draft PR that is neither under review NOR an intent-target
+        // automation target is truly unpromoted and stays non-actionable.
         using var workspace = new WorkerPrReviewPreflightWorkspace();
         WorkerPrReviewPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(
             number: 13,
             state: "OPEN",
-            title: "Fresh draft",
+            title: "Fresh draft, no target label",
             body: "Closes #100",
-            labelNames: new[] { "intent-target" },
+            labelNames: Array.Empty<string>(),
             isDraft: true,
             closingIssueNumbers: new[] { 100 }));
 
@@ -444,7 +446,46 @@ public sealed class WorkerPrReviewPreflightCommandTests : IDisposable
         Assert.Equal(0, exitCode);
         var result = JsonSerializer.Deserialize<WorkerPrReviewPreflightResult>(writer.ToString())!;
         Assert.Equal(WorkerPrReviewPreflightConstants.Classifications.NonActionable, result.Classification);
+        Assert.False(result.Actionable);
         Assert.Contains(result.Reasons, r => r.Contains("draft", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_GivenDraftIntentTargetPrWithLinkedIssue_ClassifiesAsDraftAwareReviewNotIdle()
+    {
+        // G398 AC: a draft PR carrying intent-target with a linked source issue
+        // (the Zero4Racer PR #410 case) must be draft-aware-review / actionable,
+        // NOT non-actionable / normal-hold solely because it is draft.
+        using var workspace = new WorkerPrReviewPreflightWorkspace();
+        WorkerPrReviewPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(
+            number: 13,
+            state: "OPEN",
+            title: "Draft target PR",
+            body: "Closes #100",
+            labelNames: new[] { "intent-target" },
+            isDraft: true,
+            closingIssueNumbers: new[] { 100 }));
+        WorkerPrReviewPreflightCommand.IssueLookupFactory = () => new FakeIssueLookup(BuildIssue(
+            number: 100,
+            state: "OPEN",
+            title: "Source",
+            body: string.Empty,
+            labelNames: new[] { "intent-target", "intent-pr-created" }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrReviewPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "13", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrReviewPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrReviewPreflightConstants.Classifications.DraftReadyToReview, result.Classification);
+        Assert.True(result.Actionable);
+        Assert.True(result.IsDraft);
+        Assert.Equal(WorkerPrReviewPreflightConstants.RecommendedActions.DraftAwareReview, result.RecommendedAction);
+        // Distinguishes review eligibility from merge eligibility.
+        Assert.Contains(result.Reasons, r => r.Contains("review eligibility", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

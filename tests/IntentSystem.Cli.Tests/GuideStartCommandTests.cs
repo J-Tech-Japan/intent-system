@@ -187,6 +187,42 @@ public sealed class GuideStartCommandTests
     }
 
     [Fact]
+    public void Execute_Json_ImplementationTemplateStatesNonDraftByDefault()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideStartCommand.Execute(CreateContext(), ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var templates = document.RootElement.GetProperty("ask_intent_cli_templates").EnumerateArray().ToArray();
+
+        var impl = templates.Single(t => t.GetProperty("name").GetString() == "implementation-loop");
+        var body = impl.GetProperty("template").GetString()!;
+        // G398 AC: child implementation prompt template states non-draft / ready-for-review by default.
+        Assert.Contains("ready-for-review (non-draft) by DEFAULT", body, StringComparison.Ordinal);
+        Assert.Contains("--draft", body, StringComparison.Ordinal);
+        // G398 AC#4: template carries branch/base input.
+        Assert.Contains("<base-branch>", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_ReviewTemplateStatesDraftAwareReviewBehavior()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideStartCommand.Execute(CreateContext(), ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var templates = document.RootElement.GetProperty("ask_intent_cli_templates").EnumerateArray().ToArray();
+
+        var review = templates.Single(t => t.GetProperty("name").GetString() == "review-next-slice-loop");
+        var body = review.GetProperty("template").GetString()!;
+        // G398 AC#4: draft state alone is not an operator stop; review eligibility != merge eligibility.
+        Assert.Contains("draft state alone is NOT an operator stop", body, StringComparison.Ordinal);
+        Assert.Contains("Review eligibility is distinct from merge eligibility", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownArgument_ReturnsUsageError()
     {
         using var writer = new StringWriter();
