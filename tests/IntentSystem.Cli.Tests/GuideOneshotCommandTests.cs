@@ -204,6 +204,83 @@ public sealed class GuideOneshotCommandTests
         Assert.DoesNotContain("intents/rules/automations/runbook.md", GuideOneshotCommand.HostSekibanAsAServicePrompt, StringComparison.Ordinal);
     }
 
+    // ── G402 publish ownership non-interactive contract ───────────────────────
+
+    /// <summary>
+    /// G402: the host review/next-slice prompt for intent-cli must instruct the
+    /// operator NOT to ask about publish ownership when a concurrent publisher
+    /// is observed.
+    /// </summary>
+    [Fact]
+    public void HostIntentCliPrompt_ContainsPublishOwnershipRule_DoNotAskOperator()
+    {
+        // The prompt must say publish ownership is never a question for the
+        // operator chat, so automated host loops never pause to ask.
+        Assert.Contains(
+            "do NOT ask the operator",
+            GuideOneshotCommand.HostIntentCliPrompt,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "Publish ownership follows",
+            GuideOneshotCommand.HostIntentCliPrompt,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G402: the host review/next-slice prompt must encode that publish
+    /// ownership disambiguation is NOT a valid clarification reason.
+    /// </summary>
+    [Fact]
+    public void HostIntentCliPrompt_PublishOwnershipDisambiguationNotAClarificationReason()
+    {
+        Assert.Contains(
+            "Publish ownership disambiguation is NOT a valid clarification reason",
+            GuideOneshotCommand.HostIntentCliPrompt,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G402: the guidance emitted by Execute for intent-cli domain must
+    /// include the non-interactive publish ownership rule so an automation
+    /// that observes a concurrent publisher proceeds without asking.
+    /// </summary>
+    [Fact]
+    public void Execute_HostReviewNextSlice_IntentCli_EmitsConcurrentPublisherOwnershipRule()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOneshotCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        // Must explicitly prohibit asking the operator.
+        Assert.Contains("do NOT ask the operator", output, StringComparison.OrdinalIgnoreCase);
+        // Must reference the concurrent publisher scenario.
+        Assert.Contains("concurrent", output, StringComparison.OrdinalIgnoreCase);
+        // Must name intent-cli as the source of truth for publish ownership.
+        Assert.Contains("intent-cli", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("single source of truth", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G402: same non-interactive ownership rule must be present in the
+    /// sekiban-as-a-service host prompt.
+    /// </summary>
+    [Fact]
+    public void HostSekibanAsAServicePrompt_ContainsPublishOwnershipRule_DoNotAskOperator()
+    {
+        Assert.Contains(
+            "do NOT ask the operator",
+            GuideOneshotCommand.HostSekibanAsAServicePrompt,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "Publish ownership disambiguation is NOT a valid clarification reason",
+            GuideOneshotCommand.HostSekibanAsAServicePrompt,
+            StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
