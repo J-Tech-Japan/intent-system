@@ -31,6 +31,25 @@ intent-cli intent status --format json
 - Child implementation agents do **not** read the intent tree (`intents/**`) or
   host metadata — that's host/design territory.
 
+## Intent knowledge-tree layout (tree-v1)
+
+New domains should organize intent into discoverable folders rather than a single flat
+file. The **tree-v1** layout defines recommended categories (`identity`, `product`,
+`features`, `technology`, `operations`, `decisions`, `clarifications`, `packets`, `links`)
+and a manifest schema that supports custom folder names and project types.
+
+```bash
+# Get current tree-layout authoring guidance
+intent-cli guide intent-work setup \
+  --kind tree-layout \
+  --domain <name> \
+  --target-repo <owner/repo> \
+  --format markdown
+```
+
+See [Intent knowledge-tree layout (tree-v1)](03a-intent-tree-layout.md) for the full spec,
+manifest schema, project type examples, and cross-linking rules.
+
 ## Next
 
 [Create packets & publish issues](04-packets-issues.md).

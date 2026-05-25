@@ -22,9 +22,10 @@ internal static class GuideIntentWorkSetupCommand
     private const string KindPacketPreload = "packet-preload";
     private const string KindClarification = "clarification";
     private const string KindIntentShape = "intent-shape";
+    private const string KindTreeLayout = "tree-layout";
 
     private const string UsageLine =
-        "Usage: intent-cli guide intent-work setup --kind <domain-organize|next-slice|packet-preload|clarification|intent-shape> "
+        "Usage: intent-cli guide intent-work setup --kind <domain-organize|next-slice|packet-preload|clarification|intent-shape|tree-layout> "
         + "--domain <domain> --target-repo <owner/repo> [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -67,13 +68,14 @@ internal static class GuideIntentWorkSetupCommand
             KindPacketPreload => BuildPacketPreload(domain!, targetRepo!),
             KindClarification => BuildClarification(domain!, targetRepo!),
             KindIntentShape => BuildIntentShape(domain!, targetRepo!),
+            KindTreeLayout => BuildTreeLayout(domain!, targetRepo!),
             _ => null
         };
 
         if (result is null)
         {
             writer.WriteLine(
-                $"--kind must be '{KindDomainOrganize}', '{KindNextSlice}', '{KindPacketPreload}', '{KindClarification}', or '{KindIntentShape}' (got '{kind}').");
+                $"--kind must be '{KindDomainOrganize}', '{KindNextSlice}', '{KindPacketPreload}', '{KindClarification}', '{KindIntentShape}', or '{KindTreeLayout}' (got '{kind}').");
             writer.WriteLine(UsageLine);
             return 1;
         }
@@ -430,6 +432,111 @@ Hard rules:
         };
     }
 
+    private static GuideIntentWorkSetupResult BuildTreeLayout(string domain, string targetRepo)
+    {
+        var prompt =
+$@"Organize and author the intent knowledge tree for domain `{domain}` against `{targetRepo}` using the tree-v1 flexible layout. Do not publish any GitHub issue unless the operator explicitly approves it.
+
+First-call sequence (read-only; required before any mutation):
+1. `intent-cli guide model --format json` — confirm chat-first / CLI-internal collaboration model.
+2. `intent-cli guide onboarding --format json` — first-call sequence for a fresh agent.
+3. `intent-cli guide commands list --format json` — surface `primary` / `support` / `advanced` / `experimental` buckets.
+4. `intent-cli automation summary --format json` — canonical label-driven contract and capability JSON.
+5. `intent-cli intent status --domain {domain} --format json` — current baseline / WIP / queued / clarifications.
+6. `intent-cli intent search --domain {domain} --format json` — locate related intents across the domain.
+
+Tree-v1 layout rules:
+1. New domains should organize intents into discoverable folders under `intents/{domain}/` rather than appending everything to one flat file.
+2. Provide a manifest at `intents/{domain}/manifest.yaml` with the following shape:
+   ```yaml
+   version: ""1""
+   layout_version: tree-v1
+   project_type: <product-app|library-tool|infrastructure|research-prototype>
+   target_repo: {targetRepo}
+   branch_policy: direct-main
+   metadata_policy: host-metadata
+   entrypoints:
+     - identity/mission.md
+     - README.md
+   categories:
+     identity: identity/
+     product: product/
+     features: features/
+     technology: technology/
+     operations: operations/
+     decisions: decisions/
+     clarifications: clarifications/
+     packets: packets/
+     links: links/
+   ```
+3. Recommended category purposes:
+   - `identity/`: mission, vision, values, principles, glossary
+   - `product/`: overview, users, journeys, non-goals
+   - `features/`: one subfolder per feature — overview, requirements, acceptance criteria, decisions, open questions, packets, links
+   - `technology/`: architecture, languages, libraries, frontend, backend, data, cloud, security, testing, observability, deployment
+   - `operations/`: implementation loop, review loop, release, recovery
+   - `decisions/`: ADR-style records (one file per decision, named `<NNNN>-<slug>.md`)
+   - `clarifications/`: open.md, answered.md, log.md
+   - `packets/`: roadmap, backlog, waves
+   - `links/`: GitHub repos, external docs, related projects
+4. Category names are configurable. Adapt them for the project type:
+   - product-app: use all recommended categories.
+   - library-tool: replace `product/` with `api/` and `users/`; omit `links/` if unused.
+   - infrastructure: replace `product/` with `environments/`; add `runbooks/` under `operations/`.
+   - research-prototype: replace `product/` with `hypothesis/`; replace `operations/` with `experiments/`.
+5. Cross-linking rules:
+   - Feature overview pages MUST link to relevant decisions, clarifications, packets, and GitHub issues.
+   - Decision records MUST link to the feature(s) and clarification(s) that motivated them.
+   - Clarification entries MUST link back to the feature or decision they block.
+   - Packet pages MUST link to the GitHub issue once published.
+   - Do not duplicate content across files; use relative Markdown links instead.
+
+Tree-layout authoring steps:
+1. Confirm cwd is the parent host repo root.
+2. Check `intent status` output — if a manifest already exists, read it before proposing changes.
+3. If no manifest exists, propose a manifest draft matching the project type. Present it to the operator for acceptance before writing.
+4. After acceptance: write `intents/{domain}/manifest.yaml`. Create the recommended category folders with empty `.gitkeep` files to make them visible without forcing content.
+5. For existing flat intent files: propose a migration plan that moves sections to the appropriate category folders. Present to operator; apply only after acceptance.
+6. After the tree skeleton is in place: add cross-links between feature pages, decisions, clarifications, and packets.
+7. Commit and push the parent state. Do not publish any GitHub issue in this wake.
+
+Hard rules:
+- Do not read `intents/rules/**`, local skill files, or copied prompt files. Use `intent-cli guide ...` and `intent-cli intent ...` instead.
+- Do not call `intent-cli run`. `run` is advanced runtime, not the intent-work path.
+- Do not run `dotnet run` as a fallback for `intent-cli`.
+- Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
+- All label transitions go through installed `intent-cli automation` commands.
+- Prefer tree placement and cross-links over appending all intent information into one file.
+- Existing flat-file domains do not require immediate migration; tree-v1 is recommended for new domains.
+- Do not publish a GitHub issue in this wake.";
+
+        return new GuideIntentWorkSetupResult
+        {
+            Kind = KindTreeLayout,
+            Domain = domain,
+            TargetRepo = targetRepo,
+            Prompt = prompt,
+            FirstCalls = new[]
+            {
+                "intent-cli guide model --format json",
+                "intent-cli guide onboarding --format json",
+                "intent-cli guide commands list --format json",
+                "intent-cli automation summary --format json",
+                $"intent-cli intent status --domain {domain} --format json",
+                $"intent-cli intent search --domain {domain} --format json"
+            },
+            ForbiddenSources = new[]
+            {
+                "intents/rules/**",
+                "local skill files",
+                "copied prompt files"
+            },
+            ClarificationFormat = "background, question, options, pros/cons, and recommendation",
+            IssuePublishBoundary = "Do not publish a GitHub issue in this wake. Tree-layout authoring is a host-side structural step; issue publication follows after the intent tree is organized.",
+            WorktreeFriendly = "The prompt names the parent host repo worktree root as cwd and references domain/target-repo from arguments; no operator-specific paths are hard-coded, so it works across host-side worktrees."
+        };
+    }
+
     private static void WriteMarkdown(TextWriter writer, GuideIntentWorkSetupResult result)
     {
         writer.WriteLine($"# Guide intent-work setup — {result.Kind}");
@@ -577,6 +684,7 @@ Hard rules:
         writer.WriteLine($"- {KindPacketPreload}    (--domain, --target-repo required)");
         writer.WriteLine($"- {KindClarification}   (--domain, --target-repo required)");
         writer.WriteLine($"- {KindIntentShape}     (--domain, --target-repo required)");
+        writer.WriteLine($"- {KindTreeLayout}      (--domain, --target-repo required)");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
