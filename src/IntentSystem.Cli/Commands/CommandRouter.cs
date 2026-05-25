@@ -314,6 +314,8 @@ internal static class CommandRouter
             {
                 ["host-check"] = IntentHostCheckCommand.Execute,
                 ["init"] = IntentInitCommand.Execute,
+                ["init-tree"] = IntentInitTreeCommand.Execute,
+                ["add-feature"] = IntentAddFeatureCommand.Execute,
                 ["status"] = IntentStatusCommand.Execute,
                 ["search"] = IntentSearchCommand.Execute,
                 ["explain"] = IntentExplainCommand.Execute,
