@@ -37,6 +37,13 @@ internal static class VersionCommand
     public static PrivatePreviewMetadata? OverridePrivatePreviewMetadata { get; set; }
 
     /// <summary>
+    /// G401 test seam: override the resolved
+    /// <see cref="PreviewBuildMetadata"/> for tests so they can assert
+    /// the version output for OSS preview builds.
+    /// </summary>
+    public static PreviewBuildMetadata? OverridePreviewBuildMetadata { get; set; }
+
+    /// <summary>
     /// G367 test seam: when <c>true</c>, <see cref="Execute"/> skips
     /// reading <see cref="PrivatePreviewMetadata.Read"/> against the
     /// real assembly so existing tests that pinned the single-line
@@ -70,23 +77,33 @@ internal static class VersionCommand
             ?? BuildVersionString(typeof(VersionCommand).Assembly);
         writer.WriteLine(versionString);
 
-        // G367: when the CI workflow built this assembly with the
-        // private-preview metadata properties, append a single
-        // additional line so operators can tell a CI preview artifact
-        // from a source build without scraping the package itself.
-        // Local builds (no AssemblyMetadata("PrivatePreviewChannel"))
-        // are silent here, matching the issue acceptance that source
-        // builds carry no expiry contract. The
-        // <see cref="SuppressPrivatePreviewTrailer"/> seam keeps
-        // existing single-line `--version` tests deterministic across
-        // CI/source environments.
+        // G401/G367: when the CI workflow built this assembly with preview
+        // metadata properties, append a single additional line so operators
+        // can tell a CI preview artifact from a source build without
+        // scraping the package itself. G401 OSS preview (PreviewChannel)
+        // takes precedence over the older G367 private-preview (PrivatePreviewChannel).
+        // Local builds (no AssemblyMetadata channel attribute) are silent here.
+        // The <see cref="SuppressPrivatePreviewTrailer"/> seam keeps existing
+        // single-line `--version` tests deterministic across CI/source environments.
         if (OverrideVersionString is null && !SuppressPrivatePreviewTrailer)
         {
-            var preview = OverridePrivatePreviewMetadata
-                ?? PrivatePreviewMetadata.Read(typeof(VersionCommand).Assembly);
-            if (preview is not null)
+            // G401: check OSS preview metadata first.
+            var previewBuild = OverridePreviewBuildMetadata
+                ?? PreviewBuildMetadata.Read(typeof(VersionCommand).Assembly);
+            if (previewBuild is not null)
             {
-                writer.WriteLine(preview.ToVersionTrailer());
+                writer.WriteLine(previewBuild.ToVersionTrailer());
+            }
+            else
+            {
+                // G367: fall back to old private-preview metadata for
+                // backward compat with any still-installed private-preview binaries.
+                var privatePreview = OverridePrivatePreviewMetadata
+                    ?? PrivatePreviewMetadata.Read(typeof(VersionCommand).Assembly);
+                if (privatePreview is not null)
+                {
+                    writer.WriteLine(privatePreview.ToVersionTrailer());
+                }
             }
         }
 

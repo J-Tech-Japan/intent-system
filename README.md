@@ -52,7 +52,7 @@ macOS/Linux, `%USERPROFILE%\.dotnet\tools` on Windows).
 
 > No .NET SDK? Use the self-contained binary instead — see
 > [Install without a .NET SDK](#install-without-a-net-sdk). Need the internal
-> testing channel? See [Private-preview install](#private-preview-install).
+> testing channel? See [Preview install](#preview-install).
 
 ### 2. Verify
 
@@ -60,9 +60,9 @@ macOS/Linux, `%USERPROFILE%\.dotnet\tools` on Windows).
 intent-cli --version
 ```
 
-A released build prints just the version line. (Private-preview builds add a
-`channel=private-preview … expires=…` trailer — see
-[Private-preview install](#private-preview-install).)
+A released build prints just the version line. (OSS preview CI builds add a
+`channel=preview built=… commit=…` trailer — see
+[Preview install](#preview-install).)
 
 ### 3. Ask intent-cli first
 
@@ -216,8 +216,7 @@ intent-cli --version
 On Windows, verify with `CertUtil -hashfile intent-cli-<version>-win-x64.zip SHA256`,
 unzip, and place `intent-cli.exe` on your `PATH`.
 
-Release binaries carry no build-time expiry (unlike the private-preview
-artifacts described below).
+Release binaries and OSS preview CI artifacts carry no build-time expiry.
 
 ---
 
@@ -291,31 +290,33 @@ instead of recursively launching providers from inside `run`.
 
 ---
 
-## Private-preview install
+## Preview install
 
-> Internal/testing channel. Public users should use the
-> [Quickstart install](#1-install) above; this section is for testers consuming
-> the `private-preview-pack` artifact.
+> OSS preview channel. Public users should use the
+> [Quickstart install](#1-install) (stable NuGet) or a
+> [Release binary](#release-binary) above. This section is for users who want
+> the latest merged changes before a stable release.
 
-The `private-preview-pack` GitHub Actions workflow runs on every merge to
-`main` and uploads a self-contained install bundle as a workflow artifact named
-`intent-cli-private-preview-<version>`. The bundle contains:
+The `preview-pack` GitHub Actions workflow runs on every merge to `main` and
+uploads a self-contained install bundle as a workflow artifact named
+`intent-cli-preview-<version>`. The bundle contains:
 
 | File | Purpose |
 | --- | --- |
 | `intent-cli.<version>.nupkg` | The NuGet package consumed by `dotnet tool install`. |
 | `intent-cli.<version>.nupkg.sha256` | SHA-256 checksum sidecar; verify before installing. |
-| `preview-metadata.json` | Machine-readable build provenance (channel, version, build/expiry timestamps, commit, CI run identifiers). |
-| `INSTALL.md` | Per-build install / update / verify / uninstall guide with this build's exact version, expiry, and commit pre-filled. |
+| `preview-metadata.json` | Machine-readable build provenance (channel, version, build timestamp, commit, CI run identifiers). |
+| `INSTALL.md` | Per-build install / update / verify / uninstall guide with this build's exact version and commit pre-filled. |
 
-The package version pattern is `0.2.0-preview.<run_number>.<run_attempt>`, so
-every CI run produces a distinct version. No PAT, source checkout, or public
-NuGet feed is required to install — only a compatible .NET SDK / runtime and the
-unzipped bundle.
+The package version pattern is `<nextVersion>-preview.<run_number>.<run_attempt>`
+(e.g. `0.3.0-preview.42.1`), where `nextVersion` comes from `eng/version.json`.
+Every CI run produces a distinct version. No PAT, source checkout, or public
+NuGet feed is required — only a compatible .NET SDK / runtime and the unzipped
+bundle. **OSS preview packages carry no expiry; they remain runnable indefinitely.**
 
 ```bash
 # 1. Download and unzip the workflow artifact, then cd into it.
-cd ./private-preview-package
+cd ./intent-cli-preview-0.3.0-preview.42.1
 
 # 2. Verify the checksum (macOS: shasum; Linux: sha256sum). Prints
 #    `intent-cli.<version>.nupkg: OK` on success. Do not install if it fails.
@@ -323,10 +324,10 @@ shasum -a 256 -c intent-cli.*.nupkg.sha256
 
 # 3. Install (or update) the .NET tool from this local folder:
 dotnet tool install --global --add-source . \
-  --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
+  --version 0.3.0-preview.42.1 intent-cli
 # Upgrade-in-place:
 dotnet tool update --global --add-source . \
-  --version 0.2.0-preview.<run_number>.<run_attempt> intent-cli
+  --version 0.3.0-preview.42.1 intent-cli
 
 # Uninstall:
 dotnet tool uninstall --global intent-cli
@@ -335,17 +336,46 @@ dotnet tool uninstall --global intent-cli
 The installed binary exposes the preview metadata via `intent-cli --version`:
 
 ```text
-intent-cli 0.2.0-preview.<run_number>.<run_attempt>-<short-sha>-G<unit>
-channel=private-preview built=<iso-utc> expires=<iso-utc> commit=<full-sha>
+intent-cli 0.3.0-preview.42.1-<short-sha>-G<unit>
+channel=preview built=<iso-utc> commit=<full-sha>
 ```
 
-The `channel=private-preview` trailer confirms the embedded preview metadata
-loaded successfully; a missing trailer means the wrong package was installed.
-CI-built private-preview packages expire 14 days after their build timestamp;
-after expiry the installed tool exits with code `78`. Refresh from a newer
-workflow run when the `expires=` line moves into the past. Local source builds
-(`dotnet pack` without the CI properties) carry no expiry trailer and remain
-unrestricted.
+The `channel=preview` trailer confirms the embedded preview metadata loaded
+successfully. Source builds (`dotnet pack` without the CI properties) produce no
+trailer and remain unrestricted.
+
+---
+
+## Version flow
+
+The repository version policy lives in `eng/version.json`:
+
+```json
+{
+  "stableVersion": "0.2.0",
+  "nextVersion": "0.3.0"
+}
+```
+
+| Stage | Version form | How it is derived |
+| --- | --- | --- |
+| Main CI preview | `0.3.0-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.3.0-rc.N` | Tag `v0.3.0-rc.N` triggers release workflow |
+| Stable release | `0.3.0` | Tag `v0.3.0` triggers release workflow |
+| Post-release main builds | `0.4.0-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.4.0` |
+
+**After releasing `v0.3.0`**, bump both fields in `eng/version.json`:
+
+```json
+{
+  "stableVersion": "0.3.0",
+  "nextVersion": "0.4.0"
+}
+```
+
+This ensures the next main-branch CI build immediately produces
+`0.4.0-preview.<run>.<attempt>` rather than continuing to emit `0.3.0-preview`
+(which would collide with the stable release version).
 
 ---
 
@@ -356,6 +386,5 @@ This project is licensed under the Apache License, Version 2.0 — see the
 attribution. The published `intent-cli` NuGet package declares `Apache-2.0` via
 SPDX license metadata.
 
-Release artifacts (the NuGet package and self-contained binaries) carry no
-expiration or private-use gating; the build-time expiry contract applies only to
-the separate `private-preview` channel artifacts.
+Release artifacts (the NuGet package and self-contained binaries) and OSS
+preview CI artifacts carry no expiration or private-use gating.

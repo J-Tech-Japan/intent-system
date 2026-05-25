@@ -1,31 +1,31 @@
-# G367: build a private-preview intent-cli .nupkg on every merge to
-# main and upload it as a workflow artifact. Private testers download
-# the artifact and install the tool from a local folder source rather
-# than from public NuGet -- see README.md "Private-preview install" for
-# the consumption steps. Three key properties of this workflow:
+# G401 (reworked from G367 private-preview-pack): build an OSS preview
+# intent-cli .nupkg on every merge to main and upload it as a workflow
+# artifact. The preview version is derived from `eng/version.json`
+# (`nextVersion` field) so the version policy lives in the repository and
+# not in the workflow itself.
 #
-#   1. The package version changes on every run so a tester can tell
-#      which CI build they installed. The patch component is derived
-#      from `github.run_number` plus `github.run_attempt` so two
-#      different workflow runs of the same commit also produce
-#      distinct versions.
+# Key differences from the original G367 private-preview workflow:
 #
-#   2. The CI build embeds machine-readable preview metadata
-#      (channel / build timestamp / expires-at / source commit) into
-#      the produced assembly via MSBuild properties consumed by
-#      `src/IntentSystem.Cli/IntentSystem.Cli.csproj`. The pack step
-#      compiles the CLI fresh with those properties active (no
-#      `--no-build`) so the conditional `AssemblyMetadata` ItemGroup is
-#      actually materialized into the packaged DLL.
+#   1. Package version: derived from `nextVersion` in `eng/version.json`
+#      (e.g. "0.3.0") producing "0.3.0-preview.<run>.<attempt>" rather
+#      than the old hardcoded "0.2.0-preview.<run>.<attempt>".
 #
-#   3. A deterministic verifier (`tools/PreviewArtifactVerify`) opens
-#      the produced .nupkg, walks the embedded IntentSystem.Cli.dll's
-#      AssemblyMetadata custom attributes, and fails the workflow if
-#      the preview pack is missing any `PrivatePreview*` entry OR if a
-#      source-only pack (same source tree, no preview properties)
-#      accidentally carries them. This makes the build-time wiring
-#      regression-proof without depending on a real GitHub Actions run.
-name: private-preview-pack
+#   2. Assembly metadata: three attributes only — `PreviewChannel`,
+#      `PreviewBuildTimestamp`, `PreviewSourceCommit`. The old
+#      `PrivatePreview*` attributes (including `PrivatePreviewExpiresAt`)
+#      are no longer set. OSS preview artifacts carry no expiry contract.
+#
+#   3. Channel value: "preview" (not "private-preview"). The runtime
+#      `intent-cli --version` output shows `channel=preview built=...`
+#      instead of `channel=private-preview built=... expires=...`.
+#
+#   4. PreviewArtifactVerify checks three `Preview*` keys (no expiry).
+#
+# The G368 private-preview expiry gate in PrivatePreviewExpiryGate.cs
+# remains compiled into the binary for backward compatibility — it only
+# fires for assemblies carrying a `PrivatePreviewChannel` attribute, which
+# new CI builds no longer set.
+name: preview-pack
 
 on:
   push:
@@ -37,7 +37,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: private-preview-pack-${{ github.ref }}
+  group: preview-pack-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -56,33 +56,29 @@ jobs:
           dotnet-version: 10.0.x
           dotnet-quality: preview
 
-      - name: Compute private-preview metadata
+      - name: Compute preview metadata
         id: meta
         shell: bash
         run: |
           set -euo pipefail
-          BASE_VERSION="0.2.0"
+          # G401: read nextVersion from the repository version policy file.
+          NEXT_VERSION="$(python3 -c "import json; data=json.load(open('eng/version.json')); print(data['nextVersion'])")"
           BUILD_NUMBER="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-          PACKAGE_VERSION="${BASE_VERSION}-preview.${BUILD_NUMBER}"
+          PACKAGE_VERSION="${NEXT_VERSION}-preview.${BUILD_NUMBER}"
           BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          EXPIRES_AT="$(date -u -d '+14 days' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
           SHORT_SHA="$(git rev-parse --short=7 HEAD)"
           # G378: derive the latest implemented execution unit from
           # source-controlled git history (checkout uses fetch-depth: 0)
-          # and pass it explicitly to pack so the preview/baseline
-          # artifacts can never report a stale completed unit. The csproj
-          # also derives this automatically, but pinning it here keeps the
-          # CI artifact metadata deterministic regardless of the MSBuild
-          # target. Falls back to `unknown` (never a stale G-number) when
-          # no `G<n>:` subject is found.
+          # and pass it explicitly to pack so the preview artifacts can
+          # never report a stale completed unit.
           LATEST_EXECUTION_UNIT="$(git log -n 300 --format=%s | sed -n 's/^\(G[0-9][0-9]*\)[: ].*/\1/p' | sort -t G -k2 -n | tail -1)"
           if [ -z "${LATEST_EXECUTION_UNIT}" ]; then
             LATEST_EXECUTION_UNIT="unknown"
           fi
           {
+            echo "next_version=${NEXT_VERSION}"
             echo "package_version=${PACKAGE_VERSION}"
             echo "build_timestamp=${BUILD_TIMESTAMP}"
-            echo "expires_at=${EXPIRES_AT}"
             echo "short_sha=${SHORT_SHA}"
             echo "latest_execution_unit=${LATEST_EXECUTION_UNIT}"
           } | tee -a "${GITHUB_OUTPUT}"
@@ -100,8 +96,7 @@ jobs:
 
       # G371: route TRX results to a known directory so the
       # always()-gated diagnostics upload can preserve them even when
-      # the test phase fails (the logger writes the TRX regardless of
-      # the test exit code).
+      # the test phase fails.
       - name: Test (source contract)
         id: test
         run: |
@@ -109,18 +104,17 @@ jobs:
             --logger "trx;LogFileName=test-results.trx" \
             --results-directory "${GITHUB_WORKSPACE}/.artifacts/test-results"
 
-      - name: Pack private-preview .nupkg (recompiles with preview properties active)
+      - name: Pack preview .nupkg (recompiles with preview properties active)
         id: pack_preview
         run: |
           dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
             --configuration Release \
-            -o .artifacts/private-preview \
+            -o .artifacts/preview \
             -p:Version=${{ steps.meta.outputs.package_version }} \
             -p:IntentSystemLatestExecutionUnit=${{ steps.meta.outputs.latest_execution_unit }} \
-            -p:PrivatePreviewChannel=private-preview \
-            -p:PrivatePreviewBuildTimestamp=${{ steps.meta.outputs.build_timestamp }} \
-            -p:PrivatePreviewExpiresAt=${{ steps.meta.outputs.expires_at }} \
-            -p:PrivatePreviewSourceCommit=${{ github.sha }}
+            -p:PreviewChannel=preview \
+            -p:PreviewBuildTimestamp=${{ steps.meta.outputs.build_timestamp }} \
+            -p:PreviewSourceCommit=${{ github.sha }}
 
       - name: Pack source baseline (no preview properties)
         id: pack_baseline
@@ -133,7 +127,7 @@ jobs:
       - name: Verify preview pack embeds AssemblyMetadata
         id: verify
         run: |
-          PREVIEW_NUPKG="$(ls .artifacts/private-preview/intent-cli.*.nupkg | head -n 1)"
+          PREVIEW_NUPKG="$(ls .artifacts/preview/intent-cli.*.nupkg | head -n 1)"
           SOURCE_NUPKG="$(ls .artifacts/source-baseline/intent-cli.*.nupkg | head -n 1)"
           echo "preview-nupkg=${PREVIEW_NUPKG}"
           echo "source-nupkg=${SOURCE_NUPKG}"
@@ -144,13 +138,13 @@ jobs:
 
       - name: Write artifact metadata
         run: |
-          mkdir -p .artifacts/private-preview
-          cat > .artifacts/private-preview/preview-metadata.json <<EOF
+          mkdir -p .artifacts/preview
+          cat > .artifacts/preview/preview-metadata.json <<EOF
           {
-            "channel": "private-preview",
+            "channel": "preview",
             "package_version": "${{ steps.meta.outputs.package_version }}",
+            "next_version": "${{ steps.meta.outputs.next_version }}",
             "build_timestamp": "${{ steps.meta.outputs.build_timestamp }}",
-            "expires_at": "${{ steps.meta.outputs.expires_at }}",
             "source_commit": "${{ github.sha }}",
             "source_short_sha": "${{ steps.meta.outputs.short_sha }}",
             "run_number": "${{ github.run_number }}",
@@ -158,17 +152,14 @@ jobs:
           }
           EOF
 
-      # G369: generate a SHA256 checksum sidecar so testers can verify
+      # G369: generate a SHA256 checksum sidecar so users can verify
       # the bundle they received matches what CI produced before
-      # `dotnet tool install` consumes it. The `<nupkg-filename>` form
-      # (relative path) keeps `shasum -a 256 -c` / `sha256sum -c` happy
-      # when the tester runs the check from inside the unzipped bundle
-      # directory.
+      # `dotnet tool install` consumes it.
       - name: Generate SHA256 checksum for .nupkg
         shell: bash
         run: |
           set -euo pipefail
-          cd .artifacts/private-preview
+          cd .artifacts/preview
           NUPKG_FILE="$(basename "$(ls intent-cli.*.nupkg | head -n 1)")"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "${NUPKG_FILE}" > "${NUPKG_FILE}.sha256"
@@ -178,46 +169,38 @@ jobs:
           echo "wrote ${NUPKG_FILE}.sha256:"
           cat "${NUPKG_FILE}.sha256"
 
-      # G369: generate an in-bundle INSTALL.md so a tester who received
-      # the zip via private email / file share has self-contained
-      # install / update / verify / uninstall steps without needing
-      # access to this repo's README. The template fills in this
-      # build's exact version, expiry, and commit so the commands a
-      # tester copy-pastes are correct as-is (no `<run_number>`
-      # placeholders to substitute).
+      # Generate an in-bundle INSTALL.md so a user who received the zip
+      # has self-contained install steps without needing access to this repo.
       - name: Generate install bundle README (INSTALL.md)
         shell: bash
         run: |
           set -euo pipefail
-          cd .artifacts/private-preview
+          cd .artifacts/preview
           NUPKG_FILE="$(basename "$(ls intent-cli.*.nupkg | head -n 1)")"
           PACKAGE_VERSION="${{ steps.meta.outputs.package_version }}"
           BUILD_TIMESTAMP="${{ steps.meta.outputs.build_timestamp }}"
-          EXPIRES_AT="${{ steps.meta.outputs.expires_at }}"
           SOURCE_COMMIT="${{ github.sha }}"
           SHORT_SHA="${{ steps.meta.outputs.short_sha }}"
           cat > INSTALL.md <<EOF
-          # intent-cli private-preview bundle
+          # intent-cli preview bundle
 
           - **Package version**: \`${PACKAGE_VERSION}\`
           - **Built (UTC)**: \`${BUILD_TIMESTAMP}\`
-          - **Expires (UTC)**: \`${EXPIRES_AT}\` (14 days after build; refresh
-            from a newer workflow run when this passes)
           - **Source commit**: \`${SOURCE_COMMIT}\` (short: \`${SHORT_SHA}\`)
-          - **Channel**: \`private-preview\`
+          - **Channel**: \`preview\`
 
-          This bundle is a self-contained private-preview drop of the
+          This bundle is a self-contained OSS preview drop of the
           \`intent-cli\` .NET global tool. No PAT, source checkout, or
-          public NuGet feed is required to install it -- only a
+          public NuGet feed is required to install it — only a
           compatible .NET SDK / runtime and the files in this folder.
 
           ## Bundle contents
 
           | File | Purpose |
           | --- | --- |
-          | \`${NUPKG_FILE}\` | The signed-into-place NuGet package consumed by \`dotnet tool install\`. |
+          | \`${NUPKG_FILE}\` | The NuGet package consumed by \`dotnet tool install\`. |
           | \`${NUPKG_FILE}.sha256\` | SHA-256 checksum; verify before installing. |
-          | \`preview-metadata.json\` | Machine-readable build provenance (channel, version, build/expiry timestamps, commit, CI run identifiers). |
+          | \`preview-metadata.json\` | Machine-readable build provenance (channel, version, build timestamp, commit, CI run identifiers). |
           | \`INSTALL.md\` | This file. |
 
           ## 1. Verify the download
@@ -231,8 +214,7 @@ jobs:
           sha256sum -c "${NUPKG_FILE}.sha256"
           \`\`\`
 
-          Both forms print \`${NUPKG_FILE}: OK\` on success. Do not
-          install if verification fails.
+          Both forms print \`${NUPKG_FILE}: OK\` on success.
 
           ## 2. Install (fresh)
 
@@ -241,20 +223,12 @@ jobs:
             --version ${PACKAGE_VERSION} intent-cli
           \`\`\`
 
-          \`--add-source .\` tells \`dotnet tool install\` to look for
-          \`intent-cli\` in the current folder instead of a NuGet feed.
-
           ## 3. Update (replace a previous preview)
-
-          Drop the new bundle in a folder, then:
 
           \`\`\`bash
           dotnet tool update --global --add-source . \\
             --version ${PACKAGE_VERSION} intent-cli
           \`\`\`
-
-          \`update\` is the right command even when moving forward by a
-          single CI run.
 
           ## 4. Verify the install
 
@@ -266,63 +240,43 @@ jobs:
 
           \`\`\`text
           intent-cli ${PACKAGE_VERSION}-${SHORT_SHA}-G<unit>
-          channel=private-preview built=${BUILD_TIMESTAMP} expires=${EXPIRES_AT} commit=${SOURCE_COMMIT}
+          channel=preview built=${BUILD_TIMESTAMP} commit=${SOURCE_COMMIT}
           \`\`\`
-
-          The \`channel=private-preview\` trailer is your confirmation
-          that the embedded preview metadata loaded successfully. If
-          the trailer is missing, the wrong package was installed.
 
           ## 5. Uninstall
 
           \`\`\`bash
           dotnet tool uninstall --global intent-cli
           \`\`\`
-
-          ## Expiry behaviour
-
-          When the wall clock passes \`expires=${EXPIRES_AT}\`, the
-          installed tool refuses to run and exits with code \`78\`
-          (G368 private-preview expiry gate). Refresh by installing a
-          newer bundle following step 3 above. Local source builds
-          (\`dotnet pack\` without the CI properties) carry no expiry
-          trailer and are not affected.
           EOF
           echo "wrote INSTALL.md (${PACKAGE_VERSION})"
 
       # G371: the preview package upload stays fail-closed — it only
-      # runs when every prior phase succeeded, so a failed source-test
-      # or verification run can never publish a broken bundle.
+      # runs when every prior phase succeeded.
       - name: Upload preview artifact
         id: upload
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: intent-cli-private-preview-${{ steps.meta.outputs.package_version }}
-          path: .artifacts/private-preview/**
-          retention-days: 14
+          name: intent-cli-preview-${{ steps.meta.outputs.package_version }}
+          path: .artifacts/preview/**
+          retention-days: 30
           if-no-files-found: error
 
-      # G371: preserve test result / diagnostic artifacts on EVERY run
-      # (always()), so a failed run keeps the TRX files for triage
-      # without manual log scraping. This never uploads the preview
-      # package — only diagnostics — and tolerates a missing results
-      # dir (e.g. a restore/build failure before tests ran).
+      # G371: preserve test result / diagnostic artifacts on EVERY run.
       - name: Upload diagnostic artifacts (test results)
         id: upload_diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: private-preview-pack-diagnostics-${{ steps.meta.outputs.package_version }}
+          name: preview-pack-diagnostics-${{ steps.meta.outputs.package_version }}
           path: |
             .artifacts/test-results/**
             **/*.trx
           retention-days: 14
           if-no-files-found: ignore
 
-      # G371: classify which phase failed into the run's job summary so
-      # operators can immediately tell a source-test failure apart from
-      # a packaging / upload failure.
+      # G371: classify which phase failed into the run's job summary.
       - name: Write failure summary
         if: failure()
         shell: bash
@@ -339,35 +293,30 @@ jobs:
           set -euo pipefail
           phase="unknown"
           detail="See the step logs above for the failing command."
-          # Real-phase checks come first so that, e.g., a test failure
-          # that ALSO trips the always()-gated diagnostic upload still
-          # reports the test failure as the root cause. The diagnostic
-          # upload check is last and only wins when every other phase
-          # succeeded/skipped (G371 reviewer follow-up).
           if [ "${OUTCOME_RESTORE}" = "failure" ] || [ "${OUTCOME_BUILD}" = "failure" ]; then
             phase="restore/build"
             detail="Dependency restore or compilation failed before any packaging ran. No package was produced."
           elif [ "${OUTCOME_TEST}" = "failure" ]; then
             phase="source contract tests"
-            detail="Source contract tests failed. This is a TEST failure, NOT a packaging failure: no preview package was produced or uploaded. Download the \`private-preview-pack-diagnostics-*\` artifact for the TRX test results."
+            detail="Source contract tests failed. No preview package was produced or uploaded. Download the \`preview-pack-diagnostics-*\` artifact for the TRX test results."
           elif [ "${OUTCOME_PACK_PREVIEW}" = "failure" ]; then
-            phase="private-preview pack"
-            detail="dotnet pack of the private-preview .nupkg failed after tests passed."
+            phase="preview pack"
+            detail="dotnet pack of the preview .nupkg failed after tests passed."
           elif [ "${OUTCOME_PACK_BASELINE}" = "failure" ]; then
             phase="source baseline pack"
             detail="dotnet pack of the source baseline .nupkg failed."
           elif [ "${OUTCOME_VERIFY}" = "failure" ]; then
             phase="metadata verification"
-            detail="The PreviewArtifactVerify metadata check failed; the produced package may be missing PrivatePreview AssemblyMetadata, or the source baseline unexpectedly carried it."
+            detail="The PreviewArtifactVerify metadata check failed; the produced package may be missing Preview* AssemblyMetadata, or the source baseline unexpectedly carried them."
           elif [ "${OUTCOME_UPLOAD}" = "failure" ]; then
             phase="artifact upload (preview package)"
             detail="Packaging and verification succeeded, but uploading the preview package artifact failed."
           elif [ "${OUTCOME_UPLOAD_DIAGNOSTICS}" = "failure" ]; then
             phase="artifact upload (diagnostics)"
-            detail="All build/test/pack/verify phases succeeded (the preview package may have uploaded), but uploading the diagnostic test-results artifact failed."
+            detail="All build/test/pack/verify phases succeeded, but uploading the diagnostic test-results artifact failed."
           fi
           {
-            echo "## private-preview-pack FAILED"
+            echo "## preview-pack FAILED"
             echo ""
             echo "- **Failing phase**: \`${phase}\`"
             echo "- ${detail}"
@@ -376,28 +325,27 @@ jobs:
             echo "| --- | --- |"
             echo "| restore/build | ${OUTCOME_RESTORE} / ${OUTCOME_BUILD} |"
             echo "| source contract tests | ${OUTCOME_TEST} |"
-            echo "| private-preview pack | ${OUTCOME_PACK_PREVIEW} |"
+            echo "| preview pack | ${OUTCOME_PACK_PREVIEW} |"
             echo "| source baseline pack | ${OUTCOME_PACK_BASELINE} |"
             echo "| metadata verification | ${OUTCOME_VERIFY} |"
             echo "| artifact upload (preview package) | ${OUTCOME_UPLOAD} |"
             echo "| artifact upload (diagnostics) | ${OUTCOME_UPLOAD_DIAGNOSTICS} |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      # G371: on success, summarize the produced bundle so the run page
-      # shows what was published without opening the artifact.
+      # G371: on success, summarize the produced bundle.
       - name: Write success summary
         if: success()
         shell: bash
         run: |
           set -euo pipefail
-          cd .artifacts/private-preview
+          cd .artifacts/preview
           NUPKG_FILE="$(basename "$(ls intent-cli.*.nupkg | head -n 1)")"
           {
-            echo "## private-preview-pack succeeded"
+            echo "## preview-pack succeeded"
             echo ""
-            echo "- **Failing phase**: none — all phases (restore/build, source contract tests, private-preview pack, source baseline pack, metadata verification, artifact upload) passed."
+            echo "- **Failing phase**: none — all phases passed."
             echo "- **Package**: \`${NUPKG_FILE}\`"
             echo "- **Version**: \`${{ steps.meta.outputs.package_version }}\`"
-            echo "- **Expires (UTC)**: \`${{ steps.meta.outputs.expires_at }}\`"
-            echo "- Uploaded as artifact \`intent-cli-private-preview-${{ steps.meta.outputs.package_version }}\` (nupkg + .sha256 + preview-metadata.json + INSTALL.md)."
+            echo "- **Channel**: \`preview\` (no expiry)"
+            echo "- Uploaded as artifact \`intent-cli-preview-${{ steps.meta.outputs.package_version }}\` (nupkg + .sha256 + preview-metadata.json + INSTALL.md)."
           } >> "${GITHUB_STEP_SUMMARY}"
