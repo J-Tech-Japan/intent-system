@@ -23,9 +23,10 @@ internal static class GuideIntentWorkSetupCommand
     private const string KindClarification = "clarification";
     private const string KindIntentShape = "intent-shape";
     private const string KindTreeLayout = "tree-layout";
+    private const string KindRestructure = "restructure";
 
     private const string UsageLine =
-        "Usage: intent-cli guide intent-work setup --kind <domain-organize|next-slice|packet-preload|clarification|intent-shape|tree-layout> "
+        "Usage: intent-cli guide intent-work setup --kind <domain-organize|next-slice|packet-preload|clarification|intent-shape|tree-layout|restructure> "
         + "--domain <domain> --target-repo <owner/repo> [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -69,13 +70,14 @@ internal static class GuideIntentWorkSetupCommand
             KindClarification => BuildClarification(domain!, targetRepo!),
             KindIntentShape => BuildIntentShape(domain!, targetRepo!),
             KindTreeLayout => BuildTreeLayout(domain!, targetRepo!),
+            KindRestructure => BuildRestructure(domain!, targetRepo!),
             _ => null
         };
 
         if (result is null)
         {
             writer.WriteLine(
-                $"--kind must be '{KindDomainOrganize}', '{KindNextSlice}', '{KindPacketPreload}', '{KindClarification}', '{KindIntentShape}', or '{KindTreeLayout}' (got '{kind}').");
+                $"--kind must be '{KindDomainOrganize}', '{KindNextSlice}', '{KindPacketPreload}', '{KindClarification}', '{KindIntentShape}', '{KindTreeLayout}', or '{KindRestructure}' (got '{kind}').");
             writer.WriteLine(UsageLine);
             return 1;
         }
@@ -537,6 +539,118 @@ Hard rules:
         };
     }
 
+    private static GuideIntentWorkSetupResult BuildRestructure(string domain, string targetRepo)
+    {
+        var prompt =
+$@"Design-AI-assisted flat-to-tree restructuring workflow for domain `{domain}` in `{targetRepo}`.
+
+## Roles and responsibilities
+
+| Actor | Responsibility |
+|---|---|
+| **intent-cli** | Deterministic analysis, proposed moves, reference maps, linting, validation, safety checks. Does NOT make semantic grouping decisions. |
+| **Host/design AI + operator** | Semantic grouping decisions, content reorganization, writing/moving content, committing the result for review. |
+
+## Step 1 — Analyze the flat domain (read-only)
+
+```bash
+intent-cli intent analyze-tree --domain {domain} --format markdown
+```
+
+Review the proposed restructuring plan and migration reference map. The plan shows:
+- Flat files analyzed
+- Suggested category destinations for each H2/H3 heading
+- Detected references: markdown links, heading anchors, execution-unit IDs, packet paths, GitHub issue/PR URLs
+
+## Step 2 — Run lint before restructuring
+
+```bash
+intent-cli intent lint-layout --domain {domain} --format markdown
+```
+
+Note all LARGE-FLAT-FILE, MISSING-MANIFEST, and BROKEN-RELATIVE-LINK warnings.
+
+## Step 3 — Design AI reorganizes with operator
+
+Using the analysis plan as input, the host/design AI (with operator supervision) should:
+1. Decide final category groupings for each heading/section (intent-cli suggestions are a starting point, not binding).
+2. Create tree-v1 folder structure if not already done: `intent-cli intent init-tree --domain {domain} --target-repo {targetRepo} --write`
+3. Add feature folders as needed: `intent-cli intent add-feature --domain {domain} --name <feature> --write`
+4. Move or copy content blocks from flat files into the suggested destinations.
+5. Update all markdown links and heading anchors to resolve correctly.
+6. Preserve original references: packet paths, GitHub issue/PR URLs, execution-unit IDs (e.g. G123) must remain findable.
+7. Keep a `.restructure-backup/` copy of original flat files (or rely on `--write` backup mode).
+
+## Step 4 — Optional: generate backup + stub files
+
+```bash
+intent-cli intent analyze-tree --domain {domain} --write
+```
+
+This creates:
+- `.restructure-backup/` copies of flat files (non-destructive)
+- Destination stub files with placeholders for content to be filled in
+
+## Step 5 — Lint after restructuring
+
+```bash
+intent-cli intent lint-layout --domain {domain} --format markdown
+```
+
+Verify:
+- BROKEN-RELATIVE-LINK count has not increased
+- MISSING-FEATURES-INDEX and MISSING-FEATURE-OVERVIEW resolved
+- No LARGE-FLAT-FILE warnings remain for moved files
+
+## Step 6 — Commit for review
+
+Commit the restructure as a normal reviewable change. The commit message should reference:
+- Source flat files reorganized
+- Categories created
+- Reference map: old heading paths → new tree paths
+- Verification: no source meaning lost, links updated, manifest/index updated, packet/GitHub references preserved
+
+Review checklist:
+- [ ] All original headings are traceable to a destination file
+- [ ] Markdown links updated and resolve correctly
+- [ ] Execution-unit IDs and GitHub URLs still present
+- [ ] manifest.yaml and features/index.md updated
+- [ ] Original flat files backed up or removed with confirmation
+
+Hard rules:
+- intent-cli owns analysis, safety checks, linting, and validation only.
+- Semantic grouping belongs to host/design AI + operator, not intent-cli.
+- The restructure result MUST be committed as a normal change and reviewed before merging.
+- Do not delete original flat files without backup or operator confirmation.
+- Do not publish GitHub issues in this wake.";
+
+        return new GuideIntentWorkSetupResult
+        {
+            Kind = KindRestructure,
+            Domain = domain,
+            TargetRepo = targetRepo,
+            Prompt = prompt,
+            FirstCalls = new[]
+            {
+                "intent-cli guide model --format json",
+                "intent-cli guide onboarding --format json",
+                "intent-cli guide commands list --format json",
+                "intent-cli automation summary --format json",
+                $"intent-cli intent analyze-tree --domain {domain} --format markdown",
+                $"intent-cli intent lint-layout --domain {domain} --format markdown"
+            },
+            ForbiddenSources = new[]
+            {
+                "intents/rules/**",
+                "local skill files",
+                "copied prompt files"
+            },
+            ClarificationFormat = "background, question, options, pros/cons, and recommendation",
+            IssuePublishBoundary = "Do not publish a GitHub issue in this wake. Restructuring is a host-side structural step.",
+            WorktreeFriendly = "The prompt names the parent host repo worktree root as cwd and references domain/target-repo from arguments; no operator-specific paths are hard-coded."
+        };
+    }
+
     private static void WriteMarkdown(TextWriter writer, GuideIntentWorkSetupResult result)
     {
         writer.WriteLine($"# Guide intent-work setup — {result.Kind}");
@@ -685,6 +799,7 @@ Hard rules:
         writer.WriteLine($"- {KindClarification}   (--domain, --target-repo required)");
         writer.WriteLine($"- {KindIntentShape}     (--domain, --target-repo required)");
         writer.WriteLine($"- {KindTreeLayout}      (--domain, --target-repo required)");
+        writer.WriteLine($"- {KindRestructure}    (--domain, --target-repo required)");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()

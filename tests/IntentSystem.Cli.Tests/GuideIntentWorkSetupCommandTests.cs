@@ -697,6 +697,100 @@ public sealed class GuideIntentWorkSetupCommandTests
         Assert.Contains("tree-layout", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // ──────────────────────────────────────────────
+    // G405: restructure kind
+    // ──────────────────────────────────────────────
+
+    /// <summary>
+    /// G405: restructure kind must emit a prompt describing the design-AI-assisted workflow.
+    /// </summary>
+    [Fact]
+    public void Execute_RestructureKind_EmitsDesignAiWorkflowPrompt()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "restructure", "--domain", "auth", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var json = writer.ToString();
+        var result = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+        Assert.Equal("restructure", result.GetProperty("kind").GetString());
+    }
+
+    /// <summary>
+    /// G405: restructure prompt must mention intent-cli owns analysis / guardrails,
+    /// and host/design AI owns semantic grouping.
+    /// </summary>
+    [Fact]
+    public void Execute_RestructureKind_PromptStatesIntentCliOwnsAnalysis()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "restructure", "--domain", "auth", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        var result = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(writer.ToString());
+        var prompt = result.GetProperty("prompt").GetString() ?? string.Empty;
+        Assert.Contains("intent-cli", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("analysis", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("semantic", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G405: restructure prompt must include the analyze-tree and lint-layout commands.
+    /// </summary>
+    [Fact]
+    public void Execute_RestructureKind_PromptIncludesAnalyzeTreeAndLintLayoutCommands()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "restructure", "--domain", "auth", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        var result = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json: writer.ToString());
+        var prompt = result.GetProperty("prompt").GetString() ?? string.Empty;
+        Assert.Contains("analyze-tree", prompt, StringComparison.Ordinal);
+        Assert.Contains("lint-layout", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G405: restructure prompt must state that result is committed for review.
+    /// </summary>
+    [Fact]
+    public void Execute_RestructureKind_PromptInstructsCommitForReview()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "restructure", "--domain", "auth", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        var result = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(writer.ToString());
+        var prompt = result.GetProperty("prompt").GetString() ?? string.Empty;
+        Assert.Contains("commit", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("review", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G405: restructure kind must appear in the help output.
+    /// </summary>
+    [Fact]
+    public void Execute_Help_IncludesRestructureKind()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--help"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("restructure", writer.ToString(), StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
