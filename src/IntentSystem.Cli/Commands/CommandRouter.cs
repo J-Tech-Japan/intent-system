@@ -316,6 +316,8 @@ internal static class CommandRouter
                 ["init"] = IntentInitCommand.Execute,
                 ["init-tree"] = IntentInitTreeCommand.Execute,
                 ["add-feature"] = IntentAddFeatureCommand.Execute,
+                ["analyze-tree"] = IntentAnalyzeTreeCommand.Execute,
+                ["lint-layout"] = IntentLintLayoutCommand.Execute,
                 ["status"] = IntentStatusCommand.Execute,
                 ["search"] = IntentSearchCommand.Execute,
                 ["explain"] = IntentExplainCommand.Execute,
