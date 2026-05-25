@@ -11,11 +11,12 @@ public sealed class VersionCommandTests : IDisposable
     {
         VersionCommand.OverrideVersionString = null;
         VersionCommand.OverridePrivatePreviewMetadata = null;
-        // G367: the binary embedded into this test process might carry
-        // AssemblyMetadata("PrivatePreviewChannel") when the CI pack
-        // workflow built it. Tests that pin the single-line `--version`
-        // contract must opt out so a CI run does not accidentally trip
-        // them by appending the metadata trailer.
+        VersionCommand.OverridePreviewBuildMetadata = null;
+        // G367/G401: the binary embedded into this test process might carry
+        // AssemblyMetadata("PreviewChannel" or "PrivatePreviewChannel") when
+        // the CI pack workflow built it. Tests that pin the single-line
+        // `--version` contract must opt out so a CI run does not accidentally
+        // trip them by appending the metadata trailer.
         VersionCommand.SuppressPrivatePreviewTrailer = true;
     }
 
@@ -23,6 +24,7 @@ public sealed class VersionCommandTests : IDisposable
     {
         VersionCommand.OverrideVersionString = null;
         VersionCommand.OverridePrivatePreviewMetadata = null;
+        VersionCommand.OverridePreviewBuildMetadata = null;
         VersionCommand.SuppressPrivatePreviewTrailer = false;
     }
 
@@ -234,6 +236,7 @@ public sealed class VersionCommandTests : IDisposable
         // single-line for ordinary contributors.
         VersionCommand.SuppressPrivatePreviewTrailer = false;
         VersionCommand.OverridePrivatePreviewMetadata = null;
+        VersionCommand.OverridePreviewBuildMetadata = null;
         using var writer = new StringWriter();
 
         var exitCode = VersionCommand.Execute(writer);
@@ -241,12 +244,67 @@ public sealed class VersionCommandTests : IDisposable
         Assert.Equal(0, exitCode);
         var lines = writer.ToString()
             .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-        // The running test assembly has no private-preview metadata
-        // baked in unless the CI workflow set the MSBuild properties,
-        // which the suppression seam above accounts for. Without the
+        // The running test assembly has no preview metadata baked in
+        // unless the CI workflow set the MSBuild properties. Without an
         // override the trailer must be absent.
         Assert.Single(lines);
         Assert.StartsWith("intent-cli ", lines[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_WithPreviewBuildMetadataOverride_AppendsOssPreviewTrailer()
+    {
+        // G401: a CI-built OSS preview package surfaces a channel=preview
+        // trailer (no expires= field, no private-preview).
+        VersionCommand.SuppressPrivatePreviewTrailer = false;
+        VersionCommand.OverridePreviewBuildMetadata = new PreviewBuildMetadata
+        {
+            Channel = PreviewBuildMetadata.ChannelPreview,
+            BuildTimestamp = new DateTimeOffset(2026, 5, 24, 10, 0, 0, TimeSpan.Zero),
+            SourceCommit = "abc1234",
+        };
+        using var writer = new StringWriter();
+
+        var exitCode = VersionCommand.Execute(writer);
+
+        Assert.Equal(0, exitCode);
+        var lines = writer.ToString()
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.StartsWith("intent-cli ", lines[0], StringComparison.Ordinal);
+        Assert.Equal("channel=preview built=2026-05-24T10:00:00Z commit=abc1234", lines[1]);
+        // G401 acceptance: must not contain private-preview or expires.
+        Assert.DoesNotContain("private-preview", lines[1], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("expires", lines[1], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_OssPreviewTakesPrecedenceOverPrivatePreview()
+    {
+        // G401: when both overrides are set (should not happen in production,
+        // but verifies the priority contract), OSS preview wins.
+        VersionCommand.SuppressPrivatePreviewTrailer = false;
+        VersionCommand.OverridePreviewBuildMetadata = new PreviewBuildMetadata
+        {
+            Channel = PreviewBuildMetadata.ChannelPreview,
+            BuildTimestamp = new DateTimeOffset(2026, 5, 24, 10, 0, 0, TimeSpan.Zero),
+            SourceCommit = "abc1234",
+        };
+        VersionCommand.OverridePrivatePreviewMetadata = new PrivatePreviewMetadata
+        {
+            Channel = PrivatePreviewMetadata.ChannelPrivatePreview,
+            BuildTimestamp = new DateTimeOffset(2026, 5, 19, 12, 34, 56, TimeSpan.Zero),
+            ExpiresAt = new DateTimeOffset(2026, 6, 2, 12, 34, 56, TimeSpan.Zero),
+            SourceCommit = "oldhash",
+        };
+        using var writer = new StringWriter();
+
+        var exitCode = VersionCommand.Execute(writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("channel=preview", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-preview", output, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

@@ -107,28 +107,30 @@
   </Target>
 
   <!--
-    G367: when the CI private-preview pack workflow runs on a merge to
-    main it sets four MSBuild properties so the produced .nupkg
-    embeds machine-readable preview metadata as
-    AssemblyMetadata("PrivatePreview...") attributes. A normal local
-    `dotnet build` / `dotnet pack` leaves the properties blank, which
-    skips this ItemGroup entirely and produces a source build with no
-    expiry contract, matching the issue acceptance that source builds
-    remain unrestricted. CI passes:
-      PrivatePreviewChannel=private-preview
-      PrivatePreviewBuildTimestamp=ISO-8601 UTC build timestamp
-      PrivatePreviewExpiresAt=ISO-8601 UTC build timestamp plus 14 days
-      PrivatePreviewSourceCommit=full git SHA
-    The runtime side reads the resulting attributes in
-    IntentSystem.Cli.Infrastructure.PrivatePreviewMetadata so
-    `intent-cli version` can surface the channel and expiry to the
-    private tester without depending on host state.
+    G401: when the CI preview-pack workflow runs on a merge to main it
+    sets three MSBuild properties so the produced .nupkg embeds
+    machine-readable OSS preview metadata as AssemblyMetadata("Preview...")
+    attributes. A normal local `dotnet build` / `dotnet pack` leaves the
+    properties blank, which skips this ItemGroup entirely and produces a
+    source build with no preview marker — source builds remain unrestricted.
+    CI passes:
+      PreviewChannel=preview
+      PreviewBuildTimestamp=ISO-8601 UTC build timestamp
+      PreviewSourceCommit=full git SHA
+    Unlike the old private-preview scheme (G367) there is no expiry:
+    OSS preview artifacts are always runnable. The runtime side reads the
+    resulting attributes in IntentSystem.Cli.Infrastructure.PreviewBuildMetadata
+    so "intent-cli version" can surface the channel without host state.
+
+    G367 backward compat: the old PrivatePreviewChannel/PrivatePreviewBuildTimestamp/
+    PrivatePreviewExpiresAt/PrivatePreviewSourceCommit properties are no longer
+    set by CI; the private-preview expiry gate (G368) remains in place so any
+    still-installed old private-preview binaries continue to expire correctly.
   -->
-  <ItemGroup Condition="'$(PrivatePreviewChannel)' != ''">
-    <AssemblyMetadata Include="PrivatePreviewChannel" Value="$(PrivatePreviewChannel)" />
-    <AssemblyMetadata Include="PrivatePreviewBuildTimestamp" Value="$(PrivatePreviewBuildTimestamp)" />
-    <AssemblyMetadata Include="PrivatePreviewExpiresAt" Value="$(PrivatePreviewExpiresAt)" />
-    <AssemblyMetadata Include="PrivatePreviewSourceCommit" Value="$(PrivatePreviewSourceCommit)" />
+  <ItemGroup Condition="'$(PreviewChannel)' != ''">
+    <AssemblyMetadata Include="PreviewChannel" Value="$(PreviewChannel)" />
+    <AssemblyMetadata Include="PreviewBuildTimestamp" Value="$(PreviewBuildTimestamp)" />
+    <AssemblyMetadata Include="PreviewSourceCommit" Value="$(PreviewSourceCommit)" />
   </ItemGroup>
 
   <ItemGroup>

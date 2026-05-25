@@ -3,13 +3,17 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 
-// G367: post-pack verifier that opens the .nupkg, locates the
-// IntentSystem.Cli.dll inside its tools folder, and walks the assembly's
-// AssemblyMetadata entries to confirm the four `PrivatePreview*` keys
+// G401 (updated from G367): post-pack verifier that opens the .nupkg,
+// locates the IntentSystem.Cli.dll inside its tools folder, and walks the
+// assembly's AssemblyMetadata entries to confirm the three `Preview*` keys
 // are present (preview pack) or absent (source pack). Using
 // System.Reflection.Metadata lets the verifier inspect a packaged .NET
 // 10 assembly without resolving its project references, so a .NET 10
 // runtime is the only host requirement.
+//
+// G401 changes from G367: the expected keys are now `PreviewChannel`,
+// `PreviewBuildTimestamp`, `PreviewSourceCommit` (three keys, no expiry).
+// The channel value must be "preview" (not "private-preview").
 //
 // Usage:
 //   PreviewArtifactVerify <nupkg-path> --expect-preview
@@ -72,12 +76,12 @@ using var peReader = new PEReader(memory);
 var metadataReader = peReader.GetMetadataReader();
 var entries = ReadAssemblyMetadata(metadataReader);
 
+// G401: OSS preview keys (no expiry field).
 var previewKeys = new[]
 {
-    "PrivatePreviewChannel",
-    "PrivatePreviewBuildTimestamp",
-    "PrivatePreviewExpiresAt",
-    "PrivatePreviewSourceCommit",
+    "PreviewChannel",
+    "PreviewBuildTimestamp",
+    "PreviewSourceCommit",
 };
 
 var present = entries
@@ -98,25 +102,25 @@ if (expectPreview)
     if (present.Count != previewKeys.Length
         || present.Values.Any(string.IsNullOrWhiteSpace))
     {
-        Console.Error.WriteLine("FAIL: expected all four PrivatePreview* AssemblyMetadata entries to be present and non-empty.");
+        Console.Error.WriteLine("FAIL: expected all three Preview* AssemblyMetadata entries to be present and non-empty.");
         return ExitMismatch;
     }
-    if (!string.Equals(present["PrivatePreviewChannel"], "private-preview", StringComparison.Ordinal))
+    if (!string.Equals(present["PreviewChannel"], "preview", StringComparison.Ordinal))
     {
-        Console.Error.WriteLine($"FAIL: PrivatePreviewChannel must equal 'private-preview', got '{present["PrivatePreviewChannel"]}'.");
+        Console.Error.WriteLine($"FAIL: PreviewChannel must equal 'preview', got '{present["PreviewChannel"]}'.");
         return ExitMismatch;
     }
-    Console.WriteLine("OK: preview pack carries all required PrivatePreview* AssemblyMetadata entries.");
+    Console.WriteLine("OK: preview pack carries all required Preview* AssemblyMetadata entries.");
     return ExitOk;
 }
 else
 {
     if (present.Count != 0)
     {
-        Console.Error.WriteLine($"FAIL: source pack must NOT carry PrivatePreview* AssemblyMetadata entries, but found {present.Count}.");
+        Console.Error.WriteLine($"FAIL: source pack must NOT carry Preview* AssemblyMetadata entries, but found {present.Count}.");
         return ExitMismatch;
     }
-    Console.WriteLine("OK: source pack carries no PrivatePreview* AssemblyMetadata entries.");
+    Console.WriteLine("OK: source pack carries no Preview* AssemblyMetadata entries.");
     return ExitOk;
 }
 

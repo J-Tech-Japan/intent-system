@@ -66,10 +66,13 @@ jobs:
           else
             RAW="${{ github.event.inputs.version }}"
           fi
-          # Strip a leading v from tags like v0.2.0.
+          # Strip a leading v from tags like v0.3.0.
           VERSION="${RAW#v}"
           if [ -z "${VERSION}" ]; then
-            VERSION="0.2.0-dryrun.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+            # G401: derive the dry-run default from the repository version
+            # policy so the dry-run version stays in sync with nextVersion.
+            NEXT_VERSION="$(python3 -c "import json; data=json.load(open('eng/version.json')); print(data['nextVersion'])" 2>/dev/null || echo "0.3.0")"
+            VERSION="${NEXT_VERSION}-dryrun.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           fi
           echo "version=${VERSION}" | tee -a "${GITHUB_OUTPUT}"
 
@@ -85,7 +88,7 @@ jobs:
             --logger "trx;LogFileName=test-results.trx" \
             --results-directory "${GITHUB_WORKSPACE}/.artifacts/test-results"
 
-      - name: Pack release .nupkg (no preview/expiry properties)
+      - name: Pack release .nupkg (no preview properties; stable tag-driven version)
         run: |
           dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
             --configuration Release \
