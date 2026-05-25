@@ -359,6 +359,32 @@ internal static class IntentAddFeatureCommand
     private static string ResolvePath(string hostRepoRoot, string relativePath) =>
         Path.Combine(hostRepoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
 
+    /// <summary>
+    /// Validates that a value is a safe slug: letters, digits, hyphens, and underscores only.
+    /// Mirrors the slug guard in <see cref="IntentInitCommand"/> and <see cref="IntentInitTreeCommand"/>
+    /// to prevent path-traversal when domain/feature values are interpolated into file system paths.
+    /// </summary>
+    internal static bool IsValidSlug(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            var isValid = char.IsLetterOrDigit(character)
+                || character == '-'
+                || character == '_';
+            if (!isValid)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static bool TryParseArguments(
         string[] args,
         out IntentAddFeatureRequest request,
@@ -422,9 +448,21 @@ internal static class IntentAddFeatureCommand
             return false;
         }
 
+        if (!IsValidSlug(domain))
+        {
+            error = $"intent add-feature '--domain' value '{domain}' must be a slug (letters, digits, '-', '_').";
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(featureName))
         {
             error = "intent add-feature requires '--name <feature-slug>'.";
+            return false;
+        }
+
+        if (!IsValidSlug(featureName))
+        {
+            error = $"intent add-feature '--name' value '{featureName}' must be a slug (letters, digits, '-', '_').";
             return false;
         }
 

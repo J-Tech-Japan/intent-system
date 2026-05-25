@@ -311,6 +311,92 @@ public sealed class IntentAddFeatureCommandTests
     }
 
     // ──────────────────────────────────────────────
+    // Slug validation — path-traversal safety
+    // ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("feature/../../other")]
+    [InlineData("auth domain")]
+    [InlineData("auth!")]
+    [InlineData("../etc/passwd")]
+    public void Execute_InvalidDomainSlug_ReturnsExitCode1_AndCreatesNoFiles(string badDomain)
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentAddFeatureCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", badDomain, "--name", "login", "--write"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("slug", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Directory.Exists(Path.Combine(hostRoot, "intents")));
+    }
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("feature/../../other")]
+    [InlineData("auth domain")]
+    [InlineData("login!")]
+    public void Execute_InvalidFeatureNameSlug_ReturnsExitCode1_AndCreatesNoFiles(string badName)
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentAddFeatureCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--name", badName, "--write"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("slug", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Directory.Exists(Path.Combine(hostRoot, "intents")));
+    }
+
+    [Theory]
+    [InlineData("auth", "login")]
+    [InlineData("my-domain", "user-auth")]
+    [InlineData("domain_v2", "feature_1")]
+    public void Execute_ValidSlugs_ReturnsZero(string domain, string featureName)
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentAddFeatureCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", domain, "--name", featureName, "--write"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+    }
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("feature/../../other")]
+    [InlineData("auth domain")]
+    [InlineData("auth!")]
+    public void IsValidSlug_RejectsUnsafeValues(string value)
+    {
+        Assert.False(IntentAddFeatureCommand.IsValidSlug(value));
+    }
+
+    [Theory]
+    [InlineData("auth")]
+    [InlineData("my-feature")]
+    [InlineData("feature_v2")]
+    public void IsValidSlug_AcceptsSafeValues(string value)
+    {
+        Assert.True(IntentAddFeatureCommand.IsValidSlug(value));
+    }
+
+    // ──────────────────────────────────────────────
     // Child worktree refusal
     // ──────────────────────────────────────────────
 

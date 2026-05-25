@@ -252,6 +252,72 @@ public sealed class IntentInitTreeCommandTests
         Assert.Equal(1, exitCode);
     }
 
+    // ──────────────────────────────────────────────
+    // Slug validation — path-traversal safety
+    // ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("feature/../../other")]
+    [InlineData("auth domain")]
+    [InlineData("auth!")]
+    [InlineData("../etc/passwd")]
+    public void Execute_InvalidDomainSlug_ReturnsExitCode1_AndCreatesNoFiles(string badDomain)
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentInitTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", badDomain, "--write"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("slug", output, StringComparison.OrdinalIgnoreCase);
+        // No files must have been created
+        Assert.False(Directory.Exists(Path.Combine(hostRoot, "intents")));
+    }
+
+    [Theory]
+    [InlineData("auth")]
+    [InlineData("my-domain")]
+    [InlineData("domain_v2")]
+    [InlineData("Auth123")]
+    public void Execute_ValidDomainSlug_ReturnsZero(string goodDomain)
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentInitTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", goodDomain, "--write"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+    }
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("feature/../../other")]
+    [InlineData("auth domain")]
+    [InlineData("auth!")]
+    public void IsValidSlug_RejectsUnsafeValues(string value)
+    {
+        Assert.False(IntentInitTreeCommand.IsValidSlug(value));
+    }
+
+    [Theory]
+    [InlineData("auth")]
+    [InlineData("my-domain")]
+    [InlineData("domain_v2")]
+    public void IsValidSlug_AcceptsSafeValues(string value)
+    {
+        Assert.True(IntentInitTreeCommand.IsValidSlug(value));
+    }
+
     [Fact]
     public void Execute_Help_ReturnsZeroAndUsage()
     {

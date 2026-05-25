@@ -429,6 +429,12 @@ internal static class IntentInitTreeCommand
             return false;
         }
 
+        if (!IsValidSlug(domain))
+        {
+            error = $"intent init-tree '--domain' value '{domain}' must be a slug (letters, digits, '-', '_').";
+            return false;
+        }
+
         request = new IntentInitTreeRequest
         {
             Domain = domain!,
@@ -437,6 +443,32 @@ internal static class IntentInitTreeCommand
             Write = write,
             Format = format
         };
+        return true;
+    }
+
+    /// <summary>
+    /// Validates that a value is a safe slug: letters, digits, hyphens, and underscores only.
+    /// This mirrors the slug guard in <see cref="IntentInitCommand"/> and prevents path-traversal
+    /// attacks when domain or feature values are interpolated into file system paths.
+    /// </summary>
+    internal static bool IsValidSlug(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            var isValid = char.IsLetterOrDigit(character)
+                || character == '-'
+                || character == '_';
+            if (!isValid)
+            {
+                return false;
+            }
+        }
+
         return true;
     }
 
