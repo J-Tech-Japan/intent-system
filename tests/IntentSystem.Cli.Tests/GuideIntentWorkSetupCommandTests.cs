@@ -532,6 +532,171 @@ public sealed class GuideIntentWorkSetupCommandTests
         Assert.Contains("recommendation", format, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── G403 tree-layout ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_TreeLayoutMarkdown_EmitsPasteReadyPromptAndForbiddenSources()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "tree-layout", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("# Guide intent-work setup — tree-layout", output, StringComparison.Ordinal);
+        Assert.Contains("domain: intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("target repo: J-Tech-Japan/intent-system", output, StringComparison.Ordinal);
+        Assert.Contains("## First-call sequence", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli guide model --format json", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli intent status --domain intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli intent search --domain intent-cli", output, StringComparison.Ordinal);
+        Assert.Contains("## Forbidden rule sources", output, StringComparison.Ordinal);
+        Assert.Contains("intents/rules/**", output, StringComparison.Ordinal);
+        Assert.Contains("## Prompt", output, StringComparison.Ordinal);
+        Assert.Contains("tree-v1", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_TreeLayoutJson_EmitsStructuredFieldsWithTreeV1Content()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "tree-layout", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("tree-layout", root.GetProperty("kind").GetString());
+        Assert.Equal("intent-cli", root.GetProperty("domain").GetString());
+        Assert.Equal("J-Tech-Japan/intent-system", root.GetProperty("target_repo").GetString());
+        Assert.Equal(6, root.GetProperty("first_calls").GetArrayLength());
+        Assert.True(root.GetProperty("forbidden_sources").GetArrayLength() >= 3);
+        var prompt = root.GetProperty("prompt").GetString()!;
+        Assert.Contains("tree-v1", prompt, StringComparison.Ordinal);
+        Assert.Contains("manifest.yaml", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G403: the tree-layout prompt must describe the recommended categories
+    /// so agents know where to place mission/vision, features, technology, etc.
+    /// </summary>
+    [Fact]
+    public void Execute_TreeLayoutPrompt_ContainsAllRecommendedCategories()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "tree-layout", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("identity", prompt, StringComparison.Ordinal);
+        Assert.Contains("product", prompt, StringComparison.Ordinal);
+        Assert.Contains("features", prompt, StringComparison.Ordinal);
+        Assert.Contains("technology", prompt, StringComparison.Ordinal);
+        Assert.Contains("operations", prompt, StringComparison.Ordinal);
+        Assert.Contains("decisions", prompt, StringComparison.Ordinal);
+        Assert.Contains("clarifications", prompt, StringComparison.Ordinal);
+        Assert.Contains("packets", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G403: the tree-layout prompt must include cross-linking rules so agents
+    /// know to link feature pages, decisions, clarifications, and packets.
+    /// </summary>
+    [Fact]
+    public void Execute_TreeLayoutPrompt_ContainsCrossLinkingRules()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "tree-layout", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Cross-linking", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GitHub issue", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G403: the tree-layout prompt must encode the preference for tree placement
+    /// over appending content to flat files.
+    /// </summary>
+    [Fact]
+    public void Execute_TreeLayoutPrompt_PrefersTreePlacementOverFlatFile()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "tree-layout", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Prefer tree placement", prompt, StringComparison.Ordinal);
+        Assert.Contains("flat file", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G403: the tree-layout prompt must state that existing flat-file domains
+    /// do not require immediate migration.
+    /// </summary>
+    [Fact]
+    public void Execute_TreeLayoutPrompt_ExistingDomainsNotForcedToMigrate()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "tree-layout", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Existing flat-file domains do not require immediate migration", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G403: the tree-layout prompt must ban GitHub issue publication in the
+    /// same wake as tree-layout authoring.
+    /// </summary>
+    [Fact]
+    public void Execute_TreeLayoutPrompt_BansIssuPublicationInSameWake()
+    {
+        using var writer = new StringWriter();
+        GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--kind", "tree-layout", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Do not publish a GitHub issue in this wake", prompt, StringComparison.Ordinal);
+        // issue_publish_boundary must also encode the restriction
+        Assert.Contains("issue publication follows", document.RootElement.GetProperty("issue_publish_boundary").GetString()!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G403: tree-layout must appear in the help output alongside the other kinds.
+    /// </summary>
+    [Fact]
+    public void Execute_Help_IncludesTreeLayoutKind()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideIntentWorkSetupCommand.Execute(
+            CreateContext(),
+            ["--help"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("tree-layout", writer.ToString(), StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext

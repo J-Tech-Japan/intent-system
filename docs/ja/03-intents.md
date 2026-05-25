@@ -29,6 +29,22 @@ intent-cli intent status --format json
 - child implementation agent は intent tree（`intents/**`）や host metadata を
   **読まない** — これは host/design の領域。
 
+## Intent ナレッジツリーレイアウト (tree-v1)
+
+新規ドメインは、単一のフラットファイルではなく発見しやすいフォルダに intent を整理することを推奨します。
+**tree-v1** レイアウトは推奨カテゴリ（`identity`、`product`、`features`、`technology`、`operations`、`decisions`、`clarifications`、`packets`、`links`）と、カスタムフォルダ名およびプロジェクトタイプをサポートするマニフェストスキーマを定義します。
+
+```bash
+# ツリーレイアウト作成の現在のガイダンスを取得
+intent-cli guide intent-work setup \
+  --kind tree-layout \
+  --domain <name> \
+  --target-repo <owner/repo> \
+  --format markdown
+```
+
+完全な仕様、マニフェストスキーマ、プロジェクトタイプの例、相互リンクのルールは [Intent ナレッジツリーレイアウト (tree-v1)](03a-intent-tree-layout.md) を参照してください。
+
 ## 次へ
 
 [packet 作成と issue 公開](04-packets-issues.md)。
