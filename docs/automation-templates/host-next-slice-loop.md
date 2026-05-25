@@ -159,6 +159,27 @@ Dry-run the same command without `--write` to capture the planned
 Raw `gh issue edit` label mutation is not the normal path for this
 installed transition.
 
+## Publish ownership rule (non-interactive)
+
+When the next-slice conditions are met — the candidate is
+`issue-cut-ready`, the WIP cap is clear, no Hard Clarification
+exists, and metadata safety gates pass — publish the issue through
+`intent-cli`. Do **not** ask the operator whether to proceed or
+which publisher should own the step.
+
+If a concurrent or prior publisher is observed in the host state
+(e.g. another automation session recently published a candidate),
+that observation is **context only**. It does not change the
+publish decision. Proceed via `intent-cli issue publish-reviewed`
+(or the equivalent host surface) without asking the operator.
+
+Publish ownership follows `intent-cli` as the single source of
+truth. Asking "should I publish?" or "who should own this?" is
+always wrong when the conditions above are satisfied. The only
+valid reason to stop is a genuine contract incompleteness or a
+hard metadata-safety failure — not the presence of a concurrent
+publisher note.
+
 ## What this template forbids
 
 - Authoring implementation changes. Next-slice planning describes
@@ -176,6 +197,9 @@ installed transition.
 - Asking `intent-cli` to launch an AI provider.
 - Mass-editing parent-host packet content. Use `metadata update`
   only with an explicit supported mode.
+- Asking the operator whether to publish or who should own the
+  publish step when next-slice conditions are already satisfied.
+  Concurrent publisher state is informational only.
 
 ## Boundary against the coding-automation loop
 

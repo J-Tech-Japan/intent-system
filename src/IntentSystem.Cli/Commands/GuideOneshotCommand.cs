@@ -249,8 +249,8 @@ Workflow:
 8. If review requires repair: leave an actionable PR comment and move the PR to the request-update state according to installed/runbook-supported transition behavior.
 9. If no PR is available, still run Stage 2 next-slice once.
 10. Do not cut a new child issue while any open child issue/PR with `intent-target` remains.
-11. If next-slice is clear and WIP cap is empty, create/publish exactly one child issue and preload future packets only when they satisfy the Child Issue Contract.
-12. If clarification is required, stop and report: background, question, options, pros/cons, and recommendation.
+11. If next-slice is clear and WIP cap is empty, create/publish exactly one child issue and preload future packets only when they satisfy the Child Issue Contract. If a concurrent or prior publisher is observed in the host state (e.g. another automation has recently published), treat that as informational context only — do NOT ask the operator whether to proceed or who should own the publish step. Publish ownership follows `intent-cli` as the single source of truth; it is never a question for the operator chat.
+12. If clarification is required, stop and report: background, question, options, pros/cons, and recommendation. Publish ownership disambiguation is NOT a valid clarification reason; proceed through `intent-cli` even when a concurrent publisher is observed.
 13. Commit and push parent host changes directly to `main` per `AGENTS.md`. Do not create a PR.
 
 Final report must include:
@@ -293,8 +293,8 @@ Workflow:
 8. If review requires repair: leave an actionable PR comment and move the PR to the request-update state according to installed/runbook-supported transition behavior.
 9. If no PR is available, still run Stage 2 next-slice once.
 10. Do not cut a new child issue while any open child issue/PR with `intent-target` remains.
-11. If next-slice is clear and WIP cap is empty, create/publish exactly one child issue and preload future packets only when they satisfy the Child Issue Contract.
-12. If clarification is required, stop and report: background, question, options, pros/cons, and recommendation.
+11. If next-slice is clear and WIP cap is empty, create/publish exactly one child issue and preload future packets only when they satisfy the Child Issue Contract. If a concurrent or prior publisher is observed in the host state (e.g. another automation has recently published), treat that as informational context only — do NOT ask the operator whether to proceed or who should own the publish step. Publish ownership follows `intent-cli` as the single source of truth; it is never a question for the operator chat.
+12. If clarification is required, stop and report: background, question, options, pros/cons, and recommendation. Publish ownership disambiguation is NOT a valid clarification reason; proceed through `intent-cli` even when a concurrent publisher is observed.
 13. Commit and push parent host changes directly to `main` per `AGENTS.md`. Do not create a PR.
 
 Final report must include:
