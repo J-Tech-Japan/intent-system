@@ -19,7 +19,7 @@
 #      checksums) to the triggering GitHub Release.
 #
 # Non-SDK users install by downloading a release binary; SDK users run
-# `dotnet tool install -g intent-cli`. See README.md "Install".
+# `dotnet tool install -g JTechJapan.IntentSystem.Cli`. See README.md "Install".
 name: release
 
 on:
