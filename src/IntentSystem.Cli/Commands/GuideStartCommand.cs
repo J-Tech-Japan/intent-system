@@ -74,8 +74,9 @@ internal static class GuideStartCommand
                     + "`intent-cli worker` command owns that transition.",
                 "Detailed, drift-prone rules stay in intent-cli guidance output — not copied into repo files or "
                     + "agent prompts. Re-ask the guide command when you resume work; it reflects the installed CLI.",
-                "intent-cli never launches Claude, Codex, or any AI provider, and `intent-cli run` is not the "
-                    + "production orchestrator.",
+                "You can ask an AI agent (Claude, Codex, Copilot, etc.) to run intent-cli commands on your behalf "
+                    + "— intent-cli is deterministic, provider-free tooling the agent invokes internally; it does not "
+                    + "launch AI providers itself. `intent-cli run` is not the production orchestrator.",
             },
             WorkflowPhases = new[]
             {
@@ -159,8 +160,10 @@ internal static class GuideStartCommand
                     "Stand up a new host project / domain with `intent-cli guide workflow task init-host --format json`; "
                     + "for the zero-local-rules first-call sequence run `intent-cli guide onboarding --format json`.",
                 AskIntentCliFirst =
-                    "After install, ask intent-cli — not memory or copied prompts — for each next step: re-run "
-                    + "`intent-cli guide start` whenever you resume, and use the per-phase guide command it points at.",
+                    "After install, ask intent-cli for each next step — either by pasting a design-thread prompt "
+                    + "to an AI agent (Claude, Codex, Copilot, etc.) that runs intent-cli internally, or by running "
+                    + "`intent-cli guide start` yourself. Either way: re-ask the per-phase guide command when you resume; "
+                    + "it reflects the installed CLI, not memory or copied prompts.",
             },
             AskIntentCliTemplates = new[]
             {

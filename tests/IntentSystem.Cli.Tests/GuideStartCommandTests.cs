@@ -223,6 +223,46 @@ public sealed class GuideStartCommandTests
     }
 
     [Fact]
+    public void Execute_Json_GuideFirstRuleStatesUserCanAskAiAgentToRunIntentCli()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideStartCommand.Execute(CreateContext(), ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var rules = document.RootElement.GetProperty("guide_first_rule").EnumerateArray()
+            .Select(r => r.GetString()!)
+            .ToArray();
+
+        // G418 AC#4: help/guide wording says user can ask an AI agent to run intent-cli,
+        // while intent-cli remains deterministic tooling and does not launch providers.
+        var designThreadRule = rules.FirstOrDefault(r =>
+            r.Contains("AI agent", StringComparison.OrdinalIgnoreCase) &&
+            r.Contains("intent-cli", StringComparison.Ordinal));
+        Assert.NotNull(designThreadRule);
+        Assert.Contains("does not launch AI providers", designThreadRule, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("deterministic", designThreadRule, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_Json_OnboardingGuidanceDescribesDesignThreadPath()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideStartCommand.Execute(CreateContext(), ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var askFirst = document.RootElement
+            .GetProperty("onboarding_guidance")
+            .GetProperty("ask_intent_cli_first")
+            .GetString()!;
+
+        // G418 AC#4: onboarding says user can use an AI agent that runs intent-cli internally.
+        Assert.Contains("AI agent", askFirst, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-cli guide start", askFirst, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownArgument_ReturnsUsageError()
     {
         using var writer = new StringWriter();
