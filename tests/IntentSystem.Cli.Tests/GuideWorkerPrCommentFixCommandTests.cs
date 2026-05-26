@@ -401,6 +401,93 @@ public sealed class GuideWorkerPrCommentFixCommandTests
         Assert.True(occurrences >= 2, $"Expected ≥2 occurrences of '{search}' in prompt, found {occurrences}.");
     }
 
+    // ── G408 repeated-stall recovery ─────────────────────────────────────────
+
+    /// <summary>
+    /// G408: the pr-comment-fix prompt must contain repeated-stall recovery guidance
+    /// that triggers after two or more consecutive wakes on the same PR without progress.
+    /// </summary>
+    [Fact]
+    public void Execute_Json_PromptContainsRepeatedStallRecoverySection()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Repeated-stall recovery", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("two or more consecutive", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-cli guide model", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-cli guide onboarding", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-cli guide commands list", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-cli worker pr-comment-preflight", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G408: recovery must identify safe child-loop-owned repairs vs host/operator stops.
+    /// </summary>
+    [Fact]
+    public void Execute_Json_PromptDistinguishesSafeRepairFromOperatorStop()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("child-selector-label-gap", prompt, StringComparison.Ordinal);
+        Assert.Contains("operator stop", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G408: the JSON output must include a structured repeated_stall_recovery field.
+    /// </summary>
+    [Fact]
+    public void Execute_Json_EmitsRepeatedStallRecoveryStructuredField()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.TryGetProperty("repeated_stall_recovery", out var recovery));
+        Assert.False(string.IsNullOrWhiteSpace(recovery.GetProperty("trigger").GetString()));
+        Assert.True(recovery.GetProperty("re_read_guidance").GetArrayLength() >= 5);
+        Assert.Equal("child-selector-label-gap", recovery.GetProperty("safe_repair_category").GetString());
+        Assert.True(recovery.GetProperty("operator_stop_categories").GetArrayLength() >= 3);
+        Assert.Equal(1, recovery.GetProperty("max_repairs_per_cycle").GetInt32());
+    }
+
+    /// <summary>
+    /// G408: the markdown output must include a repeated-stall recovery section.
+    /// </summary>
+    [Fact]
+    public void Execute_Markdown_ContainsRepeatedStallRecoverySection()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkerPrCommentFixCommand.Execute(
+            CreateContext(),
+            ["--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("## Repeated-stall recovery", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("child-selector-label-gap", output, StringComparison.Ordinal);
+        Assert.Contains("max repairs per cycle: 1", output, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
