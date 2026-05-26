@@ -329,7 +329,7 @@ uploads a self-contained install bundle as a workflow artifact named
 | `INSTALL.md` | Per-build install / update / verify / uninstall guide with this build's exact version and commit pre-filled. |
 
 The package version pattern is `<nextVersion>-preview.<run_number>.<run_attempt>`
-(e.g. `0.3.0-preview.42.1`), where `nextVersion` comes from `eng/version.json`.
+(e.g. `0.3.1-preview.42.1`), where `nextVersion` comes from `eng/version.json`.
 Every CI run produces a distinct version. No PAT, source checkout, or public
 NuGet feed is required — only a compatible .NET SDK / runtime and the unzipped
 bundle. **OSS preview packages carry no expiry; they remain runnable indefinitely.**
@@ -356,7 +356,7 @@ dotnet tool uninstall --global JTechJapan.IntentSystem.Cli
 The installed binary exposes the preview metadata via `intent-cli --version`:
 
 ```text
-intent-cli 0.3.0-preview.42.1-<short-sha>-G<unit>
+intent-cli 0.3.1-preview.42.1-<short-sha>-G<unit>
 channel=preview built=<iso-utc> commit=<full-sha>
 ```
 
@@ -372,29 +372,29 @@ The repository version policy lives in `eng/version.json`:
 
 ```json
 {
-  "stableVersion": "0.2.0",
-  "nextVersion": "0.3.0"
+  "stableVersion": "0.3.0",
+  "nextVersion": "0.3.1"
 }
 ```
 
 | Stage | Version form | How it is derived |
 | --- | --- | --- |
-| Main CI preview | `0.3.0-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.3.0-rc.N` | Tag `v0.3.0-rc.N` triggers release workflow |
-| Stable release | `0.3.0` | Tag `v0.3.0` triggers release workflow |
+| Main CI preview | `0.3.1-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.3.1-rc.N` | Tag `v0.3.1-rc.N` triggers release workflow |
+| Stable release | `0.3.1` | Tag `v0.3.1` triggers release workflow |
 | Post-release main builds | `0.4.0-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.4.0` |
 
-**After releasing `v0.3.0`**, bump both fields in `eng/version.json`:
+**After releasing `v0.3.1`**, bump both fields in `eng/version.json`:
 
 ```json
 {
-  "stableVersion": "0.3.0",
+  "stableVersion": "0.3.1",
   "nextVersion": "0.4.0"
 }
 ```
 
 This ensures the next main-branch CI build immediately produces
-`0.4.0-preview.<run>.<attempt>` rather than continuing to emit `0.3.0-preview`
+`0.4.0-preview.<run>.<attempt>` rather than continuing to emit `0.3.1-preview`
 (which would collide with the stable release version).
 
 ---
