@@ -211,7 +211,7 @@ cd "$HOST_ROOT"
 export CHILD_INTENT_SYSTEM="$HOST_ROOT/submodules/intent-system"
 
 git -C "$CHILD_INTENT_SYSTEM" rev-parse --show-toplevel
-"$CHILD_INTENT_SYSTEM/ops/refresh-host-local-intent-cli.sh" "$HOST_ROOT"
+"$CHILD_INTENT_SYSTEM/eng/refresh-host-local-intent-cli.sh" "$HOST_ROOT"
 ```
 
 This refresh is worktree-safe when run from the parent host root: it

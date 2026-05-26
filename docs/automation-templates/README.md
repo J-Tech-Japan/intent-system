@@ -128,7 +128,7 @@ cd "$HOST_ROOT"
 export CHILD_INTENT_SYSTEM="$HOST_ROOT/submodules/intent-system"
 
 git -C "$CHILD_INTENT_SYSTEM" rev-parse --show-toplevel
-"$CHILD_INTENT_SYSTEM/ops/refresh-host-local-intent-cli.sh" "$HOST_ROOT"
+"$CHILD_INTENT_SYSTEM/eng/refresh-host-local-intent-cli.sh" "$HOST_ROOT"
 ```
 
 Run the refresh from the parent host root, not from an arbitrary child
