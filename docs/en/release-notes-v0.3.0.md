@@ -52,10 +52,10 @@ of GitHub, plus the first public NuGet and self-contained binary distribution.
 
 ```bash
 # New install
-dotnet tool install -g intent-cli
+dotnet tool install -g JTechJapan.IntentSystem.Cli
 
 # Upgrade from an older version
-dotnet tool update -g intent-cli
+dotnet tool update -g JTechJapan.IntentSystem.Cli
 ```
 
 Requires **.NET 10 SDK** (`dotnet --version` → `10.x`).
@@ -135,7 +135,7 @@ Apache-2.0 — see [LICENSE](../../LICENSE) in the repository root.
 
 4. **Verify NuGet.org** (allow up to 15 minutes for indexing):
    ```bash
-   dotnet tool install -g intent-cli --version 0.3.0
+   dotnet tool install -g JTechJapan.IntentSystem.Cli --version 0.3.0
    intent-cli --version
    # Expected: 0.3.0
    ```

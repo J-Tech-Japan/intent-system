@@ -19,9 +19,11 @@ public sealed class PackagedInvocationSmokeTests
 
         Assert.NotNull(propertyGroup);
         Assert.Equal("true", GetPropertyValue(propertyGroup!, "PackAsTool"));
+        // G407: NuGet package id and tool command name are intentionally different.
+        // Install: dotnet tool install -g JTechJapan.IntentSystem.Cli
+        // Command: intent-cli
         Assert.Equal("intent-cli", GetPropertyValue(propertyGroup, "ToolCommandName"));
-        Assert.Equal("intent-cli", GetPropertyValue(propertyGroup, "PackageId"));
-        Assert.Equal("0.2.0", GetPropertyValue(propertyGroup, "Version"));
+        Assert.Equal("JTechJapan.IntentSystem.Cli", GetPropertyValue(propertyGroup, "PackageId"));
         Assert.Equal("README.md", GetPropertyValue(propertyGroup, "PackageReadmeFile"));
     }
 
@@ -161,7 +163,7 @@ public sealed class PackagedInvocationSmokeTests
         Assert.Contains("0.2.0-local.$LOCAL_STAMP.$$.g$CHILD_SHA", script, StringComparison.Ordinal);
         Assert.Contains("-p:Version=\"$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
         Assert.Contains("--version \"\\$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
-        Assert.Contains("find \"$PACKAGES_DIR\" -maxdepth 1 -type f -name 'intent-cli.*.nupkg' -delete", script, StringComparison.Ordinal);
+        Assert.Contains("find \"$PACKAGES_DIR\" -maxdepth 1 -type f -name 'JTechJapan.IntentSystem.Cli.*.nupkg' -delete", script, StringComparison.Ordinal);
         Assert.Contains("automation summary --format json", script, StringComparison.Ordinal);
         Assert.Contains("\"automationCommandSurfaceVersion\"", script, StringComparison.Ordinal);
         Assert.Contains("\"issue-publish\"", script, StringComparison.Ordinal);

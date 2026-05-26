@@ -8,10 +8,10 @@
 
 ```bash
 # インストール
-dotnet tool install -g intent-cli
+dotnet tool install -g JTechJapan.IntentSystem.Cli
 
 # その場でアップグレード
-dotnet tool update -g intent-cli
+dotnet tool update -g JTechJapan.IntentSystem.Cli
 
 # 確認
 intent-cli --version

@@ -6,12 +6,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackAsTool>true</PackAsTool>
+    <!--
+      G407: The NuGet package id is JTechJapan.IntentSystem.Cli (namespaced
+      to avoid collision with generic ids on NuGet.org). The installed command
+      remains intent-cli so existing users are unaffected.
+      Install:  dotnet tool install -g JTechJapan.IntentSystem.Cli
+      Command:  intent-cli ...
+    -->
     <ToolCommandName>intent-cli</ToolCommandName>
-    <PackageId>intent-cli</PackageId>
+    <PackageId>JTechJapan.IntentSystem.Cli</PackageId>
     <Version>0.2.0</Version>
     <Authors>J-Tech-Japan</Authors>
-    <Description>Intent System CLI packaged as a .NET tool.</Description>
-    <PackageTags>intent-cli;dotnet-tool</PackageTags>
+    <Description>Intent System CLI — deterministic support tooling for intent-driven development on GitHub. Install: dotnet tool install -g JTechJapan.IntentSystem.Cli. Command: intent-cli.</Description>
+    <PackageTags>intent-cli;dotnet-tool;intent-system</PackageTags>
     <RepositoryUrl>https://github.com/J-Tech-Japan/intent-system</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <!--

@@ -9,10 +9,10 @@ and Linux:
 
 ```bash
 # Install
-dotnet tool install -g intent-cli
+dotnet tool install -g JTechJapan.IntentSystem.Cli
 
 # Upgrade in place
-dotnet tool update -g intent-cli
+dotnet tool update -g JTechJapan.IntentSystem.Cli
 
 # Verify
 intent-cli --version

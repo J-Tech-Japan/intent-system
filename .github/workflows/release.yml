@@ -100,7 +100,8 @@ jobs:
         run: |
           set -euo pipefail
           cd .artifacts/release
-          for f in intent-cli.*.nupkg; do
+          # G407: package id changed to JTechJapan.IntentSystem.Cli
+          for f in JTechJapan.IntentSystem.Cli.*.nupkg; do
             sha256sum "${f}" > "${f}.sha256"
           done
           cat ./*.sha256
@@ -117,8 +118,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ github.event.release.tag_name }}" \
-            .artifacts/release/intent-cli.*.nupkg \
-            .artifacts/release/intent-cli.*.nupkg.sha256 \
+            .artifacts/release/JTechJapan.IntentSystem.Cli.*.nupkg \
+            .artifacts/release/JTechJapan.IntentSystem.Cli.*.nupkg.sha256 \
             --repo "${{ github.repository }}" --clobber
 
       - name: Publish to NuGet.org (guarded; skips on forks / missing secret)
@@ -133,7 +134,7 @@ jobs:
             echo "Artifacts were still built and attached to the release."
             exit 0
           fi
-          dotnet nuget push .artifacts/release/intent-cli.*.nupkg \
+          dotnet nuget push .artifacts/release/JTechJapan.IntentSystem.Cli.*.nupkg \
             --api-key "${NUGET_API_KEY}" \
             --source "https://api.nuget.org/v3/index.json" \
             --skip-duplicate
