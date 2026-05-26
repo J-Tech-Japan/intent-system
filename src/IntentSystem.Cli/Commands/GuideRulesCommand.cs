@@ -41,7 +41,7 @@ internal static class GuideRulesCommand
             SourceReferences = new[]
             {
                 "intents/rules/label-driven-automation.md",
-                "ops/intent-automation-label-state-machine.md",
+                "docs/automation-templates/intent-automation-label-state-machine.md",
                 "intents/rules/intent-target-publish-boundary.md"
             },
             InstalledCommandHints = new[]

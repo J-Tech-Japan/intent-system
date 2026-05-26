@@ -114,7 +114,7 @@ If the smoke path reports `stale-host-cli`, refresh the host-local
 `.intent-cli/bin/intent-cli` wrapper from the parent host root using the
 current `submodules/intent-system` checkout. The supported refresh is:
 run
-`$HOST_ROOT/submodules/intent-system/ops/refresh-host-local-intent-cli.sh "$HOST_ROOT"`.
+`$HOST_ROOT/submodules/intent-system/eng/refresh-host-local-intent-cli.sh "$HOST_ROOT"`.
 The script packs the current child checkout with a unique local version,
 replaces only `$HOST_ROOT/.intent-cli/bin/intent-cli`, and verifies the
 expected `automationCommandSurfaceVersion` together with the required
