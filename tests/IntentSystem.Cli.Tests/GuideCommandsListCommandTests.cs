@@ -56,11 +56,11 @@ public sealed class GuideCommandsListCommandTests
         Assert.Equal("support", byName["issue"].GetProperty("classification").GetString());
         Assert.Equal("support", byName["queue"].GetProperty("classification").GetString());
 
-        Assert.Equal("advanced", byName["run"].GetProperty("classification").GetString());
+        Assert.Equal("legacy", byName["run"].GetProperty("classification").GetString());
         Assert.Equal("advanced-runtime", byName["run"].GetProperty("recommended_caller").GetString());
 
-        Assert.Equal("experimental", byName["intake"].GetProperty("classification").GetString());
-        Assert.Equal("experimental", byName["bug"].GetProperty("classification").GetString());
+        Assert.Equal("legacy", byName["intake"].GetProperty("classification").GetString());
+        Assert.Equal("legacy", byName["bug"].GetProperty("classification").GetString());
     }
 
     [Fact]
@@ -152,8 +152,7 @@ public sealed class GuideCommandsListCommandTests
 
         Assert.Contains("primary", classifications);
         Assert.Contains("support", classifications);
-        Assert.Contains("advanced", classifications);
-        Assert.Contains("experimental", classifications);
+        Assert.Contains("legacy", classifications);
     }
 
     private static CliContext CreateContext()

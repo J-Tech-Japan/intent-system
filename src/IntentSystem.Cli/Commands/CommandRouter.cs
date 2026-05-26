@@ -108,9 +108,6 @@ internal static class CommandRouter
             },
             ["review"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
-                ["run"] = ReviewRunCommand.Execute,
-                ["comment"] = ReviewCommentCommand.Execute,
-                ["accept"] = ReviewAcceptCommand.Execute,
                 ["closeout-plan"] = ReviewCloseoutPlanCommand.Execute,
                 // G374: host-side structured worker-signal collection / convergence.
                 ["collect-signals"] = ReviewCollectSignalsCommand.Execute,
@@ -580,9 +577,9 @@ internal static class CommandRouter
         writer.WriteLine();
 
         writer.WriteLine("Per-group help:");
-        writer.WriteLine("- `intent-cli <group> --help` (e.g. `intent-cli guide --help`, `intent-cli metadata --help`, `intent-cli migrate --help`) — list the group's subcommands.");
+        writer.WriteLine("- `intent-cli <group> --help` (e.g. `intent-cli guide --help`, `intent-cli worker --help`) — list the group's subcommands.");
         writer.WriteLine("- `intent-cli guide help [--format markdown|json]` — external-user self-discovery surface with examples + workflow guide pointers.");
-        writer.WriteLine("- `intent-cli guide commands list [--format markdown|json]` — full catalog with primary/support/advanced/experimental classification.");
+        writer.WriteLine("- `intent-cli guide commands list [--format markdown|json]` — classified catalog (primary / support / legacy).");
 
         writer.WriteLine();
         writer.WriteLine("Automation commands:");
@@ -601,9 +598,9 @@ internal static class CommandRouter
         }
         else
         {
-            writer.WriteLine("Advanced / legacy surfaces (`run`, concept-intake `intake`, projection, bug-intent, tasking, safety, generate-from-current) are hidden from this chat-first view.");
-            writer.WriteLine("- `intent-cli --help --all` — show every command group, including advanced / legacy ones.");
-            writer.WriteLine("- `intent-cli run` is integration smoke / deterministic replay / local dogfooding only — NOT the implementation/review loop; do not route routine work through it.");
+            writer.WriteLine("Legacy and advanced surfaces are hidden from this chat-first view.");
+            writer.WriteLine("- `intent-cli --help --all` — show every command group including legacy ones.");
+            writer.WriteLine("- `intent-cli guide commands list` — classified catalog to see which surfaces are active vs. legacy.");
         }
     }
 
