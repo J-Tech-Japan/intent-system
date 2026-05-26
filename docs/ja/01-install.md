@@ -25,8 +25,8 @@ intent-cli --version
 から取得（ランタイム同梱）。使用前に `.sha256` を検証する。手順は
 [ルート README](../../README.md#install-without-a-net-sdk) を参照。
 
-**社内テスター**（`private-preview-pack` アーティファクト利用）は
-[ルート README の private-preview セクション](../../README.md#private-preview-install)
+**プレビューチャンネルユーザー**（`preview-pack` アーティファクト利用）は
+[ルート README のプレビューセクション](../../README.md#preview-install)
 を参照。
 
 ## 次へ
