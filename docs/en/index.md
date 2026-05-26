@@ -19,9 +19,8 @@ need to memorize or run its commands directly.
 2. Open a design thread in your AI agent.
 3. Paste a prompt such as:
 
-> Ask intent-cli what phase I'm in for `<owner>/<repo>` domain `<name>`.
-> Run `intent-cli guide start` and `intent-cli intent status`, then tell me
-> what I should decide next.
+> I want to work on `<owner>/<repo>` with intent-cli.
+> Ask intent-cli what phase I'm in and what I should decide next.
 
 The agent runs `intent-cli` internally and brings back questions or results.
 You focus on intent, priorities, and approval decisions — not on memorizing

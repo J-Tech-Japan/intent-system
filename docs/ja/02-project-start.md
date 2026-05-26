@@ -10,10 +10,7 @@
 AI agent（Claude、Codex、Copilot など）に貼り付けてください:
 
 > `<owner>/<repo>` の domain `<name>` のプロジェクトを開始または継続したいです。
-> host リポジトリのルートから `intent-cli guide start` と `intent-cli intent status`
-> を実行してください。現在のフェーズと、私が次に決断すべきことを教えてください。
-> label や metadata の変更は intent-cli の遷移を使い、ファイルを手編集したり
-> GitHub label を直接適用したりしないでください。
+> intent-cli に現在のフェーズと次に決断すべきことを聞いてください。
 
 ## agent が実行するコマンド（リファレンス）
 

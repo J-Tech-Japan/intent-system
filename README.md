@@ -55,14 +55,12 @@ repository and paste one of these prompts:
 **Start or continue a project:**
 
 > I want to work on `<owner>/<repo>` with intent-cli.
-> Please run `intent-cli guide start` and `intent-cli intent status`, then
-> tell me which phase we're in and what I should decide next.
+> Ask intent-cli what phase I'm in and what I should decide next.
 
 **Start an implementation loop:**
 
 > Set up a child implementation loop for `<owner>/<repo>`.
-> Run `intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>`
-> and follow the guidance.
+> Ask intent-cli for the next step.
 
 The agent runs `intent-cli` commands internally and brings back questions or
 results. You focus on intent, priorities, and approval decisions.

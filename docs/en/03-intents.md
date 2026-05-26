@@ -1,7 +1,6 @@
 # Organize & maintain intents
 
-> **Ask intent-cli first:** `intent-cli guide start` →
-> `intent-cli guide workflow task intent-interview --format json`. ← [docs index](index.md)
+> **Ask intent-cli first.** ← [docs index](index.md)
 
 **Host/design** work: capture and compile durable intent before cutting any
 slice.
@@ -19,9 +18,7 @@ intent-cli intent status --format json
 
 ## Ask-intent-cli prompt template
 
-> I'm organizing intents for domain `<name>`. Run `intent-cli guide start` then
-> the `intent-interview` workflow guide, and use `intent-cli interview …` to
-> record answers. Don't invent rules — ask intent-cli for current guidance.
+> I'm organizing intents for domain `<name>`. Ask intent-cli what I should do next.
 
 ## Metadata / label safety
 

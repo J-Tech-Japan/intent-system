@@ -11,10 +11,7 @@ questions or results.
 Paste this into your AI agent (Claude, Codex, Copilot, etc.):
 
 > I want to start or continue the project on `<owner>/<repo>`, domain `<name>`.
-> Please run `intent-cli guide start` and `intent-cli intent status` from the
-> host repo root. Tell me which phase I'm in and what decisions I need to make
-> next. Use intent-cli transitions for any label or metadata change — never
-> hand-edit files or apply GitHub labels directly.
+> Ask intent-cli what phase I'm in and what I should decide next.
 
 ## What the agent will run (reference)
 
