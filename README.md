@@ -99,9 +99,9 @@ Rules of thumb the docs and guidance enforce:
   --add-label`.
 - **Ask, don't read-and-guess.** Prefer `intent-cli guide ...` over reading
   local rule files; the guidance reflects the installed CLI's current contract.
-- **Never ask `intent-cli` to launch an AI provider**, and never call
-  `intent-cli run` as a production orchestrator (it is smoke/replay/dogfooding
-  tooling only — see [CLI command roles](#cli-command-roles)).
+- **Never ask `intent-cli` to launch an AI provider.** Drive work through
+  `intent-cli guide`, `worker`, and `automation` commands; these are the
+  supported chat-first workflow surfaces.
 
 ### 4. Start a project
 
@@ -295,13 +295,11 @@ companion to that loop, not a replacement.
 | `intent-cli worker next-action` / `claim` / `result-summary` / `complete` | Child implementation loop selector + bounded label transitions |
 | `intent-cli automation summary` | Provider-neutral label-driven automation contract emitter |
 | `intent-cli safety nested-provider-handoff` | Artifact-only nested-provider safety guard (never spawns providers) |
-| `intent-cli run …` | **Integration smoke, deterministic replay, and local dogfooding only** — not the primary production orchestrator |
 
 For ongoing production automation, drive work through the host-side
 review/next-slice loop and the provider-neutral label set described by
 `intent-cli automation summary`. For nested-provider handoff steps, use
-`intent-cli safety nested-provider-handoff` to emit a deterministic artifact
-instead of recursively launching providers from inside `run`.
+`intent-cli safety nested-provider-handoff` to emit a deterministic artifact.
 
 ---
 
