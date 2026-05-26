@@ -19,16 +19,12 @@ internal static class GuideCommandsListCommand
 
     private const string ClassificationPrimary = "primary";
     private const string ClassificationSupport = "support";
-    private const string ClassificationAdvanced = "advanced";
-    private const string ClassificationExperimental = "experimental";
-
     private const string MutabilityReadOnly = "read-only";
     private const string MutabilityMixed = "mixed";
 
     private const string CallerChatAgent = "chat-agent";
     private const string CallerImplementationLoop = "implementation-loop";
     private const string CallerHostLoop = "host-loop";
-    private const string CallerAdvancedRuntime = "advanced-runtime";
     private const string CallerOperator = "operator";
 
     private const string UsageLine =
@@ -98,7 +94,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerHostLoop,
-            Purpose = "Review-side surfaces: closeout-plan (read-only), run / comment / accept (older review surface)."
+            Purpose = "Review-side surfaces: closeout-plan (read-only), collect-signals / signal-handled (G374 worker-signal convergence)."
         },
         new CommandGroupEntry
         {
@@ -158,68 +154,12 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
-            Name = "tasking",
-            Classification = ClassificationExperimental,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Cross-thread tasking handoff bundles and task-packet helpers; experimental compared to the chat-first flow."
-        },
-        new CommandGroupEntry
-        {
             Name = "task",
             Classification = ClassificationSupport,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerOperator,
             Purpose = "G317 explicit one-shot task planners (issue-to-pr / review-pr / fix-pr-comments / publish-next-issue). Returns a bounded executable contract — preconditions, steps, label transitions, abort conditions — for controllers that already know the target. Read-only: never calls gh, never mutates state, never launches AI providers."
         },
-        new CommandGroupEntry
-        {
-            Name = "intake",
-            Classification = ClassificationExperimental,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Older concept-intake surface (init / concept / interview / compile / foldin / patch / apply / execution / advance / activate / issue / enqueue / autostart / launch / start). Prefer `guide collaborate` + `interview record-answer` for new flows."
-        },
-        new CommandGroupEntry
-        {
-            Name = "bug",
-            Classification = ClassificationExperimental,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Bug-intent CRUD (report / triage / start / repair). Not the primary collaboration path."
-        },
-        new CommandGroupEntry
-        {
-            Name = "projection",
-            Classification = ClassificationExperimental,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Projection generate / regenerate. Internal to specific tooling; not part of the chat-first product path."
-        },
-        new CommandGroupEntry
-        {
-            Name = "project",
-            Classification = ClassificationExperimental,
-            Mutability = MutabilityReadOnly,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Project status. Older surface predating `intent status`; retained for compatibility."
-        },
-        new CommandGroupEntry
-        {
-            Name = "safety",
-            Classification = ClassificationExperimental,
-            Mutability = MutabilityReadOnly,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Safety helpers (e.g. nested-provider-handoff). Used by advanced runtime, not the chat-first flow."
-        },
-        new CommandGroupEntry
-        {
-            Name = "run",
-            Classification = ClassificationAdvanced,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerAdvancedRuntime,
-            Purpose = "Integration smoke / deterministic replay / local dogfooding. Explicitly not the primary chat-first path; do not use from collaborative loops."
-        }
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -259,7 +199,7 @@ internal static class GuideCommandsListCommand
     {
         writer.WriteLine("# Guide commands — top-level groups");
         writer.WriteLine();
-        writer.WriteLine("Lifecycle classification: `primary` (chat-agent's first calls), `support` (used inside the same flow), `advanced` (optional runtime, not the chat-first path), `experimental` (older surfaces retained for compatibility).");
+        writer.WriteLine("Lifecycle classification: `primary` (chat-agent's first calls), `support` (used inside the same flow).");
         writer.WriteLine();
         writer.WriteLine("| group | classification | mutability | caller | purpose |");
         writer.WriteLine("|-------|----------------|------------|--------|---------|");

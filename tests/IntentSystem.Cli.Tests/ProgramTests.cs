@@ -183,29 +183,6 @@ public sealed class ProgramTests
         }
     }
 
-    [Fact]
-    public void Main_GivenIntakeInitCommandWithoutIntentCliRoot_BootstrapsCurrentDirectory()
-    {
-        lock (ProcessStateLock)
-        {
-            using var tempDirectory = new TemporaryDirectory();
-            var repoRoot = tempDirectory.CreateDirectory("repo");
-            var workRepoRoot = tempDirectory.CreateDirectory("work-repo");
-            using var consoleScope = new ConsoleScope();
-            using var currentDirectoryScope = new CurrentDirectoryScope(repoRoot);
-
-            var exitCode = Program.Main(
-                ["intake", "init", "billing", "--text", "Bootstrap billing intake.", "--work-repo-path", workRepoRoot]);
-
-            Assert.Equal(0, exitCode);
-            Assert.Contains("Intake init processed for domain 'billing'.", consoleScope.Out.ToString(), StringComparison.Ordinal);
-            Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "config.toml")));
-            Assert.True(File.Exists(Path.Combine(repoRoot, ".intent-cli", "intake", "billing.concept.yaml")));
-            Assert.True(File.Exists(Path.Combine(repoRoot, "intents", "billing", "README.md")));
-            Assert.Equal(string.Empty, consoleScope.Error.ToString());
-        }
-    }
-
     private sealed class CurrentDirectoryScope : IDisposable
     {
         private readonly string originalCurrentDirectory = Directory.GetCurrentDirectory();

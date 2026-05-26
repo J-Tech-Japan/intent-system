@@ -20,7 +20,7 @@ public sealed class GuideCommandsListCommandTests
         var output = writer.ToString();
         Assert.Contains("# Guide commands — top-level groups", output, StringComparison.Ordinal);
         Assert.Contains("| group | classification | mutability | caller | purpose |", output, StringComparison.Ordinal);
-        foreach (var group in new[] { "guide", "intent", "interview", "packet", "worker", "automation", "metadata", "review", "closeout", "issue", "queue", "intake", "bug", "run" })
+        foreach (var group in new[] { "guide", "intent", "interview", "packet", "worker", "automation", "metadata", "review", "closeout", "issue", "queue" })
         {
             Assert.Contains(group, output, StringComparison.Ordinal);
         }
@@ -38,7 +38,7 @@ public sealed class GuideCommandsListCommandTests
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var groups = document.RootElement.GetProperty("groups");
-        Assert.True(groups.GetArrayLength() >= 18);
+        Assert.True(groups.GetArrayLength() >= 11);
 
         var byName = groups.EnumerateArray()
             .ToDictionary(e => e.GetProperty("name").GetString()!, e => e);
@@ -56,11 +56,6 @@ public sealed class GuideCommandsListCommandTests
         Assert.Equal("support", byName["issue"].GetProperty("classification").GetString());
         Assert.Equal("support", byName["queue"].GetProperty("classification").GetString());
 
-        Assert.Equal("advanced", byName["run"].GetProperty("classification").GetString());
-        Assert.Equal("advanced-runtime", byName["run"].GetProperty("recommended_caller").GetString());
-
-        Assert.Equal("experimental", byName["intake"].GetProperty("classification").GetString());
-        Assert.Equal("experimental", byName["bug"].GetProperty("classification").GetString());
     }
 
     [Fact]
@@ -74,7 +69,7 @@ public sealed class GuideCommandsListCommandTests
 
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
-        Assert.True(document.RootElement.GetProperty("groups").GetArrayLength() >= 18);
+        Assert.True(document.RootElement.GetProperty("groups").GetArrayLength() >= 11);
     }
 
     [Fact]
@@ -152,8 +147,6 @@ public sealed class GuideCommandsListCommandTests
 
         Assert.Contains("primary", classifications);
         Assert.Contains("support", classifications);
-        Assert.Contains("advanced", classifications);
-        Assert.Contains("experimental", classifications);
     }
 
     private static CliContext CreateContext()

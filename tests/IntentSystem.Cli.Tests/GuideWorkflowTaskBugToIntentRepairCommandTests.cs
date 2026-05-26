@@ -263,7 +263,6 @@ public sealed class GuideWorkflowTaskBugToIntentRepairCommandTests
             // class is BugExecutionCommand.cs (renamed dispatcher,
             // kept class name).
             ("bug plan", "BugExecutionCommand.cs"),
-            ("bug intent-repair", "BugIntentRepairCommand.cs"),
             ("bug implementation-repair", "BugImplementationRepairCommand.cs"),
             ("packet draft", "PacketDraftCommand.cs"),
             ("issue draft", "IssueDraftCommand.cs"),
