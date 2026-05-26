@@ -26,8 +26,8 @@ not on your `PATH`, the install output prints the line to add.
 the runtime is bundled. Verify the `.sha256` sidecar before use. See the
 [root README](../../README.md#install-without-a-net-sdk) for the full steps.
 
-**Internal testers** consuming the `private-preview-pack` artifact: see the
-[root README private-preview section](../../README.md#private-preview-install).
+**Preview channel users** consuming the `preview-pack` artifact: see the
+[root README preview section](../../README.md#preview-install).
 
 ## Next
 
