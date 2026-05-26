@@ -18,9 +18,8 @@
 2. AI agent のデザインスレッドを開く。
 3. 次のようなプロンプトを貼り付ける:
 
-> `<owner>/<repo>` の domain `<name>` について、intent-cli に現在のフェーズを
-> 聞いてください。`intent-cli guide start` と `intent-cli intent status` を実行し、
-> 次に私が決断すべきことを教えてください。
+> `<owner>/<repo>` で intent-cli を使い始めたいです。
+> intent-cli に現在のフェーズと次に決断すべきことを聞いてください。
 
 agent が内部で `intent-cli` を実行し、質問や結果を返します。
 あなたは意図・優先度・承認の判断に集中するだけです。コマンドシーケンスを

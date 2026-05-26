@@ -1,8 +1,6 @@
 # packet 作成と issue 公開
 
-> **まず intent-cli に聞く:** `intent-cli guide start` →
-> `intent-cli guide workflow task packet-draft --format json` と
-> `… task issue-publish --format json`。 ← [ドキュメント索引](index.md)
+> **まず intent-cli に聞く。** ← [ドキュメント索引](index.md)
 
 **host/design** 作業。packet が正本ファイルを scaffold し、公開境界がレビュー済みの
 Standalone Child Issue Contract を GitHub issue にする。
@@ -20,8 +18,7 @@ intent-cli automation issue-publish --issue <n> --write --format json
 ## ask-intent-cli プロンプトテンプレート
 
 > packet `<id>` を作成し、その issue を `<owner>/<repo>` に公開する。
-> `intent-cli guide start` の後に `packet-draft` と `issue-publish` のワークフロー
-> ガイドを実行し、`intent-target` は公開/automation コマンド経由でのみ付与する。
+> intent-cli に次に行うべきことを聞いてください。
 
 ## metadata / label の安全境界
 

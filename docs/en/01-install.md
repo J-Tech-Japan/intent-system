@@ -1,7 +1,7 @@
 # Install
 
-> **Ask intent-cli first.** After installing, run `intent-cli guide start` before
-> doing any workflow work. ← [docs index](index.md)
+> **Ask intent-cli first.** After installing, ask intent-cli what to do next before
+> starting any workflow work. ← [docs index](index.md)
 
 The basic path is the .NET global tool from NuGet.org (requires a **.NET 10
 SDK**; check with `dotnet --version`). The same commands work on macOS, Windows,
@@ -32,4 +32,4 @@ the runtime is bundled. Verify the `.sha256` sidecar before use. See the
 ## Next
 
 Confirmed `intent-cli --version`? Continue to
-[Start a project](02-project-start.md) — but run `intent-cli guide start` first.
+[Start a project](02-project-start.md).

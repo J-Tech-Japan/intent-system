@@ -1,8 +1,6 @@
 # Create packets & publish issues
 
-> **Ask intent-cli first:** `intent-cli guide start` →
-> `intent-cli guide workflow task packet-draft --format json` and
-> `… task issue-publish --format json`. ← [docs index](index.md)
+> **Ask intent-cli first.** ← [docs index](index.md)
 
 **Host/design** work. A packet scaffolds the canonical files; the publish
 boundary turns a reviewed Standalone Child Issue Contract into a GitHub issue.
@@ -19,9 +17,8 @@ intent-cli automation issue-publish --issue <n> --write --format json
 
 ## Ask-intent-cli prompt template
 
-> I'm drafting packet `<id>` and publishing its issue to `<owner>/<repo>`. Run
-> `intent-cli guide start`, then the `packet-draft` and `issue-publish` workflow
-> guides, and apply `intent-target` only via the publish/automation command.
+> I'm drafting packet `<id>` and publishing its issue to `<owner>/<repo>`.
+> Ask intent-cli what I should do next.
 
 ## Metadata / label safety
 

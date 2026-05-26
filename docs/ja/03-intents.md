@@ -1,7 +1,6 @@
 # intent の整理・保守
 
-> **まず intent-cli に聞く:** `intent-cli guide start` →
-> `intent-cli guide workflow task intent-interview --format json`。 ← [ドキュメント索引](index.md)
+> **まず intent-cli に聞く。** ← [ドキュメント索引](index.md)
 
 **host/design** 作業: slice を切り出す前に、永続的な intent を収集・コンパイルする。
 
@@ -18,9 +17,7 @@ intent-cli intent status --format json
 
 ## ask-intent-cli プロンプトテンプレート
 
-> domain `<name>` の intent を整理する。`intent-cli guide start` の後に
-> `intent-interview` ワークフローガイドを実行し、`intent-cli interview …` で
-> 回答を記録する。ルールを発明せず、現在のガイドを intent-cli に尋ねる。
+> domain `<name>` の intent を整理する。intent-cli に次に行うべきことを聞いてください。
 
 ## metadata / label の安全境界
 
