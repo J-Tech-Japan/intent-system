@@ -152,7 +152,7 @@ public sealed class PackagedInvocationSmokeTests
 
         Assert.Contains("mkdir -p .artifacts/smoke-repo/.intent-cli", readme, StringComparison.Ordinal);
         Assert.Contains("cat > .artifacts/smoke-repo/.intent-cli/config.toml <<'EOF'", readme, StringComparison.Ordinal);
-        Assert.Contains("export INTENT_CLI_LOCAL_VERSION=\"0.2.0-local.$(date -u +%Y%m%d%H%M%S)\"", readme, StringComparison.Ordinal);
+        Assert.Contains("export INTENT_CLI_LOCAL_VERSION=\"0.3.1-local.$(date -u +%Y%m%d%H%M%S)\"", readme, StringComparison.Ordinal);
         // G407: package id is JTechJapan.IntentSystem.Cli; dotnet tool exec / dnx uses the
         // package id to locate the nupkg. The installed command remains intent-cli.
         Assert.Contains("(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" JTechJapan.IntentSystem.Cli project status)", readme, StringComparison.Ordinal);
@@ -162,9 +162,9 @@ public sealed class PackagedInvocationSmokeTests
     [Fact]
     public void HostRefreshScript_UsesUniqueLocalVersionAndVerifiesAutomationSurface()
     {
-        var script = File.ReadAllText(Path.Combine(GetSolutionRoot(), "ops", "refresh-host-local-intent-cli.sh"));
+        var script = File.ReadAllText(Path.Combine(GetSolutionRoot(), "eng", "refresh-host-local-intent-cli.sh"));
 
-        Assert.Contains("0.2.0-local.$LOCAL_STAMP.$$.g$CHILD_SHA", script, StringComparison.Ordinal);
+        Assert.Contains("0.3.1-local.$LOCAL_STAMP.$$.g$CHILD_SHA", script, StringComparison.Ordinal);
         Assert.Contains("-p:Version=\"$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
         Assert.Contains("--version \"\\$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
         Assert.Contains("find \"$PACKAGES_DIR\" -maxdepth 1 -type f -name 'JTechJapan.IntentSystem.Cli.*.nupkg' -delete", script, StringComparison.Ordinal);
@@ -224,7 +224,7 @@ public sealed class PackagedInvocationSmokeTests
 
     private static string CreateLocalPackageVersion()
     {
-        return $"0.2.0-local.{Guid.NewGuid():N}";
+        return $"0.3.1-local.{Guid.NewGuid():N}";
     }
 
     private sealed record ProcessResult(int ExitCode);
