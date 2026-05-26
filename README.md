@@ -51,8 +51,8 @@ install` output prints the exact line to add (commonly `~/.dotnet/tools` on
 macOS/Linux, `%USERPROFILE%\.dotnet\tools` on Windows).
 
 > No .NET SDK? Use the self-contained binary instead — see
-> [Install without a .NET SDK](#install-without-a-net-sdk). Need the internal
-> testing channel? See [Preview install](#preview-install).
+> [Install without a .NET SDK](#install-without-a-net-sdk). Need the preview
+> channel? See [Preview install](#preview-install).
 
 ### 2. Verify
 

@@ -20,7 +20,7 @@ Run this checklist before promoting a branch or release to public OSS audiences.
 
 ## Private-preview and expiry language
 
-- [ ] No user-facing "private-preview", "internal tester", or "social内テスター" wording in docs
+- [ ] No user-facing "private-preview", "internal tester", or "社内テスター" wording in docs
   ```bash
   grep -rni "private.preview\|internal tester\|社内テスター" docs/ README.md
   ```
