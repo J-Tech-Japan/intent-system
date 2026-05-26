@@ -35,10 +35,10 @@ v0.3.0 は `intent-cli` の最初の OSS 向け安定リリースです。GitHub
 
 ```bash
 # 新規インストール
-dotnet tool install -g intent-cli
+dotnet tool install -g JTechJapan.IntentSystem.Cli
 
 # 旧バージョンからのアップグレード
-dotnet tool update -g intent-cli
+dotnet tool update -g JTechJapan.IntentSystem.Cli
 ```
 
 **.NET 10 SDK** が必要です (`dotnet --version` → `10.x`)。
@@ -95,18 +95,18 @@ Apache-2.0 — リポジトリルートの [LICENSE](../../LICENSE) を参照し
    - **公開** (ドラフトではない) — 公開するとリリースワークフローがトリガーされる。
 
 2. **リリースワークフローを監視** (Actions タブ):
-   - `nupkg` ジョブ: `intent-cli.0.3.0.nupkg` をビルドし NuGet.org にプッシュ (`NUGET_API_KEY` が設定されている場合)。`.nupkg` + `.sha256` をリリースに添付。
+   - `nupkg` ジョブ: `JTechJapan.IntentSystem.Cli.0.3.0.nupkg` をビルドし NuGet.org にプッシュ (`NUGET_API_KEY` が設定されている場合)。`.nupkg` + `.sha256` をリリースに添付。
    - `binaries` ジョブ (3×): `osx-arm64`, `win-x64`, `linux-x64` のセルフコンテインドアーカイブをビルド。`intent-cli --version` のスモークテスト後にリリースへ添付。
 
 3. **GitHub Release ページでリリースアセットを確認**:
-   - `intent-cli.0.3.0.nupkg` + `.sha256`
+   - `JTechJapan.IntentSystem.Cli.0.3.0.nupkg` + `.sha256`
    - `intent-cli-0.3.0-osx-arm64.tar.gz` + `.sha256`
    - `intent-cli-0.3.0-win-x64.zip` + `.sha256`
    - `intent-cli-0.3.0-linux-x64.tar.gz` + `.sha256`
 
 4. **NuGet.org を確認** (インデックス化に最大 15 分かかる場合あり):
    ```bash
-   dotnet tool install -g intent-cli --version 0.3.0
+   dotnet tool install -g JTechJapan.IntentSystem.Cli --version 0.3.0
    intent-cli --version
    # 期待値: 0.3.0
    ```

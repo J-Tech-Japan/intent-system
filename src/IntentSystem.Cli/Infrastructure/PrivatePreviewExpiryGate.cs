@@ -115,7 +115,7 @@ internal static class PrivatePreviewExpiryGate
                 : $"  commit: {metadata.SourceCommit}",
             string.Empty,
             "Download a newer artifact from a more recent `private-preview-pack` workflow run on `main` and reinstall:",
-            "  dotnet tool update --global --add-source <downloaded-folder> --version <newer-version> intent-cli",
+            "  dotnet tool update --global --add-source <downloaded-folder> --version <newer-version> JTechJapan.IntentSystem.Cli",
             string.Empty,
             "Source-only builds (no preview metadata) are unaffected; see README.md \"Private-preview install\" for the full flow.",
         });

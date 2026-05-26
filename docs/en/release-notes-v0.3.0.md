@@ -52,10 +52,10 @@ of GitHub, plus the first public NuGet and self-contained binary distribution.
 
 ```bash
 # New install
-dotnet tool install -g intent-cli
+dotnet tool install -g JTechJapan.IntentSystem.Cli
 
 # Upgrade from an older version
-dotnet tool update -g intent-cli
+dotnet tool update -g JTechJapan.IntentSystem.Cli
 ```
 
 Requires **.NET 10 SDK** (`dotnet --version` → `10.x`).
@@ -121,21 +121,21 @@ Apache-2.0 — see [LICENSE](../../LICENSE) in the repository root.
    - **Publish** (not draft) — publishing triggers the release workflow.
 
 2. **Monitor the release workflow** in the Actions tab:
-   - `nupkg` job: builds `intent-cli.0.3.0.nupkg` and pushes to NuGet.org
+   - `nupkg` job: builds `JTechJapan.IntentSystem.Cli.0.3.0.nupkg` and pushes to NuGet.org
      (if `NUGET_API_KEY` is set); attaches `.nupkg` + `.sha256` to the release.
    - `binaries` jobs (3×): build `osx-arm64`, `win-x64`, `linux-x64`
      self-contained archives; smoke-test `intent-cli --version`; attach to the
      release.
 
 3. **Verify the release assets** on the GitHub Release page:
-   - `intent-cli.0.3.0.nupkg` + `.sha256`
+   - `JTechJapan.IntentSystem.Cli.0.3.0.nupkg` + `.sha256`
    - `intent-cli-0.3.0-osx-arm64.tar.gz` + `.sha256`
    - `intent-cli-0.3.0-win-x64.zip` + `.sha256`
    - `intent-cli-0.3.0-linux-x64.tar.gz` + `.sha256`
 
 4. **Verify NuGet.org** (allow up to 15 minutes for indexing):
    ```bash
-   dotnet tool install -g intent-cli --version 0.3.0
+   dotnet tool install -g JTechJapan.IntentSystem.Cli --version 0.3.0
    intent-cli --version
    # Expected: 0.3.0
    ```

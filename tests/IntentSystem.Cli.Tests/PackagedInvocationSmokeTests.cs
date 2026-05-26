@@ -19,9 +19,11 @@ public sealed class PackagedInvocationSmokeTests
 
         Assert.NotNull(propertyGroup);
         Assert.Equal("true", GetPropertyValue(propertyGroup!, "PackAsTool"));
+        // G407: NuGet package id and tool command name are intentionally different.
+        // Install: dotnet tool install -g JTechJapan.IntentSystem.Cli
+        // Command: intent-cli
         Assert.Equal("intent-cli", GetPropertyValue(propertyGroup, "ToolCommandName"));
-        Assert.Equal("intent-cli", GetPropertyValue(propertyGroup, "PackageId"));
-        Assert.Equal("0.2.0", GetPropertyValue(propertyGroup, "Version"));
+        Assert.Equal("JTechJapan.IntentSystem.Cli", GetPropertyValue(propertyGroup, "PackageId"));
         Assert.Equal("README.md", GetPropertyValue(propertyGroup, "PackageReadmeFile"));
     }
 
@@ -56,8 +58,10 @@ public sealed class PackagedInvocationSmokeTests
 
             var invokeOutputPath = tempDirectory.GetPath("invoke.stdout.txt");
             var invokeErrorPath = tempDirectory.GetPath("invoke.stderr.txt");
+            // G407: package id is JTechJapan.IntentSystem.Cli; dotnet tool exec uses the
+            // package id to locate the nupkg, then invokes the ToolCommandName (intent-cli).
             var invokeResult = RunShellCommand(
-                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli project status > {QuoteForShell(invokeOutputPath)} 2> {QuoteForShell(invokeErrorPath)}",
+                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} JTechJapan.IntentSystem.Cli project status > {QuoteForShell(invokeOutputPath)} 2> {QuoteForShell(invokeErrorPath)}",
                 fixtureRoot);
 
             var invokeOutput = File.ReadAllText(invokeOutputPath);
@@ -97,7 +101,7 @@ public sealed class PackagedInvocationSmokeTests
             var summaryOutputPath = tempDirectory.GetPath("summary.stdout.txt");
             var summaryErrorPath = tempDirectory.GetPath("summary.stderr.txt");
             var summaryResult = RunShellCommand(
-                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli automation summary --format json > {QuoteForShell(summaryOutputPath)} 2> {QuoteForShell(summaryErrorPath)}",
+                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} JTechJapan.IntentSystem.Cli automation summary --format json > {QuoteForShell(summaryOutputPath)} 2> {QuoteForShell(summaryErrorPath)}",
                 fixtureRoot);
 
             var summaryOutput = File.ReadAllText(summaryOutputPath);
@@ -113,7 +117,7 @@ public sealed class PackagedInvocationSmokeTests
             var prTransitionHelpOutputPath = tempDirectory.GetPath("pr-transition.stdout.txt");
             var prTransitionHelpErrorPath = tempDirectory.GetPath("pr-transition.stderr.txt");
             var prTransitionHelpResult = RunShellCommand(
-                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli -- automation pr-transition --help > {QuoteForShell(prTransitionHelpOutputPath)} 2> {QuoteForShell(prTransitionHelpErrorPath)}",
+                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} JTechJapan.IntentSystem.Cli -- automation pr-transition --help > {QuoteForShell(prTransitionHelpOutputPath)} 2> {QuoteForShell(prTransitionHelpErrorPath)}",
                 fixtureRoot);
 
             var prTransitionHelpOutput = File.ReadAllText(prTransitionHelpOutputPath);
@@ -128,7 +132,7 @@ public sealed class PackagedInvocationSmokeTests
             var topLevelHelpOutputPath = tempDirectory.GetPath("help.stdout.txt");
             var topLevelHelpErrorPath = tempDirectory.GetPath("help.stderr.txt");
             var topLevelHelpResult = RunShellCommand(
-                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} intent-cli -- --help > {QuoteForShell(topLevelHelpOutputPath)} 2> {QuoteForShell(topLevelHelpErrorPath)}",
+                $"dotnet tool exec --yes --source {QuoteForShell(packageOutputDirectory)} --version {QuoteForShell(packageVersion)} JTechJapan.IntentSystem.Cli -- --help > {QuoteForShell(topLevelHelpOutputPath)} 2> {QuoteForShell(topLevelHelpErrorPath)}",
                 fixtureRoot);
 
             var topLevelHelpOutput = File.ReadAllText(topLevelHelpOutputPath);
@@ -149,8 +153,10 @@ public sealed class PackagedInvocationSmokeTests
         Assert.Contains("mkdir -p .artifacts/smoke-repo/.intent-cli", readme, StringComparison.Ordinal);
         Assert.Contains("cat > .artifacts/smoke-repo/.intent-cli/config.toml <<'EOF'", readme, StringComparison.Ordinal);
         Assert.Contains("export INTENT_CLI_LOCAL_VERSION=\"0.2.0-local.$(date -u +%Y%m%d%H%M%S)\"", readme, StringComparison.Ordinal);
-        Assert.Contains("(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" intent-cli project status)", readme, StringComparison.Ordinal);
-        Assert.Contains("(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" intent-cli project status)", readme, StringComparison.Ordinal);
+        // G407: package id is JTechJapan.IntentSystem.Cli; dotnet tool exec / dnx uses the
+        // package id to locate the nupkg. The installed command remains intent-cli.
+        Assert.Contains("(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" JTechJapan.IntentSystem.Cli project status)", readme, StringComparison.Ordinal);
+        Assert.Contains("(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" JTechJapan.IntentSystem.Cli project status)", readme, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -161,7 +167,7 @@ public sealed class PackagedInvocationSmokeTests
         Assert.Contains("0.2.0-local.$LOCAL_STAMP.$$.g$CHILD_SHA", script, StringComparison.Ordinal);
         Assert.Contains("-p:Version=\"$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
         Assert.Contains("--version \"\\$INTENT_CLI_LOCAL_VERSION\"", script, StringComparison.Ordinal);
-        Assert.Contains("find \"$PACKAGES_DIR\" -maxdepth 1 -type f -name 'intent-cli.*.nupkg' -delete", script, StringComparison.Ordinal);
+        Assert.Contains("find \"$PACKAGES_DIR\" -maxdepth 1 -type f -name 'JTechJapan.IntentSystem.Cli.*.nupkg' -delete", script, StringComparison.Ordinal);
         Assert.Contains("automation summary --format json", script, StringComparison.Ordinal);
         Assert.Contains("\"automationCommandSurfaceVersion\"", script, StringComparison.Ordinal);
         Assert.Contains("\"issue-publish\"", script, StringComparison.Ordinal);

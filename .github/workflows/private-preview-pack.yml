@@ -127,8 +127,8 @@ jobs:
       - name: Verify preview pack embeds AssemblyMetadata
         id: verify
         run: |
-          PREVIEW_NUPKG="$(ls .artifacts/preview/intent-cli.*.nupkg | head -n 1)"
-          SOURCE_NUPKG="$(ls .artifacts/source-baseline/intent-cli.*.nupkg | head -n 1)"
+          PREVIEW_NUPKG="$(ls .artifacts/preview/JTechJapan.IntentSystem.Cli.*.nupkg | head -n 1)"
+          SOURCE_NUPKG="$(ls .artifacts/source-baseline/JTechJapan.IntentSystem.Cli.*.nupkg | head -n 1)"
           echo "preview-nupkg=${PREVIEW_NUPKG}"
           echo "source-nupkg=${SOURCE_NUPKG}"
           dotnet run --project tools/PreviewArtifactVerify --configuration Release -- \
@@ -160,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           cd .artifacts/preview
-          NUPKG_FILE="$(basename "$(ls intent-cli.*.nupkg | head -n 1)")"
+          NUPKG_FILE="$(basename "$(ls JTechJapan.IntentSystem.Cli.*.nupkg | head -n 1)")"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "${NUPKG_FILE}" > "${NUPKG_FILE}.sha256"
           else
@@ -176,7 +176,7 @@ jobs:
         run: |
           set -euo pipefail
           cd .artifacts/preview
-          NUPKG_FILE="$(basename "$(ls intent-cli.*.nupkg | head -n 1)")"
+          NUPKG_FILE="$(basename "$(ls JTechJapan.IntentSystem.Cli.*.nupkg | head -n 1)")"
           PACKAGE_VERSION="${{ steps.meta.outputs.package_version }}"
           BUILD_TIMESTAMP="${{ steps.meta.outputs.build_timestamp }}"
           SOURCE_COMMIT="${{ github.sha }}"
@@ -246,7 +246,7 @@ jobs:
           ## 5. Uninstall
 
           \`\`\`bash
-          dotnet tool uninstall --global intent-cli
+          dotnet tool uninstall --global JTechJapan.IntentSystem.Cli
           \`\`\`
           EOF
           echo "wrote INSTALL.md (${PACKAGE_VERSION})"
@@ -339,7 +339,7 @@ jobs:
         run: |
           set -euo pipefail
           cd .artifacts/preview
-          NUPKG_FILE="$(basename "$(ls intent-cli.*.nupkg | head -n 1)")"
+          NUPKG_FILE="$(basename "$(ls JTechJapan.IntentSystem.Cli.*.nupkg | head -n 1)")"
           {
             echo "## preview-pack succeeded"
             echo ""

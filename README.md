@@ -39,11 +39,11 @@ SDK** (`dotnet --version` should report `10.x`).
 **macOS, Windows, and Linux (same commands):**
 
 ```bash
-# Install
-dotnet tool install -g intent-cli
+# Install (NuGet package id: JTechJapan.IntentSystem.Cli; command: intent-cli)
+dotnet tool install -g JTechJapan.IntentSystem.Cli
 
 # Later, upgrade in place
-dotnet tool update -g intent-cli
+dotnet tool update -g JTechJapan.IntentSystem.Cli
 ```
 
 If the global tools directory is not yet on your `PATH`, the `dotnet tool
@@ -232,8 +232,8 @@ Release binaries and OSS preview CI artifacts carry no build-time expiry.
 
 ## Packaged invocation (local smoke)
 
-The CLI is packaged as a .NET tool (package id `intent-cli`, command
-`intent-cli`). To smoke-test a locally built package:
+The CLI is packaged as a .NET tool (package id `JTechJapan.IntentSystem.Cli`,
+command `intent-cli`). To smoke-test a locally built package:
 
 ```bash
 export INTENT_CLI_LOCAL_VERSION="0.2.0-local.$(date -u +%Y%m%d%H%M%S)"
@@ -246,13 +246,13 @@ default_domain = "intent-cli"
 artifact_root = ".intent-cli"
 worktree_root = ".intent-cli/worktrees"
 EOF
-(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" intent-cli project status)
+(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" JTechJapan.IntentSystem.Cli project status)
 ```
 
 Equivalent `dnx` path:
 
 ```bash
-(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" intent-cli project status)
+(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" JTechJapan.IntentSystem.Cli project status)
 ```
 
 Project-local best-practice and model-registry starter docs live under
@@ -303,8 +303,8 @@ uploads a self-contained install bundle as a workflow artifact named
 
 | File | Purpose |
 | --- | --- |
-| `intent-cli.<version>.nupkg` | The NuGet package consumed by `dotnet tool install`. |
-| `intent-cli.<version>.nupkg.sha256` | SHA-256 checksum sidecar; verify before installing. |
+| `JTechJapan.IntentSystem.Cli.<version>.nupkg` | The NuGet package consumed by `dotnet tool install`. |
+| `JTechJapan.IntentSystem.Cli.<version>.nupkg.sha256` | SHA-256 checksum sidecar; verify before installing. |
 | `preview-metadata.json` | Machine-readable build provenance (channel, version, build timestamp, commit, CI run identifiers). |
 | `INSTALL.md` | Per-build install / update / verify / uninstall guide with this build's exact version and commit pre-filled. |
 
@@ -316,21 +316,21 @@ bundle. **OSS preview packages carry no expiry; they remain runnable indefinitel
 
 ```bash
 # 1. Download and unzip the workflow artifact, then cd into it.
-cd ./intent-cli-preview-0.3.0-preview.42.1
+cd ./intent-cli-preview-0.3.1-preview.42.1
 
 # 2. Verify the checksum (macOS: shasum; Linux: sha256sum). Prints
-#    `intent-cli.<version>.nupkg: OK` on success. Do not install if it fails.
-shasum -a 256 -c intent-cli.*.nupkg.sha256
+#    `JTechJapan.IntentSystem.Cli.<version>.nupkg: OK` on success. Do not install if it fails.
+shasum -a 256 -c JTechJapan.IntentSystem.Cli.*.nupkg.sha256
 
 # 3. Install (or update) the .NET tool from this local folder:
 dotnet tool install --global --add-source . \
-  --version 0.3.0-preview.42.1 intent-cli
+  --version 0.3.1-preview.42.1 JTechJapan.IntentSystem.Cli
 # Upgrade-in-place:
 dotnet tool update --global --add-source . \
-  --version 0.3.0-preview.42.1 intent-cli
+  --version 0.3.1-preview.42.1 JTechJapan.IntentSystem.Cli
 
 # Uninstall:
-dotnet tool uninstall --global intent-cli
+dotnet tool uninstall --global JTechJapan.IntentSystem.Cli
 ```
 
 The installed binary exposes the preview metadata via `intent-cli --version`:

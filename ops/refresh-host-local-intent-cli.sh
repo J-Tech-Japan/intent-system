@@ -42,7 +42,7 @@ if [[ "$INTENT_CLI_LOCAL_VERSION" == "0.2.0" ]]; then
 fi
 
 mkdir -p "$PACKAGES_DIR" "$BIN_DIR"
-find "$PACKAGES_DIR" -maxdepth 1 -type f -name 'intent-cli.*.nupkg' -delete
+find "$PACKAGES_DIR" -maxdepth 1 -type f -name 'JTechJapan.IntentSystem.Cli.*.nupkg' -delete
 
 dotnet pack "$PROJECT_PATH" \
   -p:Version="$INTENT_CLI_LOCAL_VERSION" \
