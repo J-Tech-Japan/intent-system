@@ -243,10 +243,14 @@ jobs:
             ASSET="dist/${NAME}.tar.gz"
             tar -czf "${ASSET}" -C stage "intent-cli"
           fi
+          # G409: cd into dist so the sidecar records only the basename, not
+          # the dist/ path prefix, allowing users to verify from the download
+          # directory without recreating the CI folder layout.
+          BASENAME="$(basename "${ASSET}")"
           if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "${ASSET}" > "${ASSET}.sha256"
+            (cd dist && sha256sum "${BASENAME}" > "${BASENAME}.sha256")
           else
-            shasum -a 256 "${ASSET}" > "${ASSET}.sha256"
+            (cd dist && shasum -a 256 "${BASENAME}" > "${BASENAME}.sha256")
           fi
           echo "asset=${ASSET}" | tee -a "${GITHUB_OUTPUT}"
           cat "${ASSET}.sha256"

@@ -74,6 +74,25 @@ public sealed class ReleaseWorkflowContractTests
         Assert.DoesNotContain("PrivatePreviewExpiresAt", workflow, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ReleaseWorkflow_ChecksumSidecarsUseBasenameNotDistPath()
+    {
+        // G409: sidecar files must record only the archive basename so users can
+        // verify from a plain download directory without recreating dist/.
+        // The fix is to cd into dist before running sha256sum/shasum, which means
+        // the checksum command must NOT pass the full dist/ path to the hasher.
+        var workflow = File.ReadAllText(LocateReleaseWorkflow());
+
+        // The fix pattern: cd into dist, then hash the BASENAME variable (not ASSET).
+        Assert.Contains("cd dist", workflow, StringComparison.Ordinal);
+        Assert.Contains("BASENAME", workflow, StringComparison.Ordinal);
+
+        // Regression guard: the hasher must not receive the dist/-prefixed ASSET path.
+        // sha256sum "${ASSET}" or shasum -a 256 "${ASSET}" would reintroduce dist/ prefix.
+        Assert.DoesNotContain("sha256sum \"${ASSET}\"", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("shasum -a 256 \"${ASSET}\"", workflow, StringComparison.Ordinal);
+    }
+
     private static string LocateReleaseWorkflow()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

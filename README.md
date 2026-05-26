@@ -198,10 +198,13 @@ SDK is required).
 | Windows (x64) | `intent-cli-<version>-win-x64.zip` |
 | Linux (x64) | `intent-cli-<version>-linux-x64.tar.gz` |
 
-Each archive ships with a `.sha256` sidecar; verify it before use.
+Each archive ships with a `.sha256` sidecar; download both files into the same
+directory and verify before use.
+
+**macOS:**
 
 ```bash
-# 1. Verify the checksum (run from the folder containing both files).
+# 1. Verify (run from the folder containing both files).
 shasum -a 256 -c intent-cli-<version>-osx-arm64.tar.gz.sha256
 
 # 2. Extract and place the binary on your PATH.
@@ -213,8 +216,25 @@ sudo mv intent-cli /usr/local/bin/
 intent-cli --version
 ```
 
-On Windows, verify with `CertUtil -hashfile intent-cli-<version>-win-x64.zip SHA256`,
-unzip, and place `intent-cli.exe` on your `PATH`.
+**Linux:**
+
+```bash
+# 1. Verify (run from the folder containing both files).
+sha256sum -c intent-cli-<version>-linux-x64.tar.gz.sha256
+
+# 2. Extract and place the binary on your PATH.
+tar -xzf intent-cli-<version>-linux-x64.tar.gz
+chmod +x intent-cli
+sudo mv intent-cli /usr/local/bin/
+
+# 3. Confirm.
+intent-cli --version
+```
+
+**Windows:** Download `intent-cli-<version>-win-x64.zip` and its `.sha256` sidecar.
+Compare the hash from `CertUtil -hashfile intent-cli-<version>-win-x64.zip SHA256`
+against the first field in the `.sha256` file, unzip, and place `intent-cli.exe`
+on your `PATH`.
 
 Release binaries and OSS preview CI artifacts carry no build-time expiry.
 
