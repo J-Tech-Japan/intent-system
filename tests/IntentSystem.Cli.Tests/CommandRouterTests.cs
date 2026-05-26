@@ -46,8 +46,7 @@ public sealed class CommandRouterTests
         Assert.DoesNotContain("- generate-from-current", output, StringComparison.Ordinal);
         Assert.DoesNotContain("not the primary production orchestrator", output, StringComparison.Ordinal);
 
-        // The default points at the explicit full-catalog discovery paths.
-        Assert.Contains("intent-cli --help --all", output, StringComparison.Ordinal);
+        // The default points at the guide commands catalog.
         Assert.Contains("intent-cli guide commands list", output, StringComparison.Ordinal);
     }
 

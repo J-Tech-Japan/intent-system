@@ -541,7 +541,7 @@ internal static class CommandRouter
     {
         writer.WriteLine("intent-cli — chat-first intent workflow CLI.");
         writer.WriteLine("Routine model: human <-> coding agent (Claude / Codex / Copilot) <-> intent-cli calls <-> GitHub / host metadata.");
-        writer.WriteLine("Ask `intent-cli guide workflow task <task> --format json` or `intent-cli guide prompt-template ...` for current paste-ready instructions rather than probing legacy command surfaces.");
+        writer.WriteLine("Ask `intent-cli guide workflow task <task> --format json` or `intent-cli guide prompt-template ...` for current paste-ready instructions.");
         writer.WriteLine();
 
         // G334: top-level help must point an external agent at the
@@ -579,7 +579,7 @@ internal static class CommandRouter
         writer.WriteLine("Per-group help:");
         writer.WriteLine("- `intent-cli <group> --help` (e.g. `intent-cli guide --help`, `intent-cli worker --help`) — list the group's subcommands.");
         writer.WriteLine("- `intent-cli guide help [--format markdown|json]` — external-user self-discovery surface with examples + workflow guide pointers.");
-        writer.WriteLine("- `intent-cli guide commands list [--format markdown|json]` — classified catalog (primary / support / legacy).");
+        writer.WriteLine("- `intent-cli guide commands list [--format markdown|json]` — classified catalog (primary / support).");
 
         writer.WriteLine();
         writer.WriteLine("Automation commands:");
@@ -588,19 +588,13 @@ internal static class CommandRouter
             writer.WriteLine($"- {command}");
         }
 
-        writer.WriteLine();
         if (includeAll)
         {
+            writer.WriteLine();
             foreach (var line in RunRoleNote)
             {
                 writer.WriteLine(line);
             }
-        }
-        else
-        {
-            writer.WriteLine("Legacy and advanced surfaces are hidden from this chat-first view.");
-            writer.WriteLine("- `intent-cli --help --all` — show every command group including legacy ones.");
-            writer.WriteLine("- `intent-cli guide commands list` — classified catalog to see which surfaces are active vs. legacy.");
         }
     }
 

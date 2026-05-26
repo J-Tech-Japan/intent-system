@@ -19,17 +19,12 @@ internal static class GuideCommandsListCommand
 
     private const string ClassificationPrimary = "primary";
     private const string ClassificationSupport = "support";
-    private const string ClassificationAdvanced = "advanced";
-    private const string ClassificationExperimental = "experimental";
-    private const string ClassificationLegacy = "legacy";
-
     private const string MutabilityReadOnly = "read-only";
     private const string MutabilityMixed = "mixed";
 
     private const string CallerChatAgent = "chat-agent";
     private const string CallerImplementationLoop = "implementation-loop";
     private const string CallerHostLoop = "host-loop";
-    private const string CallerAdvancedRuntime = "advanced-runtime";
     private const string CallerOperator = "operator";
 
     private const string UsageLine =
@@ -159,68 +154,12 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
-            Name = "tasking",
-            Classification = ClassificationLegacy,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Legacy cross-thread tasking handoff bundles; not part of the current chat-first product path."
-        },
-        new CommandGroupEntry
-        {
             Name = "task",
             Classification = ClassificationSupport,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerOperator,
             Purpose = "G317 explicit one-shot task planners (issue-to-pr / review-pr / fix-pr-comments / publish-next-issue). Returns a bounded executable contract — preconditions, steps, label transitions, abort conditions — for controllers that already know the target. Read-only: never calls gh, never mutates state, never launches AI providers."
         },
-        new CommandGroupEntry
-        {
-            Name = "intake",
-            Classification = ClassificationLegacy,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Legacy concept-intake surface. Use `interview next-question` / `record-answer` / `compile` for current flows."
-        },
-        new CommandGroupEntry
-        {
-            Name = "bug",
-            Classification = ClassificationLegacy,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Legacy bug-intent CRUD. Use `guide workflow task bug-to-intent-repair` for the current bug repair workflow."
-        },
-        new CommandGroupEntry
-        {
-            Name = "projection",
-            Classification = ClassificationLegacy,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Legacy projection generate / regenerate. Internal tooling not part of the current product path."
-        },
-        new CommandGroupEntry
-        {
-            Name = "project",
-            Classification = ClassificationLegacy,
-            Mutability = MutabilityReadOnly,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Legacy project status; use `intent status` instead."
-        },
-        new CommandGroupEntry
-        {
-            Name = "safety",
-            Classification = ClassificationLegacy,
-            Mutability = MutabilityReadOnly,
-            RecommendedCaller = CallerOperator,
-            Purpose = "Legacy safety helpers (nested-provider-handoff). Not part of the current chat-first product path."
-        },
-        new CommandGroupEntry
-        {
-            Name = "run",
-            Classification = ClassificationLegacy,
-            Mutability = MutabilityMixed,
-            RecommendedCaller = CallerAdvancedRuntime,
-            Purpose = "Integration smoke / deterministic replay / local dogfooding only. Not the primary chat-first path; do not use from collaborative loops."
-        }
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -260,7 +199,7 @@ internal static class GuideCommandsListCommand
     {
         writer.WriteLine("# Guide commands — top-level groups");
         writer.WriteLine();
-        writer.WriteLine("Lifecycle classification: `primary` (chat-agent's first calls), `support` (used inside the same flow), `legacy` (obsolete; not part of the current product path).");
+        writer.WriteLine("Lifecycle classification: `primary` (chat-agent's first calls), `support` (used inside the same flow).");
         writer.WriteLine();
         writer.WriteLine("| group | classification | mutability | caller | purpose |");
         writer.WriteLine("|-------|----------------|------------|--------|---------|");
