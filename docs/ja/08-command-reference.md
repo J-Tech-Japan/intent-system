@@ -1,0 +1,104 @@
+# コマンドリファレンス（agent 向け / パワーユーザー向け）
+
+> 日本語版。English version: [`../en/08-command-reference.md`](../en/08-command-reference.md)
+
+このページは AI agent やパワーユーザーが代理で実行する `intent-cli` コマンド群を示します。
+通常の利用では記憶する必要はありません。
+[ルート README](../../README.md) のクイックスタートと `intent-cli guide start` が
+典型的なパスをカバーします。
+
+以下のコマンドは AI agent が内部で実行するものです。現在の全カタログは
+`intent-cli guide commands list --format json` を実行してください。
+
+---
+
+## 2 つの agent ロール
+
+| ロール | source of truth | 責務 |
+| --- | --- | --- |
+| **Host / review agent** | 親 host の `.intent-cli/` 状態 + intent tree | issue 公開、`intent-target` 付与、review/approve/merge、next slice 切り出し、`intent-cli automation` 経由の label 遷移 |
+| **Child implementation agent** | **GitHub の issue/PR + repo ローカルのコード**（host metadata ではない） | issue 契約の実装、PR の作成/更新、`intent-cli worker` での結果記録 |
+
+Child implementation agent は **GitHub-contract-only** です: host の `.intent-cli/`、
+queue-state、metadata branch、`intents/**` を読んだり変更したりしません。
+
+host は **別の host リポジトリ** にも、**同じリポジトリの専用 metadata ブランチ**
+（例: `main-metadata`）にも置くことができます。
+詳しくは [プロジェクト開始 → リポジトリトポロジーの選択](02-project-start.md#リポジトリトポロジーの選択) を参照してください。
+
+---
+
+## プロジェクトセットアップ
+
+```bash
+intent-cli intent init --domain <name> [--target-repo <owner>/<repo>] --write
+intent-cli intent status
+intent-cli guide intent-work setup --format json
+```
+
+## デザイン / intent
+
+```bash
+intent-cli interview next-question
+intent-cli interview record-answer ...
+intent-cli interview compile
+intent-cli guide workflow
+```
+
+## Packet / issue
+
+```bash
+intent-cli packet ...
+intent-cli issue validate-body ...
+intent-cli issue prepare ...
+intent-cli issue publish-reviewed ...
+intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
+intent-cli automation issue-publish --write
+```
+
+## 実装・レビューループ
+
+```bash
+# AI agent 向けループプロンプトを取得:
+intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>
+intent-cli guide oneshot --kind host-review-next-slice    --domain <name>
+```
+
+worker/metadata コマンドだけでループを回す operator dogfooding 向けプロンプトテンプレートは
+[`docs/automation-templates/`](../automation-templates/README.md) にあります。
+
+## 復旧
+
+```bash
+intent-cli worker issue-preflight       --repo <owner>/<repo> --issue <n> --format json
+intent-cli worker pr-comment-preflight  --repo <owner>/<repo> --pr <n>    --format json
+intent-cli automation doctor --format json
+```
+
+---
+
+## コマンドグループ概要
+
+| Surface | 役割 |
+|---------|------|
+| `intent-cli guide …` | Ask-first ガイダンス: コラボレーションモデル、ワークフロー、プロンプトテンプレートカタログ、one-shot プロンプト |
+| `intent-cli status brief` | コンパクトな AI スレッドコンテキスト入力 |
+| `intent-cli clarify draft` / `clarify record` | オーナー clarification フロー |
+| `intent-cli issue validate-body` | Child Issue Contract 単独強制 |
+| `intent-cli issue prepare` / `issue publish-reviewed` | レビュー済み issue body 公開境界（`intent-target` は付与しない） |
+| `intent-cli worker next-action` / `claim` / `result-summary` / `complete` | Child 実装ループセレクター + 境界付き label 遷移 |
+| `intent-cli automation summary` | プロバイダー中立 label 駆動自動化コントラクトエミッター |
+| `intent-cli safety nested-provider-handoff` | アーティファクトのみのネストされたプロバイダー安全ガード（プロバイダーを起動しない） |
+
+---
+
+## ルール
+
+- **`intent-cli` 遷移コマンドを使い、直接編集はしない。** `intent-cli automation` /
+  `intent-cli worker` が所有する遷移（queue-state、ワークフロー label、
+  packet publish metadata など）は手編集しない。label は必ずこれらのコマンド経由で付与し、
+  `gh ... edit --add-label` を直接使わない。
+- **読んで推測するより聞く。** ローカルのルールファイルを読むより `intent-cli guide ...`
+  を優先する; ガイダンスはインストール済み CLI の現行コントラクトを反映している。
+- **`intent-cli` は AI プロバイダーを起動しない。** 決定論的なガイダンスを出力し、
+  コントラクトを検証し、bounded な GitHub/metadata 遷移を行うだけ。AI agent がドライバーシートに留まる。

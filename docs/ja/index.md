@@ -32,7 +32,7 @@ agent が内部で `intent-cli` を実行し、質問や結果を返します。
 このルールを強制しています。
 
 agent が代わりに使うコマンドの全リストは
-[README コマンドリファレンス](../../README.md#command-reference-agent-facing--power-users)
+[コマンドリファレンス](08-command-reference.md)
 を参照してください。
 
 ## ページ一覧
@@ -44,6 +44,8 @@ agent が代わりに使うコマンドの全リストは
 5. [実装ループの設定](05-implementation-loop.md)
 6. [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
 7. [ループがおかしいときの復旧](07-recovery.md)
+8. [コマンドリファレンス](08-command-reference.md) — agent 向け・パワーユーザー向けコマンド一覧
+9. [開発者リファレンス](09-developer-reference.md) — パッケージ化された実行、preview チャンネル、バージョンフロー
 
 ## 2 つの agent ロール（最初に一度だけ読む）
 
