@@ -37,7 +37,8 @@ internal static class AutomationCheckCommand
         {
             "--repo", repo!,
             "--workdir", resolvedWorkdir,
-            "--format", format
+            "--format", format,
+            "--github-only"
         };
 
         return WorkerNextActionCommand.Execute(context, workerArgs.ToArray(), writer);
