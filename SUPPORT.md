@@ -23,10 +23,14 @@ that failed.
 Open a GitHub issue using the **Feature Request** template. Describe the
 problem you are trying to solve.
 
-## Questions
+## Questions and community discussion
 
-For general questions, open a GitHub Discussion or a GitHub issue with the
-question label.
+For general questions, join the [J-Tech Japan Discord](https://discord.gg/kMdv978X)
+for community discussion and lightweight support, or open a GitHub Discussion.
+Discord is not a formal support channel and carries no SLA.
+
+Reproducible bugs and actionable feature requests should still be filed as
+GitHub issues, not Discord messages.
 
 ## Security issues
 

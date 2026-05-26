@@ -61,3 +61,10 @@ The host can live in a **separate host repository** or in the **same repository
 on a dedicated metadata branch** (e.g. `main-metadata`). Both topologies are
 fully supported. See [Start a project → Repository topology choices](02-project-start.md#repository-topology-choices)
 for guidance on which to choose.
+
+## Community
+
+Join the [J-Tech Japan Discord](https://discord.gg/kMdv978X) for community
+discussion and questions. For bugs or actionable feature requests, open a
+[GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) instead.
+Security reports go to [SECURITY.md](../../SECURITY.md), not Discord.
