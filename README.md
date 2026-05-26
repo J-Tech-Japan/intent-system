@@ -401,6 +401,16 @@ This ensures the next main-branch CI build immediately produces
 
 ---
 
+## Community
+
+Join the [J-Tech Japan Discord](https://discord.gg/kMdv978X) for community
+discussion, questions, and lightweight support. Discord is for general chat;
+for reproducible bugs or actionable feature requests, please open a
+[GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) instead.
+Security-sensitive reports go to [SECURITY.md](./SECURITY.md), not Discord.
+
+---
+
 ## License
 
 This project is licensed under the Apache License, Version 2.0 — see the

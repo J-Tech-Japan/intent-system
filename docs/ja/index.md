@@ -61,3 +61,12 @@ host は **別の host リポジトリ** に置くこともできますし、**�
 （例: `main-metadata`）に置くこともできます。どちらのトポロジーも完全にサポートされています。
 どちらを選ぶかは [プロジェクト開始 → リポジトリトポロジーの選択](02-project-start.md#リポジトリトポロジーの選択)
 を参照してください。
+
+## コミュニティ
+
+コミュニティのディスカッションや質問には [J-Tech Japan Discord](https://discord.gg/kMdv978X)
+にご参加ください。Discord はカジュアルなサポート窓口であり、正式なサポート SLA はありません。
+
+再現可能なバグやアクションにつながる機能要望は Discord ではなく
+[GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) として報告してください。
+セキュリティに関する報告は Discord ではなく [SECURITY.md](../../SECURITY.md) へ。
