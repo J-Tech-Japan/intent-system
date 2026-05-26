@@ -1,12 +1,22 @@
 # Start a project
 
-> **Ask intent-cli first:** `intent-cli guide start` → then the
-> `design-and-intent` / project-start guidance it points at. ← [docs index](index.md)
+> ← [docs index](index.md)
 
-This is **host/design** work (you may touch metadata, but ask intent-cli for the
-current command before hand-editing it).
+This is **host/design** work. Paste the prompt below into your AI agent
+design thread; the agent will run the intent-cli commands and bring back
+questions or results.
 
-## Initialize and inspect
+## Design-thread prompt
+
+Paste this into your AI agent (Claude, Codex, Copilot, etc.):
+
+> I want to start or continue the project on `<owner>/<repo>`, domain `<name>`.
+> Please run `intent-cli guide start` and `intent-cli intent status` from the
+> host repo root. Tell me which phase I'm in and what decisions I need to make
+> next. Use intent-cli transitions for any label or metadata change — never
+> hand-edit files or apply GitHub labels directly.
+
+## What the agent will run (reference)
 
 ```bash
 # Initialize a host domain (read-only without --write)
@@ -18,13 +28,6 @@ intent-cli intent status
 # Ask what the work surfaces expect
 intent-cli guide intent-work --format json
 ```
-
-## Ask-intent-cli prompt template
-
-> Before starting on `<owner>/<repo>` domain `<name>`, run
-> `intent-cli guide start` and `intent-cli intent status`, then follow the
-> guide command for the phase I'm in. Use intent-cli transitions for any
-> label/metadata change; never hand-edit.
 
 ## Metadata / label safety
 

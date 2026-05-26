@@ -7,19 +7,33 @@ development workflow on top of GitHub. These pages give a little more structure
 than the [root README](../../README.md) without requiring you to read the
 internal design notes.
 
-## The one rule: ask intent-cli first
+## How to use intent-cli
 
-Before any intent / packet / issue / review / implementation-loop work, run:
+`intent-cli` is designed to be driven by an AI agent — Claude, Codex,
+Copilot, or any capable coding assistant with repository access. You do not
+need to memorize or run its commands directly.
 
-```bash
-intent-cli guide start
-```
+**The typical human path:**
 
-It points you at the exact `intent-cli guide …` command for your phase. Don't
-start from memory, copied prompts, or ordinary GitHub habits, and don't
-hand-edit metadata or labels when an `intent-cli` command owns the transition.
-Every page below repeats this rule because it is the difference between a smooth
-loop and a broken one.
+1. Install `intent-cli` and verify with `intent-cli --version`.
+2. Open a design thread in your AI agent.
+3. Paste a prompt such as:
+
+> Ask intent-cli what phase I'm in for `<owner>/<repo>` domain `<name>`.
+> Run `intent-cli guide start` and `intent-cli intent status`, then tell me
+> what I should decide next.
+
+The agent runs `intent-cli` internally and brings back questions or results.
+You focus on intent, priorities, and approval decisions — not on memorizing
+command sequences.
+
+**The one rule behind the prompts:** before any label/metadata change, the AI
+agent should run the appropriate `intent-cli` command rather than editing files
+or applying GitHub labels by hand. Every guide and automation page below
+enforces this rule.
+
+See the [README command reference](../../README.md#command-reference-agent-facing--power-users)
+for the full list of commands the agent will use on your behalf.
 
 ## Pages
 

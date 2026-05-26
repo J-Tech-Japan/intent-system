@@ -1,7 +1,5 @@
 # 実装ループの設定
 
-> **まず intent-cli に聞く:** `intent-cli guide start` →
-> `intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>`。
 > ← [ドキュメント索引](index.md)
 
 これは **child-implementation** 作業で、**GitHub-contract-only かつ
@@ -9,9 +7,17 @@ metadata-free**: issue/PR と repo ローカルのコードのみが source of t
 host の `.intent-cli/`、queue-state、metadata branch、`intents/**` を読んだり
 変更したりしない。
 
-## ループ（1 wake で 1 アクション）
+## デザインスレッドプロンプト
 
-oneshot prompt が正本。概要:
+AI agent（Claude、Codex、Copilot など）に貼り付けてください:
+
+> このワークツリーから `<owner>/<repo>` の child implementation ループを回してください。
+> まず以下を実行してフルループの prompt を取得し、そのとおりに従ってください:
+> `intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>`
+> 作業の選択は `intent-cli worker next-action` のみ。1 wake で最大 1 アクション。
+> label 遷移はすべて `intent-cli worker` 経由で — raw `gh ... --add-label` は使わない。
+
+## agent が実行するコマンド（リファレンス）
 
 ```bash
 # 1. 対象を 1 つだけ選ぶ（手動の label-walking はしない）
@@ -26,13 +32,6 @@ intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> --git
 
 `pr-comment-fix` の対象も、既存 PR ブランチ上で claim → 修正 → result-summary →
 complete という同じ形に従う。
-
-## ask-intent-cli プロンプトテンプレート
-
-> このワークツリーから `<owner>/<repo>` の child implementation ループを回す。
-> prompt は `intent-cli guide oneshot --kind child-implement-or-update` で取得。
-> 作業の選択は `intent-cli worker next-action` のみ。1 wake で最大 1 アクション。
-> label 遷移はすべて intent-cli worker 経由で、raw `gh` は使わない。
 
 ## metadata / label の安全境界
 

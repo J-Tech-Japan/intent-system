@@ -1,7 +1,5 @@
 # Implementation loop setup
 
-> **Ask intent-cli first:** `intent-cli guide start` →
-> `intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>`.
 > ← [docs index](index.md)
 
 This is **child-implementation** work and is **GitHub-contract-only &
@@ -9,9 +7,18 @@ metadata-free**: the issue/PR and repo-local code are the only source of truth.
 Never read or mutate host `.intent-cli/`, queue-state, metadata branches, or
 `intents/**`.
 
-## The loop (one action per wake)
+## Design-thread prompt
 
-The oneshot prompt is authoritative; in outline:
+Paste this into your AI agent (Claude, Codex, Copilot, etc.):
+
+> Run the child implementation loop for `<owner>/<repo>` from this worktree.
+> Get the full loop prompt via:
+> `intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>`
+> and follow it exactly. Select work only via `intent-cli worker next-action`;
+> process at most one action per wake. All label transitions go through
+> `intent-cli worker` — never raw `gh ... --add-label`.
+
+## What the agent will run (reference)
 
 ```bash
 # 1. Select exactly one target (no manual label-walking)
@@ -26,13 +33,6 @@ intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> --git
 
 `pr-comment-fix` targets follow the same claim → repair → result-summary →
 complete shape on the existing PR branch.
-
-## Ask-intent-cli prompt template
-
-> Run the child implementation loop for `<owner>/<repo>` from this worktree.
-> Get the prompt via `intent-cli guide oneshot --kind child-implement-or-update`.
-> Select work only via `intent-cli worker next-action`; process at most one
-> action; all label transitions through intent-cli worker, never raw `gh`.
 
 ## Metadata / label safety
 

@@ -6,18 +6,34 @@
 **決定論的なサポートツール** です。これらのページは、内部設計ノートを全部読まなくても
 [ルート README](../../README.md) より少しだけ構造化された案内を提供します。
 
-## 唯一のルール: まず intent-cli に聞く
+## intent-cli の使い方
 
-intent / packet / issue / review / implementation-loop の作業を始める前に、まず実行する:
+`intent-cli` は AI agent — Claude、Codex、Copilot など、リポジトリアクセスを持つ
+有能なコーディングアシスタント — に動かしてもらうことを前提に設計されています。
+コマンドを自分で記憶・実行する必要はありません。
 
-```bash
-intent-cli guide start
-```
+**人間の典型的な操作手順:**
 
-現在のフェーズに対応する `intent-cli guide …` コマンドを案内してくれます。記憶や
-コピーした prompt、通常の GitHub 操作の感覚から始めない。`intent-cli` のコマンドが
-遷移を所有している label / metadata は手編集しない。以下の各ページがこのルールを
-繰り返すのは、これがループの成否を分けるからです。
+1. `intent-cli` をインストールし、`intent-cli --version` で確認する。
+2. AI agent のデザインスレッドを開く。
+3. 次のようなプロンプトを貼り付ける:
+
+> `<owner>/<repo>` の domain `<name>` について、intent-cli に現在のフェーズを
+> 聞いてください。`intent-cli guide start` と `intent-cli intent status` を実行し、
+> 次に私が決断すべきことを教えてください。
+
+agent が内部で `intent-cli` を実行し、質問や結果を返します。
+あなたは意図・優先度・承認の判断に集中するだけです。コマンドシーケンスを
+記憶する必要はありません。
+
+**プロンプトの背後にある唯一のルール:** label/metadata を変更する前に、AI agent は
+ファイルを手編集したり GitHub label を手動で適用したりするのではなく、適切な
+`intent-cli` コマンドを実行すべきです。以下のすべてのガイドと自動化ページが
+このルールを強制しています。
+
+agent が代わりに使うコマンドの全リストは
+[README コマンドリファレンス](../../README.md#command-reference-agent-facing--power-users)
+を参照してください。
 
 ## ページ一覧
 
