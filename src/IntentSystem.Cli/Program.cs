@@ -37,19 +37,8 @@ internal static class Program
                 return PrivatePreviewExpiryGate.ExpiredExitCode;
             }
 
-            if (DirectRunDetachedCaptureCommand.TryExecute(args, out var directRunDetachedCaptureExitCode))
-            {
-                return directRunDetachedCaptureExitCode;
-            }
-
-            if (DirectRunExitMonitorCommand.TryExecute(args, out var directRunExitMonitorExitCode))
-            {
-                return directRunExitMonitorExitCode;
-            }
-
             var currentDirectory = Directory.GetCurrentDirectory();
-            if (IsIntakeInitCommand(args)
-                || IsIntentInitCommand(args)
+            if (IsIntentInitCommand(args)
                 || IsAutomationWorktreeCommand(args)
                 || IsGuideOneshotCommand(args)
                 || IsWorkerCommand(args)
@@ -85,13 +74,6 @@ internal static class Program
             Console.Error.WriteLine(exception.Message);
             return 1;
         }
-    }
-
-    private static bool IsIntakeInitCommand(string[] args)
-    {
-        return args.Length >= 2
-            && string.Equals(args[0], "intake", StringComparison.Ordinal)
-            && string.Equals(args[1], "init", StringComparison.Ordinal);
     }
 
     private static bool IsIntentInitCommand(string[] args)

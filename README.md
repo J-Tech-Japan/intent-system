@@ -275,11 +275,6 @@ Equivalent `dnx` path:
 (cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" JTechJapan.IntentSystem.Cli project status)
 ```
 
-The `generate-from-current best-practice` command scans conventional directories
-(`.intent/best-practices/`, `.intent/model-registry/`, `.intent-cli/best-practices/`,
-`docs/best-practices/`) in the child repo for project-local knowledge-base inputs.
-Create these directories in your own repository as needed.
-
 ---
 
 ## CLI command roles

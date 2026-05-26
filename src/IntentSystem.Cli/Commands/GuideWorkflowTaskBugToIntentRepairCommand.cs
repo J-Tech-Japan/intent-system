@@ -66,7 +66,7 @@ internal static class GuideWorkflowTaskBugToIntentRepairCommand
         {
             Stage = "intent-repair",
             Purpose = "Scaffold the repair packet (when the lane is intent-gap / packet-gap / rule-gap). The repair packet follows the standard G337 packet contract (`packet draft` → four files → `issue validate-body` → `issue publish-flow` → `automation issue-publish --write`). The repair PACKET is the canonical fix surface for guidance bugs; a child PR alone does NOT close the loop because the bad guidance remains in the rule/packet file.",
-            Command = "intent-cli bug intent-repair <bug-id>",
+            Command = "intent-cli packet draft --execution-unit <unit> --target-repo <owner/repo>",
             Output = "An intent-repair record (`.intent-cli/bugs/<bug-id>.intent-repair.yaml`) tying the bug's report / triage / plan artifacts to the scaffolded packet. Run `intent-cli packet draft --execution-unit <unit>` to scaffold the four packet files (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`). The `github-body.md` MUST cite the original bug report in `Related Links` AND carry G311 `Closes #<bug-report-issue>`.",
             Boundary = "Packet scaffolding runs on the HOST repo. The repair PACKET is host-side; the repair PR (when needed) is opened from a child cwd via the standard child loop after `automation issue-publish --write` labels the repair issue `intent-target`.",
             FailsOpen = "If `issue validate-body --from-file <github-body.md> --format json` reports missing contract sections, STOP and repair the body before publishing. The G337 issue-publish boundary applies verbatim to repair packets; the FORBIDDEN raw `gh issue edit --add-label intent-target` rule still applies."

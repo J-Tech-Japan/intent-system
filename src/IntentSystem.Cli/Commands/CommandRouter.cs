@@ -3,7 +3,6 @@ namespace IntentSystem.Cli.Commands;
 internal static class CommandRouter
 {
     private delegate int CommandHandler(CliContext context, string[] args, TextWriter writer);
-    private const string GenerateFromCurrentCommandName = "generate-from-current";
 
     private static readonly string[] CommandGroups =
     [
@@ -12,12 +11,10 @@ internal static class CommandRouter
         "queue",
         "issue",
         "bug",
-        "run",
         "review",
         "interview",
         "clarify",
         "clarification",
-        "intake",
         "status",
         "context",
         "next-slice",
@@ -37,12 +34,7 @@ internal static class CommandRouter
     /// <summary>
     /// G379: the chat-first subset shown by the default <c>intent-cli --help</c>.
     /// These are the routine implementation / review / next-slice surfaces from
-    /// the issue's Accepted Baseline. The remaining groups — advanced
-    /// (<c>run</c>) and experimental / legacy (concept-intake <c>intake</c>,
-    /// projection, bug-intent, tasking, safety, etc.) — are classified in
-    /// <c>guide commands list</c> and shown only by <c>intent-cli --help --all</c>,
-    /// so a routine agent does not mistake <c>intent-cli run</c> for the
-    /// implementation/review loop. Every entry must also appear in
+    /// the issue's Accepted Baseline. Every entry must also appear in
     /// <see cref="CommandGroups"/> (asserted by tests).
     /// </summary>
     internal static readonly IReadOnlyList<string> PrimaryCommandGroups = new[]
@@ -93,18 +85,6 @@ internal static class CommandRouter
             {
                 ["generate"] = ProjectionGenerateCommand.Generate,
                 ["regenerate"] = ProjectionGenerateCommand.Regenerate
-            },
-            ["run"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
-            {
-                ["start"] = RunStartCommand.Execute,
-                ["supervise"] = RunSuperviseCommand.Execute,
-                ["submit"] = RunSubmitCommand.Execute,
-                ["resubmit"] = RunResubmitCommand.Execute,
-                ["rereview"] = RunRereviewCommand.Execute,
-                ["resume"] = RunResumeCommand.Execute,
-                ["log"] = RunLogCommand.Execute,
-                ["implement"] = RunImplementCommand.Execute,
-                ["fix"] = RunFixCommand.Execute
             },
             ["review"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -162,13 +142,6 @@ internal static class CommandRouter
                 ["report"] = BugReportCommand.Execute,
                 ["triage"] = BugTriageCommand.Execute,
                 ["plan"] = BugExecutionCommand.Execute,
-                ["intent-repair"] = BugIntentRepairCommand.Execute,
-                ["intent-issue"] = BugIntentIssueCommand.Execute,
-                ["intent-enqueue"] = BugIntentEnqueueCommand.Execute,
-                ["intent-start"] = BugIntentStartCommand.Execute,
-                ["intent-submit"] = BugIntentSubmitCommand.Execute,
-                ["intent-review"] = BugIntentReviewCommand.Execute,
-                ["intent-comment"] = BugIntentCommentCommand.Execute,
                 ["implementation-repair"] = BugImplementationRepairCommand.Execute,
                 ["implementation-issue"] = BugImplementationIssueCommand.Execute
             },
@@ -257,24 +230,6 @@ internal static class CommandRouter
                 ["handoff-bundle-history"] = TaskingHandoffBundleHistoryCommand.Execute,
                 ["ai-thread-summary-attach"] = TaskingAiThreadSummaryAttachCommand.Execute
             },
-            ["intake"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
-            {
-                ["init"] = IntakeInitCommand.Execute,
-                ["concept"] = IntakeConceptCommand.Execute,
-                ["interview"] = IntakeInterviewCommand.Execute,
-                ["compile"] = IntakeCompileCommand.Execute,
-                ["foldin"] = IntakeFoldinCommand.Execute,
-                ["patch"] = IntakePatchCommand.Execute,
-                ["apply"] = IntakeApplyCommand.Execute,
-                ["execution"] = IntakeExecutionCommand.Execute,
-                ["advance"] = IntakeAdvanceCommand.Execute,
-                ["activate"] = IntakeActivateCommand.Execute,
-                ["issue"] = IntakeIssueCommand.Execute,
-                ["enqueue"] = IntakeEnqueueCommand.Execute,
-                ["autostart"] = IntakeAutostartCommand.Execute,
-                ["launch"] = IntakeLaunchCommand.Execute,
-                ["start"] = IntakeStartCommand.Execute
-            },
             ["guide"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 // G393: guide-first entrypoint — the single obvious command an
@@ -355,16 +310,6 @@ internal static class CommandRouter
         {
             WriteHelp(writer, includeAll: false);
             return 0;
-        }
-
-        if (string.Equals(args[0], GenerateFromCurrentCommandName, StringComparison.Ordinal))
-        {
-            return GenerateFromCurrentCommand.Execute(context, args[1..], writer);
-        }
-
-        if (args.Length == 1 && string.Equals(args[0], "run", StringComparison.Ordinal))
-        {
-            return RunCommand.Execute(context, [], writer);
         }
 
         // G317 review-fix: `intent-cli task` (no subcommand) and
@@ -512,13 +457,11 @@ internal static class CommandRouter
             ["next-slice"] = "Prefer `intent-cli intent next-slice --dry-run` for collaborative shaping.",
             ["clarify"] = "`intent-cli clarify open ...` / `list` / `answer` / `draft` / `record`.",
             ["clarification"] = "`intent-cli clarification status`, `intent-cli clarification next`, `intent-cli clarification answer`.",
-            ["intake"] = "Older concept-intake surface; prefer `guide collaborate` + `interview record-answer` for new flows.",
             ["task"] = "`intent-cli task issue-to-pr --repo <r> --issue <n> --workdir <path>` (controller-driven planners).",
             ["tasking"] = "`intent-cli tasking handoff` / `task-packet` / `handoff-bundle` (cross-thread tasking; experimental).",
             ["safety"] = "`intent-cli safety nested-provider-handoff` (artifact-only nested-provider handoffs).",
             ["projection"] = "`intent-cli projection generate` / `regenerate` (internal tooling).",
-            ["project"] = "`intent-cli project status` (older surface; prefer `intent status`).",
-            ["run"] = "`intent-cli run ...` is integration smoke / replay / dogfooding — NOT the primary chat-first path."
+            ["project"] = "`intent-cli project status` (older surface; prefer `intent status`)."
         };
 
     private static void WriteHelp(TextWriter writer) => WriteHelp(writer, includeAll: false);
@@ -527,13 +470,7 @@ internal static class CommandRouter
     /// G379: the default <c>intent-cli --help</c> is chat-first. It leads with
     /// the workflow guides and lists only the primary command groups
     /// (<see cref="PrimaryCommandGroups"/>) a coding agent reaches for in
-    /// routine implementation / review / next-slice work. Advanced / legacy /
-    /// provider-runtime surfaces (<c>run</c>, concept-intake <c>intake</c>,
-    /// projection, bug-intent, tasking, safety, <c>generate-from-current</c>)
-    /// are NOT shown by default so agents do not mistake <c>intent-cli run</c>
-    /// for the implementation/review loop. They remain fully available via
-    /// <c>intent-cli --help --all</c> and the classified
-    /// <c>intent-cli guide commands list</c> catalog. With
+    /// routine implementation / review / next-slice work. With
     /// <paramref name="includeAll"/> the full group list and the
     /// <see cref="RunRoleNote"/> are emitted.
     /// </summary>
@@ -563,8 +500,6 @@ internal static class CommandRouter
             {
                 writer.WriteLine($"- {group}");
             }
-            writer.WriteLine("Additional top-level commands:");
-            writer.WriteLine($"- {GenerateFromCurrentCommandName}");
         }
         else
         {

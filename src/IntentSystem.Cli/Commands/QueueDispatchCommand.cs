@@ -110,7 +110,7 @@ internal static class QueueDispatchCommand
             executionUnit,
             context.RepoRoot,
             packet.TargetRepo,
-            RunStartCommand.ResolveWorktreePath(context, executionUnit),
+            Path.GetFullPath(Path.Combine(context.ResolveWorktreeRootPath(), executionUnit)),
             packet.TargetPath,
             packet.TargetPart);
 

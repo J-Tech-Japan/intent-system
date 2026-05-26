@@ -134,31 +134,6 @@ public sealed class AdvancedRuntimeGuidanceGateTests
     }
 
     [Fact]
-    public void GuideCommandsList_RunGroup_StaysClassifiedAsAdvanced()
-    {
-        var run = GuideCommandsListCommand.Groups.Single(group => group.Name == "run");
-        Assert.Equal("advanced", run.Classification);
-        Assert.Equal("advanced-runtime", run.RecommendedCaller);
-    }
-
-    [Fact]
-    public void GuideCommandsList_DefaultMarkdown_FlagsRunAsAdvanced()
-    {
-        using var writer = new StringWriter();
-        var exitCode = GuideCommandsListCommand.Execute(
-            CreateContext(),
-            [],
-            writer);
-
-        Assert.Equal(0, exitCode);
-        var output = writer.ToString();
-        // Confirm the row for the `run` group surfaces the advanced bucket.
-        var runLine = output.Split('\n').First(line => line.StartsWith("| run ", StringComparison.Ordinal));
-        Assert.Contains("| advanced |", runLine, StringComparison.Ordinal);
-        Assert.Contains("| advanced-runtime |", runLine, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void GuideCollaborate_DefaultOutput_DoesNotRecommendIntentCliRun()
     {
         using var writer = new StringWriter();
