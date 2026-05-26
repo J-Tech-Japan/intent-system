@@ -32,7 +32,7 @@ agent should run the appropriate `intent-cli` command rather than editing files
 or applying GitHub labels by hand. Every guide and automation page below
 enforces this rule.
 
-See the [README command reference](../../README.md#command-reference-agent-facing--power-users)
+See the [command reference](08-command-reference.md)
 for the full list of commands the agent will use on your behalf.
 
 ## Pages
@@ -44,6 +44,8 @@ for the full list of commands the agent will use on your behalf.
 5. [Implementation loop setup](05-implementation-loop.md)
 6. [Review / next-slice loop setup](06-review-next-slice-loop.md)
 7. [Recover when a loop looks wrong](07-recovery.md)
+8. [Command reference](08-command-reference.md) — agent-facing and power-user command surfaces
+9. [Developer reference](09-developer-reference.md) — packaged invocation, preview channel, version flow
 
 ## Two agent roles (read this once)
 

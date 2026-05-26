@@ -148,15 +148,18 @@ public sealed class PackagedInvocationSmokeTests
     [Fact]
     public void Readme_DocumentsHermeticPackagedInvocationPaths()
     {
-        var readme = File.ReadAllText(Path.Combine(GetSolutionRoot(), "README.md"));
+        // G422: packaged invocation smoke guidance moved from README.md to
+        // docs/en/09-developer-reference.md. Verify the new canonical location.
+        var devRef = File.ReadAllText(
+            Path.Combine(GetSolutionRoot(), "docs", "en", "09-developer-reference.md"));
 
-        Assert.Contains("mkdir -p .artifacts/smoke-repo/.intent-cli", readme, StringComparison.Ordinal);
-        Assert.Contains("cat > .artifacts/smoke-repo/.intent-cli/config.toml <<'EOF'", readme, StringComparison.Ordinal);
-        Assert.Contains("export INTENT_CLI_LOCAL_VERSION=\"0.3.1-local.$(date -u +%Y%m%d%H%M%S)\"", readme, StringComparison.Ordinal);
+        Assert.Contains("mkdir -p .artifacts/smoke-repo/.intent-cli", devRef, StringComparison.Ordinal);
+        Assert.Contains("cat > .artifacts/smoke-repo/.intent-cli/config.toml <<'EOF'", devRef, StringComparison.Ordinal);
+        Assert.Contains("export INTENT_CLI_LOCAL_VERSION=\"0.3.1-local.$(date -u +%Y%m%d%H%M%S)\"", devRef, StringComparison.Ordinal);
         // G407: package id is JTechJapan.IntentSystem.Cli; dotnet tool exec / dnx uses the
         // package id to locate the nupkg. The installed command remains intent-cli.
-        Assert.Contains("(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" JTechJapan.IntentSystem.Cli project status)", readme, StringComparison.Ordinal);
-        Assert.Contains("(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" JTechJapan.IntentSystem.Cli project status)", readme, StringComparison.Ordinal);
+        Assert.Contains("(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" JTechJapan.IntentSystem.Cli project status)", devRef, StringComparison.Ordinal);
+        Assert.Contains("(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version \"$INTENT_CLI_LOCAL_VERSION\" JTechJapan.IntentSystem.Cli project status)", devRef, StringComparison.Ordinal);
     }
 
     [Fact]
