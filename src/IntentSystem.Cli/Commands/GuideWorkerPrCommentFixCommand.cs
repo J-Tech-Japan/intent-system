@@ -110,7 +110,18 @@ Hard rules:
 - Do not add `intent-pr-created` to the PR; it is an issue-side completion marker.
 - Do not edit `queue-state.json`, `linked_issue`, or `linked_pr`; those are host-owned durable bookkeeping and must not be touched during a PR comment fix turn.
 - Do not edit `.intent-cli/**` or `intents/**` paths. These are host-owned metadata artifacts (packet files, publish artifacts, clarifications, queue state, runs). If a comment requests such changes, stop with outcome `host-artifact-repair-required` — the host repair agent must handle them, not the child implementation worker.
-- Do not run `intent-cli automation issue-publish`; that command is for publishing child issues, not for resolving PR comment repairs.";
+- Do not run `intent-cli automation issue-publish`; that command is for publishing child issues, not for resolving PR comment repairs.
+
+Repeated-stall recovery (G408: when the same PR has cycled without progress for two or more consecutive wakes):
+1. Do not retry the same repair without first re-reading the installed guidance:
+   - `intent-cli guide model --format json`
+   - `intent-cli guide onboarding --format json`
+   - `intent-cli guide commands list --format json`
+   - `intent-cli automation summary --domain {domainPlaceholder} --format json`
+   - `intent-cli worker pr-comment-preflight --repo <OWNER>/<REPO> --pr <n> --format json`
+2. Determine whether the stall was caused by prior noncompliance with intent-cli guidance (e.g. new branch created instead of checking out the existing one, force-push when not requested, host metadata path edited by child worker, claim/complete handoff skipped). If yes, apply the one safe current-lane repair that `intent-cli` explicitly marks as owned by the child loop (`child-selector-label-gap` category).
+3. If the stall is caused by a host-owned or operator-owned gap (`host-artifact-repair-required`, `clarification-required`, unsafe durable state, or operator policy decision), stop and emit a structured operator stop. Do not silently bypass or invent workarounds.
+4. Apply at most one guided repair per recovery cycle. If the stall persists after the repair, escalate to an operator stop rather than retrying indefinitely.";
 
         return new GuideWorkerPrCommentFixResult
         {
@@ -124,6 +135,21 @@ Hard rules:
                 "intent-cli guide onboarding --format json",
                 "intent-cli guide commands list --format json",
                 $"intent-cli automation summary --domain {domainPlaceholder} --format json"
+            },
+            RepeatedStallRecovery = new RepeatedStallRecoveryGuidance
+            {
+                Trigger = "Same PR has cycled without progress for two or more consecutive wakes.",
+                ReReadGuidance = new[]
+                {
+                    "intent-cli guide model --format json",
+                    "intent-cli guide onboarding --format json",
+                    "intent-cli guide commands list --format json",
+                    $"intent-cli automation summary --domain {domainPlaceholder} --format json",
+                    "intent-cli worker pr-comment-preflight --repo <OWNER>/<REPO> --pr <n> --format json"
+                },
+                SafeRepairCategory = "child-selector-label-gap",
+                OperatorStopCategories = new[] { "host-artifact-repair-required", "clarification-required", "unsafe-durable-state", "operator-policy-decision" },
+                MaxRepairsPerCycle = 1
             },
             OutcomeClassification = new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -185,6 +211,20 @@ Hard rules:
         writer.WriteLine(result.WorktreeFriendly);
         writer.WriteLine();
 
+        writer.WriteLine("## Repeated-stall recovery (G408)");
+        writer.WriteLine();
+        writer.WriteLine($"Trigger: {result.RepeatedStallRecovery.Trigger}");
+        writer.WriteLine();
+        writer.WriteLine("Re-read guidance:");
+        foreach (var call in result.RepeatedStallRecovery.ReReadGuidance)
+        {
+            writer.WriteLine($"- `{call}`");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"Safe repair category: `{result.RepeatedStallRecovery.SafeRepairCategory}`");
+        writer.WriteLine($"Operator stop categories: {string.Join(", ", result.RepeatedStallRecovery.OperatorStopCategories.Select(c => $"`{c}`"))}");
+        writer.WriteLine($"Max repairs per cycle: {result.RepeatedStallRecovery.MaxRepairsPerCycle}");
+        writer.WriteLine();
         writer.WriteLine("## Prompt");
         writer.WriteLine();
         writer.WriteLine("```text");
@@ -305,4 +345,7 @@ internal sealed record GuideWorkerPrCommentFixResult
 
     [JsonPropertyName("worktree_friendly")]
     public required string WorktreeFriendly { get; init; }
+
+    [JsonPropertyName("repeated_stall_recovery")]
+    public required RepeatedStallRecoveryGuidance RepeatedStallRecovery { get; init; }
 }

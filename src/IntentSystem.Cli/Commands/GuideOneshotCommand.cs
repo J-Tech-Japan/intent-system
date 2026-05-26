@@ -253,6 +253,15 @@ Workflow:
 12. If clarification is required, stop and report: background, question, options, pros/cons, and recommendation. Publish ownership disambiguation is NOT a valid clarification reason; proceed through `intent-cli` even when a concurrent publisher is observed.
 13. Commit and push parent host changes directly to `main` per `AGENTS.md`. Do not create a PR.
 
+Repeated-stall recovery (G408):
+- If the same PR or issue has returned to the host loop without progress for two or more consecutive wakes, do not retry without first re-reading intent-cli guidance:
+  1. `intent-cli guide model --format json`
+  2. `intent-cli automation summary --format text`
+  3. `intent-cli automation doctor --format json`
+- Apply only the safe current-lane repair that intent-cli explicitly marks as owned by the host loop (e.g. stale label cleanup via `intent-cli automation` commands).
+- If the gap requires operator judgment, is an unsafe metadata state, or requires durable state changes outside intent-cli transition commands, stop and report a structured operator stop rather than silently bypassing safety gates.
+- Apply at most one guided repair per recovery cycle. If the stall persists after one repair, escalate to the operator.
+
 Final report must include:
 - selected issue / PR or none
 - label transitions applied
@@ -296,6 +305,15 @@ Workflow:
 11. If next-slice is clear and WIP cap is empty, create/publish exactly one child issue and preload future packets only when they satisfy the Child Issue Contract. If a concurrent or prior publisher is observed in the host state (e.g. another automation has recently published), treat that as informational context only — do NOT ask the operator whether to proceed or who should own the publish step. Publish ownership follows `intent-cli` as the single source of truth; it is never a question for the operator chat.
 12. If clarification is required, stop and report: background, question, options, pros/cons, and recommendation. Publish ownership disambiguation is NOT a valid clarification reason; proceed through `intent-cli` even when a concurrent publisher is observed.
 13. Commit and push parent host changes directly to `main` per `AGENTS.md`. Do not create a PR.
+
+Repeated-stall recovery (G408):
+- If the same PR or issue has returned to the host loop without progress for two or more consecutive wakes, do not retry without first re-reading intent-cli guidance:
+  1. `intent-cli guide model --format json`
+  2. `intent-cli automation summary --format text`
+  3. `intent-cli automation doctor --format json`
+- Apply only the safe current-lane repair that intent-cli explicitly marks as owned by the host loop (e.g. stale label cleanup via `intent-cli automation` commands).
+- If the gap requires operator judgment, is an unsafe metadata state, or requires durable state changes outside intent-cli transition commands, stop and report a structured operator stop rather than silently bypassing safety gates.
+- Apply at most one guided repair per recovery cycle. If the stall persists after one repair, escalate to the operator.
 
 Final report must include:
 - selected issue / PR or none
@@ -375,6 +393,16 @@ Clarification / failure:
 - If clarification is needed, stop and report: background, question, options, pros/cons, and recommendation.
 - Do not create a second issue or PR in the same wake.
 - Do not continue to another target after success or failure.
+
+Repeated-stall recovery (G408):
+- If the same issue or PR has been selected and stalled without progress for two or more consecutive wakes, do not retry without first re-reading intent-cli guidance:
+  1. `intent-cli guide model --format json`
+  2. `intent-cli guide onboarding --format json`
+  3. `intent-cli guide commands list --format json`
+  4. `intent-cli automation summary --domain <DOMAIN> --format json`
+  5. Run the relevant preflight: `intent-cli worker issue-preflight --repo <OWNER>/<REPO> --issue <n> --format json` or `intent-cli worker pr-comment-preflight --repo <OWNER>/<REPO> --pr <n> --format json`.
+- Apply only the safe current-lane repair that intent-cli explicitly marks as owned by the child loop (`child-selector-label-gap` category). All other categories are host-owned or operator-owned and must be reported as structured operator stops.
+- Apply at most one guided repair per recovery cycle. If the stall persists after one repair, stop and report to the operator.
 
 Final report must include:
 - selected action

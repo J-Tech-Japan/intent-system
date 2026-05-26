@@ -28,6 +28,41 @@ child-loop 所有の修復が存在するかを示す。host 所有のカテゴ�
 > `intent-cli worker …-preflight` と `intent-cli automation doctor` を実行し、CLI が
 > 安全かつ scope 内と判断した修復のみ適用する。label/metadata を手編集しない。
 
+## 繰り返しストール回復（G408）
+
+自動化ループが同じターゲットで同じブロッカーに **2 回以上連続** してヒットし、
+進捗なしのまま繰り返す場合は、同じ停止を報告し続けるのではなく自己回復する。
+
+**回復フロー — まずガイダンスを再読する:**
+
+```bash
+intent-cli guide model --format json
+intent-cli guide onboarding --format json
+intent-cli guide commands list --format json
+intent-cli automation summary --domain <domain> --format json
+
+# child ループ: 詰まったターゲットに対応する preflight を実行
+intent-cli worker issue-preflight     --repo <owner>/<repo> --issue <n> --format json
+intent-cli worker pr-comment-preflight --repo <owner>/<repo> --pr    <n> --format json
+
+# host ループ: 鮮度と状態を確認
+intent-cli automation doctor --format json
+```
+
+**結果に応じた対応:**
+
+| 結果 | 対応 |
+|------|------|
+| `safe_repair_category: child-selector-label-gap` | `intent-cli` が安全と判断した修復を 1 回適用し、リトライ。 |
+| `host-artifact-repair-required` | 停止。構造化された operator stop を報告する。手修正しない。 |
+| `clarification-required` | 停止。何が曖昧かを報告し、operator の入力を待つ。 |
+| 1 回修復してもストール継続 | operator stop へエスカレートする。無限リトライしない。 |
+
+**制限事項:**
+- 1 回復サイクルあたり最大 **1 件** のガイド済み修復のみ適用する。
+- 回復として raw `gh label` 操作や手動ワークアラウンドを発明しない。
+- `intent-cli worker` / `intent-cli automation` のトランジション所有権を回避しない。
+
 ## metadata / label の安全境界
 
 - 復旧は `queue-state.json` や label の手編集を意味しない。preflight サーフェスは

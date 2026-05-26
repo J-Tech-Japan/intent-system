@@ -281,6 +281,105 @@ public sealed class GuideOneshotCommandTests
             StringComparison.Ordinal);
     }
 
+    // ── G408 repeated-stall recovery ─────────────────────────────────────────
+
+    /// <summary>
+    /// G408: the host intent-cli oneshot prompt must contain repeated-stall
+    /// recovery guidance that triggers after two or more consecutive identical stalls.
+    /// </summary>
+    [Fact]
+    public void HostIntentCliPrompt_ContainsRepeatedStallRecoveryGuidance()
+    {
+        Assert.Contains("Repeated-stall recovery", GuideOneshotCommand.HostIntentCliPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("two or more consecutive", GuideOneshotCommand.HostIntentCliPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-cli automation doctor", GuideOneshotCommand.HostIntentCliPrompt, StringComparison.Ordinal);
+        Assert.Contains("operator stop", GuideOneshotCommand.HostIntentCliPrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G408: the host intent-cli prompt must distinguish safe host-loop-owned repairs
+    /// from operator-escalation stops.
+    /// </summary>
+    [Fact]
+    public void HostIntentCliPrompt_DistinguishesSafeRepairFromOperatorStop()
+    {
+        Assert.Contains("intent-cli automation", GuideOneshotCommand.HostIntentCliPrompt, StringComparison.Ordinal);
+        Assert.Contains("operator", GuideOneshotCommand.HostIntentCliPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("structured operator stop", GuideOneshotCommand.HostIntentCliPrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G408: the sekiban-as-a-service host prompt must also contain repeated-stall recovery.
+    /// </summary>
+    [Fact]
+    public void HostSekibanAsAServicePrompt_ContainsRepeatedStallRecoveryGuidance()
+    {
+        Assert.Contains("Repeated-stall recovery", GuideOneshotCommand.HostSekibanAsAServicePrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("two or more consecutive", GuideOneshotCommand.HostSekibanAsAServicePrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-cli automation doctor", GuideOneshotCommand.HostSekibanAsAServicePrompt, StringComparison.Ordinal);
+        Assert.Contains("structured operator stop", GuideOneshotCommand.HostSekibanAsAServicePrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G408: the child implement-or-update oneshot prompt must contain repeated-stall
+    /// recovery guidance specific to the child loop.
+    /// </summary>
+    [Fact]
+    public void ChildPromptBody_ContainsRepeatedStallRecoveryGuidance()
+    {
+        Assert.Contains("Repeated-stall recovery", GuideOneshotCommand.ChildPromptBody, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("two or more consecutive", GuideOneshotCommand.ChildPromptBody, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-cli worker issue-preflight", GuideOneshotCommand.ChildPromptBody, StringComparison.Ordinal);
+        Assert.Contains("intent-cli worker pr-comment-preflight", GuideOneshotCommand.ChildPromptBody, StringComparison.Ordinal);
+        Assert.Contains("child-selector-label-gap", GuideOneshotCommand.ChildPromptBody, StringComparison.Ordinal);
+        Assert.Contains("structured operator stop", GuideOneshotCommand.ChildPromptBody, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G408: the child oneshot prompt must limit recovery to at most one repair per cycle.
+    /// </summary>
+    [Fact]
+    public void ChildPromptBody_LimitsRecoveryToOneRepairPerCycle()
+    {
+        Assert.Contains("at most one guided repair", GuideOneshotCommand.ChildPromptBody, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// G408: executing the child implement-or-update prompt must emit the recovery guidance.
+    /// </summary>
+    [Fact]
+    public void Execute_ChildImplementOrUpdate_EmitsRepeatedStallRecoveryGuidance()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOneshotCommand.Execute(
+            CreateContext(),
+            ["--kind", "child-implement-or-update", "--repo", "J-Tech-Japan/intent-system", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Repeated-stall recovery", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("child-selector-label-gap", output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G408: executing the host review prompt must emit the recovery guidance.
+    /// </summary>
+    [Fact]
+    public void Execute_HostReviewNextSlice_IntentCli_EmitsRepeatedStallRecoveryGuidance()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOneshotCommand.Execute(
+            CreateContext(),
+            ["--kind", "host-review-next-slice", "--domain", "intent-cli", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Repeated-stall recovery", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("structured operator stop", output, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
