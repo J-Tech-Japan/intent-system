@@ -119,7 +119,7 @@ Repeated-stall recovery (G408: when the same PR has cycled without progress for 
    - `intent-cli guide commands list --format json`
    - `intent-cli automation summary --domain {domainPlaceholder} --format json`
    - `intent-cli worker pr-comment-preflight --repo <OWNER>/<REPO> --pr <n> --format json`
-2. Determine whether the stall was caused by prior noncompliance with intent-cli guidance (e.g. new branch created instead of checking out the existing one, force-push when not requested, host metadata path edited by child worker, claim/complete handoff skipped). If yes, apply the one safe current-lane repair that `intent-cli` explicitly marks as owned by the child loop.
+2. Determine whether the stall was caused by prior noncompliance with intent-cli guidance (e.g. new branch created instead of checking out the existing one, force-push when not requested, host metadata path edited by child worker, claim/complete handoff skipped). If yes, apply the one safe current-lane repair that `intent-cli` explicitly marks as owned by the child loop (`child-selector-label-gap` category).
 3. If the stall is caused by a host-owned or operator-owned gap (`host-artifact-repair-required`, `clarification-required`, unsafe durable state, or operator policy decision), stop and emit a structured operator stop. Do not silently bypass or invent workarounds.
 4. Apply at most one guided repair per recovery cycle. If the stall persists after the repair, escalate to an operator stop rather than retrying indefinitely.";
 
