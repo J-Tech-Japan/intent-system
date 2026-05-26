@@ -95,11 +95,11 @@ Apache-2.0 — リポジトリルートの [LICENSE](../../LICENSE) を参照し
    - **公開** (ドラフトではない) — 公開するとリリースワークフローがトリガーされる。
 
 2. **リリースワークフローを監視** (Actions タブ):
-   - `nupkg` ジョブ: `intent-cli.0.3.0.nupkg` をビルドし NuGet.org にプッシュ (`NUGET_API_KEY` が設定されている場合)。`.nupkg` + `.sha256` をリリースに添付。
+   - `nupkg` ジョブ: `JTechJapan.IntentSystem.Cli.0.3.0.nupkg` をビルドし NuGet.org にプッシュ (`NUGET_API_KEY` が設定されている場合)。`.nupkg` + `.sha256` をリリースに添付。
    - `binaries` ジョブ (3×): `osx-arm64`, `win-x64`, `linux-x64` のセルフコンテインドアーカイブをビルド。`intent-cli --version` のスモークテスト後にリリースへ添付。
 
 3. **GitHub Release ページでリリースアセットを確認**:
-   - `intent-cli.0.3.0.nupkg` + `.sha256`
+   - `JTechJapan.IntentSystem.Cli.0.3.0.nupkg` + `.sha256`
    - `intent-cli-0.3.0-osx-arm64.tar.gz` + `.sha256`
    - `intent-cli-0.3.0-win-x64.zip` + `.sha256`
    - `intent-cli-0.3.0-linux-x64.tar.gz` + `.sha256`

@@ -232,8 +232,8 @@ Release binaries and OSS preview CI artifacts carry no build-time expiry.
 
 ## Packaged invocation (local smoke)
 
-The CLI is packaged as a .NET tool (package id `intent-cli`, command
-`intent-cli`). To smoke-test a locally built package:
+The CLI is packaged as a .NET tool (package id `JTechJapan.IntentSystem.Cli`,
+command `intent-cli`). To smoke-test a locally built package:
 
 ```bash
 export INTENT_CLI_LOCAL_VERSION="0.2.0-local.$(date -u +%Y%m%d%H%M%S)"
@@ -246,13 +246,13 @@ default_domain = "intent-cli"
 artifact_root = ".intent-cli"
 worktree_root = ".intent-cli/worktrees"
 EOF
-(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" intent-cli project status)
+(cd .artifacts/smoke-repo && dotnet tool exec --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" JTechJapan.IntentSystem.Cli project status)
 ```
 
 Equivalent `dnx` path:
 
 ```bash
-(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" intent-cli project status)
+(cd .artifacts/smoke-repo && dnx --yes --source ../packages --version "$INTENT_CLI_LOCAL_VERSION" JTechJapan.IntentSystem.Cli project status)
 ```
 
 Project-local best-practice and model-registry starter docs live under
