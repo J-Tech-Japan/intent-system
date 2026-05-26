@@ -246,7 +246,7 @@ jobs:
           ## 5. Uninstall
 
           \`\`\`bash
-          dotnet tool uninstall --global intent-cli
+          dotnet tool uninstall --global JTechJapan.IntentSystem.Cli
           \`\`\`
           EOF
           echo "wrote INSTALL.md (${PACKAGE_VERSION})"
