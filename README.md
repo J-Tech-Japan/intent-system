@@ -14,6 +14,14 @@ recover when a loop looks wrong — all through explicit, inspectable commands.
 - License: [Apache-2.0](#license)
 - Repository: <https://github.com/J-Tech-Japan/intent-system>
 
+**ドキュメント / Documentation:**
+[日本語](./docs/ja/index.md) | [English](./docs/en/index.md)
+
+> **はじめての方へ:** インストール後、`intent-cli --version` で動作確認し、
+> Claude・Codex・Copilot などの AI エージェントのチャットで
+> `intent-cli に聞いて...` と伝えるだけで始められます。
+> 詳しくは[日本語ドキュメント](./docs/ja/index.md)をご覧ください。
+
 ---
 
 ## Quickstart (public / OSS)
