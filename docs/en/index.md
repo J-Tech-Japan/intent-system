@@ -42,3 +42,8 @@ Child implementation agents are **GitHub-contract-only**: they must not read or
 mutate host `.intent-cli/`, queue-state, metadata branches, or `intents/**`.
 Host/review agents may operate on metadata, but ask `intent-cli` for the current
 command first and prefer its transitions over hand edits.
+
+The host can live in a **separate host repository** or in the **same repository
+on a dedicated metadata branch** (e.g. `main-metadata`). Both topologies are
+fully supported. See [Start a project → Repository topology choices](02-project-start.md#repository-topology-choices)
+for guidance on which to choose.

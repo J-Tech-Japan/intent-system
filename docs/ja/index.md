@@ -40,3 +40,8 @@ Child implementation agent は **GitHub-contract-only**: host の `.intent-cli/`
 queue-state、metadata branch、`intents/**` を読んだり変更したりしない。
 Host/review agent は metadata を扱ってよいが、手編集の前に `intent-cli` へ現在の
 コマンドを尋ね、その遷移を優先する。
+
+host は **別の host リポジトリ** に置くこともできますし、**同じリポジトリの専用 metadata ブランチ**
+（例: `main-metadata`）に置くこともできます。どちらのトポロジーも完全にサポートされています。
+どちらを選ぶかは [プロジェクト開始 → リポジトリトポロジーの選択](02-project-start.md#リポジトリトポロジーの選択)
+を参照してください。
