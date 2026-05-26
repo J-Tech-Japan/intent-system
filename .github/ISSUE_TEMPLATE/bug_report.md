@@ -38,6 +38,11 @@ What actually happened. Include the full error output if available.
 2.
 3.
 
+## Did you ask intent-cli for guidance first?
+
+<!-- Run: intent-cli guide help -->
+<!-- If yes, paste the relevant output. If no, please try that first — it resolves most common questions. -->
+
 ## Additional context
 
 Any other information that might help (config files, environment variables, etc.).

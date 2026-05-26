@@ -16,6 +16,7 @@ Closes #
 
 ## Checklist
 
+- [ ] I asked `intent-cli` for current guidance before touching workflow labels, packets, automation state, or intent metadata (`intent-cli guide help`)
 - [ ] Tests added or updated for new behavior
 - [ ] `dotnet test IntentSystem.sln --configuration Release` passes
 - [ ] PR is based on `main`
