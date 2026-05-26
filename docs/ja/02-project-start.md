@@ -1,12 +1,21 @@
 # プロジェクト開始
 
-> **まず intent-cli に聞く:** `intent-cli guide start` → 案内される
-> `design-and-intent` / プロジェクト開始ガイド。 ← [ドキュメント索引](index.md)
+> ← [ドキュメント索引](index.md)
 
-これは **host/design** 作業（metadata を触ってよいが、手編集の前に intent-cli へ
-現在のコマンドを尋ねる）。
+これは **host/design** 作業です。以下のプロンプトを AI agent のデザインスレッドに
+貼り付けてください。agent が intent-cli コマンドを実行し、質問や結果を返します。
 
-## 初期化と確認
+## デザインスレッドプロンプト
+
+AI agent（Claude、Codex、Copilot など）に貼り付けてください:
+
+> `<owner>/<repo>` の domain `<name>` のプロジェクトを開始または継続したいです。
+> host リポジトリのルートから `intent-cli guide start` と `intent-cli intent status`
+> を実行してください。現在のフェーズと、私が次に決断すべきことを教えてください。
+> label や metadata の変更は intent-cli の遷移を使い、ファイルを手編集したり
+> GitHub label を直接適用したりしないでください。
+
+## agent が実行するコマンド（リファレンス）
 
 ```bash
 # host domain を初期化（--write なしは read-only）
@@ -18,12 +27,6 @@ intent-cli intent status
 # 作業サーフェスが期待する内容を尋ねる
 intent-cli guide intent-work --format json
 ```
-
-## ask-intent-cli プロンプトテンプレート
-
-> `<owner>/<repo>` の domain `<name>` を始める前に、`intent-cli guide start` と
-> `intent-cli intent status` を実行し、フェーズに対応する guide コマンドに従う。
-> label/metadata の変更は intent-cli の遷移を使い、手編集しない。
 
 ## metadata / label の安全境界
 

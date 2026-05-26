@@ -18,18 +18,16 @@ recover when a loop looks wrong — all through explicit, inspectable commands.
 
 ## Quickstart (public / OSS)
 
-New to `intent-cli`? Follow this path top to bottom. Every step has a
-`intent-cli ...` command that tells you what to do next, so you rarely need to
-memorize anything.
+New to `intent-cli`? The typical path is:
 
-1. [Install](#1-install)
-2. [Verify](#2-verify)
-3. [Ask intent-cli first](#3-ask-intent-cli-first) ← the core habit
-4. [Start a project](#4-start-a-project)
-5. [Organize intents](#5-organize-intents)
-6. [Create packets / publish GitHub issues](#6-create-packets--publish-github-issues)
-7. [Set up implementation & review loops](#7-set-up-implementation--review-loops)
-8. [Recover when a loop looks wrong](#8-recover-when-a-loop-looks-wrong)
+1. [Install](#1-install) — one-time setup.
+2. [Verify](#2-verify) — confirm `intent-cli` is on your PATH.
+3. [Open a design thread and paste a prompt](#3-open-a-design-thread-and-paste-a-prompt) — the AI agent does the rest.
+
+After install, you do not need to memorize `intent-cli` commands. Open a Claude,
+Codex, or Copilot-style chat with repository access and paste one of the
+[ready-made prompts](#design-thread-prompt-examples) below. The AI agent will
+run `intent-cli` internally and bring questions or results back to you.
 
 ### 1. Install
 
@@ -64,33 +62,109 @@ A released build prints just the version line. (OSS preview CI builds add a
 `channel=preview built=… commit=…` trailer — see
 [Preview install](#preview-install).)
 
-### 3. Ask intent-cli first
+### 3. Open a design thread and paste a prompt
 
-**This is the operating rule of the whole system.** Before you edit metadata,
-move a workflow label, hand-write a packet, or tweak an automation prompt — ask
-`intent-cli` for the current guidance and let it own the transition. Guessing at
-label/metadata behavior is the most common cause of broken automation; the CLI
-exists so you never have to guess.
+Open a capable AI coding agent (Claude, Codex, Copilot, etc.) with access to
+your repository. Paste one of the prompts below. The agent will run
+`intent-cli` commands internally and bring back questions or results — you
+focus on intent, priorities, and approval decisions.
 
-Copy-paste starting points:
+**Start or continue a project:**
+
+> I want to work on `<owner>/<repo>` with intent-cli.
+> Please run `intent-cli guide start` and `intent-cli intent status`, then
+> tell me which phase we're in and what I should decide next.
+
+**Design/clarify intents before cutting work:**
+
+> Ask intent-cli about the current design phase for `<owner>/<repo>` domain `<name>`.
+> Run `intent-cli guide workflow --format json` and `intent-cli interview next-question`.
+> Report back: what questions remain open and what is the recommended next action?
+
+**Create a packet and publish GitHub issues:**
+
+> For domain `<name>` in `<owner>/<repo>`, ask intent-cli to help me
+> scaffold the next packet and publish a reviewed Child Issue Contract.
+> Run `intent-cli guide workflow --format json`, then follow the packet
+> and issue-publish workflow. Apply all labels through intent-cli; never
+> hand-apply `intent-target`.
+
+**Start an implementation loop (child agent):**
+
+> Set up a child implementation loop for `<owner>/<repo>`.
+> Run `intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>`
+> and follow the guidance. Use `intent-cli worker` commands for all label
+> transitions; never run raw `gh ... edit --add-label`.
+
+**Start a review / next-slice loop (host agent):**
+
+> Set up the host review and next-slice loop for `<owner>/<repo>`.
+> Run `intent-cli guide oneshot --kind host-review-next-slice --repo <owner>/<repo>`
+> and follow the guidance. Use `intent-cli automation` commands for all
+> host-side label transitions.
+
+**Recover when something looks wrong:**
+
+> Something looks wrong with `<owner>/<repo>`.
+> Run `intent-cli automation doctor --format json` and
+> `intent-cli worker issue-preflight --repo <owner>/<repo> --issue <n> --format json`.
+> Classify the gap and apply only the safe, in-scope repair intent-cli recommends.
+
+---
+
+## Command reference (agent-facing / power users)
+
+The commands below are what the AI agent runs on your behalf. You do not need
+to run them directly for routine use; they are documented here for transparency,
+advanced troubleshooting, and power-user automation.
+
+### Project setup
 
 ```bash
-# What can intent-cli do, and which command owns which transition?
-intent-cli guide help
-intent-cli guide commands list --format json
-
-# The exact step-by-step prompt for a given loop/role:
-intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>
-intent-cli guide oneshot --kind host-review-next-slice    --repo <owner>/<repo>
-
-# The provider-neutral automation/label contract for your domain:
-intent-cli automation summary --domain <domain> --format json
-
-# Any command's current flags:
-intent-cli <group> <command> --help
+intent-cli intent init --domain <name> [--target-repo <owner>/<repo>] --write
+intent-cli intent status
+intent-cli guide intent-work --format json
 ```
 
-Rules of thumb the docs and guidance enforce:
+### Design / intents
+
+```bash
+intent-cli interview next-question
+intent-cli interview record-answer ...
+intent-cli interview compile
+intent-cli guide workflow
+```
+
+### Packets / issues
+
+```bash
+intent-cli packet ...
+intent-cli issue validate-body ...
+intent-cli issue prepare ...
+intent-cli issue publish-reviewed ...
+```
+
+### Implementation & review loops
+
+```bash
+# Fetch the complete loop prompt for an AI agent:
+intent-cli guide oneshot --kind child-implement-or-update --repo <owner>/<repo>
+intent-cli guide oneshot --kind host-review-next-slice    --repo <owner>/<repo>
+```
+
+Operator-dogfooding prompt templates that wire these loops entirely through the
+deterministic worker/metadata commands live under
+[`docs/automation-templates/`](./docs/automation-templates/README.md).
+
+### Recovery
+
+```bash
+intent-cli worker issue-preflight       --repo <owner>/<repo> --issue <n> --format json
+intent-cli worker pr-comment-preflight  --repo <owner>/<repo> --pr <n>    --format json
+intent-cli automation doctor --format json
+```
+
+### Rules of thumb
 
 - **Use `intent-cli` transition commands, not raw edits.** Do not directly edit
   queue-state, workflow labels, packet publish metadata, or other host artifacts
@@ -99,74 +173,9 @@ Rules of thumb the docs and guidance enforce:
   --add-label`.
 - **Ask, don't read-and-guess.** Prefer `intent-cli guide ...` over reading
   local rule files; the guidance reflects the installed CLI's current contract.
-- **Never ask `intent-cli` to launch an AI provider.** Drive work through
-  `intent-cli guide`, `worker`, and `automation` commands; these are the
-  supported chat-first workflow surfaces.
-
-### 4. Start a project
-
-Initialize a host domain and inspect its state (read-only without `--write`):
-
-```bash
-intent-cli intent init --domain <name> [--target-repo <owner>/<repo>] --write
-intent-cli intent status
-intent-cli guide intent-work --format json   # what the work surfaces expect
-```
-
-### 5. Organize intents
-
-Capture and compile durable intent before cutting work:
-
-```bash
-intent-cli interview next-question        # durable per-domain Q/A
-intent-cli interview record-answer ...
-intent-cli interview compile
-intent-cli guide workflow                 # suggested end-to-end flow
-```
-
-### 6. Create packets / publish GitHub issues
-
-Scaffold the canonical packet (read-only without `--write`) and publish a
-reviewed Child Issue Contract. The publish boundary applies host labels through
-`intent-cli` — you never hand-apply `intent-target`:
-
-```bash
-intent-cli packet ...                     # packet.yaml / implementation.md / review-context.md / github-body.md
-intent-cli issue validate-body ...        # enforce the Standalone Child Issue Contract
-intent-cli issue prepare ...
-intent-cli issue publish-reviewed ...     # reviewed-issue publish boundary
-```
-
-### 7. Set up implementation & review loops
-
-Two cooperating loops, each with a ready-made prompt from
-`intent-cli guide oneshot`:
-
-- **Child implementation loop** (`--kind child-implement-or-update`): selects one
-  GitHub target via `intent-cli worker next-action`, claims it, implements the
-  smallest change, opens a ready-for-review PR (with a mandatory
-  `Closes #<issue>` reference), and records the outcome via
-  `intent-cli worker result-summary` + `intent-cli worker complete`.
-- **Host review / next-slice loop** (`--kind host-review-next-slice`): reviews PRs
-  against the packet/intent contract, requests updates, approves/merges, and cuts
-  the next slice.
-
-Operator-dogfooding prompt templates that wire these loops entirely through the
-deterministic worker/metadata commands live under
-[`docs/automation-templates/`](./docs/automation-templates/README.md).
-
-### 8. Recover when a loop looks wrong
-
-Don't hand-fix state — ask the CLI to classify and (where safe) repair:
-
-```bash
-intent-cli worker issue-preflight       --repo <owner>/<repo> --issue <n> --format json
-intent-cli worker pr-comment-preflight  --repo <owner>/<repo> --pr <n>    --format json
-intent-cli automation doctor --format json      # CLI freshness / host-state resolution
-```
-
-These read-only surfaces tell you whether a safe, in-scope repair is available
-and which command owns it, instead of guessing.
+- **`intent-cli` does not launch AI providers.** It emits deterministic
+  guidance, validates contracts, and performs bounded GitHub/metadata
+  transitions. The AI agent stays in the driver's seat.
 
 ---
 
