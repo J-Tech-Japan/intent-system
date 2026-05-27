@@ -1,6 +1,6 @@
 # Install
 
-← [docs index](index.md) | → [Start a project](02-project-start.md)
+← [docs index](README.md) | → [Start a project](02-project-start.md)
 
 Install `intent-cli` and verify it works. Once confirmed, continue to [Start a project](02-project-start.md).
 

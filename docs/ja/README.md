@@ -1,6 +1,6 @@
 # intent-cli ドキュメント（日本語）
 
-> English version: [`../en/index.md`](../en/index.md)
+> English version: [`../en/README.md`](../en/README.md)
 
 `intent-cli` は、AI agent に Intent System の正規手順を確認させながら Intent-Driven Development を進めるための **決定論的なサポートツール** です。
 

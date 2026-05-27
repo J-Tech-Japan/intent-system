@@ -15,12 +15,12 @@ recover when a loop looks wrong — all through explicit, inspectable commands.
 - Repository: <https://github.com/J-Tech-Japan/intent-system>
 
 **ドキュメント / Documentation:**
-[日本語](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/index.md) | [English](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/index.md)
+[日本語](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/README.md) | [English](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/README.md)
 
 > **はじめての方へ:** インストール後、`intent-cli --version` で動作確認し、
 > Claude・Codex・Copilot などの AI エージェントのチャットで
 > `intent-cli に聞いて...` と伝えるだけで始められます。
-> 詳しくは[日本語ドキュメント](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/index.md)をご覧ください。
+> 詳しくは[日本語ドキュメント](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/README.md)をご覧ください。
 
 ---
 
@@ -69,9 +69,9 @@ results. You focus on intent, priorities, and approval decisions.
 
 ## Documentation
 
-- **English:** [`docs/en/`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/index.md) — install, project start, intent
+- **English:** [`docs/en/`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/README.md) — install, project start, intent
   organization, packet/issue creation, implementation & review loop setup, recovery.
-- **日本語:** [`docs/ja/`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/index.md) — 同上のドキュメント日本語版。
+- **日本語:** [`docs/ja/`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/README.md) — 同上のドキュメント日本語版。
 - **Command reference:** [`docs/en/08-command-reference.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/08-command-reference.md)
   — agent-facing and power-user command surfaces.
 - **Developer reference:** [`docs/en/09-developer-reference.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/09-developer-reference.md)
