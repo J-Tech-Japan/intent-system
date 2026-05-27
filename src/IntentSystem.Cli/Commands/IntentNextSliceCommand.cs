@@ -52,20 +52,10 @@ internal static class IntentNextSliceCommand
     private const string UsageLine =
         "Usage: intent-cli intent next-slice --dry-run [--domain <name>] [--target-repo <owner/repo>] [--runtime-creation-allowed] [--format json|markdown]";
 
-    private static readonly IReadOnlyList<string> RequiredContractSections =
-        new[]
-        {
-            "Goal",
-            "Why This Slice Exists Now",
-            "Current Observed State",
-            "Accepted Baseline You May Assume",
-            "Target Repo / Path / Part",
-            "In Scope",
-            "Out Of Scope",
-            "Acceptance Criteria",
-            "Verification",
-            "Related Links"
-        };
+    // G433: use the same required section list as publish-flow so readiness
+    // and publish validation are always consistent.
+    private static IReadOnlyList<string> RequiredContractSections =>
+        PacketDraftCommand.RequiredContractSections;
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
