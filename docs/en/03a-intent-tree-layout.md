@@ -1,10 +1,29 @@
 # Intent knowledge-tree layout (tree-v1)
 
-> **Ask intent-cli first:** `intent-cli guide intent-work setup --kind tree-layout --domain <name> --target-repo <owner/repo>` ← [Organize intents](03-intents.md)
+> **Ask intent-cli first.** ← [Organize intents](03-intents.md)
 
 This page describes the **tree-v1** flexible intent knowledge-tree layout for new
 domains. Existing flat-file domains do not need to migrate immediately — tree-v1
 is a recommended default for new domains, not a hard requirement for existing ones.
+
+## How the intent-deepening conversation maps to the tree
+
+Answers from the [intent-deepening conversation](03-intents.md#what-is-intent-deepening)
+are organized into the folders below.
+
+| Conversation content | Tree location |
+|---|---|
+| Product goal, users, non-goals | `product/` |
+| Mission/value/vision, principles | `identity/` |
+| Feature requirements, user stories | `features/<slug>/` |
+| Technical choices, architecture, libraries | `technology/` |
+| ADR-style decisions | `decisions/` |
+| Unresolved questions | `clarifications/open.md` |
+| Implementation/review loop policy, release policy | `operations/` |
+| Executable slices | `packets/` → GitHub issue |
+
+Not all folders need to be populated in one conversation. Intent deepening can be repeated
+as the project evolves.
 
 ## Why tree-v1
 

@@ -26,6 +26,26 @@ The agent runs `intent-cli` internally and brings back questions or results.
 You focus on intent, priorities, and approval decisions — not on memorizing
 command sequences.
 
+## What is intent deepening?
+
+**Intent deepening** is the process of working with an AI agent to clarify what you want to build and why.
+
+For a new product or domain, paste a prompt like this:
+
+> Ask intent-cli to help organize the intent for this project.
+>
+> I want to build `<product or feature>`.
+> The important direction is `<user value, business goal, quality bar, operational policy>`.
+> Technically, I am considering `<language, cloud, architecture>`.
+> Some decisions are still unclear, so ask me structured questions with background, options, pros/cons, and a recommendation with reasons.
+> Organize the result into an intent tree that can lead to packets and GitHub issues.
+
+The AI agent uses intent-cli guidance to ask structured questions — background, options, pros/cons, and a recommendation. Your answers are organized into an **intent tree** (a discoverable folder structure) that feeds packets and GitHub issues.
+
+You do not need deep technical expertise. If you do not know the best technical choice, ask the AI agent to suggest options and explain tradeoffs.
+
+See [Organize & maintain intents](03-intents.md) for the full explanation.
+
 **The one rule behind the prompts:** before any label/metadata change, the AI
 agent should run the appropriate `intent-cli` command rather than editing files
 or applying GitHub labels by hand. Every guide and automation page below
