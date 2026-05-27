@@ -1,6 +1,6 @@
 # Start a project
 
-← [docs index](index.md) | → [Organize & maintain intents](03-intents.md)
+← [docs index](README.md) | → [Organize & maintain intents](03-intents.md)
 
 This is **host/design** work. Paste the prompt below into your AI agent
 design thread; the agent will run the intent-cli commands and bring back

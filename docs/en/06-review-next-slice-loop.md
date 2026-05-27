@@ -1,6 +1,6 @@
 # Review / next-slice loop setup
 
-← [docs index](index.md) | → [Recover when a loop looks wrong](07-recovery.md)
+← [docs index](README.md) | → [Recover when a loop looks wrong](07-recovery.md)
 
 Do not copy the steps from this page directly to create a review/next-slice loop.
 The authoritative conditions come from installed intent-cli guidance.
@@ -78,4 +78,4 @@ intent-cli automation pr-transition --transition <name> --write --format json
 
 ## Next
 
-[Recover when a loop looks wrong](07-recovery.md) | [Implementation loop setup](05-implementation-loop.md) | [docs index](index.md)
+[Recover when a loop looks wrong](07-recovery.md) | [Implementation loop setup](05-implementation-loop.md) | [docs index](README.md)

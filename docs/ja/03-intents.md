@@ -1,6 +1,6 @@
 # Intent Storming と intent の整理
 
-← [ドキュメント索引](index.md) | → [packet 作成と issue 公開](04-packets-issues.md)
+← [ドキュメント索引](README.md) | → [packet 作成と issue 公開](04-packets-issues.md)
 
 このページは **host/design** 作業です。packet を切り出す前に、AI agent とのデザインスレッドでプロダクト・技術の intent を整理します。
 

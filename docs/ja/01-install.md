@@ -1,6 +1,6 @@
 # インストール
 
-← [ドキュメント索引](index.md) | → [プロジェクト開始](02-project-start.md)
+← [ドキュメント索引](README.md) | → [プロジェクト開始](02-project-start.md)
 
 `intent-cli` をインストールして動作確認します。インストールが終わったら [プロジェクト開始](02-project-start.md) に進んでください。
 

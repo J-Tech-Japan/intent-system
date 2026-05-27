@@ -1,6 +1,6 @@
 # Intent Storming & organize intents
 
-← [docs index](index.md) | → [Create packets & publish issues](04-packets-issues.md)
+← [docs index](README.md) | → [Create packets & publish issues](04-packets-issues.md)
 
 This page covers **host/design** work. Before cutting packets, run Intent Storming with an AI agent in a design thread to clarify your product and technical intent.
 

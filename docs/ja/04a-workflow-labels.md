@@ -1,6 +1,6 @@
 # GitHub ワークフローラベルで見る現在地
 
-← [ドキュメント索引](index.md) | → [実装ループの設定](05-implementation-loop.md)
+← [ドキュメント索引](README.md) | → [実装ループの設定](05-implementation-loop.md)
 
 packet が GitHub Issue になると、Intent System の状態は GitHub ラベルとして見えるようになります。
 ラベルは人間が現在地を把握するための可視状態です。**通常は手で付け外ししません。**
@@ -48,4 +48,4 @@ intent-target + intent-pr-approved（PR 側）
 
 ## 次へ
 
-[実装ループの設定](05-implementation-loop.md) | [packet 作成と issue 公開](04-packets-issues.md) | [ドキュメント索引](index.md)
+[実装ループの設定](05-implementation-loop.md) | [packet 作成と issue 公開](04-packets-issues.md) | [ドキュメント索引](README.md)

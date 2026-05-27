@@ -1,6 +1,6 @@
 # Recover when a loop looks wrong
 
-← [docs index](index.md) | → [Review / next-slice loop setup](06-review-next-slice-loop.md)
+← [docs index](README.md) | → [Review / next-slice loop setup](06-review-next-slice-loop.md)
 
 When a loop looks stuck, the first step is to describe the symptom — not to run commands.
 Do not edit labels or metadata directly. Tell the AI agent what looks wrong and ask it
@@ -91,4 +91,4 @@ intent-cli automation doctor --format json
 
 ## Next
 
-[docs index](index.md) | [Review / next-slice loop setup](06-review-next-slice-loop.md)
+[docs index](README.md) | [Review / next-slice loop setup](06-review-next-slice-loop.md)

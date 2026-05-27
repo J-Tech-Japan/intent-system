@@ -1,6 +1,6 @@
 # 実装ループの設定
 
-← [ドキュメント索引](index.md) | → [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
+← [ドキュメント索引](README.md) | → [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
 
 実装ループは、このページの手順を直接コピーして作るものではありません。
 正確な条件は installed intent-cli guidance が source of truth です。
@@ -76,4 +76,4 @@ intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> --git
 
 ## 次へ
 
-[レビュー / next-slice ループの設定](06-review-next-slice-loop.md) | [ドキュメント索引](index.md)
+[レビュー / next-slice ループの設定](06-review-next-slice-loop.md) | [ドキュメント索引](README.md)

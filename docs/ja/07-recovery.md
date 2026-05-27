@@ -1,6 +1,6 @@
 # ループがおかしいときの復旧
 
-← [ドキュメント索引](index.md) | → [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
+← [ドキュメント索引](README.md) | → [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
 
 ループが止まったとき、最初に必要なのはコマンドではなく症状の説明です。
 label や metadata を直接編集せず、AI agent に症状を伝えて
@@ -90,4 +90,4 @@ intent-cli automation doctor --format json
 
 ## 次へ
 
-[ドキュメント索引](index.md) | [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
+[ドキュメント索引](README.md) | [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)

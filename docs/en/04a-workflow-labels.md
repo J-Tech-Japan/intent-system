@@ -1,6 +1,6 @@
 # GitHub workflow labels and what they mean
 
-← [docs index](index.md) | → [Implementation loop setup](05-implementation-loop.md)
+← [docs index](README.md) | → [Implementation loop setup](05-implementation-loop.md)
 
 When a packet becomes a GitHub Issue, the Intent System's workflow state becomes visible
 through GitHub labels. Labels are the canonical visible state that humans use to understand
@@ -49,4 +49,4 @@ intent-target + intent-pr-approved (on the PR)
 
 ## Next
 
-[Implementation loop setup](05-implementation-loop.md) | [Create packets & publish issues](04-packets-issues.md) | [docs index](index.md)
+[Implementation loop setup](05-implementation-loop.md) | [Create packets & publish issues](04-packets-issues.md) | [docs index](README.md)

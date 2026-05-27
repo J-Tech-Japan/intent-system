@@ -1,6 +1,6 @@
 # intent-cli documentation (English)
 
-> 日本語版は [`../ja/index.md`](../ja/index.md) を参照してください.
+> 日本語版は [`../ja/README.md`](../ja/README.md) を参照してください.
 
 `intent-cli` is **deterministic support tooling** for an intent-driven development workflow on top of GitHub.
 

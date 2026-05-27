@@ -1,6 +1,6 @@
 # packet 作成と issue 公開
 
-← [ドキュメント索引](index.md) | → [GitHub ワークフローラベル](04a-workflow-labels.md) | → [実装ループの設定](05-implementation-loop.md)
+← [ドキュメント索引](README.md) | → [GitHub ワークフローラベル](04a-workflow-labels.md) | → [実装ループの設定](05-implementation-loop.md)
 
 これは **host/design** 作業です。intent が十分に固まったら、デザインスレッドがそれを **packet**（実行可能な実装単位）に分割し、1つずつ GitHub Issue として公開します。child implementation agent がその issue を受け取って実装します。
 
