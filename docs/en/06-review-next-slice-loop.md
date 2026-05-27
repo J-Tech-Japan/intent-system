@@ -1,5 +1,7 @@
 # Review / next-slice loop setup
 
+← [docs index](index.md) | → [Recover when a loop looks wrong](07-recovery.md)
+
 Do not copy the steps from this page directly to create a review/next-slice loop.
 The authoritative conditions come from installed intent-cli guidance.
 Ask the AI agent in your design thread to generate the current loop creation prompt.

@@ -1,5 +1,7 @@
 # Recover when a loop looks wrong
 
+← [docs index](index.md) | → [Review / next-slice loop setup](06-review-next-slice-loop.md)
+
 When a loop looks stuck, the first step is to describe the symptom — not to run commands.
 Do not edit labels or metadata directly. Tell the AI agent what looks wrong and ask it
 to consult intent-cli for the safe repair path.
@@ -41,10 +43,6 @@ marked safe. Manual state edits and hand-applied labels are not the normal recov
 - **Delegate to the agent**: intent-cli determines which command owns each repair
 - **One at a time**: apply at most one guided repair per recovery cycle
 - **Stop if operator judgment is needed**: if intent-cli returns `host-artifact-repair-required` or `clarification-required`, report to the operator and stop
-
-## Next
-
-[docs index](index.md) | [Review / next-slice loop setup](06-review-next-slice-loop.md)
 
 ## Command reference (for agents, maintainers, and troubleshooting)
 
@@ -90,3 +88,7 @@ intent-cli automation doctor --format json
 | `host-artifact-repair-required` | Stop. Report a structured operator stop. Do not hand-fix |
 | `clarification-required` | Stop. Report what is ambiguous; wait for operator input |
 | Stall persists after one repair | Escalate to operator stop — do not retry indefinitely |
+
+## Next
+
+[docs index](index.md) | [Review / next-slice loop setup](06-review-next-slice-loop.md)

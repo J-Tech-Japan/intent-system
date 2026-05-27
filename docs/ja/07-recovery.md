@@ -1,5 +1,7 @@
 # ループがおかしいときの復旧
 
+← [ドキュメント索引](index.md) | → [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
+
 ループが止まったとき、最初に必要なのはコマンドではなく症状の説明です。
 label や metadata を直接編集せず、AI agent に症状を伝えて
 intent-cli への修復依頼を任せてください。
@@ -41,10 +43,6 @@ manual な状態編集や label の手付けは通常の修復パスではあり
 - **agent に任せる**: intent-cli がどのコマンドが修復を所有するかを判断する
 - **1 回ずつ**: 1 回の修復サイクルで最大 1 件の guided repair のみ適用する
 - **operator 判断が必要なら止まる**: intent-cli が `host-artifact-repair-required` または `clarification-required` を返した場合はオペレーターへ報告して止まる
-
-## 次へ
-
-[ドキュメント索引](index.md) | [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
 
 ## コマンドリファレンス（agent・メンテナ・トラブルシューティング向け）
 
@@ -89,3 +87,7 @@ intent-cli automation doctor --format json
 | `host-artifact-repair-required` | 停止。構造化された operator stop を報告する。手修正しない |
 | `clarification-required` | 停止。何が曖昧かを報告し、operator の入力を待つ |
 | 1 回修復してもストール継続 | operator stop へエスカレートする。無限リトライしない |
+
+## 次へ
+
+[ドキュメント索引](index.md) | [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)

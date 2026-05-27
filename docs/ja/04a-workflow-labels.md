@@ -1,5 +1,7 @@
 # GitHub ワークフローラベルで見る現在地
 
+← [ドキュメント索引](index.md) | → [実装ループの設定](05-implementation-loop.md)
+
 packet が GitHub Issue になると、Intent System の状態は GitHub ラベルとして見えるようになります。
 ラベルは人間が現在地を把握するための可視状態です。**通常は手で付け外ししません。**
 workflow label の変更は intent-cli と automation が行います。

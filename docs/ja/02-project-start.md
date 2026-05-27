@@ -1,6 +1,6 @@
 # プロジェクト開始
 
-> ← [ドキュメント索引](index.md)
+← [ドキュメント索引](index.md) | → [intent の整理・保守](03-intents.md)
 
 これは **host/design** 作業です。以下のプロンプトを AI agent のデザインスレッドに
 貼り付けてください。agent が intent-cli コマンドを実行し、質問や結果を返します。

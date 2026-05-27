@@ -1,5 +1,7 @@
 # GitHub workflow labels and what they mean
 
+← [docs index](index.md) | → [Implementation loop setup](05-implementation-loop.md)
+
 When a packet becomes a GitHub Issue, the Intent System's workflow state becomes visible
 through GitHub labels. Labels are the canonical visible state that humans use to understand
 what is waiting on whom. **You do not manually add or remove workflow labels in normal operation.**
