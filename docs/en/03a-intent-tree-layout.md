@@ -6,9 +6,9 @@ This page describes the **tree-v1** flexible intent knowledge-tree layout for ne
 domains. Existing flat-file domains do not need to migrate immediately — tree-v1
 is a recommended default for new domains, not a hard requirement for existing ones.
 
-## How the intent-deepening conversation maps to the tree
+## How the Intent Storming conversation maps to the tree
 
-Answers from the [intent-deepening conversation](03-intents.md#what-is-intent-deepening)
+Answers from the [Intent Storming conversation](03-intents.md#what-is-intent-storming)
 are organized into the folders below.
 
 | Conversation content | Tree location |
@@ -22,7 +22,7 @@ are organized into the folders below.
 | Implementation/review loop policy, release policy | `operations/` |
 | Executable slices | `packets/` → GitHub issue |
 
-Not all folders need to be populated in one conversation. Intent deepening can be repeated
+Not all folders need to be populated in one conversation. Intent Storming can be repeated
 as the project evolves.
 
 ## Why tree-v1

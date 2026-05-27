@@ -1,14 +1,16 @@
-# Organize & maintain intents
+# Intent Storming & organize intents
 
 ← [docs index](index.md) | → [Create packets & publish issues](04-packets-issues.md)
 
-This page covers **host/design** work. Before cutting packets, deepen your product and technical intent in a design thread with an AI agent.
+This page covers **host/design** work. Before cutting packets, run Intent Storming with an AI agent in a design thread to clarify your product and technical intent.
 
-## What is intent deepening?
+## What is Intent Storming?
 
-"Intent deepening" is the process of working with an AI agent to clarify what you want to build and why.
+**Intent Storming** is the practice of working with an AI agent before coding to clarify what you want to build and why — capturing the result in a structured intent tree.
 
 You start with a rough description. The AI agent uses intent-cli guidance to ask structured questions with background, options, pros/cons, and a recommendation. As you answer, the project direction, technical choices, and open questions become clear. The results are organized into an **intent tree** — a discoverable folder structure that feeds packets and GitHub issues.
+
+See also the [Intent-Driven Development Intent Storming proposal](https://www.intent-driven-development.com/jp/our-proposals/intent-storming).
 
 You do not need deep technical expertise. If you do not know the best technical choice, ask the AI agent to suggest options and explain tradeoffs.
 

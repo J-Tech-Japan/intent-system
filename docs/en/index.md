@@ -2,63 +2,20 @@
 
 > 日本語版は [`../ja/index.md`](../ja/index.md) を参照してください.
 
-`intent-cli` is **deterministic support tooling** for an intent-driven
-development workflow on top of GitHub. These pages give a little more structure
-than the [root README](../../README.md) without requiring you to read the
-internal design notes.
+`intent-cli` is **deterministic support tooling** for an intent-driven development workflow on top of GitHub.
 
-## How to use intent-cli
-
-`intent-cli` is designed to be driven by an AI agent — Claude, Codex,
-Copilot, or any capable coding assistant with repository access. You do not
-need to memorize or run its commands directly.
-
-**The typical human path:**
-
-1. Install `intent-cli` and verify with `intent-cli --version`.
-2. Open a design thread in your AI agent.
-3. Paste a prompt such as:
+Once installed, open a design thread in your AI agent and paste a prompt like:
 
 > I want to work on `<owner>/<repo>` with intent-cli.
 > Ask intent-cli what phase I'm in and what I should decide next.
 
-The agent runs `intent-cli` internally and brings back questions or results.
-You focus on intent, priorities, and approval decisions — not on memorizing
-command sequences.
-
-## What is intent deepening?
-
-**Intent deepening** is the process of working with an AI agent to clarify what you want to build and why.
-
-For a new product or domain, paste a prompt like this:
-
-> Ask intent-cli to help organize the intent for this project.
->
-> I want to build `<product or feature>`.
-> The important direction is `<user value, business goal, quality bar, operational policy>`.
-> Technically, I am considering `<language, cloud, architecture>`.
-> Some decisions are still unclear, so ask me structured questions with background, options, pros/cons, and a recommendation with reasons.
-> Organize the result into an intent tree that can lead to packets and GitHub issues.
-
-The AI agent uses intent-cli guidance to ask structured questions — background, options, pros/cons, and a recommendation. Your answers are organized into an **intent tree** (a discoverable folder structure) that feeds packets and GitHub issues.
-
-You do not need deep technical expertise. If you do not know the best technical choice, ask the AI agent to suggest options and explain tradeoffs.
-
-See [Organize & maintain intents](03-intents.md) for the full explanation.
-
-**The one rule behind the prompts:** before any label/metadata change, the AI
-agent should run the appropriate `intent-cli` command rather than editing files
-or applying GitHub labels by hand. Every guide and automation page below
-enforces this rule.
-
-See the [command reference](08-command-reference.md)
-for the full list of commands the agent will use on your behalf.
+The agent runs `intent-cli` internally and brings back questions or results. You do not need to memorize commands.
 
 ## Pages
 
 1. [Install](01-install.md)
 2. [Start a project](02-project-start.md)
-3. [Organize & maintain intents](03-intents.md)
+3. [Intent Storming & organize intents](03-intents.md)
 4. [Create packets & publish issues](04-packets-issues.md)
 4a. [GitHub workflow labels and what they mean](04a-workflow-labels.md) — label meanings and how to read them
 5. [Implementation loop setup](05-implementation-loop.md)
@@ -67,6 +24,14 @@ for the full list of commands the agent will use on your behalf.
 8. [Command reference](08-command-reference.md) — agent-facing and power-user command surfaces
 9. [Developer reference](09-developer-reference.md) — packaged invocation, preview channel, version flow
 
+## What is Intent Storming?
+
+**Intent Storming** is the practice of working with an AI agent before coding to clarify what you want to build and why — capturing the result in a structured intent tree. The AI agent asks structured questions with background, options, pros/cons, and a recommendation. Your answers are organized into an **intent tree** that feeds packets and GitHub issues.
+
+See [Intent Storming & organize intents](03-intents.md) for the full guide.
+
+**The one rule behind the prompts:** before any label/metadata change, the AI agent should run the appropriate `intent-cli` command rather than editing files or applying GitHub labels by hand. See the [command reference](08-command-reference.md).
+
 ## Two agent roles (read this once)
 
 | Role | Source of truth | Responsibilities |
@@ -74,19 +39,10 @@ for the full list of commands the agent will use on your behalf.
 | **Host / review agent** | parent host `.intent-cli/` state + intent tree | publish issues, apply `intent-target`, review/approve/merge, cut next slices, label transitions via `intent-cli automation` |
 | **Child implementation agent** | the **GitHub issue/PR + repo-local code** (not host metadata) | implement the issue contract, open/update the PR, record outcomes via `intent-cli worker` |
 
-Child implementation agents are **GitHub-contract-only**: they must not read or
-mutate host `.intent-cli/`, queue-state, metadata branches, or `intents/**`.
-Host/review agents may operate on metadata, but ask `intent-cli` for the current
-command first and prefer its transitions over hand edits.
+Child implementation agents are **GitHub-contract-only**: they must not read or mutate host `.intent-cli/`, queue-state, metadata branches, or `intents/**`.
 
-The host can live in a **separate host repository** or in the **same repository
-on a dedicated metadata branch** (e.g. `main-metadata`). Both topologies are
-fully supported. See [Start a project → Repository topology choices](02-project-start.md#repository-topology-choices)
-for guidance on which to choose.
+The host can live in a **separate host repository** or in the **same repository on a dedicated metadata branch** (e.g. `main-metadata`). See [Start a project → Repository topology choices](02-project-start.md#repository-topology-choices) for guidance.
 
 ## Community
 
-Join the [J-Tech Japan Discord](https://discord.gg/kMdv978X) for community
-discussion and questions. For bugs or actionable feature requests, open a
-[GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) instead.
-Security reports go to [SECURITY.md](../../SECURITY.md), not Discord.
+Join the [J-Tech Japan Discord](https://discord.gg/kMdv978X) for community discussion and questions. For bugs or actionable feature requests, open a [GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) instead. Security reports go to [SECURITY.md](../../SECURITY.md), not Discord.
