@@ -5,9 +5,9 @@
 このページでは、新規ドメイン向けの **tree-v1** フレキシブル intent ナレッジツリーレイアウトについて説明します。
 既存のフラットファイルドメインはすぐに移行する必要はありません。tree-v1 は新規ドメインへの推奨デフォルトであり、既存ドメインへの強制要件ではありません。
 
-## intent deepening の会話とツリーの関係
+## Intent Storming の会話とツリーの関係
 
-[intent deepening の会話](03-intents.md#intent-deepening-とは)で得られた回答は、このツリーの各フォルダに整理されます。
+[Intent Storming の会話](03-intents.md#intent-storming-とは)で得られた回答は、このツリーの各フォルダに整理されます。
 
 | 会話で決まった内容 | ツリーの格納先 |
 |---|---|
@@ -20,7 +20,7 @@
 | 実装ループ・リリース方針 | `operations/` |
 | 実行可能スライス | `packets/` → GitHub issue |
 
-1回の会話ですべてのフォルダが埋まる必要はありません。intent deepening は何度でも繰り返せます。
+1回の会話ですべてのフォルダが埋まる必要はありません。Intent Storming は何度でも繰り返せます。
 
 ## なぜ tree-v1 か
 

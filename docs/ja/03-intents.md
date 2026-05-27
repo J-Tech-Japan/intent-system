@@ -1,14 +1,16 @@
-# intent の整理・保守
+# Intent Storming と intent の整理
 
 ← [ドキュメント索引](index.md) | → [packet 作成と issue 公開](04-packets-issues.md)
 
-このページは **host/design** 作業です。packet を切り出す前に、AI agent とのデザインスレッドでプロダクト・技術の intent を深化させます。
+このページは **host/design** 作業です。packet を切り出す前に、AI agent とのデザインスレッドでプロダクト・技術の intent を整理します。
 
-## intent deepening とは
+## Intent Storming とは
 
-「intent deepening（意図の深化）」とは、AI agent と一緒に「何を作りたいか・なぜ作るか」を整理していくプロセスです。
+**Intent Storming** は、コードを書く前に「何を作るか・なぜ作るか・どの制約を受け入れるか」を AI agent と整理し、構造化された intent tree に残す作業です。
 
 最初は大まかな説明から始まります。AI agent は intent-cli のガイダンスを使って、背景・選択肢・メリット/デメリット・推奨理由つきで構造化された質問を投げかけます。あなたが答えるたびに、プロジェクトの方向性・技術的選択・未解決の課題が明確になっていきます。その結果は **intent tree** という発見しやすいフォルダ構造に整理され、packet（実装タスク）と GitHub issue の土台になります。
+
+詳細は [Intent-Driven Development サイトの Intent Storming 提案](https://www.intent-driven-development.com/jp/our-proposals/intent-storming) も参照してください。
 
 技術的な専門知識がなくても始められます。どの選択肢がよいか分からない場合は、AI agent に提案を求めてトレードオフを比較しながら決められます。
 
