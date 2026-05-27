@@ -1,7 +1,5 @@
 # レビュー / next-slice ループの設定
 
-← [実装ループの設定](05-implementation-loop.md) | → [ループがおかしいときの復旧](07-recovery.md)
-
 レビュー/next-slice ループも、このページの手順を直接コピーして作るものではありません。
 正確な条件は installed intent-cli guidance が source of truth です。
 設計スレッドで AI agent に依頼し、現在のループ作成プロンプトを生成してもらいます。
@@ -77,4 +75,4 @@ intent-cli automation pr-transition --transition <name> --write --format json
 
 ## 次へ
 
-[ループがおかしいときの復旧](07-recovery.md)。
+[ループがおかしいときの復旧](07-recovery.md) | [実装ループの設定](05-implementation-loop.md) | [ドキュメント索引](index.md)
