@@ -34,7 +34,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         int closeoutDriftRepairsAvailable = 0,
         bool draftReviewReady = false,
         bool draftFindingsPresent = false,
-        bool operatorIntendedDraft = false)
+        bool operatorIntendedDraft = false,
+        IReadOnlyList<string>? candidateMissingContractSections = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(openPrs);
@@ -469,6 +470,32 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
 
         if (!string.IsNullOrWhiteSpace(candidateExecutionUnit))
         {
+            // G433: reject candidates with incomplete packet contracts so
+            // issue-publish-ready is never emitted for a packet that
+            // issue publish-flow would refuse. Mirrors the validation in
+            // IntentNextSliceCommand so both readiness surfaces agree.
+            if (candidateMissingContractSections is { Count: > 0 })
+            {
+                var sectionList = string.Join(", ", candidateMissingContractSections);
+                details.Add(new AutomationHostReviewDiagnosticsDetail
+                {
+                    Kind = AutomationHostReviewDiagnosticsClassifications.ClarificationRequired,
+                    TargetKind = null,
+                    TargetNumber = null,
+                    TargetUrl = null,
+                    Description = $"candidate {candidateExecutionUnit} is missing required contract sections: {sectionList}",
+                });
+                return Build(
+                    repo,
+                    AutomationHostReviewDiagnosticsClassifications.ClarificationRequired,
+                    $"Candidate {candidateExecutionUnit} packet is missing required contract sections ({sectionList}); repair the packet before publishing.",
+                    recommendedNextCommand: null,
+                    clarification: null,
+                    details,
+                    warnings,
+                    missingContractSections: candidateMissingContractSections);
+            }
+
             // G286: a complete queued candidate with no review/WIP/clarification
             // blocker is the deterministic publish path. Surface
             // `issue-publish-ready` and a recommended chain that walks the
@@ -568,7 +595,8 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
         AutomationHostReviewDiagnosticsClarification? clarification,
         IReadOnlyList<AutomationHostReviewDiagnosticsDetail> details,
         IReadOnlyList<string> warnings,
-        string? safeRepairCategory = null) =>
+        string? safeRepairCategory = null,
+        IReadOnlyList<string>? missingContractSections = null) =>
         new()
         {
             Repo = repo,
@@ -584,6 +612,7 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
             // unsafe-metadata, clarification-required, or true-idle paths.
             SafeRepairAvailable = safeRepairCategory is not null,
             SafeRepairCategory = safeRepairCategory,
+            MissingContractSections = missingContractSections ?? Array.Empty<string>(),
         };
 
     private static IReadOnlyList<int> ExtractLinkedIssueNumbers(string repo, GitHubAutomationPrCandidate pr)

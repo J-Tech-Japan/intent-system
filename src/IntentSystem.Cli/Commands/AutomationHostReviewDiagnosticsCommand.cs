@@ -287,6 +287,15 @@ internal static class AutomationHostReviewDiagnosticsCommand
             }
         }
 
+        // G433: validate the candidate's packet contract so that neither the
+        // auto-probe path nor the explicit --candidate path can return
+        // issue-publish-ready for a packet that issue publish-flow would reject.
+        // Skip validation when the body file is absent (no file means no
+        // validation signal — callers that supply --candidate without a packet
+        // body on disk retain the pre-G433 behavior).
+        var candidateMissingSections = ComputeCandidateMissingContractSections(
+            resolvedWorkdir, candidate, context);
+
         var result = AutomationHostReviewDiagnosticsAnalyzer.Analyze(
             repo!,
             openPrs,
@@ -303,7 +312,8 @@ internal static class AutomationHostReviewDiagnosticsCommand
             closeoutDriftRepairsAvailable,
             draftReviewReady,
             draftFindingsPresent,
-            operatorIntendedDraft);
+            operatorIntendedDraft,
+            candidateMissingSections);
 
         Emit(writer, result, format);
         return 0;
@@ -567,6 +577,63 @@ internal static class AutomationHostReviewDiagnosticsCommand
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// G433: reads the candidate's <c>github-body.md</c> and returns the
+    /// required Child Issue Contract sections that are absent. Returns an
+    /// empty list when the body file does not exist (no signal → no
+    /// validation) or when <paramref name="candidate"/> is empty.
+    /// </summary>
+    private static IReadOnlyList<string> ComputeCandidateMissingContractSections(
+        string workdir,
+        string? candidate,
+        CliContext context)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return Array.Empty<string>();
+        }
+
+        var artifactRoot = context.Config?.Project?.ArtifactRoot ?? ".intent-cli";
+        var bodyPath = Path.Combine(workdir, artifactRoot, "issues", candidate, "github-body.md");
+        if (!File.Exists(bodyPath))
+        {
+            return Array.Empty<string>();
+        }
+
+        var content = File.ReadAllText(bodyPath);
+        var missing = new List<string>();
+        foreach (var section in PacketDraftCommand.RequiredContractSections)
+        {
+            if (!ContainsPacketSectionHeading(content, section))
+            {
+                missing.Add(section);
+            }
+        }
+
+        return missing;
+    }
+
+    private static bool ContainsPacketSectionHeading(string content, string section)
+    {
+        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (!line.StartsWith("##", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var heading = line.TrimStart('#').Trim();
+            if (string.Equals(heading, section, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string ResolveWorkdir(CliContext context, string? workdir)

@@ -1838,6 +1838,125 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.False(result.SafeRepairAvailable);
     }
 
+    // ─── G433 regression tests ────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G433_CandidateWithMissingBaseBranchPolicy_ReturnsClarificationRequired_NotIssuePublishReady()
+    {
+        // Passing --candidate with a packet body that is missing "Base Branch
+        // Policy" must return clarification-required, not issue-publish-ready,
+        // and must include "Base Branch Policy" in missing_contract_sections.
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        workspace.WritePacketBody("G433x", """
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Verification
+
+            - Run `dotnet test`.
+
+            ## Related Links
+
+            - (none)
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G433x", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("clarification-required", result.Classification);
+        Assert.NotEqual("issue-publish-ready", result.Classification);
+        Assert.Contains("Base Branch Policy", result.MissingContractSections, StringComparer.Ordinal);
+        Assert.False(result.SafeRepairAvailable);
+    }
+
+    [Fact]
+    public void Execute_G433_CandidateWithCompleteBody_ReturnsIssuePublishReady()
+    {
+        // A candidate whose packet body has all required sections must still
+        // return issue-publish-ready (no regression in the happy path).
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        AutomationHostReviewDiagnosticsCommand.CandidateListerFactory = () => new FakeLister();
+
+        workspace.WritePacketBody("G433y", """
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Verification
+
+            - Run `dotnet test`.
+
+            ## Related Links
+
+            - (none)
+
+            ## Base Branch Policy
+
+            Expected PR base branch: `main`
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--candidate", "G433y", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("issue-publish-ready", result.Classification);
+        Assert.Empty(result.MissingContractSections);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     private sealed class HostReviewDiagnosticsWorkspace : IDisposable
     {
         public HostReviewDiagnosticsWorkspace()
@@ -1864,6 +1983,13 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
 
         public void WriteSentinel() =>
             File.WriteAllText(Path.Combine(RootPath, "sentinel.txt"), "unchanged");
+
+        public void WritePacketBody(string executionUnit, string body)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "github-body.md"), body);
+        }
 
         public IReadOnlyDictionary<string, string> SnapshotFiles()
         {

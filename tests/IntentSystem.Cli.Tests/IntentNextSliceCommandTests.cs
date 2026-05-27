@@ -693,6 +693,10 @@ public sealed class IntentNextSliceCommandTests
 
             ## Related Links
             - x
+
+            ## Base Branch Policy
+
+            Expected PR base branch: `main`
             """;
     }
 
@@ -1386,6 +1390,10 @@ public sealed class IntentNextSliceCommandTests
 
             ## Acceptance Criteria
             x
+
+            ## Base Branch Policy
+
+            Expected PR base branch: `main`
             """);
         workspace.WriteQueueState(
             """
@@ -1480,6 +1488,10 @@ public sealed class IntentNextSliceCommandTests
 
             ## Acceptance Criteria
             x
+
+            ## Base Branch Policy
+
+            Expected PR base branch: `main`
             """);
 
         // First pass: confirm mechanical-repairable
@@ -1524,6 +1536,10 @@ public sealed class IntentNextSliceCommandTests
             ## Related Links
 
             - (none)
+
+            ## Base Branch Policy
+
+            Expected PR base branch: `main`
             """);
 
         // Second pass: must return issue-cut-ready
@@ -2288,6 +2304,131 @@ public sealed class IntentNextSliceCommandTests
         {
             if (Directory.Exists(childRoot)) Directory.Delete(childRoot, recursive: true);
         }
+    }
+
+    // ─── G433 regression tests ────────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G433_MissingBaseBranchPolicy_ReturnsClarificationRequired()
+    {
+        // G433: next-slice must use the same required section list as
+        // publish-flow. A packet that is otherwise complete but missing
+        // "Base Branch Policy" should return clarification-required, not
+        // issue-cut-ready, because publish-flow would reject it.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G433/github-body.md",
+            """
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            x
+
+            ## Out Of Scope
+            x
+
+            ## Acceptance Criteria
+            x
+
+            ## Verification
+            x
+
+            ## Related Links
+            - x
+            """);
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G433",
+                  "title": "contract validation consistency",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        // Must not return issue-cut-ready — publish-flow would reject this packet
+        Assert.Equal("clarification-required", root.GetProperty("recommended_outcome").GetString());
+        var missing = root.GetProperty("candidate").GetProperty("missing_contract_sections");
+        var missingNames = missing.EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("Base Branch Policy", missingNames);
+    }
+
+    [Fact]
+    public void Execute_G433_CompleteBodyWithBaseBranchPolicy_ReturnsIssueCutReady()
+    {
+        // G433 positive case: a packet with all required sections including
+        // "Base Branch Policy" must still return issue-cut-ready.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G433b/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G433b",
+                  "title": "contract validation consistency positive",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal(0, root.GetProperty("candidate").GetProperty("missing_contract_sections").GetArrayLength());
     }
 
     private sealed class IntentNextSliceWorkspace : IDisposable
