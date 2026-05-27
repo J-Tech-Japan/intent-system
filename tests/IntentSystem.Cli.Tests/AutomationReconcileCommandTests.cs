@@ -941,6 +941,14 @@ public sealed class AutomationReconcileCommandTests : IDisposable
             var binPath = Path.Combine(RootPath, ".intent-cli", "bin");
             Directory.CreateDirectory(binPath);
             var scriptPath = Path.Combine(binPath, "intent-cli");
+            // On Linux, overwriting an executable in-place with WriteAllText triggers
+            // ETXTBSY (Text file busy) if the inode is still open for execution. Unlinking
+            // the file first lets any running process keep its inode while the new file
+            // gets a fresh one.
+            if (!OperatingSystem.IsWindows() && File.Exists(scriptPath))
+            {
+                File.Delete(scriptPath);
+            }
             var prTransitionBlock = stalePrTransition
                 ? "  echo \"Command 'automation pr-transition' is not yet implemented.\"\n  exit 1\n"
                 : "  echo '--transition is required (review-start, request-update, or approved).'\n  exit 1\n";
