@@ -2,23 +2,28 @@
 
 ← [ドキュメント索引](index.md) | → [実装ループの設定](05-implementation-loop.md)
 
-これは **host/design** 作業です。packet が正本ファイルを scaffold し、公開境界がレビュー済みの
-Standalone Child Issue Contract を GitHub issue にします。以下のプロンプトを AI agent のデザインスレッドに
-貼り付けてください。agent が intent-cli コマンドを実行し、結果を返します。
+これは **host/design** 作業です。intent が十分に固まったら、デザインスレッドがそれを **packet**（実行可能な実装単位）に分割し、1つずつ GitHub Issue として公開します。child implementation agent がその issue を受け取って実装します。
 
-## agent が実行するコマンド（メンテナ・トラブルシューティング向け）
+## packet とは
 
-> **注意:** 以下のコマンドは AI agent が内部で実行します。通常、ユーザーが直接実行する必要はありません。メンテナンスやトラブルシューティングの際に参照してください。
+**packet** は、intent から切り出された焦点の絞られた実装スライスです。デザインスレッドが正本ファイル一式（`packet.yaml`、`implementation.md`、`review-context.md`、`github-body.md`）を scaffold します。これにより、何を作るかが明確に定義されます。
 
-```bash
-# packet を scaffold（packet.yaml / implementation.md / review-context.md / github-body.md）
-intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --format markdown
+**issue 公開**はレビュー済みの packet を GitHub Issue に変換します。この issue は **Standalone Child Issue Contract** であり、child implementation agent が実装に必要な唯一の情報源です。child agent は issue 本文とリポジトリのコードを参照するだけです。host metadata にはアクセスしません。
 
-# Standalone Child Issue Contract を検証してから公開
-intent-cli issue validate-body ...
-intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
-intent-cli automation issue-publish --issue <n> --write --format json
-```
+## デザインスレッドプロンプト
+
+AI agent のデザインスレッドに貼り付けてください:
+
+> domain `<name>` の次の packet を作成し、その issue を `<owner>/<repo>` に公開したい。
+> intent-cli に次に行うべきことを聞いてください。
+
+AI agent が行うこと:
+1. intent-cli で現在の intent と未完了作業を確認する
+2. 次の packet を draft する（正本ファイルを scaffold）
+3. Standalone Child Issue Contract のレビューを支援する
+4. 正しいワークフローラベルで issue を公開する
+
+公開後、issue はターゲットリポジトリに `intent-target` 付きで現れ、child implementation agent が受け取れる状態になります。
 
 ## ask-intent-cli プロンプトテンプレート
 
@@ -31,6 +36,20 @@ intent-cli automation issue-publish --issue <n> --write --format json
   child implementation agent も付けない。
 - issue 本文は **standalone contract** であること — child agent はそれを唯一の
   source of truth として扱う（host metadata にはアクセスしない）。
+
+## コマンドリファレンス（agent・メンテナ・トラブルシューティング向け）
+
+> **注意:** 以下のコマンドは AI agent が内部で実行します。通常、ユーザーが直接実行する必要はありません。ワークフローのデバッグや host automation のメンテナンスを行う場合に参照してください。
+
+```bash
+# packet を scaffold（packet.yaml / implementation.md / review-context.md / github-body.md）
+intent-cli packet draft --execution-unit <id> --target-repo <owner>/<repo> --format markdown
+
+# Standalone Child Issue Contract を検証してから公開
+intent-cli issue validate-body ...
+intent-cli issue publish-flow <id> --repo <owner>/<repo> --write --format json
+intent-cli automation issue-publish --issue <n> --write --format json
+```
 
 ## 次へ
 
