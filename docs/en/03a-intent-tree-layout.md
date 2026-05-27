@@ -1,6 +1,6 @@
 # Intent knowledge-tree layout (tree-v1)
 
-> **Ask intent-cli first.** ← [Organize intents](03-intents.md)
+← [docs index](index.md) | ← [Organize & maintain intents](03-intents.md)
 
 This page describes the **tree-v1** flexible intent knowledge-tree layout for new
 domains. Existing flat-file domains do not need to migrate immediately — tree-v1

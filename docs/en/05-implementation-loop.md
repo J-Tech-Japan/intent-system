@@ -1,5 +1,7 @@
 # Implementation loop setup
 
+← [docs index](index.md) | → [Review / next-slice loop setup](06-review-next-slice-loop.md)
+
 Do not copy the steps from this page directly to create an implementation loop.
 The authoritative conditions come from installed intent-cli guidance.
 Ask the AI agent in your design thread to generate the current loop creation prompt.
