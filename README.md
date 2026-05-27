@@ -11,16 +11,16 @@ recover when a loop looks wrong — all through explicit, inspectable commands.
 > seat and **asks `intent-cli` what to do next**.
 
 - Package id / command: `intent-cli`
-- License: [Apache-2.0](#license)
+- License: [Apache-2.0](https://github.com/J-Tech-Japan/intent-system/blob/main/README.md#license)
 - Repository: <https://github.com/J-Tech-Japan/intent-system>
 
 **ドキュメント / Documentation:**
-[日本語](./docs/ja/index.md) | [English](./docs/en/index.md)
+[日本語](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/index.md) | [English](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/index.md)
 
 > **はじめての方へ:** インストール後、`intent-cli --version` で動作確認し、
 > Claude・Codex・Copilot などの AI エージェントのチャットで
 > `intent-cli に聞いて...` と伝えるだけで始められます。
-> 詳しくは[日本語ドキュメント](./docs/ja/index.md)をご覧ください。
+> 詳しくは[日本語ドキュメント](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/index.md)をご覧ください。
 
 ---
 
@@ -37,9 +37,9 @@ dotnet tool install -g JTechJapan.IntentSystem.Cli
 If `intent-cli` is not found after install, add `~/.dotnet/tools` (macOS/Linux)
 or `%USERPROFILE%\.dotnet\tools` (Windows) to your `PATH`.
 
-> No .NET SDK? See **[Install without a .NET SDK](./docs/en/01-install.md#install-without-a-net-sdk)**
+> No .NET SDK? See **[Install without a .NET SDK](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/01-install.md#install-without-a-net-sdk)**
 > for self-contained binaries. Need the preview channel? See the
-> **[developer reference](./docs/en/09-developer-reference.md#preview-install)**.
+> **[developer reference](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/09-developer-reference.md#preview-install)**.
 
 ### 2. Verify
 
@@ -69,12 +69,12 @@ results. You focus on intent, priorities, and approval decisions.
 
 ## Documentation
 
-- **English:** [`docs/en/`](./docs/en/index.md) — install, project start, intent
+- **English:** [`docs/en/`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/index.md) — install, project start, intent
   organization, packet/issue creation, implementation & review loop setup, recovery.
-- **日本語:** [`docs/ja/`](./docs/ja/index.md) — 同上のドキュメント日本語版。
-- **Command reference:** [`docs/en/08-command-reference.md`](./docs/en/08-command-reference.md)
+- **日本語:** [`docs/ja/`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/index.md) — 同上のドキュメント日本語版。
+- **Command reference:** [`docs/en/08-command-reference.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/08-command-reference.md)
   — agent-facing and power-user command surfaces.
-- **Developer reference:** [`docs/en/09-developer-reference.md`](./docs/en/09-developer-reference.md)
+- **Developer reference:** [`docs/en/09-developer-reference.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/09-developer-reference.md)
   — packaged invocation smoke test, preview channel, version flow.
 
 ---
@@ -85,14 +85,14 @@ Join the [J-Tech Japan Discord](https://discord.gg/kMdv978X) for community
 discussion, questions, and lightweight support. Discord is for general chat;
 for reproducible bugs or actionable feature requests, please open a
 [GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) instead.
-Security-sensitive reports go to [SECURITY.md](./SECURITY.md), not Discord.
+Security-sensitive reports go to [SECURITY.md](https://github.com/J-Tech-Japan/intent-system/blob/main/SECURITY.md), not Discord.
 
 ---
 
 ## License
 
 This project is licensed under the Apache License, Version 2.0 — see the
-[`LICENSE`](./LICENSE) file for the full text and [`NOTICE`](./NOTICE) for
+[`LICENSE`](https://github.com/J-Tech-Japan/intent-system/blob/main/LICENSE) file for the full text and [`NOTICE`](https://github.com/J-Tech-Japan/intent-system/blob/main/NOTICE) for
 attribution. The published `intent-cli` NuGet package declares `Apache-2.0` via
 SPDX license metadata.
 
