@@ -1,7 +1,8 @@
 # インストール
 
-> **まず intent-cli に聞く。** インストール後、ワークフロー作業の前に
-> intent-cli に次に行うべきことを聞く。 ← [ドキュメント索引](index.md)
+← [ドキュメント索引](index.md) | → [プロジェクト開始](02-project-start.md)
+
+`intent-cli` をインストールして動作確認します。インストールが終わったら [プロジェクト開始](02-project-start.md) に進んでください。
 
 基本ルートは NuGet.org の .NET グローバルツール（**.NET 10 SDK** が必要。
 `dotnet --version` で確認）。macOS / Windows / Linux で同じコマンド:

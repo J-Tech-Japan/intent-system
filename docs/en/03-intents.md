@@ -1,8 +1,8 @@
 # Organize & maintain intents
 
-> **Ask intent-cli first.** ← [docs index](index.md)
+← [docs index](index.md) | → [Create packets & publish issues](04-packets-issues.md)
 
-**Host/design** work: capture and compile durable intent before cutting any slice.
+This page covers **host/design** work. Before cutting packets, deepen your product and technical intent in a design thread with an AI agent.
 
 ## What is intent deepening?
 
@@ -89,19 +89,6 @@ AI agent questions take this shape:
   files.
 - Child implementation agents do **not** read the intent tree (`intents/**`) or
   host metadata — that's host/design territory.
-
-## Command reference (agent-facing)
-
-```bash
-# Durable per-domain Q/A artifact
-intent-cli interview next-question
-intent-cli interview record-answer ...
-intent-cli interview compile
-
-# Suggested end-to-end flow / readiness
-intent-cli guide workflow --format json
-intent-cli intent status --format json
-```
 
 ## Intent knowledge-tree layout (tree-v1)
 

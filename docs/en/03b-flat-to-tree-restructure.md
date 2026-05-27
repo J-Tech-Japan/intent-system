@@ -1,9 +1,9 @@
 # Flat-to-Tree Restructure (G405)
 
-> **Ask intent-cli first:** `intent-cli guide intent-work setup --kind restructure --domain <name> --target-repo <owner/repo>`
-> ← [intent management](03-intents.md)
+← [Organize & maintain intents](03-intents.md) | → [Create packets & publish issues](04-packets-issues.md)
 
 This page describes the design-AI-assisted workflow for restructuring an existing flat intent domain into the tree-v1 layout (G403/G404).
+To start a restructure, ask `intent-cli` to check the current state in your AI agent design thread.
 
 ## When to use this
 

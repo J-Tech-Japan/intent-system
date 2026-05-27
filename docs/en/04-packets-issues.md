@@ -1,9 +1,15 @@
 # Create packets & publish issues
 
-> **Ask intent-cli first.** ← [docs index](index.md)
+← [docs index](index.md) | → [Implementation loop setup](05-implementation-loop.md)
 
-**Host/design** work. A packet scaffolds the canonical files; the publish
+This is **host/design** work. A packet scaffolds the canonical files; the publish
 boundary turns a reviewed Standalone Child Issue Contract into a GitHub issue.
+Paste the prompt below into your AI agent design thread; the agent will run the
+intent-cli commands and bring back questions or results.
+
+## What the agent will run (for maintainers and troubleshooting)
+
+> **Note:** The commands below are run by the AI agent internally. You do not normally need to run them manually. Refer to this section for maintenance or troubleshooting.
 
 ```bash
 # Scaffold the packet (packet.yaml / implementation.md / review-context.md / github-body.md)

@@ -1,7 +1,8 @@
 # Install
 
-> **Ask intent-cli first.** After installing, ask intent-cli what to do next before
-> starting any workflow work. ← [docs index](index.md)
+← [docs index](index.md) | → [Start a project](02-project-start.md)
+
+Install `intent-cli` and verify it works. Once confirmed, continue to [Start a project](02-project-start.md).
 
 The basic path is the .NET global tool from NuGet.org (requires a **.NET 10
 SDK**; check with `dotnet --version`). The same commands work on macOS, Windows,

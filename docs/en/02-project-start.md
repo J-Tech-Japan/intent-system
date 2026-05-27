@@ -13,7 +13,9 @@ Paste this into your AI agent (Claude, Codex, Copilot, etc.):
 > I want to start or continue the project on `<owner>/<repo>`, domain `<name>`.
 > Ask intent-cli what phase I'm in and what I should decide next.
 
-## What the agent will run (reference)
+## What the agent will run (for maintainers and troubleshooting)
+
+> **Note:** The commands below are run by the AI agent internally. You do not normally need to run them manually. Refer to this section for maintenance or troubleshooting.
 
 ```bash
 # Initialize a host domain (read-only without --write)

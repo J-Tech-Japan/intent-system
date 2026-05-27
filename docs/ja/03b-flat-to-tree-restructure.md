@@ -1,9 +1,9 @@
 # フラットからツリーへの再構成 (G405)
 
-> **まず intent-cli に聞く:** `intent-cli guide intent-work setup --kind restructure --domain <name> --target-repo <owner/repo>`
-> ← [intent の整理](03-intents.md)
+← [intent の整理・保守](03-intents.md) | → [packet 作成と issue 公開](04-packets-issues.md)
 
 このページでは、既存のフラット intent ドメインを tree-v1 レイアウト (G403/G404) に再構成するための、デザイン AI 支援ワークフローを説明します。
+再構成を始めるには、AI agent のデザインスレッドで `intent-cli` に現在の状態を確認させてください。
 
 ## いつ使うか
 

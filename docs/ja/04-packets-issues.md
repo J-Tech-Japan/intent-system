@@ -1,9 +1,14 @@
 # packet 作成と issue 公開
 
-> **まず intent-cli に聞く。** ← [ドキュメント索引](index.md)
+← [ドキュメント索引](index.md) | → [実装ループの設定](05-implementation-loop.md)
 
-**host/design** 作業。packet が正本ファイルを scaffold し、公開境界がレビュー済みの
-Standalone Child Issue Contract を GitHub issue にする。
+これは **host/design** 作業です。packet が正本ファイルを scaffold し、公開境界がレビュー済みの
+Standalone Child Issue Contract を GitHub issue にします。以下のプロンプトを AI agent のデザインスレッドに
+貼り付けてください。agent が intent-cli コマンドを実行し、結果を返します。
+
+## agent が実行するコマンド（メンテナ・トラブルシューティング向け）
+
+> **注意:** 以下のコマンドは AI agent が内部で実行します。通常、ユーザーが直接実行する必要はありません。メンテナンスやトラブルシューティングの際に参照してください。
 
 ```bash
 # packet を scaffold（packet.yaml / implementation.md / review-context.md / github-body.md）
