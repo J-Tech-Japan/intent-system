@@ -1,6 +1,6 @@
 # Create packets & publish issues
 
-← [docs index](index.md) | → [Implementation loop setup](05-implementation-loop.md)
+← [docs index](index.md) | → [GitHub workflow labels](04a-workflow-labels.md) | → [Implementation loop setup](05-implementation-loop.md)
 
 This is **host/design** work. When your intent is clear enough to act on, the design thread splits it into **packets** — focused implementation units — and publishes one at a time as a GitHub Issue for a child implementation agent to pick up.
 

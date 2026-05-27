@@ -60,6 +60,7 @@ for the full list of commands the agent will use on your behalf.
 2. [Start a project](02-project-start.md)
 3. [Organize & maintain intents](03-intents.md)
 4. [Create packets & publish issues](04-packets-issues.md)
+4a. [GitHub workflow labels and what they mean](04a-workflow-labels.md) — label meanings and how to read them
 5. [Implementation loop setup](05-implementation-loop.md)
 6. [Review / next-slice loop setup](06-review-next-slice-loop.md)
 7. [Recover when a loop looks wrong](07-recovery.md)

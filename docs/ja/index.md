@@ -64,6 +64,7 @@ agent が代わりに使うコマンドの全リストは
 2. [プロジェクト開始](02-project-start.md)
 3. [intent の整理・保守](03-intents.md)
 4. [packet 作成と issue 公開](04-packets-issues.md)
+4a. [GitHub ワークフローラベルで見る現在地](04a-workflow-labels.md) — ラベルの意味と読み方
 5. [実装ループの設定](05-implementation-loop.md)
 6. [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
 7. [ループがおかしいときの復旧](07-recovery.md)
