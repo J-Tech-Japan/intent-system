@@ -71,6 +71,20 @@ internal sealed record AutomationHostReviewDiagnosticsResult
 
     [JsonPropertyName("safeRepairCategory")]
     public string? SafeRepairCategoryCamel => SafeRepairCategory;
+
+    /// <summary>
+    /// G433: required Child Issue Contract sections that are absent from
+    /// the candidate packet's <c>github-body.md</c>. Non-empty only when
+    /// <see cref="Classification"/> is <c>clarification-required</c> due
+    /// to a contract gap on an explicit candidate. Mirrors the field emitted
+    /// by <c>intent next-slice --dry-run</c> so callers can use the same
+    /// repair path.
+    /// </summary>
+    [JsonPropertyName("missing_contract_sections")]
+    public IReadOnlyList<string> MissingContractSections { get; init; } = Array.Empty<string>();
+
+    [JsonPropertyName("missingContractSections")]
+    public IReadOnlyList<string> MissingContractSectionsCamel => MissingContractSections;
 }
 
 internal sealed record AutomationHostReviewDiagnosticsDetail
