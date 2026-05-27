@@ -15,7 +15,7 @@
     -->
     <ToolCommandName>intent-cli</ToolCommandName>
     <PackageId>JTechJapan.IntentSystem.Cli</PackageId>
-    <Version>0.3.1</Version>
+    <Version>0.3.2</Version>
     <Authors>J-Tech-Japan</Authors>
     <Description>Intent System CLI — deterministic support tooling for intent-driven development on GitHub. Install: dotnet tool install -g JTechJapan.IntentSystem.Cli. Command: intent-cli.</Description>
     <PackageTags>intent-cli;dotnet-tool;intent-system</PackageTags>

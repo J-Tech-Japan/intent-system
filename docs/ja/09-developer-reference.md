@@ -68,7 +68,7 @@ CLI は .NET ツールとしてパッケージ化されています（パッケ�
 コマンド `intent-cli`）。ローカルビルドパッケージのスモークテスト:
 
 ```bash
-export INTENT_CLI_LOCAL_VERSION="0.3.1-local.$(date -u +%Y%m%d%H%M%S)"
+export INTENT_CLI_LOCAL_VERSION="0.3.2-local.$(date -u +%Y%m%d%H%M%S)"
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj \
   -p:Version="$INTENT_CLI_LOCAL_VERSION" \
   -o .artifacts/packages
