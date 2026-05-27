@@ -1,8 +1,8 @@
 # intent の整理・保守
 
-> **まず intent-cli に聞く。** ← [ドキュメント索引](index.md)
+← [ドキュメント索引](index.md) | → [packet 作成と issue 公開](04-packets-issues.md)
 
-**host/design** 作業: slice を切り出す前に、永続的な intent を収集・コンパイルする。
+このページは **host/design** 作業です。packet を切り出す前に、AI agent とのデザインスレッドでプロダクト・技術の intent を深化させます。
 
 ## intent deepening とは
 
@@ -96,19 +96,6 @@ AI agent の質問はこの形をとります:
   （ここでの変更は `record-answer` のみ）。永続 Q/A ファイルを手編集しない。
 - child implementation agent は intent tree（`intents/**`）や host metadata を
   **読まない** — これは host/design の領域。
-
-## コマンドリファレンス（agent 向け）
-
-```bash
-# domain ごとの永続 Q/A アーティファクト
-intent-cli interview next-question
-intent-cli interview record-answer ...
-intent-cli interview compile
-
-# 推奨フロー / 準備状況
-intent-cli guide workflow --format json
-intent-cli intent status --format json
-```
 
 ## Intent ナレッジツリーレイアウト (tree-v1)
 
