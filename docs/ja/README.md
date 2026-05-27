@@ -45,6 +45,6 @@ host は **別の host リポジトリ** に置くこともできますし、**�
 
 ## コミュニティ
 
-コミュニティのディスカッションや質問には [J-Tech JAPAN OSS](https://discord.gg/kMdv978X) にご参加ください。
+コミュニティのディスカッションや質問には [J-Tech JAPAN OSS Discord](https://discord.gg/kMdv978X) にご参加ください。
 
 再現可能なバグやアクションにつながる機能要望は [GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) として報告してください。セキュリティに関する報告は [SECURITY.md](../../SECURITY.md) へ。

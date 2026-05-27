@@ -81,7 +81,7 @@ results. You focus on intent, priorities, and approval decisions.
 
 ## Community
 
-Join the [J-Tech JAPAN OSS](https://discord.gg/kMdv978X) for community
+Join the [J-Tech JAPAN OSS Discord](https://discord.gg/kMdv978X) for community
 discussion, questions, and lightweight support. Discord is for general chat;
 for reproducible bugs or actionable feature requests, please open a
 [GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) instead.
