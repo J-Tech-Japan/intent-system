@@ -4,8 +4,24 @@
 
 `intent-cli` をインストールして動作確認します。インストールが終わったら [プロジェクト開始](02-project-start.md) に進んでください。
 
-基本ルートは NuGet.org の .NET グローバルツール（**.NET 10 SDK** が必要。
-`dotnet --version` で確認）。macOS / Windows / Linux で同じコマンド:
+## .NET SDK が入っていない場合
+
+NuGet global tool として intent-cli を入れるには .NET SDK が必要です。
+まだ `dotnet` コマンドが使えない場合は、Microsoft の公式ページから .NET 10 SDK をインストールしてください。
+
+- https://dotnet.microsoft.com/en-us/download
+
+インストール後、ターミナルで次を確認します。
+
+```bash
+dotnet --version
+```
+
+バージョンが表示されたら、次の手順に進めます。
+
+## インストール
+
+基本ルートは NuGet.org の .NET グローバルツール（**.NET 10 SDK** が必要）。macOS / Windows / Linux で同じコマンド:
 
 ```bash
 # インストール
