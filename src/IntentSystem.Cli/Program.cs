@@ -155,7 +155,9 @@ internal static class Program
                 // routing inside CommandRouter, which also requires
                 // bootstrap-friendly entry from a child cwd).
                 || string.Equals(args[1], "help", StringComparison.Ordinal)
-                || string.Equals(args[1], "--help", StringComparison.Ordinal));
+                || string.Equals(args[1], "--help", StringComparison.Ordinal)
+                // G438: external artifact intake guidance — read-only, no host state required.
+                || string.Equals(args[1], "artifact-intake", StringComparison.Ordinal));
     }
 
     /// <summary>

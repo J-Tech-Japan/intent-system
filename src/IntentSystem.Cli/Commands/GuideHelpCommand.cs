@@ -244,6 +244,13 @@ internal static class GuideHelpCommand
             Name = "review-verification-policy",
             Purpose = "G383 deterministic route for visible/manual/runtime-gated verification ACs so the review loop never re-asks the operator: standing-policy-approve / implementation-finding (PR feedback) / review-policy-gap (durable host signal recorded once).",
             Example = "intent-cli guide review-verification-policy --standing-policy --evidence source-mapping --format json"
+        },
+        // G438: external artifact intake guidance.
+        new GuideSubcommandEntry
+        {
+            Name = "artifact-intake",
+            Purpose = "G438 AI-agent-facing guidance for importing external GitHub issues and PRs. Three lanes: external-issue (issue intake before intent-target), external-pr-review (PR review before transitions), external-pr-adopt (rare explicit host adoption). Each lane requires lightweight packet/review-context metadata before any label mutation.",
+            Example = "intent-cli guide artifact-intake --lane external-issue --repo <owner/repo> --format markdown"
         }
     };
 

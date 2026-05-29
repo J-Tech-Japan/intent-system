@@ -260,7 +260,9 @@ internal static class CommandRouter
                 // G326: role-scoped host ownership model.
                 ["host-ownership"] = GuideHostOwnershipCommand.Execute,
                 // G334: self-discovery help surface for external users.
-                ["help"] = GuideHelpCommand.Execute
+                ["help"] = GuideHelpCommand.Execute,
+                // G438: external artifact intake guidance (external issue / PR review / PR adopt).
+                ["artifact-intake"] = GuideArtifactIntakeCommand.Execute
             },
             ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
