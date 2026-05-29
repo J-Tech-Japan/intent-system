@@ -307,6 +307,98 @@ public sealed class GuideArtifactIntakeCommandTests
         }
     }
 
+    // ── Repo interpolation regression (G438 review fix) ─────────────────────
+
+    [Fact]
+    public void Execute_ExternalPrReview_AllSuggestedSteps_SubstituteRepo()
+    {
+        // Every repo-bearing suggested step must contain the resolved repo,
+        // not a literal '{repo}' placeholder.
+        const string testRepo = "J-Tech-Japan/intent-system";
+        var guidance = GuideArtifactIntakeCommand.Build(
+            GuideArtifactIntakeCommand.LaneExternalPrReview,
+            testRepo);
+
+        foreach (var step in guidance.SuggestedSteps)
+        {
+            Assert.DoesNotContain("{repo}", step, StringComparison.Ordinal);
+            if (step.Contains("--repo", StringComparison.Ordinal))
+            {
+                Assert.Contains(testRepo, step, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void Execute_ExternalPrAdopt_AllSuggestedSteps_SubstituteRepo()
+    {
+        // Every repo-bearing suggested step must contain the resolved repo,
+        // not a literal '{repo}' placeholder.
+        const string testRepo = "J-Tech-Japan/intent-system";
+        var guidance = GuideArtifactIntakeCommand.Build(
+            GuideArtifactIntakeCommand.LaneExternalPrAdopt,
+            testRepo);
+
+        foreach (var step in guidance.SuggestedSteps)
+        {
+            Assert.DoesNotContain("{repo}", step, StringComparison.Ordinal);
+            if (step.Contains("--repo", StringComparison.Ordinal))
+            {
+                Assert.Contains(testRepo, step, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void Execute_ExternalIssue_AllSuggestedSteps_SubstituteRepo()
+    {
+        const string testRepo = "J-Tech-Japan/intent-system";
+        var guidance = GuideArtifactIntakeCommand.Build(
+            GuideArtifactIntakeCommand.LaneExternalIssue,
+            testRepo);
+
+        foreach (var step in guidance.SuggestedSteps)
+        {
+            Assert.DoesNotContain("{repo}", step, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Execute_ExternalPrReview_ShadowIssueStep_ContainsResolvedRepo()
+    {
+        // Specifically verify the shadow-issue gh command uses the resolved repo.
+        const string testRepo = "my-test-org/my-test-repo";
+        var guidance = GuideArtifactIntakeCommand.Build(
+            GuideArtifactIntakeCommand.LaneExternalPrReview,
+            testRepo);
+
+        var shadowStep = guidance.SuggestedSteps.FirstOrDefault(
+            s => s.Contains("Shadow", StringComparison.OrdinalIgnoreCase)
+              && s.Contains("gh issue create", StringComparison.OrdinalIgnoreCase));
+
+        Assert.NotNull(shadowStep);
+        Assert.Contains(testRepo, shadowStep, StringComparison.Ordinal);
+        Assert.DoesNotContain("{repo}", shadowStep, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ExternalPrAdopt_ShadowIssueStep_ContainsResolvedRepo()
+    {
+        // Specifically verify the shadow-issue gh command uses the resolved repo.
+        const string testRepo = "my-test-org/my-test-repo";
+        var guidance = GuideArtifactIntakeCommand.Build(
+            GuideArtifactIntakeCommand.LaneExternalPrAdopt,
+            testRepo);
+
+        var shadowStep = guidance.SuggestedSteps.FirstOrDefault(
+            s => s.Contains("Adopt", StringComparison.OrdinalIgnoreCase)
+              && s.Contains("gh issue create", StringComparison.OrdinalIgnoreCase));
+
+        Assert.NotNull(shadowStep);
+        Assert.Contains(testRepo, shadowStep, StringComparison.Ordinal);
+        Assert.DoesNotContain("{repo}", shadowStep, StringComparison.Ordinal);
+    }
+
     private static CliContext CreateContext(string domain)
     {
         return new CliContext

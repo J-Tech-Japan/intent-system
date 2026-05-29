@@ -200,11 +200,11 @@ internal static class GuideArtifactIntakeCommand
     private static IReadOnlyList<string> SuggestedStepsExternalPrReview(string repo) =>
     [
         $"`gh pr view <n> --repo {repo}` — read the PR body, linked issues, and current labels.",
-        "Check if a suitable linked issue exists: `gh pr view <n> --repo {repo} --json closingIssuesReferences`.",
+        $"Check if a suitable linked issue exists: `gh pr view <n> --repo {repo} --json closingIssuesReferences`.",
         "If no linked issue and product questions are unresolved → run interview/clarification first:",
         "  `intent-cli guide workflow task intent-interview --format markdown`",
         "If no linked issue (and intent context is clear) → create a shadow issue with provenance:",
-        "  `gh issue create --repo {repo} --title \"[Shadow] <pr-title>\" --body \"<provenance + metadata>\"` (operator confirms)",
+        $"  `gh issue create --repo {repo} --title \"[Shadow] <pr-title>\" --body \"<provenance + metadata>\"` (operator confirms)",
         "Record review-context metadata: linked_issue, relevant_intents, review_focus, constraints, host_decision.",
         $"`intent-cli automation host-review-preflight --repo {repo} --format json` — verify review-start preconditions.",
         $"`intent-cli automation pr-transition --transition review-start --pr <n> --repo {repo} --write --format json` — start review after metadata is confirmed."
@@ -272,7 +272,7 @@ internal static class GuideArtifactIntakeCommand
         $"`gh pr view <n> --repo {repo}` — read the PR body, linked issues, provenance.",
         "Confirm operator explicitly intends adoption (not just review). If unclear, route to `external-pr-review`.",
         "If no suitable linked issue → create shadow issue with full provenance first:",
-        "  `gh issue create --repo {repo} --title \"[Adopt] <pr-title>\" --body \"<provenance + adoption rationale>\"` (operator confirms)",
+        $"  `gh issue create --repo {repo} --title \"[Adopt] <pr-title>\" --body \"<provenance + adoption rationale>\"` (operator confirms)",
         "Record adoption metadata: source_artifact, adoption_rationale, linked_issue, relevant_intents, provenance, expected_outcome, constraints, operator_confirmation.",
         $"`intent-cli intent search --domain <domain> --query <keyword> --format json` — verify intent linkage.",
         $"`intent-cli automation host-review-preflight --repo {repo} --format json` — verify review-start preconditions after metadata is complete.",
