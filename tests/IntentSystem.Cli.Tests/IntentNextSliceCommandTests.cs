@@ -1998,14 +1998,14 @@ public sealed class IntentNextSliceCommandTests
     }
 
     [Fact]
-    public void Execute_G359_NoBindingsFile_FailsClosedWithDomainNote()
+    public void Execute_G439_NoBindingsFile_CompletePacket_ReturnsIssueCutReadyWithWarning()
     {
-        // PR #824 review repair #3: when `--domain` is supplied AND
-        // bindings.md is missing, next-slice MUST fail closed —
-        // accepting a candidate without verifying the active domain
-        // boundary defeats G361's safety contract. The previous fail-
-        // open behavior let a wrong-namespace packet slip into
-        // issue-cut-ready under a misconfigured host.
+        // G439: when `--domain` is supplied and bindings.md is MISSING
+        // (MissingOrAbsent) but the queued packet is complete, next-slice
+        // MUST surface the candidate as issue-cut-ready. Only an explicitly
+        // broken regex pattern (InvalidPattern) causes fail-closed behavior.
+        // A missing-domain-bindings note is still emitted as a warning so
+        // the operator knows to add execution_unit_regex to bindings.md.
         using var workspace = new IntentNextSliceWorkspace();
         // Delete the default permissive bindings the workspace
         // constructor seeded so we exercise the genuine "no
@@ -2024,8 +2024,14 @@ public sealed class IntentNextSliceCommandTests
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var root = document.RootElement;
-        Assert.NotEqual("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
-        Assert.False(root.TryGetProperty("candidate", out _));
+        // G439: a complete packet MUST surface as issue-cut-ready even
+        // without a bindings.md — diagnostics would agree.
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.True(root.TryGetProperty("candidate", out var candidateEl));
+        Assert.Equal(
+            "G359",
+            candidateEl.GetProperty("execution_unit").GetString());
+        // The missing-domain-bindings warning note must still be present.
         var notes = root.GetProperty("notes");
         Assert.Contains(
             notes.EnumerateArray().Select(n => n.GetString() ?? string.Empty),
@@ -2066,6 +2072,60 @@ public sealed class IntentNextSliceCommandTests
         Assert.Contains(
             notes.EnumerateArray().Select(n => n.GetString() ?? string.Empty),
             n => n.Contains("invalid-domain-bindings", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G439_Zero4RacerStyle_QueuedCompletePacket_NoBindings_ReturnsIssueCutReady()
+    {
+        // Regression for G439: Zero4Racer-style case where Z4R-G286 is
+        // queued, packet is complete, but bindings.md is absent from the
+        // zero4racer-mobile-revival domain. Previously next-slice returned
+        // design-needed; it must now return issue-cut-ready.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.DeleteAutomationBindings("intent-cli");
+        // Use a Z4R-prefixed packet name to simulate the Zero4Racer namespace
+        workspace.WriteFile(
+            ".intent-cli/issues/Z4R-G286/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-29T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "Z4R-G286",
+                  "title": "zero4racer queued complete packet",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": null,
+                  "linked_issue": null,
+                  "linked_pr": null
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", "intent-cli"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.True(root.TryGetProperty("candidate", out var candidateEl));
+        Assert.Equal(
+            "Z4R-G286",
+            candidateEl.GetProperty("execution_unit").GetString());
+        // Warning note must still be present so operator can add bindings.md
+        var notes = root.GetProperty("notes");
+        Assert.Contains(
+            notes.EnumerateArray().Select(n => n.GetString() ?? string.Empty),
+            n => n.Contains("missing-domain-bindings", StringComparison.Ordinal));
     }
 
     [Fact]
