@@ -13,6 +13,12 @@ recover when a loop looks wrong — all through explicit, inspectable commands.
 - Package id / command: `intent-cli`
 - License: [Apache-2.0](https://github.com/J-Tech-Japan/intent-system/blob/main/README.md#license)
 - Repository: <https://github.com/J-Tech-Japan/intent-system>
+- Official site: <https://www.intent-driven-development.com/> — the Intent-Driven Development concept & intent-system service site, operated by J-Tech Japan ([日本語](https://www.intent-driven-development.com/jp))
+
+> [intent-driven-development.com](https://www.intent-driven-development.com/) is
+> operated by J-Tech Japan and covers the broader Intent-Driven Development
+> concept and the intent-system service overview. This GitHub repository remains
+> the source for code, releases, installation, and detailed docs.
 
 **ドキュメント / Documentation:**
 [日本語](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/README.md) | [English](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/README.md)
