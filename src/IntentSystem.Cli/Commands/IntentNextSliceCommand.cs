@@ -181,15 +181,23 @@ internal static class IntentNextSliceCommand
         // outcome instead of TryLoad so callers can distinguish
         // "no domain configured" (legacy fallback) from "domain
         // configured but bindings.md missing" and "bindings present
-        // but pattern invalid". When a domain IS supplied AND the
-        // bindings are missing or malformed, fail closed: refuse to
-        // surface ANY candidate (so a wrong-namespace packet cannot
-        // sneak through without verifying the domain boundary).
+        // but pattern invalid".
+        //
+        // G439: only fail closed on InvalidPattern (an explicitly
+        // broken regex the operator must fix). When bindings.md is
+        // absent/missing the namespace constraint simply isn't
+        // configured yet — treat it like a null regex (open filter,
+        // same as MatchesExecutionUnitRegex(null, …) = true) so a
+        // complete queued packet isn't blocked solely because
+        // bindings.md hasn't been authored. Domain/repo protection
+        // continues via MatchesDomainAndRepoFilter regardless.
         var bindingsResolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(context, domain);
         var executionUnitRegex = bindingsResolution.Regex;
         var bindingsFailedClosed = !string.IsNullOrWhiteSpace(domainOverride)
-            && bindingsResolution.Kind != ExecutionUnitRegexResolutionKind.Present;
-        if (bindingsFailedClosed)
+            && bindingsResolution.Kind == ExecutionUnitRegexResolutionKind.InvalidPattern;
+        if (bindingsFailedClosed
+            || (!string.IsNullOrWhiteSpace(domainOverride)
+                && bindingsResolution.Kind == ExecutionUnitRegexResolutionKind.MissingOrAbsent))
         {
             // Add a structured note so the operator can see the gap
             // (missing bindings.md, missing field, or invalid pattern).
@@ -203,8 +211,11 @@ internal static class IntentNextSliceCommand
                 $"domain `{domain}` bindings.md `{bindingsResolution.BindingsPath ?? "(unresolved)"}` "
                 + $"reported `{kindLabel}` "
                 + (bindingsResolution.Detail is { Length: > 0 } ? $"({bindingsResolution.Detail}); " : "; ")
-                + "next-slice refuses to surface a candidate without verifying the active "
-                + "domain boundary (PR #824 review repair #3).");
+                + (bindingsFailedClosed
+                    ? "next-slice refuses to surface a candidate without verifying the active "
+                      + "domain boundary (PR #824 review repair #3)."
+                    : "next-slice will surface candidates without an execution-unit namespace check; "
+                      + "add execution_unit_regex to bindings.md to restrict the domain boundary (G439)."));
         }
 
         var wip = new List<string>();
@@ -279,11 +290,13 @@ internal static class IntentNextSliceCommand
         // behave byte-identically.
 
         IntentNextSliceCandidate? candidate = null;
-        // PR #824 review repair #3: when the host requested a domain
-        // (--domain supplied) and the bindings.md is missing or
-        // malformed, refuse to surface ANY candidate. Otherwise a
-        // wrong-namespace packet could be accepted without verifying
-        // the domain boundary. The notes added above explain the gap.
+        // PR #824 review repair #3 / G439: only block candidate selection
+        // when bindings have an INVALID pattern (operator must fix the
+        // regex). When bindings.md is simply absent, domain/repo
+        // protection from MatchesDomainAndRepoFilter is still applied and
+        // the note added above informs the operator. This aligns
+        // next-slice with host-review-diagnostics which never gates on the
+        // execution_unit_regex.
         if (Directory.Exists(packetRoot) && !bindingsFailedClosed)
         {
             // Pick the first queued execution_unit in queue-state order whose packet
