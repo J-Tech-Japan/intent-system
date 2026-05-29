@@ -2,6 +2,8 @@
 
 > 日本語版は [`../ja/README.md`](../ja/README.md) を参照してください.
 
+> **Official service site:** [intent-driven-development.com](https://www.intent-driven-development.com/) — the Intent-Driven Development concept & intent-system service site, operated by J-Tech Japan, covering the broader Intent-Driven Development concept and intent-system overview. This GitHub repository remains the source for code, releases, installation, and detailed docs.
+
 `intent-cli` is **deterministic support tooling** for an intent-driven development workflow on top of GitHub.
 
 Once installed, open a design thread in your AI agent and paste a prompt like:

@@ -2,6 +2,8 @@
 
 > English version: [`../en/README.md`](../en/README.md)
 
+> **公式サイト:** [intent-driven-development.com（日本語）](https://www.intent-driven-development.com/jp) — J-Tech Japan が運営する Intent-Driven Development のコンセプト・intent-system サービスサイトです。Intent-Driven Development の考え方や intent-system の概要を扱います。GitHub リポジトリは引き続きコード・リリース・インストール・詳細ドキュメントの提供元です。
+
 `intent-cli` は、AI agent に Intent System の正規手順を確認させながら Intent-Driven Development を進めるための **決定論的なサポートツール** です。
 
 `intent-cli` をインストールしたら、AI agent のデザインスレッドで次のように依頼します:

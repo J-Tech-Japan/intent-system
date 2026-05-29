@@ -2,6 +2,8 @@
 
 Welcome to the intent-cli documentation.
 
+> **Official service site:** [intent-driven-development.com](https://www.intent-driven-development.com/) ([日本語](https://www.intent-driven-development.com/jp)) — the Intent-Driven Development concept & intent-system service site, operated by J-Tech Japan. These docs stay focused on installation, usage, and repository-specific guidance.
+
 ---
 
 ## Choose your language
