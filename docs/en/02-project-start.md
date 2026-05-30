@@ -21,12 +21,30 @@ Paste this into your AI agent (Claude, Codex, Copilot, etc.):
 # Initialize a host domain (read-only without --write)
 intent-cli intent init --domain <name> [--target-repo <owner>/<repo>] --write
 
+# Initialize the intent tree + automation bindings for the domain
+intent-cli intent init-tree --domain <name> [--target-repo <owner>/<repo>] --write
+
+# Confirm the host is initialized (expects `ok`, not `partially-initialized`)
+intent-cli intent host-check --domain <name> --format json
+
 # Inspect current baseline / WIP / queued packets (read-only)
 intent-cli intent status
+
+# Plan the first slice (expects `design-needed` guidance on a fresh domain,
+# never a hard `missing-domain-bindings` blocker)
+intent-cli intent next-slice --domain <name> --dry-run --format json
 
 # Ask what the work surfaces expect
 intent-cli guide intent-work --format json
 ```
+
+> **First-run note (G441):** `intent init` + `intent init-tree --write` now scaffold
+> the durable-state skeletons (`.intent-cli/queue-state.json`, `.intent-cli/runs.jsonl`)
+> and the domain automation bindings (`intents/<name>/automation/bindings.md`), so the
+> first `host-check` reports `ok` and `next-slice` is not blocked by
+> `missing-domain-bindings`. If a command looks stuck, **ask intent-cli for the next
+> action** (`host-check`, `next-slice --dry-run`, `automation summary`) — you do not need
+> to read intent-cli source code or hand-author `bindings.md` to recover first-run setup.
 
 ## Metadata / label safety
 
