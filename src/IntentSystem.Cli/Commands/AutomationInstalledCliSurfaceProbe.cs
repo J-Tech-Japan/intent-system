@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json.Serialization;
 using IntentSystem.Cli;
@@ -86,7 +87,12 @@ internal static class AutomationInstalledCliSurfaceProbe
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
-            or IOException)
+            or IOException
+            // G443: a persistent process-start failure (e.g. ETXTBSY that
+            // survives the bounded retry in RunInstalledCli) degrades the
+            // surface to "missing" rather than crashing the whole command
+            // (which previously surfaced as a hard exit 1 in release CI).
+            or Win32Exception)
         {
             return Missing(surface, exception.Message);
         }
@@ -124,6 +130,22 @@ internal static class AutomationInstalledCliSurfaceProbe
             false,
             reason);
 
+    /// <summary>
+    /// G443: errno for <c>ETXTBSY</c> ("Text file busy") on Linux. The probe
+    /// execs an installed binary that may have just been written/copied into
+    /// place (e.g. a freshly published global tool, or a cwd-local shim a test
+    /// harness wrote a moment earlier). On Linux, exec races against a writer
+    /// still holding the inode — including a sibling <see cref="Process.Start"/>
+    /// in the same process that transiently inherits the writable fd under
+    /// parallel CI — and surfaces as <see cref="Win32Exception"/> with this
+    /// native error code. Retrying briefly clears the race deterministically.
+    /// </summary>
+    private const int TextFileBusyNativeErrorCode = 26;
+
+    private const int InstalledCliStartMaxAttempts = 12;
+
+    private const int InstalledCliStartRetryDelayMilliseconds = 25;
+
     private static InstalledCliProbeResult RunInstalledCli(string installedCliPath, IReadOnlyList<string> arguments)
     {
         var startInfo = new ProcessStartInfo
@@ -140,12 +162,37 @@ internal static class AutomationInstalledCliSurfaceProbe
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"failed to start installed intent-cli at {installedCliPath}");
+        using var process = StartWithTextFileBusyRetry(startInfo, installedCliPath);
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         return new InstalledCliProbeResult(process.ExitCode, stdout, stderr);
+    }
+
+    /// <summary>
+    /// G443: start the installed-CLI probe process, retrying on the
+    /// <c>ETXTBSY</c> ("Text file busy") exec race that otherwise made the
+    /// release CI test job flaky on Linux runners. Non-ETXTBSY failures and a
+    /// persistent ETXTBSY after the bounded retries propagate unchanged.
+    /// </summary>
+    private static Process StartWithTextFileBusyRetry(ProcessStartInfo startInfo, string installedCliPath)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return Process.Start(startInfo)
+                    ?? throw new InvalidOperationException($"failed to start installed intent-cli at {installedCliPath}");
+            }
+            catch (Win32Exception exception)
+                when (exception.NativeErrorCode == TextFileBusyNativeErrorCode
+                    && attempt < InstalledCliStartMaxAttempts)
+            {
+                // The binary is momentarily busy (still being written/copied or
+                // held by a sibling exec). Back off briefly and retry.
+                Thread.Sleep(InstalledCliStartRetryDelayMilliseconds);
+            }
+        }
     }
 
     private static InstalledCliResolution ResolveInstalledCliPath(string repoRoot)

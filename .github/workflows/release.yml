@@ -85,7 +85,7 @@ jobs:
       - name: Test
         run: |
           dotnet test IntentSystem.sln --configuration Release --no-build \
-            --logger "trx;LogFileName=test-results.trx" \
+            --logger "trx;LogFilePrefix=test-results" \
             --results-directory "${GITHUB_WORKSPACE}/.artifacts/test-results"
 
       - name: Pack release .nupkg (no preview properties; stable tag-driven version)

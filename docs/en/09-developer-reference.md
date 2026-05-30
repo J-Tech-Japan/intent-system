@@ -170,3 +170,18 @@ The repository version policy lives in `eng/version.json`:
 This ensures the next main-branch CI build immediately produces
 `0.4.0-preview.<run>.<attempt>` rather than continuing to emit `0.3.1-preview`
 (which would collide with the stable release version).
+
+### Re-creating a deleted release tag (`v0.3.3`)
+
+`v0.3.3` was tagged too early and the tag was deleted. **Only re-create the
+`v0.3.3` tag/release after both release-blocking packets are merged to `main`
+and the release CI test job is green:**
+
+- **G441** — first-run host initialization deadlock fix.
+- **G443** — release CI stabilization (the installed-CLI surface probe is
+  hardened against the `Text file busy` / ETXTBSY exec race on Linux runners,
+  and each test project writes a uniquely named `*.trx` so release CI results
+  are diagnosable).
+
+Re-tagging before a green CI run on a commit that contains both fixes will
+reproduce the original failing release job.

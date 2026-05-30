@@ -101,7 +101,7 @@ jobs:
         id: test
         run: |
           dotnet test IntentSystem.sln --configuration Release --no-build \
-            --logger "trx;LogFileName=test-results.trx" \
+            --logger "trx;LogFilePrefix=test-results" \
             --results-directory "${GITHUB_WORKSPACE}/.artifacts/test-results"
 
       - name: Pack preview .nupkg (recompiles with preview properties active)
