@@ -99,6 +99,13 @@ internal static class IntentInitTreeCommand
 
         planned.Add($"intents/{request.Domain}/identity/mission.md");
 
+        // G441: scaffold the domain automation bindings so a fresh host is
+        // recognized by `next-slice`, `host-check`, and `automation summary`
+        // without the operator hand-authoring bindings.md. Before G441 the
+        // missing file surfaced a `missing-domain-bindings` blocker on the
+        // very first `next-slice --domain <name>` call.
+        planned.Add($"intents/{request.Domain}/automation/bindings.md");
+
         var written = new List<string>();
         var existing = new List<string>();
 
@@ -219,6 +226,11 @@ internal static class IntentInitTreeCommand
             return RenderMissionStarter(request);
         }
 
+        if (relativePath.EndsWith("automation/bindings.md", StringComparison.Ordinal))
+        {
+            return RenderAutomationBindings(request);
+        }
+
         throw new InvalidOperationException($"intent init-tree has no template for '{relativePath}'.");
     }
 
@@ -303,6 +315,64 @@ internal static class IntentInitTreeCommand
         """;
     }
 
+    /// <summary>
+    /// G441: renders the domain automation bindings file. The only field
+    /// the first-run loop strictly needs is <c>execution_unit_regex</c>,
+    /// which <see cref="NextSliceDomainBindingsExecutionUnitRegex"/> and
+    /// <see cref="AutomationSummaryAnalyzer"/> parse as a top-level scalar.
+    /// The default <c>.*</c> accepts every execution unit, which is correct
+    /// for a freshly initialized single-domain host and removes the
+    /// <c>missing-domain-bindings</c> first-run trap; operators narrow it
+    /// once an issues root is shared across domains. <c>child_repo</c> is
+    /// emitted only when a target repo is known so the file never carries a
+    /// placeholder that downstream analyzers would treat as real.
+    /// </summary>
+    private static string RenderAutomationBindings(IntentInitTreeRequest request)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("---");
+        sb.AppendLine($"# Automation bindings for the `{request.Domain}` intent domain (tree-v1).");
+        sb.AppendLine("#");
+        sb.AppendLine("# Created by `intent-cli intent init-tree` so first-run `next-slice`,");
+        sb.AppendLine("# `host-check`, and `automation summary` recognize this domain without");
+        sb.AppendLine("# hand-authoring. Ask intent-cli before editing:");
+        sb.AppendLine($"#   intent-cli guide intent-work setup --kind tree-layout --domain {request.Domain} --format markdown");
+        if (!string.IsNullOrWhiteSpace(request.TargetRepo))
+        {
+            sb.AppendLine();
+            sb.AppendLine("# Implementation (child) repository this domain's issues target.");
+            sb.AppendLine($"child_repo: {request.TargetRepo}");
+        }
+        else
+        {
+            sb.AppendLine();
+            sb.AppendLine("# Implementation (child) repository this domain's issues target.");
+            sb.AppendLine("# Set this once known, e.g. `child_repo: <owner>/<repo>`.");
+        }
+        sb.AppendLine();
+        sb.AppendLine("# Execution-unit namespace filter used by `next-slice` and");
+        sb.AppendLine("# `automation summary` to select which execution units belong to this");
+        sb.AppendLine("# domain. The default `.*` accepts every execution unit (correct for a");
+        sb.AppendLine($"# single-domain host). Narrow it (for example `^{request.Domain}-`) once you");
+        sb.AppendLine("# share a `.intent-cli/issues` root across multiple domains.");
+        sb.AppendLine("execution_unit_regex: .*");
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine($"# {request.Domain} automation bindings");
+        sb.AppendLine();
+        sb.AppendLine($"This file maps the `{request.Domain}` intent domain to its implementation");
+        sb.AppendLine("repository and durable automation state. intent-cli reads the");
+        sb.AppendLine("frontmatter fields above; the prose below is for humans and agents.");
+        sb.AppendLine();
+        sb.AppendLine("Ask intent-cli for the next action instead of inspecting source code to");
+        sb.AppendLine("recover first-run setup:");
+        sb.AppendLine();
+        sb.AppendLine($"- `intent-cli intent host-check --domain {request.Domain} --format json`");
+        sb.AppendLine($"- `intent-cli intent next-slice --dry-run --domain {request.Domain} --format json`");
+        sb.AppendLine($"- `intent-cli automation summary --domain {request.Domain} --format json`");
+        return sb.ToString();
+    }
+
     private static IReadOnlyList<string> BuildNextSteps(
         IntentInitTreeRequest request,
         int writtenCount,
@@ -327,6 +397,9 @@ internal static class IntentInitTreeCommand
         }
 
         steps.Add($"Edit `intents/{request.Domain}/identity/mission.md` with the domain's mission and vision.");
+        steps.Add($"Automation bindings scaffolded at `intents/{request.Domain}/automation/bindings.md` (default execution_unit_regex `.*`); narrow it once you share an issues root across domains.");
+        steps.Add($"Check first-run state: intent-cli intent host-check --domain {request.Domain} --format json");
+        steps.Add($"Plan the first slice: intent-cli intent next-slice --dry-run --domain {request.Domain} --format json");
         steps.Add($"Add a feature: intent-cli intent add-feature --domain {request.Domain} --name <feature> --write");
         steps.Add($"Run `intent-cli guide intent-work setup --kind tree-layout --domain {request.Domain} --format markdown` for tree authoring guidance.");
         return steps;

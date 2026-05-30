@@ -95,6 +95,90 @@ public sealed class IntentInitTreeCommandTests
     }
 
     // ──────────────────────────────────────────────
+    // G441 first-run automation bindings scaffold
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G441_WithWrite_CreatesAutomationBindings_WithPermissiveRegexAndChildRepo()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        IntentInitTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--target-repo", "owner/repo", "--write"],
+            writer);
+
+        var bindingsPath = Path.Combine(hostRoot, "intents", "auth", "automation", "bindings.md");
+        Assert.True(File.Exists(bindingsPath), "init-tree must scaffold automation/bindings.md");
+
+        var bindings = File.ReadAllText(bindingsPath);
+        Assert.Contains("execution_unit_regex: .*", bindings, StringComparison.Ordinal);
+        Assert.Contains("child_repo: owner/repo", bindings, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G441_BindingsScaffold_IsRecognizedByNextSliceResolver_AsPresent()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        using var writer = new StringWriter();
+        var context = CreateContext(hostRoot);
+
+        IntentInitTreeCommand.Execute(
+            context,
+            ["--domain", "auth", "--target-repo", "owner/repo", "--write"],
+            writer);
+
+        // The first-run deadlock was next-slice reporting `missing-domain-bindings`
+        // after init/init-tree. With the scaffold present the resolver must report
+        // a compiled, Present execution_unit_regex instead.
+        var resolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(context, "auth");
+        Assert.Equal(ExecutionUnitRegexResolutionKind.Present, resolution.Kind);
+        Assert.NotNull(resolution.Regex);
+        Assert.True(resolution.Regex!.IsMatch("any-execution-unit-id"));
+    }
+
+    [Fact]
+    public void Execute_G441_NoTargetRepo_OmitsChildRepoField_ButKeepsRegex()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        IntentInitTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--write"],
+            writer);
+
+        var bindings = File.ReadAllText(
+            Path.Combine(hostRoot, "intents", "auth", "automation", "bindings.md"));
+        Assert.Contains("execution_unit_regex: .*", bindings, StringComparison.Ordinal);
+        // No placeholder child_repo value that downstream analyzers would treat as real.
+        Assert.DoesNotContain("child_repo: owner/repo", bindings, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G441_BindingsScaffold_IsIdempotent_NotOverwritten()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        var bindingsPath = Path.Combine(hostRoot, "intents", "auth", "automation", "bindings.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(bindingsPath)!);
+        File.WriteAllText(bindingsPath, "execution_unit_regex: ^auth-\n");
+
+        using var writer = new StringWriter();
+        IntentInitTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--write"],
+            writer);
+
+        // Existing operator-authored bindings must be preserved.
+        Assert.Equal("execution_unit_regex: ^auth-\n", File.ReadAllText(bindingsPath));
+    }
+
+    // ──────────────────────────────────────────────
     // Custom project types
     // ──────────────────────────────────────────────
 
