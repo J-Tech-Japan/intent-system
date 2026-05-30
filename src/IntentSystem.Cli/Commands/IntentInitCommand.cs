@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -73,6 +75,14 @@ internal static class IntentInitCommand
         {
             $"{CliRuntimeContracts.IntentCliDirectoryName}/{CliRuntimeContracts.ConfigFileName}",
             $"{CliRuntimeContracts.IntentCliDirectoryName}/host-binding.toml",
+            // G441: scaffold the durable-state skeletons so a freshly
+            // initialized host reports `ok` from `intent host-check`
+            // instead of `partially-initialized` solely because the first
+            // host-loop wake has not yet created them. Both are valid empty
+            // skeletons (queue-state with zero items; an empty append-only
+            // runs log) and are preserved idempotently if already present.
+            $"{CliRuntimeContracts.IntentCliDirectoryName}/{CliRuntimeContracts.QueueStateFileName}",
+            $"{CliRuntimeContracts.IntentCliDirectoryName}/{CliRuntimeContracts.RunLogFileName}",
             "AGENTS.md",
             "CLAUDE.md",
             $"intents/{request.Domain}/README.md",
@@ -183,6 +193,10 @@ internal static class IntentInitCommand
                 => RenderConfigToml(request),
             var path when path.EndsWith("/host-binding.toml", StringComparison.Ordinal)
                 => RenderHostBindingToml(request),
+            var path when path.EndsWith($"/{CliRuntimeContracts.QueueStateFileName}", StringComparison.Ordinal)
+                => RenderEmptyQueueState(),
+            var path when path.EndsWith($"/{CliRuntimeContracts.RunLogFileName}", StringComparison.Ordinal)
+                => string.Empty,
             "AGENTS.md" => RenderAgentsMarkdown(request),
             "CLAUDE.md" => RenderClaudeMarkdown(request),
             var path when path.EndsWith("/README.md", StringComparison.Ordinal)
@@ -194,6 +208,26 @@ internal static class IntentInitCommand
             _ => throw new InvalidOperationException(
                 $"Intent init has no template for '{relativePath}'.")
         };
+    }
+
+    /// <summary>
+    /// G441: canonical empty queue-state skeleton. Schema-version 1 with
+    /// zero items and a sentinel <c>UpdatedAt</c> of the Unix epoch so the
+    /// scaffold is byte-for-byte deterministic (no wall-clock in init) and
+    /// clearly reads as "never updated". The first host-loop publish
+    /// overwrites it with real items. Serialized through the same
+    /// <see cref="QueueStateSerializer"/> the loader uses so the file is
+    /// guaranteed to round-trip.
+    /// </summary>
+    private static string RenderEmptyQueueState()
+    {
+        var skeleton = new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+            Items = Array.Empty<QueueItem>()
+        };
+        return QueueStateSerializer.Serialize(skeleton);
     }
 
     /// <summary>

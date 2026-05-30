@@ -20,12 +20,31 @@ AI agent（Claude、Codex、Copilot など）に貼り付けてください:
 # host domain を初期化（--write なしは read-only）
 intent-cli intent init --domain <name> [--target-repo <owner>/<repo>] --write
 
+# intent tree と automation bindings を初期化
+intent-cli intent init-tree --domain <name> [--target-repo <owner>/<repo>] --write
+
+# host が初期化済みか確認（`partially-initialized` ではなく `ok` を期待）
+intent-cli intent host-check --domain <name> --format json
+
 # 現在の baseline / WIP / キュー済み packet を確認（read-only）
 intent-cli intent status
+
+# 最初の slice を計画（新規ドメインでは `design-needed` ガイダンスを期待。
+# `missing-domain-bindings` のハードブロックにはならない）
+intent-cli intent next-slice --domain <name> --dry-run --format json
 
 # 作業サーフェスが期待する内容を尋ねる
 intent-cli guide intent-work --format json
 ```
+
+> **初回セットアップ補足（G441）:** `intent init` + `intent init-tree --write` は
+> durable-state スケルトン（`.intent-cli/queue-state.json`・`.intent-cli/runs.jsonl`）と
+> ドメインの automation bindings（`intents/<name>/automation/bindings.md`）を生成します。
+> これにより初回の `host-check` は `ok` を返し、`next-slice` が
+> `missing-domain-bindings` でブロックされません。コマンドが詰まって見えたら、
+> **intent-cli に次のアクションを尋ねてください**（`host-check`・`next-slice --dry-run`・
+> `automation summary`）。初回セットアップの復旧に intent-cli のソースコードを読む必要も、
+> `bindings.md` を手書きする必要もありません。
 
 ## metadata / label の安全境界
 

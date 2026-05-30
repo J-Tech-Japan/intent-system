@@ -1,5 +1,6 @@
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -300,6 +301,94 @@ public sealed class IntentInitCommandTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("--base-branch-policy must be", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    // ──────────────────────────────────────────────
+    // G441 durable-state skeletons (first-run host-check)
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_G441_WithWrite_CreatesDurableStateSkeletons()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "demo", "--target-repo", "owner/repo", "--write"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var queueStatePath = Path.Combine(hostRoot, ".intent-cli", "queue-state.json");
+        var runsPath = Path.Combine(hostRoot, ".intent-cli", "runs.jsonl");
+        Assert.True(File.Exists(queueStatePath), "init must scaffold .intent-cli/queue-state.json");
+        Assert.True(File.Exists(runsPath), "init must scaffold .intent-cli/runs.jsonl");
+
+        // queue-state must be a valid, round-trippable empty skeleton.
+        var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        Assert.Empty(queueState.Items);
+        Assert.Equal("1", queueState.SchemaVersion);
+
+        // runs.jsonl is an empty append-only log skeleton.
+        Assert.Equal(string.Empty, File.ReadAllText(runsPath));
+    }
+
+    [Fact]
+    public void Execute_G441_FreshHost_AllHostCheckArtifactsPresent_AnalyzerReportsOk()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        using var writer = new StringWriter();
+
+        IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "demo", "--target-repo", "owner/repo", "--host-repo", "owner/host", "--write"],
+            writer);
+
+        // The four artifacts host-check keys off must all exist after a
+        // single `intent init --write`, so the analyzer no longer returns
+        // `partially-initialized` solely due to missing scaffolds (AC #3).
+        bool Present(params string[] parts) => File.Exists(Path.Combine(new[] { hostRoot }.Concat(parts).ToArray()));
+        var input = new IntentHostCheckInput
+        {
+            RepoRoot = hostRoot,
+            Domain = "demo",
+            TargetRepo = "owner/repo",
+            ObservedRemoteUrl = null,
+            BoundHostRepo = "owner/host",
+            ConfigTomlPresent = Present(".intent-cli", "config.toml"),
+            HostBindingPresent = Present(".intent-cli", "host-binding.toml"),
+            IntentsDomainDirectoryPresent = Directory.Exists(Path.Combine(hostRoot, "intents", "demo")),
+            AgentsMarkdownPresent = Present("AGENTS.md"),
+            ClaudeMarkdownPresent = Present("CLAUDE.md"),
+            QueueStateJsonPresent = Present(".intent-cli", "queue-state.json"),
+            RunsJsonlPresent = Present(".intent-cli", "runs.jsonl"),
+        };
+
+        var result = IntentHostCheckAnalyzer.Analyze(input);
+        Assert.Equal(IntentHostCheckAnalyzer.ClassificationOk, result.Classification);
+        Assert.True(result.Ok);
+    }
+
+    [Fact]
+    public void Execute_G441_DurableStateSkeleton_IsIdempotent_NotOverwritten()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var hostRoot = tempDirectory.CreateDirectory("host");
+        var queueStatePath = Path.Combine(hostRoot, ".intent-cli", "queue-state.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(queueStatePath)!);
+        const string existing = "{\"schema_version\":\"1\",\"updated_at\":\"2026-01-01T00:00:00+00:00\",\"items\":[]}";
+        File.WriteAllText(queueStatePath, existing);
+
+        using var writer = new StringWriter();
+        IntentInitCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "demo", "--write"],
+            writer);
+
+        // An existing queue-state (e.g. an active host) must be preserved.
+        Assert.Equal(existing, File.ReadAllText(queueStatePath));
     }
 
     private static CliContext CreateContext(string repoRoot)
