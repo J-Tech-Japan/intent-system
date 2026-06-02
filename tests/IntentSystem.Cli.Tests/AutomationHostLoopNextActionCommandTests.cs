@@ -325,6 +325,49 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_NextSliceIssueCutReady_AdjacentLongerIdOnGitHub_DoesNotFalseMatch_StillPublishes_G444()
+    {
+        // G444 review fix: the duplicate guard must be token-boundary aware,
+        // not a plain substring. A candidate `SKS-G67` must NOT be treated as
+        // already-published just because an unrelated open issue is titled
+        // `SKS-G670 ...`. The guard must fall through to the normal publish
+        // lane (no real duplicate, no open intent-target work).
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: new[]
+            {
+                new GitHubAutomationIssueCandidate
+                {
+                    Number = 700,
+                    Title = "SKS-G670 a different, longer execution unit",
+                    Url = "https://github.com/J-Tech-Japan/SekibanAsAService/issues/700",
+                    CreatedAt = "2026-06-01T00:00:00Z",
+                    // No intent-target label: unrelated open issue, must not
+                    // block the WIP cap either.
+                    Labels = Array.Empty<GitHubAutomationLabel>(),
+                    State = "OPEN"
+                }
+            });
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G67" });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        // Adjacent longer id must NOT trigger the stale-reconcile guard.
+        Assert.NotEqual("stale-next-slice-reconcile", root.GetProperty("classification").GetString());
+        Assert.Equal("publish-next-issue", root.GetProperty("classification").GetString());
+        Assert.Contains("--execution-unit SKS-G67", root.GetProperty("recommended_command").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_NextSliceProbeReturnsNoActionableItem_FallsThroughToTrueIdle()
     {
         // G318 acceptance: when next-slice has no candidate AND no other

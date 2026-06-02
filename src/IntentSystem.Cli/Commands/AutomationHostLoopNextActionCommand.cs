@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -541,10 +542,18 @@ internal static class AutomationHostLoopNextActionCommand
     /// <summary>
     /// G444: deterministic GitHub-reality cross-check for the issue-cut-ready
     /// execution unit. Returns true when an open issue or PR already names the
-    /// execution unit in its title (issues/PRs) or body (PRs) — the signal
-    /// that the unit is already published and the queue-state is stale. A
-    /// case-insensitive, word-boundary-aware substring match keeps the check
-    /// deterministic and avoids false positives on unrelated units.
+    /// execution unit as a standalone token in its title (issues/PRs) or body
+    /// (PRs) — the signal that the unit is already published and the
+    /// queue-state is stale.
+    ///
+    /// The match is TOKEN-BOUNDARY aware, not a plain substring: the
+    /// execution unit must be delimited by a non-identifier character (or
+    /// string start/end) on both sides, where identifier characters are
+    /// <c>[A-Za-z0-9-]</c>. This prevents a shorter candidate from
+    /// false-matching a longer adjacent id — e.g. `G44` must NOT match
+    /// `G444 ...` and `SKS-G67` must NOT match `SKS-G670 ...`, which would
+    /// otherwise wrongly suppress a legitimate publish. Exact ids such as
+    /// `Z4R-G329` still match `Z4R-G329 implement thing`.
     /// </summary>
     private static bool ExecutionUnitAlreadyOnGitHub(
         string? executionUnit,
@@ -556,9 +565,13 @@ internal static class AutomationHostLoopNextActionCommand
             return false;
         }
 
-        bool Names(string? text) =>
-            !string.IsNullOrEmpty(text)
-            && text.Contains(executionUnit, StringComparison.OrdinalIgnoreCase);
+        // (?<![A-Za-z0-9-]) <unit> (?![A-Za-z0-9-]) — the unit may itself
+        // contain '-', so identifier boundaries (not \b word boundaries)
+        // are required to reject adjacent longer ids.
+        var pattern = $"(?<![A-Za-z0-9-]){Regex.Escape(executionUnit)}(?![A-Za-z0-9-])";
+        var matcher = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
+
+        bool Names(string? text) => !string.IsNullOrEmpty(text) && matcher.IsMatch(text);
 
         return openIssues.Any(issue => Names(issue.Title))
             || openPrs.Any(pr => Names(pr.Title) || Names(pr.Body));
