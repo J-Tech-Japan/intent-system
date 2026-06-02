@@ -124,8 +124,8 @@ public sealed class VersionPolicyTests : IDisposable
     public void EngVersionJson_InThisRepo_IsReadableAndHasExpectedNextVersion()
     {
         // Smoke-test: the actual eng/version.json in the repository must
-        // be parseable and must point to 0.3.4 as the next development line
-        // (post-v0.3.3 release bump, see G442).
+        // be parseable and must point to 0.3.5 as the next development line
+        // (post-v0.3.4 release bump, see G447).
         var repoRoot = FindRepoRoot();
         if (repoRoot is null)
         {
@@ -135,8 +135,8 @@ public sealed class VersionPolicyTests : IDisposable
         var policy = VersionPolicy.TryReadFromRepo(repoRoot);
 
         Assert.NotNull(policy);
-        Assert.Equal("0.3.4", policy.NextVersion);
-        Assert.Equal("0.3.3", policy.StableVersion);
+        Assert.Equal("0.3.5", policy.NextVersion);
+        Assert.Equal("0.3.4", policy.StableVersion);
     }
 
     private static string? FindRepoRoot()
