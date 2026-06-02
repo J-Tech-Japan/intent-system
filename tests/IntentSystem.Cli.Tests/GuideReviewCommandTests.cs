@@ -8,6 +8,58 @@ namespace IntentSystem.Cli.Tests;
 public sealed class GuideReviewCommandTests
 {
     [Fact]
+    public void Execute_EmitsDeviceGatedEvidencePolicy_WithApproveWithGapAndHardBlockRules_G445()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G248", "review", title: "guide review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G248/packet.yaml", "x");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var policy = document.RootElement.GetProperty("device_gated_evidence_policy")
+            .EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.NotEmpty(policy);
+        // Distinguishes ordinary device-gap (approve-with-recorded-gap) from hard blockers.
+        Assert.Contains(policy, p => p.Contains("device-gap", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(policy, p => p.Contains("Approve-with-recorded-gap", StringComparison.Ordinal)
+            && p.Contains("source/log/unit/simulator", StringComparison.Ordinal));
+        Assert.Contains(policy, p => p.Contains("HARD-BLOCK", StringComparison.Ordinal)
+            && p.Contains("primary deliverable", StringComparison.Ordinal));
+        // No-false-claim rule.
+        Assert.Contains(policy, p => p.Contains("NEVER claim", StringComparison.Ordinal)
+            && p.Contains("NOT collected", StringComparison.Ordinal));
+        // Durable follow-up tracking required.
+        Assert.Contains(policy, p => p.Contains("follow-up", StringComparison.OrdinalIgnoreCase));
+        // Do not re-ask the standing-policy question per packet.
+        Assert.Contains(policy, p => p.Contains("Do NOT re-ask", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_Markdown_IncludesDeviceGatedEvidencePolicySection_G445()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G248", "review", title: "guide review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G248/packet.yaml", "x");
+
+        using var writer = new StringWriter();
+        GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598", "--format", "markdown"],
+            writer);
+
+        var output = writer.ToString();
+        Assert.Contains("## Device-gated evidence policy (G445)", output, StringComparison.Ordinal);
+        Assert.Contains("Approve-with-recorded-gap", output, StringComparison.Ordinal);
+        Assert.Contains("HARD-BLOCK", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenQueueMatchAndReviewContext_EmitsReadyTrueWithExcerpt()
     {
         using var workspace = new GuideReviewWorkspace();
