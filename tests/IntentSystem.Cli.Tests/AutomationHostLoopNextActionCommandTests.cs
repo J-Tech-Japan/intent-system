@@ -263,6 +263,68 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_NextSliceIssueCutReady_ButUnitAlreadyOnGitHub_ReconcilesInsteadOfDuplicatePublish_G444()
+    {
+        // G444 / Zero4Racer Z4R-G329: stale queue-state makes next-slice
+        // report `issue-cut-ready` even though GitHub already has an open
+        // issue (#661) and PR (#662) for the same execution unit. The host
+        // loop must NOT publish a duplicate; it must reconcile.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: new[]
+            {
+                new GitHubAutomationPrCandidate
+                {
+                    Number = 662,
+                    Title = "Z4R-G329 implement thing",
+                    Url = "https://github.com/J-Tech-Japan/intent-system/pull/662",
+                    Body = "Closes #661",
+                    CreatedAt = "2026-06-01T00:00:00Z",
+                    UpdatedAt = "2026-06-01T00:00:00Z",
+                    Labels = Array.Empty<GitHubAutomationLabel>(),
+                    ClosingIssuesReferences = new[] { new GitHubPrClosingIssueReference { Number = 661 } },
+                    State = "OPEN",
+                    IsDraft = false
+                }
+            },
+            issues: new[]
+            {
+                new GitHubAutomationIssueCandidate
+                {
+                    Number = 661,
+                    Title = "Z4R-G329 implement thing",
+                    Url = "https://github.com/J-Tech-Japan/intent-system/issues/661",
+                    CreatedAt = "2026-06-01T00:00:00Z",
+                    Labels = new[]
+                    {
+                        new GitHubAutomationLabel { Name = "intent-target" },
+                        new GitHubAutomationLabel { Name = "intent-pr-created" }
+                    },
+                    State = "OPEN"
+                }
+            });
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "Z4R-G329" });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/intent-system",
+             "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("stale-next-slice-reconcile", root.GetProperty("classification").GetString());
+        Assert.False(root.GetProperty("mutation_allowed").GetBoolean());
+        var recommended = root.GetProperty("recommended_command").GetString()!;
+        Assert.Contains("automation reconcile", recommended, StringComparison.Ordinal);
+        Assert.Contains("--lane next-slice", recommended, StringComparison.Ordinal);
+        // Must NOT recommend the publish chain.
+        Assert.DoesNotContain("packet draft", recommended, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_NextSliceProbeReturnsNoActionableItem_FallsThroughToTrueIdle()
     {
         // G318 acceptance: when next-slice has no candidate AND no other

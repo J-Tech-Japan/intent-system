@@ -64,6 +64,19 @@ internal static class HostLoopNextActionAnalyzer
     public const string ClassificationApprovedPrMetadataBlocked = "approved-pr-metadata-blocked";
     public const string ClassificationRepairHostMetadata = "repair-host-metadata";
     public const string ClassificationPublishNextIssue = "publish-next-issue";
+
+    /// <summary>
+    /// G444: emitted when `next-slice --dry-run` reports `issue-cut-ready`
+    /// for an execution unit that GitHub reality shows is ALREADY published
+    /// (an open issue or PR already exists whose title/body names the unit).
+    /// This is a stale queue-state signal: publishing again would create a
+    /// duplicate issue. The host loop must reconcile queue-state with GitHub
+    /// instead of publishing, so this lane fires ABOVE
+    /// <see cref="ClassificationPublishNextIssue"/> and recommends
+    /// `automation reconcile` rather than the publish chain.
+    /// </summary>
+    public const string ClassificationStaleNextSliceReconcile = "stale-next-slice-reconcile";
+
     public const string ClassificationHardClarification = "hard-clarification";
     public const string ClassificationWipCapBlocked = "wip-cap-blocked";
     public const string ClassificationWaitForChild = "wait-for-child";
@@ -271,6 +284,25 @@ internal static class HostLoopNextActionAnalyzer
                 "Closeout drift (G358): linked_issue-only items have an inferred closing PR — run closeout-drift-check --write.");
         }
 
+        // 5b. G444 stale-next-slice reconcile: next-slice says issue-cut-ready
+        //     for a unit that GitHub already has an open issue/PR for. The
+        //     queue-state is stale; publishing would duplicate the issue.
+        //     Reconcile instead of publishing. Fires ABOVE publish-next-issue.
+        if (input.NextSliceIssueCutReady
+            && input.PublishNextSliceExecutionUnit is { } staleUnit
+            && input.NextSliceUnitAlreadyOnGitHub)
+        {
+            return Result(ClassificationStaleNextSliceReconcile, mutationAllowed: false,
+                $"intent-cli automation reconcile --repo {input.Repo} --lane next-slice --format json",
+                new[]
+                {
+                    $"intent next-slice --dry-run reports `issue-cut-ready` for execution unit `{staleUnit}`, but GitHub already has an open issue or PR for that unit.",
+                    "Queue-state is stale: publishing now would create a DUPLICATE issue. Run `automation reconcile --lane next-slice` to resync queue-state with GitHub reality, then re-run the wake.",
+                    "Do NOT run the publish chain (packet draft → issue publish-flow → automation issue-publish) while next-slice and GitHub disagree."
+                },
+                $"Stale next-slice (G444): `{staleUnit}` already on GitHub — reconcile, do not publish a duplicate.");
+        }
+
         // 6. publish next issue
         if (input.NextSliceIssueCutReady && input.PublishNextSliceExecutionUnit is { } unit && !input.OpenIntentTargetPrOrIssueExists)
         {
@@ -413,6 +445,15 @@ internal sealed record HostLoopNextActionInput
 
     /// <summary>Execution unit ready to publish (set when NextSliceIssueCutReady is true).</summary>
     public string? PublishNextSliceExecutionUnit { get; init; }
+
+    /// <summary>
+    /// G444: true when the issue-cut-ready execution unit
+    /// (<see cref="PublishNextSliceExecutionUnit"/>) already has an open
+    /// GitHub issue or PR naming it — i.e. queue-state is stale and a publish
+    /// would duplicate. Routes to <c>stale-next-slice-reconcile</c> instead of
+    /// <c>publish-next-issue</c>.
+    /// </summary>
+    public bool NextSliceUnitAlreadyOnGitHub { get; init; }
 
     /// <summary>True when any open intent-target PR or issue exists in the target repo.</summary>
     public bool OpenIntentTargetPrOrIssueExists { get; init; }

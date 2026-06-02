@@ -335,6 +335,10 @@ internal static class AutomationHostLoopNextActionCommand
             CloseoutDriftRepairsAvailable = closeoutDriftRepairsAvailable,
             NextSliceIssueCutReady = nextSliceIssueCutReady,
             PublishNextSliceExecutionUnit = publishNextSliceExecutionUnit,
+            // G444: when next-slice says issue-cut-ready, cross-check GitHub
+            // reality so a stale queue-state cannot drive a duplicate publish.
+            NextSliceUnitAlreadyOnGitHub = nextSliceIssueCutReady
+                && ExecutionUnitAlreadyOnGitHub(publishNextSliceExecutionUnit, openPrs, openIssues),
             OpenIntentTargetPrOrIssueExists = openIntentTargetExistsResolved,
             AnyChildWorkerLeaseHeld = anyLeaseHeld,
             HardClarificationOpen = hardClarificationOpen,
@@ -532,6 +536,32 @@ internal static class AutomationHostLoopNextActionCommand
             .Any(label => string.Equals(label.Name, WorkerNextActionConstants.Labels.IntentTarget, StringComparison.Ordinal));
         return openPrs.Any(pr => HasIntentTarget(pr.Labels))
             || openIssues.Any(issue => HasIntentTarget(issue.Labels));
+    }
+
+    /// <summary>
+    /// G444: deterministic GitHub-reality cross-check for the issue-cut-ready
+    /// execution unit. Returns true when an open issue or PR already names the
+    /// execution unit in its title (issues/PRs) or body (PRs) — the signal
+    /// that the unit is already published and the queue-state is stale. A
+    /// case-insensitive, word-boundary-aware substring match keeps the check
+    /// deterministic and avoids false positives on unrelated units.
+    /// </summary>
+    private static bool ExecutionUnitAlreadyOnGitHub(
+        string? executionUnit,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues)
+    {
+        if (string.IsNullOrWhiteSpace(executionUnit))
+        {
+            return false;
+        }
+
+        bool Names(string? text) =>
+            !string.IsNullOrEmpty(text)
+            && text.Contains(executionUnit, StringComparison.OrdinalIgnoreCase);
+
+        return openIssues.Any(issue => Names(issue.Title))
+            || openPrs.Any(pr => Names(pr.Title) || Names(pr.Body));
     }
 
     private static bool AnyChildWorkerLeaseHeld(
