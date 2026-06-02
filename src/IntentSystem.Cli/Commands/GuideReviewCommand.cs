@@ -123,6 +123,25 @@ internal static class GuideReviewCommand
         "Tests-only failure mode (\"tests pass but evidence missing\") is itself an implementation-finding when the PR cannot show packet/intent conformance — request the implementer to add the missing evidence (test names mapped to AC, comments tying changes to packet clauses, etc.)."
     };
 
+    // G445: standing policy for device/operator/hardware-gated acceptance
+    // criteria. AI review loops cannot always operate physical devices or
+    // produce real hardware evidence; without a stable rule they stall,
+    // asking the operator the same policy question on every such packet.
+    // This surfaces the standing policy so the agent applies it
+    // deterministically: approve-with-recorded-gap for ordinary device gaps
+    // when code conformance is otherwise verified, hard-block for primary /
+    // high-risk device evidence, and never claim evidence that was not
+    // collected.
+    private static readonly IReadOnlyList<string> DeviceGatedEvidencePolicy = new[]
+    {
+        "Definition: a `device-gap` is an acceptance criterion whose ONLY missing evidence is real physical-device / operator / hardware proof that this automation cannot generate (e.g. a real two-finger touch gesture), while source, log, unit-test, and simulator evidence for the same criterion IS available and passes.",
+        "Approve-with-recorded-gap (NOT an operator stop) when ALL hold: (a) code/packet conformance is verified by available source/log/unit/simulator evidence; (b) the missing evidence is purely a device/automation limitation; (c) the gap is explicitly recorded as a `device-gap` in the approval summary AND a durable follow-up (PR comment / closeout note / follow-up issue) tracks collecting the real-device evidence.",
+        "HARD-BLOCK (request-update or operator stop, never approve) when the device-gated evidence IS the primary deliverable of the slice, OR is safety / security / data-loss / payment / other high-risk proof. These are not eligible for approve-with-gap.",
+        "NEVER claim physical evidence was collected when it was not. State plainly: \"real-device evidence for <criterion> was NOT collected (device-gap); verified by <source/log/unit/simulator> instead\" — fabricating or implying device evidence is a false-claim violation.",
+        "Do NOT re-ask the standing-policy question once a device-gap policy is established for this domain/wave; apply the same rule to subsequent packets with equivalent device gaps and only escalate genuinely new high-risk gates.",
+        "Record every accepted device-gap durably (closeout note / PR comment / follow-up issue) so the deferred real-device verification is tracked and not silently lost."
+    };
+
     private static readonly IReadOnlyList<string> DefaultValidationSuggestions = new[]
     {
         "Run focused tests named in the packet's Verification section.",
@@ -263,6 +282,7 @@ internal static class GuideReviewCommand
             ReviewBoundaries = ReviewBoundaries,
             ApprovalSummaryRequirements = ApprovalSummaryRequirements,
             RequestUpdateRequirements = RequestUpdateRequirements,
+            DeviceGatedEvidencePolicy = DeviceGatedEvidencePolicy,
             ReviewBlockerProtocol = ReviewBlockerProtocol.ProtocolRules,
             PrBlockerCommentTemplate = ReviewBlockerProtocol.BlockerCommentTemplateSections,
             ReviewBlockerRoutingExamples = BuildBlockerRoutingExamples(),
@@ -508,6 +528,14 @@ internal static class GuideReviewCommand
         }
         writer.WriteLine();
 
+        // G445: standing policy for device/operator/hardware-gated evidence gaps.
+        writer.WriteLine("## Device-gated evidence policy (G445)");
+        foreach (var item in result.DeviceGatedEvidencePolicy)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+
         // G394: durable blocker protocol + PR blocker comment template +
         // worked routing examples. Record current-PR blockers on the PR, not
         // only in chat, before completing as request-update / clarification.
@@ -735,6 +763,15 @@ internal sealed record GuideReviewResult
     /// </summary>
     [JsonPropertyName("request_update_requirements")]
     public required IReadOnlyList<string> RequestUpdateRequirements { get; init; }
+
+    /// <summary>
+    /// G445: standing policy for device/operator/hardware-gated evidence
+    /// gaps — when to approve-with-recorded-gap vs hard-block, the
+    /// no-false-claim rule, durable follow-up tracking, and not re-asking the
+    /// standing-policy question per packet.
+    /// </summary>
+    [JsonPropertyName("device_gated_evidence_policy")]
+    public required IReadOnlyList<string> DeviceGatedEvidencePolicy { get; init; }
 
     /// <summary>
     /// G394: durable-routing rules for review clarification stops — record
