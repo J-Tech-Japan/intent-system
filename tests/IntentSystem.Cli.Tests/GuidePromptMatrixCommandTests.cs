@@ -942,6 +942,29 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_HostLoopPrompt_StatesSchedulerInvariantAndAllows5mSequential_G444()
+    {
+        // G444: the host-loop prompt must state the safe scheduling invariant
+        // (one active wake per host repo+domain), allow a 5m same-thread
+        // sequential loop, forbid independent concurrent schedulers, and tell
+        // the agent NOT to stop for scheduler-policy confirmation when the
+        // invariant is satisfiable.
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--domain", "intent-system", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--frequency", "5m", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Scheduler invariant (G444)", prompt, StringComparison.Ordinal);
+        Assert.Contains("ONE active wake per host repo + domain", prompt, StringComparison.Ordinal);
+        Assert.Contains("5m same-thread sequential loop", prompt, StringComparison.Ordinal);
+        Assert.Contains("two independent concurrent schedulers", prompt, StringComparison.Ordinal);
+        Assert.Contains("do NOT stop to ask the operator for scheduler-policy confirmation", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_ChildLoopPrompt_AgentCodex_IncludesLocalSchedulingContract_G314()
     {
         using var writer = new StringWriter();

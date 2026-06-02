@@ -386,8 +386,9 @@ $@"Frequency: {frequency} (operator-resolved). {schedulingHint}
     /// / disconnected monitor) so a fresh agent has no path to a
     /// non-local schedule.
     /// </summary>
-    private static string RenderLocalSchedulingContract(string resolvedAgent, string frequency) =>
-        resolvedAgent switch
+    private static string RenderLocalSchedulingContract(string resolvedAgent, string frequency)
+    {
+        var agentParagraph = resolvedAgent switch
         {
             AgentClaude =>
 $@"**Local scheduling contract (G314)**: this loop runs **same-thread** in the active Claude Code session via `/loop {frequency} <prompt>`. Each wake reuses this thread's local filesystem paths (host repo cwd, child worktree, `.intent-cli/` packages); a different thread / new chat / remote process cannot reach those paths. Do NOT create a new Claude Code thread, a separate chat, a remote/cloud scheduler, an external cron, an out-of-process monitor, or any automation that cannot exec the host's local `intent-cli` against the host repo. If `/loop` is unavailable in the current session, surface the gap to the operator instead of substituting a non-local schedule.",
@@ -396,6 +397,22 @@ $@"**Local scheduling contract (G314)**: this loop runs **current-thread** in th
             _ =>
 $@"**Local scheduling contract (G314)**: this loop runs in the **agent's current-thread / same-session** automation surface at {frequency}. Each wake reuses this thread's local filesystem paths (host repo cwd, child worktree, `.intent-cli/` packages); a different thread / new chat / remote process cannot reach those paths. Do NOT create a new thread / chat, a remote/cloud scheduler, an external cron, an out-of-process monitor, or any automation that cannot exec the host's local `intent-cli` against the host repo. If the agent has no same-thread loop primitive, surface the gap to the operator instead of substituting a non-local schedule."
         };
+
+        // G444: the safe scheduling invariant is "one active wake per host
+        // repo + domain", NOT "never use a short interval". A 5-minute
+        // same-thread sequential loop is acceptable because each wake runs to
+        // completion before the next fires (the runtime serializes wakes on
+        // the same thread). What is unsafe is two INDEPENDENT concurrent
+        // schedulers / threads / processes driving the same host repo+domain.
+        // Agents that previously stopped to ask the operator about "5m cron
+        // policy" should instead proceed when the runtime can satisfy the
+        // single-active-wake invariant, and only surface to the operator when
+        // it cannot be guaranteed.
+        var schedulerInvariant =
+$@"**Scheduler invariant (G444)**: the safe invariant is exactly ONE active wake per host repo + domain at a time. A {frequency} same-thread sequential loop satisfies this because each wake runs to completion before the next fires; what is forbidden is two independent concurrent schedulers (or threads/processes) driving the same host repo + domain. When the runtime can satisfy this invariant with a same-thread sequential loop, PROCEED and set it up — do NOT stop to ask the operator for scheduler-policy confirmation. Only surface to the operator when you cannot guarantee a single active wake (e.g. another loop already drives this repo + domain).";
+
+        return $"{agentParagraph}\n\n{schedulerInvariant}";
+    }
 
     private static string NormalizeAgent(string? agent)
     {

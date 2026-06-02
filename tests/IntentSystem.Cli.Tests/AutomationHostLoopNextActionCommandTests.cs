@@ -263,6 +263,111 @@ public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_NextSliceIssueCutReady_ButUnitAlreadyOnGitHub_ReconcilesInsteadOfDuplicatePublish_G444()
+    {
+        // G444 / Zero4Racer Z4R-G329: stale queue-state makes next-slice
+        // report `issue-cut-ready` even though GitHub already has an open
+        // issue (#661) and PR (#662) for the same execution unit. The host
+        // loop must NOT publish a duplicate; it must reconcile.
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: new[]
+            {
+                new GitHubAutomationPrCandidate
+                {
+                    Number = 662,
+                    Title = "Z4R-G329 implement thing",
+                    Url = "https://github.com/J-Tech-Japan/intent-system/pull/662",
+                    Body = "Closes #661",
+                    CreatedAt = "2026-06-01T00:00:00Z",
+                    UpdatedAt = "2026-06-01T00:00:00Z",
+                    Labels = Array.Empty<GitHubAutomationLabel>(),
+                    ClosingIssuesReferences = new[] { new GitHubPrClosingIssueReference { Number = 661 } },
+                    State = "OPEN",
+                    IsDraft = false
+                }
+            },
+            issues: new[]
+            {
+                new GitHubAutomationIssueCandidate
+                {
+                    Number = 661,
+                    Title = "Z4R-G329 implement thing",
+                    Url = "https://github.com/J-Tech-Japan/intent-system/issues/661",
+                    CreatedAt = "2026-06-01T00:00:00Z",
+                    Labels = new[]
+                    {
+                        new GitHubAutomationLabel { Name = "intent-target" },
+                        new GitHubAutomationLabel { Name = "intent-pr-created" }
+                    },
+                    State = "OPEN"
+                }
+            });
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "Z4R-G329" });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/intent-system",
+             "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("stale-next-slice-reconcile", root.GetProperty("classification").GetString());
+        Assert.False(root.GetProperty("mutation_allowed").GetBoolean());
+        var recommended = root.GetProperty("recommended_command").GetString()!;
+        Assert.Contains("automation reconcile", recommended, StringComparison.Ordinal);
+        Assert.Contains("--lane next-slice", recommended, StringComparison.Ordinal);
+        // Must NOT recommend the publish chain.
+        Assert.DoesNotContain("packet draft", recommended, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_NextSliceIssueCutReady_AdjacentLongerIdOnGitHub_DoesNotFalseMatch_StillPublishes_G444()
+    {
+        // G444 review fix: the duplicate guard must be token-boundary aware,
+        // not a plain substring. A candidate `SKS-G67` must NOT be treated as
+        // already-published just because an unrelated open issue is titled
+        // `SKS-G670 ...`. The guard must fall through to the normal publish
+        // lane (no real duplicate, no open intent-target work).
+        AutomationHostLoopNextActionCommand.CandidateListerFactory = () => new FakeLister(
+            prs: Array.Empty<GitHubAutomationPrCandidate>(),
+            issues: new[]
+            {
+                new GitHubAutomationIssueCandidate
+                {
+                    Number = 700,
+                    Title = "SKS-G670 a different, longer execution unit",
+                    Url = "https://github.com/J-Tech-Japan/SekibanAsAService/issues/700",
+                    CreatedAt = "2026-06-01T00:00:00Z",
+                    // No intent-target label: unrelated open issue, must not
+                    // block the WIP cap either.
+                    Labels = Array.Empty<GitHubAutomationLabel>(),
+                    State = "OPEN"
+                }
+            });
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FakeNextSliceProbe(
+            new NextSliceProbeResult { RecommendedOutcome = "issue-cut-ready", ExecutionUnit = "SKS-G67" });
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopNextActionCommand.Execute(
+            CreateContext(),
+            ["--repo", "J-Tech-Japan/SekibanAsAService",
+             "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        // Adjacent longer id must NOT trigger the stale-reconcile guard.
+        Assert.NotEqual("stale-next-slice-reconcile", root.GetProperty("classification").GetString());
+        Assert.Equal("publish-next-issue", root.GetProperty("classification").GetString());
+        Assert.Contains("--execution-unit SKS-G67", root.GetProperty("recommended_command").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_NextSliceProbeReturnsNoActionableItem_FallsThroughToTrueIdle()
     {
         // G318 acceptance: when next-slice has no candidate AND no other
