@@ -189,7 +189,13 @@ internal static class PacketDraftCommand
             PacketDirectory = packetDirectory,
             Mode = mode,
             Files = files,
-            MissingContractSections = missingSections
+            MissingContractSections = missingSections,
+            // G449: derive the packet's publish-readiness verdict through the
+            // SHARED NextSliceReadinessEvaluator so packet-draft validation
+            // agrees with next-slice / publish-flow / diagnostics on contract
+            // completeness (no missing required sections → publishable).
+            ContractPublishable = NextSliceReadinessEvaluator.IsPublishable(
+                executionUnit, contractComplete: missingSections.Count == 0)
         };
     }
 
@@ -499,6 +505,16 @@ internal sealed record PacketDraftResult
 
     [JsonPropertyName("missing_contract_sections")]
     public required IReadOnlyList<string> MissingContractSections { get; init; }
+
+    /// <summary>
+    /// G449: the packet's publish-readiness verdict from the shared
+    /// <see cref="NextSliceReadinessEvaluator"/> — true only when the contract
+    /// is complete (no missing required sections). Routes packet-draft
+    /// validation through the same engine as next-slice / publish-flow /
+    /// diagnostics so the surfaces never contradict on contract completeness.
+    /// </summary>
+    [JsonPropertyName("contract_publishable")]
+    public bool ContractPublishable { get; init; }
 }
 
 internal sealed record PacketDraftFile

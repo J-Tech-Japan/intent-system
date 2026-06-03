@@ -135,7 +135,13 @@ internal static class IssuePublishFlowCommand
             title = FormatIssueTitle(executionUnit!, title);
         }
 
-        if (!githubBodyPresent || missing.Count > 0)
+        // G449: gate publish on the SHARED NextSliceReadinessEvaluator's
+        // contract-completeness verdict so a candidate publish-flow rejects is
+        // exactly one that next-slice / packet-draft / diagnostics will not
+        // report issue-cut-ready. ContractComplete requires the body present AND
+        // no missing required sections.
+        var contractComplete = githubBodyPresent && missing.Count == 0;
+        if (!NextSliceReadinessEvaluator.IsPublishable(executionUnit!, contractComplete))
         {
             var validationResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                 packetExists: true,
