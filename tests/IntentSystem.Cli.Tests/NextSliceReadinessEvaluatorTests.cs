@@ -226,4 +226,51 @@ public sealed class NextSliceReadinessEvaluatorTests
             HostLoopNextActionAnalyzer.ClassificationPublishNextIssue,
             result.ToHostLoopClassification());
     }
+
+    // ---- shared adapter routes every publish-readiness surface (G449) -------
+
+    [Theory]
+    [InlineData(true, true)]   // complete contract → publishable
+    [InlineData(false, false)] // incomplete contract → not publishable
+    public void SharedAdapter_IsPublishable_ReflectsContractCompleteness(bool contractComplete, bool expected)
+    {
+        Assert.Equal(expected, NextSliceReadinessEvaluator.IsPublishable(Unit, contractComplete));
+    }
+
+    [Fact]
+    public void HostReviewDiagnosticsSurface_IncompleteContract_NotIssuePublishReady_ViaSharedAdapter()
+    {
+        var result = AutomationHostReviewDiagnosticsAnalyzer.Analyze(
+            repo: "J-Tech-Japan/intent-system",
+            openPrs: Array.Empty<GitHubAutomationPrCandidate>(),
+            publishedIntentTargetIssues: Array.Empty<GitHubAutomationIssueCandidate>(),
+            clarificationRequired: false,
+            candidateExecutionUnit: Unit,
+            candidateMissingContractSections: ["Acceptance Criteria"]);
+
+        // The same candidate that publish-flow / packet-draft reject for an
+        // incomplete contract is NOT reported issue-publish-ready here.
+        Assert.NotEqual(
+            AutomationHostReviewDiagnosticsClassifications.IssuePublishReady,
+            result.Classification);
+        Assert.Equal(
+            AutomationHostReviewDiagnosticsClassifications.ClarificationRequired,
+            result.Classification);
+    }
+
+    [Fact]
+    public void HostReviewDiagnosticsSurface_CompleteContract_IsIssuePublishReady_ViaSharedAdapter()
+    {
+        var result = AutomationHostReviewDiagnosticsAnalyzer.Analyze(
+            repo: "J-Tech-Japan/intent-system",
+            openPrs: Array.Empty<GitHubAutomationPrCandidate>(),
+            publishedIntentTargetIssues: Array.Empty<GitHubAutomationIssueCandidate>(),
+            clarificationRequired: false,
+            candidateExecutionUnit: Unit,
+            candidateMissingContractSections: Array.Empty<string>());
+
+        Assert.Equal(
+            AutomationHostReviewDiagnosticsClassifications.IssuePublishReady,
+            result.Classification);
+    }
 }

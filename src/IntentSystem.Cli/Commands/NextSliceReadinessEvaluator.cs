@@ -34,6 +34,30 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class NextSliceReadinessEvaluator
 {
+    /// <summary>
+    /// G449: shared adapter every publish-readiness surface calls for the
+    /// contract-completeness gate (intent next-slice, packet draft validation,
+    /// issue publish-flow, host-review diagnostics). Returns true only when the
+    /// candidate is publishable per the single shared engine — i.e. it has a
+    /// candidate, a complete contract, no open hard clarification, and no
+    /// duplicate. Routing every surface through this one method guarantees a
+    /// candidate rejected by one (e.g. publish-flow for an incomplete contract)
+    /// is never reported <c>issue-cut-ready</c> by another (e.g. next-slice).
+    /// </summary>
+    public static bool IsPublishable(
+        string? candidateExecutionUnit,
+        bool contractComplete,
+        bool openHardClarification = false,
+        NextSliceExistingReference? existingGitHubReference = null) =>
+        Evaluate(new NextSliceReadinessInput
+        {
+            HasCandidate = true,
+            CandidateExecutionUnit = candidateExecutionUnit,
+            ContractComplete = contractComplete,
+            OpenHardClarification = openHardClarification,
+            ExistingGitHubReference = existingGitHubReference,
+        }).IssueCutReady;
+
     public static NextSliceReadinessResult Evaluate(NextSliceReadinessInput input)
     {
         ArgumentNullException.ThrowIfNull(input);

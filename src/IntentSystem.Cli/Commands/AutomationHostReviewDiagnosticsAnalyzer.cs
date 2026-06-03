@@ -470,12 +470,16 @@ internal static class AutomationHostReviewDiagnosticsAnalyzer
 
         if (!string.IsNullOrWhiteSpace(candidateExecutionUnit))
         {
-            // G433: reject candidates with incomplete packet contracts so
-            // issue-publish-ready is never emitted for a packet that
-            // issue publish-flow would refuse. Mirrors the validation in
-            // IntentNextSliceCommand so both readiness surfaces agree.
-            if (candidateMissingContractSections is { Count: > 0 })
+            // G433 / G449: reject candidates with incomplete packet contracts so
+            // issue-publish-ready is never emitted for a packet that issue
+            // publish-flow would refuse. The contract-completeness verdict is now
+            // routed through the SHARED NextSliceReadinessEvaluator so this
+            // diagnostic agrees with next-slice / packet-draft / publish-flow /
+            // host-loop-next-action on the same candidate.
+            var diagnosticsContractComplete = candidateMissingContractSections is not { Count: > 0 };
+            if (!NextSliceReadinessEvaluator.IsPublishable(candidateExecutionUnit, diagnosticsContractComplete))
             {
+                candidateMissingContractSections ??= Array.Empty<string>();
                 var sectionList = string.Join(", ", candidateMissingContractSections);
                 details.Add(new AutomationHostReviewDiagnosticsDetail
                 {

@@ -501,23 +501,29 @@ internal static class IntentNextSliceCommand
                 : OutcomeDesignNeeded;
         }
 
-        if (candidate.MissingContractSections.Count > 0)
+        if (candidate.MissingContractSections.Count > 0
+            && candidate.GapAnalysis is not null
+            && candidate.GapAnalysis.OverallClassification ==
+                PacketContractGapAnalyzer.ClassificationMechanicalRepairable)
         {
             // G354: when every missing section is mechanical-repairable
             // (Verification, Related Links), surface the specific repair
             // outcome so the host agent can apply the boilerplate templates
             // autonomously — no operator clarification needed.
-            if (candidate.GapAnalysis is not null
-                && candidate.GapAnalysis.OverallClassification ==
-                    PacketContractGapAnalyzer.ClassificationMechanicalRepairable)
-            {
-                return OutcomePacketGapMechanicalRepairable;
-            }
-
-            return OutcomeClarificationRequired;
+            return OutcomePacketGapMechanicalRepairable;
         }
 
-        return OutcomeIssueCutReady;
+        // G449: route the contract-completeness publish verdict through the
+        // SHARED NextSliceReadinessEvaluator so `intent next-slice` agrees with
+        // packet-draft validation, issue publish-flow, host-loop-next-action,
+        // and classify. A complete contract → issue-cut-ready; an incomplete one
+        // → clarification-required (publish-flow would reject it, so next-slice
+        // must not report it ready).
+        return NextSliceReadinessEvaluator.IsPublishable(
+            candidate.ExecutionUnit,
+            contractComplete: candidate.MissingContractSections.Count == 0)
+            ? OutcomeIssueCutReady
+            : OutcomeClarificationRequired;
     }
 
     /// <summary>
