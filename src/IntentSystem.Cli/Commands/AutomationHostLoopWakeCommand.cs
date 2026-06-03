@@ -20,16 +20,23 @@ namespace IntentSystem.Cli.Commands;
 ///      <c>true-idle</c>, <c>review</c>, <c>publish</c>, <c>blocker</c> — and
 ///      enforces the at-most-one-PR / at-most-one-issue-publish invariant.
 ///
-/// Read-only by default. Under <c>--write</c> it executes the documented SAFE
-/// mutation lane — the deterministic host-metadata repair — through the existing
-/// <c>automation publish-recovery</c> / <c>closeout-drift-check --write</c>
-/// surface, preserving the one-PR / one-publish invariant (a repair is neither).
-/// It performs no destructive git operation and never auto-approves review.
-/// Judgement-gated (review approval) and multi-step (publish chain) lanes stay
-/// fail-closed: the single safe command is surfaced as <c>pending_command</c>
-/// for the host to run through the existing detailed commands, which remain
-/// available and compatible. A safe-lane execution that fails stays fail-closed
-/// (no mutation claimed) and records a warning.
+/// Read-only by default. Under <c>--write</c> it executes the documented SAFE,
+/// no-judgement mutation lanes through existing surfaces:
+/// <list type="bullet">
+///   <item>deterministic host-metadata repair — <c>automation publish-recovery</c>
+///         / <c>closeout-drift-check --write</c>;</item>
+///   <item>next-slice publish — the deterministic chain <c>packet draft</c> →
+///         <c>issue publish-flow --write</c> → <c>automation issue-publish
+///         --write</c> (the candidate is already issue-cut-ready with an empty
+///         WIP cap, so no expert judgement is involved).</item>
+/// </list>
+/// The one-PR / one-publish invariant is preserved. It performs no destructive
+/// git operation and never auto-approves review. Review approval / request-update
+/// transitions REQUIRE expert judgement and stay fail-closed: the single safe
+/// command is surfaced as <c>pending_command</c> for the host to run after
+/// review through the existing detailed commands. Any safe-lane step that fails
+/// stays fail-closed (no further step runs, no unearned mutation claimed) and
+/// records a warning.
 /// </summary>
 internal static class AutomationHostLoopWakeCommand
 {
@@ -58,6 +65,17 @@ internal static class AutomationHostLoopWakeCommand
     /// safe-mutation lane. Production delegates to
     /// <see cref="AutomationCloseoutDriftCheckCommand.Execute"/>.</summary>
     public static Func<CliContext, string[], TextWriter, int>? CloseoutDriftCheckDelegate { get; set; }
+
+    /// <summary>G450 (review fix 2): testability seams for the deterministic
+    /// next-slice publish chain (packet draft → issue publish-flow --write →
+    /// automation issue-publish --write). Production delegates to the existing
+    /// commands; tests inject fakes to assert the chain runs without real
+    /// GitHub mutation.</summary>
+    public static Func<CliContext, string[], TextWriter, int>? PacketDraftDelegate { get; set; }
+
+    public static Func<CliContext, string[], TextWriter, int>? IssuePublishFlowDelegate { get; set; }
+
+    public static Func<CliContext, string[], TextWriter, int>? IssuePublishDelegate { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -151,18 +169,168 @@ internal static class AutomationHostLoopWakeCommand
         var result = BuildResult(repo!, domain, mode, inner, surfaceReport.InstalledCliPath);
 
         // G450 (review fix): under --write, actually execute the documented safe
-        // mutation lane (deterministic host-metadata repair) through the existing
-        // automation surface, preserving the one-PR / one-publish invariant (a
-        // repair is neither). Judgement-gated (review approval) and multi-step
-        // (publish chain) lanes stay fail-closed and only surface pending_command.
-        if (string.Equals(mode, AutomationHostLoopWakeModes.Write, StringComparison.Ordinal)
-            && string.Equals(result.Classification, HostLoopNextActionAnalyzer.ClassificationRepairHostMetadata, StringComparison.Ordinal))
+        // mutation lanes through existing surfaces, preserving the one-PR /
+        // one-publish invariant. Review approval / request-update transitions
+        // remain JUDGEMENT-gated (out of scope to auto-approve) and stay
+        // fail-closed with pending_command surfaced.
+        if (string.Equals(mode, AutomationHostLoopWakeModes.Write, StringComparison.Ordinal))
         {
-            result = ExecuteSafeRepairLane(context, repo!, inner, result);
+            if (string.Equals(result.Classification, HostLoopNextActionAnalyzer.ClassificationRepairHostMetadata, StringComparison.Ordinal))
+            {
+                // Deterministic host-metadata repair.
+                result = ExecuteSafeRepairLane(context, repo!, inner, result);
+            }
+            else if (string.Equals(result.WakeAction, AutomationHostLoopWakeActions.Publish, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(inner.CandidateExecutionUnit))
+            {
+                // G450 (review fix 2): the next-slice publish lane is
+                // deterministic and requires NO expert judgement (the candidate
+                // is already issue-cut-ready with an empty WIP cap), so --write
+                // runs the documented publish chain through existing surfaces:
+                // packet draft → issue publish-flow --write → automation
+                // issue-publish --write.
+                result = ExecutePublishChain(context, repo!, inner.CandidateExecutionUnit!, result);
+            }
         }
 
         Emit(writer, result, format);
         return 0;
+    }
+
+    /// <summary>
+    /// G450 (review fix 2): execute the deterministic next-slice publish chain
+    /// through the existing surfaces. Fail-closed: if any step returns non-zero
+    /// or cannot resolve the created issue number, no further step runs, no
+    /// mutation is claimed beyond what actually succeeded, and a warning is
+    /// recorded. Preserves the one-issue-publish invariant.
+    /// </summary>
+    private static AutomationHostLoopWakeResult ExecutePublishChain(
+        CliContext context,
+        string repo,
+        string unit,
+        AutomationHostLoopWakeResult result)
+    {
+        var packetDraft = PacketDraftDelegate ?? PacketDraftCommand.Execute;
+        var publishFlow = IssuePublishFlowDelegate ?? IssuePublishFlowCommand.Execute;
+        var issuePublish = IssuePublishDelegate ?? AutomationIssuePublishCommand.Execute;
+        var mutations = new List<string>();
+
+        // Step 1: packet draft (scaffold/validate the packet directory).
+        using (var draftBuffer = new StringWriter())
+        {
+            int exit;
+            try
+            {
+                exit = packetDraft(context, ["--execution-unit", unit, "--target-repo", repo, "--format", "json"], draftBuffer);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
+            {
+                return FailClosedPublish(result, $"packet draft for '{unit}' failed: {exception.Message}");
+            }
+            if (exit != 0)
+            {
+                return FailClosedPublish(result, $"packet draft for '{unit}' returned exit {exit.ToString(System.Globalization.CultureInfo.InvariantCulture)}; publish chain not started.");
+            }
+            mutations.Add($"packet draft --execution-unit {unit}");
+        }
+
+        // Step 2: issue publish-flow --write (creates the GitHub issue + durable state).
+        int? issueNumber;
+        using (var flowBuffer = new StringWriter())
+        {
+            int exit;
+            try
+            {
+                exit = publishFlow(context, [unit, "--repo", repo, "--write", "--format", "json"], flowBuffer);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
+            {
+                return FailClosedPublish(result, $"issue publish-flow for '{unit}' failed: {exception.Message}");
+            }
+            if (exit != 0)
+            {
+                return FailClosedPublish(result, $"issue publish-flow for '{unit}' returned exit {exit.ToString(System.Globalization.CultureInfo.InvariantCulture)}; no issue-publish performed.");
+            }
+            issueNumber = ExtractIssueNumber(flowBuffer.ToString());
+            mutations.Add($"issue publish-flow {unit} --write" + (issueNumber is { } n ? $" (#{n.ToString(System.Globalization.CultureInfo.InvariantCulture)})" : string.Empty));
+        }
+
+        if (issueNumber is not { } createdIssue)
+        {
+            // Issue created but number not resolvable — do NOT guess; surface for
+            // the host to apply intent-target via the existing surface.
+            return result with
+            {
+                WriteExecuted = true,
+                Mutations = mutations,
+                PendingCommand = $"intent-cli automation issue-publish --repo {repo} --issue <n> --write",
+                StopReason = "publish chain created the issue but the issue number was not resolvable; apply intent-target via automation issue-publish.",
+                Summary = $"host-loop-wake: published '{unit}' (issue-publish label step deferred — number unresolved).",
+                Warnings = [.. result.Warnings, "issue publish-flow did not surface an issue_number; intent-target not applied automatically."],
+            };
+        }
+
+        // Step 3: automation issue-publish --write (applies intent-target).
+        using (var publishBuffer = new StringWriter())
+        {
+            int exit;
+            try
+            {
+                exit = issuePublish(context, ["--repo", repo, "--issue", createdIssue.ToString(System.Globalization.CultureInfo.InvariantCulture), "--write", "--format", "json"], publishBuffer);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
+            {
+                return result with
+                {
+                    WriteExecuted = true,
+                    Mutations = mutations,
+                    Warnings = [.. result.Warnings, $"automation issue-publish for #{createdIssue.ToString(System.Globalization.CultureInfo.InvariantCulture)} failed: {exception.Message}"],
+                };
+            }
+            if (exit != 0)
+            {
+                return result with
+                {
+                    WriteExecuted = true,
+                    Mutations = mutations,
+                    Warnings = [.. result.Warnings, $"automation issue-publish for #{createdIssue.ToString(System.Globalization.CultureInfo.InvariantCulture)} returned exit {exit.ToString(System.Globalization.CultureInfo.InvariantCulture)}."],
+                };
+            }
+            mutations.Add($"automation issue-publish --issue {createdIssue.ToString(System.Globalization.CultureInfo.InvariantCulture)} --write");
+        }
+
+        return result with
+        {
+            WriteExecuted = true,
+            PendingCommand = null,
+            Mutations = mutations,
+            StopReason = $"published next-slice issue #{createdIssue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for '{unit}' via the existing publish chain.",
+            Summary = $"host-loop-wake: published next-slice issue #{createdIssue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for '{unit}'.",
+        };
+    }
+
+    private static AutomationHostLoopWakeResult FailClosedPublish(AutomationHostLoopWakeResult result, string warning) =>
+        result with { Warnings = [.. result.Warnings, warning] };
+
+    private static int? ExtractIssueNumber(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("issue_number", out var n)
+                && n.ValueKind == JsonValueKind.Number
+                ? n.GetInt32()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -287,7 +455,7 @@ internal static class AutomationHostLoopWakeCommand
         var evidence = new List<string>(inner.Evidence)
         {
             isWrite
-                ? "--write executes the safe host-metadata repair lane through the existing surface; judgement-gated/multi-step lanes stay fail-closed and surface pending_command."
+                ? "--write executes the safe no-judgement lanes (host-metadata repair, next-slice publish chain) through existing surfaces; review approval/request-update stay judgement-gated and surface pending_command."
                 : "read-only wake: no mutation performed; the recommended command is advisory.",
         };
 
@@ -508,7 +676,7 @@ internal static class AutomationHostLoopWakeCommand
         writer.WriteLine("automation host-loop-wake");
         writer.WriteLine("Usage: intent-cli automation host-loop-wake --repo <owner/repo> [--domain <d>] [--write] [--format json|markdown]");
         writer.WriteLine("One safe-wake orchestration: gates on installed-CLI surface, reuses host-loop-next-action, and reports one of true-idle / review / publish / blocker.");
-        writer.WriteLine("Read-only by default. --write runs the safe host-metadata repair lane via the existing publish-recovery/closeout-drift-check surface; judgement-gated/multi-step lanes stay fail-closed and surface pending_command.");
+        writer.WriteLine("Read-only by default. --write runs the safe no-judgement lanes (host-metadata repair; next-slice publish chain packet draft -> issue publish-flow --write -> automation issue-publish --write) via existing surfaces; review approval/request-update stay judgement-gated and surface pending_command.");
         writer.WriteLine("Processes at most one PR review/closeout and one issue publish per wake. Existing detailed commands remain available.");
     }
 

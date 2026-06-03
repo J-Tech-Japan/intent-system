@@ -20,6 +20,9 @@ public sealed class AutomationHostLoopWakeCommandTests : IDisposable
         AutomationHostLoopWakeCommand.NextActionDelegate = null;
         AutomationHostLoopWakeCommand.PublishRecoveryDelegate = null;
         AutomationHostLoopWakeCommand.CloseoutDriftCheckDelegate = null;
+        AutomationHostLoopWakeCommand.PacketDraftDelegate = null;
+        AutomationHostLoopWakeCommand.IssuePublishFlowDelegate = null;
+        AutomationHostLoopWakeCommand.IssuePublishDelegate = null;
         AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
         AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = null;
     }
@@ -29,6 +32,9 @@ public sealed class AutomationHostLoopWakeCommandTests : IDisposable
         AutomationHostLoopWakeCommand.NextActionDelegate = null;
         AutomationHostLoopWakeCommand.PublishRecoveryDelegate = null;
         AutomationHostLoopWakeCommand.CloseoutDriftCheckDelegate = null;
+        AutomationHostLoopWakeCommand.PacketDraftDelegate = null;
+        AutomationHostLoopWakeCommand.IssuePublishFlowDelegate = null;
+        AutomationHostLoopWakeCommand.IssuePublishDelegate = null;
         AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
         AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = null;
     }
@@ -223,17 +229,16 @@ public sealed class AutomationHostLoopWakeCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_Write_JudgementGatedLane_StaysFailClosed_SurfacesPendingCommand()
+    public void Execute_Write_JudgementGatedReviewLane_StaysFailClosed_SurfacesPendingCommand()
     {
-        // Review approval requires expert judgement and publish is a multi-step
-        // chain: --write must NOT auto-execute those; it surfaces pending_command.
+        // Review approval requires expert judgement: --write must NOT auto-execute
+        // it; it surfaces pending_command for the host to run after review.
         using var ws = new Workspace();
         ws.StubSurfaceAvailable();
-        const string command = "intent-cli packet draft --execution-unit G500 --target-repo " + Repo;
+        const string command = "intent-cli automation pr-transition --transition approved --repo " + Repo + " --pr 5 --write";
         AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
-            HostLoopNextActionAnalyzer.ClassificationPublishNextIssue,
+            HostLoopNextActionAnalyzer.ClassificationReviewPr,
             mutationAllowed: true,
-            candidateExecutionUnit: "G500",
             recommendedCommand: command);
 
         using var writer = new StringWriter();
@@ -241,9 +246,84 @@ public sealed class AutomationHostLoopWakeCommandTests : IDisposable
 
         Assert.Equal(0, exit);
         using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("review", doc.RootElement.GetProperty("wake_action").GetString());
         Assert.False(doc.RootElement.GetProperty("write_executed").GetBoolean());
         Assert.Equal(0, doc.RootElement.GetProperty("mutations").GetArrayLength());
         Assert.Equal(command, doc.RootElement.GetProperty("pending_command").GetString());
+    }
+
+    [Fact]
+    public void Execute_Write_PublishLane_ExecutesPublishChainThroughExistingSurfaces()
+    {
+        // G450 review fix 2: the deterministic next-slice publish lane runs the
+        // documented chain (packet draft → issue publish-flow --write →
+        // automation issue-publish --write) — no expert judgement needed.
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            HostLoopNextActionAnalyzer.ClassificationPublishNextIssue,
+            mutationAllowed: true,
+            candidateExecutionUnit: "G500",
+            recommendedCommand: "intent-cli packet draft --execution-unit G500 --target-repo " + Repo);
+
+        var draftRan = false; var flowRan = false; var publishIssue = 0;
+        AutomationHostLoopWakeCommand.PacketDraftDelegate = (_, args, w) =>
+        {
+            draftRan = true;
+            Assert.Contains("G500", args);
+            w.WriteLine("{}");
+            return 0;
+        };
+        AutomationHostLoopWakeCommand.IssuePublishFlowDelegate = (_, args, w) =>
+        {
+            flowRan = true;
+            Assert.Contains("--write", args);
+            w.WriteLine("{\"issue_number\":4242,\"created\":true}");
+            return 0;
+        };
+        AutomationHostLoopWakeCommand.IssuePublishDelegate = (_, args, w) =>
+        {
+            publishIssue = Array.IndexOf(args, "--issue") is var i && i >= 0 ? int.Parse(args[i + 1]) : 0;
+            Assert.Contains("--write", args);
+            w.WriteLine("{}");
+            return 0;
+        };
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        Assert.True(draftRan && flowRan);
+        Assert.Equal(4242, publishIssue);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("write_executed").GetBoolean());
+        Assert.Equal(3, doc.RootElement.GetProperty("mutations").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("pending_command").ValueKind);
+        Assert.Equal(1, doc.RootElement.GetProperty("processed_issue_publish_count").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_Write_PublishLane_FlowFailure_FailsClosed_DoesNotRunIssuePublish()
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            HostLoopNextActionAnalyzer.ClassificationPublishNextIssue,
+            mutationAllowed: true,
+            candidateExecutionUnit: "G500");
+
+        AutomationHostLoopWakeCommand.PacketDraftDelegate = (_, _, w) => { w.WriteLine("{}"); return 0; };
+        AutomationHostLoopWakeCommand.IssuePublishFlowDelegate = (_, _, w) => { w.WriteLine("{}"); return 1; }; // fail
+        var issuePublishRan = false;
+        AutomationHostLoopWakeCommand.IssuePublishDelegate = (_, _, w) => { issuePublishRan = true; w.WriteLine("{}"); return 0; };
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        Assert.False(issuePublishRan, "issue-publish must not run after publish-flow failed");
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("write_executed").GetBoolean());
     }
 
     [Theory]
