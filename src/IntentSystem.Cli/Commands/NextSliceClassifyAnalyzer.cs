@@ -179,10 +179,26 @@ internal static class NextSliceClassifyAnalyzer
             && candidate.Unit is not null
             && candidate.Path is not null)
         {
+            // G449: derive the terminal class through the SHARED
+            // NextSliceReadinessEvaluator so `next-slice classify` and the host
+            // loop agree on one readiness contract. At this point WIP cap is
+            // clear (checked above), no open clarification (checked above), the
+            // packet is complete (not Incomplete), and the unit is not yet linked
+            // — a clean issue-cut-ready candidate. Routing it through the shared
+            // engine guarantees publish-flow / host-loop see the same verdict.
+            var readiness = NextSliceReadinessEvaluator.Evaluate(new NextSliceReadinessInput
+            {
+                HasCandidate = true,
+                CandidateExecutionUnit = candidate.Unit,
+                ContractComplete = true,
+                OpenHardClarification = false,
+                ExistingGitHubReference = null,
+            });
+
             return new NextSliceClassifyResult
             {
                 Domain = domain,
-                Classification = NextSliceClassification.IssueCutReady,
+                Classification = readiness.ToNextSliceClassification(),
                 Rationale = $"issue packet for {candidate.Unit} is present and not yet linked in queue-state.",
                 WipRefs = Array.Empty<string>(),
                 ClarificationSummary = null,

@@ -160,6 +160,44 @@ public sealed class NextSliceReadinessEvaluatorTests
         Assert.Equal(NextSliceReadinessClass.DuplicateExisting, duplicate.ReadinessClass);
     }
 
+    // ---- real-surface wiring (G449 review fix) ------------------------------
+    // These exercise the ACTUAL HostLoopNextActionAnalyzer surface to prove it
+    // routes the publish-vs-duplicate decision through the shared evaluator,
+    // not an independent inline branch.
+
+    [Fact]
+    public void HostLoopSurface_UnitAlreadyOnGitHub_RoutesToStaleReconcile_ViaSharedEvaluator()
+    {
+        var result = HostLoopNextActionAnalyzer.Analyze(new HostLoopNextActionInput
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            NextSliceIssueCutReady = true,
+            PublishNextSliceExecutionUnit = Unit,
+            NextSliceUnitAlreadyOnGitHub = true,
+        });
+
+        // duplicate-existing → ToHostLoopClassification → stale-next-slice-reconcile
+        Assert.Equal(HostLoopNextActionAnalyzer.ClassificationStaleNextSliceReconcile, result.Classification);
+        Assert.False(result.MutationAllowed);
+    }
+
+    [Fact]
+    public void HostLoopSurface_CleanCandidate_RoutesToPublish_ViaSharedEvaluator()
+    {
+        var result = HostLoopNextActionAnalyzer.Analyze(new HostLoopNextActionInput
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            NextSliceIssueCutReady = true,
+            PublishNextSliceExecutionUnit = Unit,
+            NextSliceUnitAlreadyOnGitHub = false,
+            OpenIntentTargetPrOrIssueExists = false,
+        });
+
+        // issue-cut-ready → ToHostLoopClassification → publish-next-issue
+        Assert.Equal(HostLoopNextActionAnalyzer.ClassificationPublishNextIssue, result.Classification);
+        Assert.True(result.MutationAllowed);
+    }
+
     [Theory]
     [InlineData(false, true, false, false)] // no candidate
     [InlineData(true, false, false, false)] // contract incomplete

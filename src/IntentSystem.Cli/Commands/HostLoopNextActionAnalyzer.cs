@@ -284,36 +284,56 @@ internal static class HostLoopNextActionAnalyzer
                 "Closeout drift (G358): linked_issue-only items have an inferred closing PR — run closeout-drift-check --write.");
         }
 
-        // 5b. G444 stale-next-slice reconcile: next-slice says issue-cut-ready
-        //     for a unit that GitHub already has an open issue/PR for. The
-        //     queue-state is stale; publishing would duplicate the issue.
-        //     Reconcile instead of publishing. Fires ABOVE publish-next-issue.
-        if (input.NextSliceIssueCutReady
-            && input.PublishNextSliceExecutionUnit is { } staleUnit
-            && input.NextSliceUnitAlreadyOnGitHub)
+        // 5b / 6. G449: route the publish-vs-duplicate decision through the
+        //     SHARED NextSliceReadinessEvaluator so the host loop and next-slice
+        //     agree on a single terminal class. The evaluator owns the
+        //     precedence: an execution unit already on GitHub resolves to
+        //     `duplicate-existing` (→ stale-next-slice-reconcile, G444); a clean
+        //     candidate resolves to `issue-cut-ready` (→ publish-next-issue). The
+        //     WIP-cap guard (`OpenIntentTargetPrOrIssueExists`) stays here because
+        //     it is a host-loop concern outside the next-slice readiness contract.
+        if (input.NextSliceIssueCutReady && input.PublishNextSliceExecutionUnit is { } unit)
         {
-            return Result(ClassificationStaleNextSliceReconcile, mutationAllowed: false,
-                $"intent-cli automation reconcile --repo {input.Repo} --lane next-slice --format json",
-                new[]
-                {
-                    $"intent next-slice --dry-run reports `issue-cut-ready` for execution unit `{staleUnit}`, but GitHub already has an open issue or PR for that unit.",
-                    "Queue-state is stale: publishing now would create a DUPLICATE issue. Run `automation reconcile --lane next-slice` to resync queue-state with GitHub reality, then re-run the wake.",
-                    "Do NOT run the publish chain (packet draft → issue publish-flow → automation issue-publish) while next-slice and GitHub disagree."
-                },
-                $"Stale next-slice (G444): `{staleUnit}` already on GitHub — reconcile, do not publish a duplicate.");
-        }
+            var readiness = NextSliceReadinessEvaluator.Evaluate(new NextSliceReadinessInput
+            {
+                HasCandidate = true,
+                CandidateExecutionUnit = unit,
+                ContractComplete = true,
+                OpenHardClarification = false,
+                ExistingGitHubReference = input.NextSliceUnitAlreadyOnGitHub
+                    ? new NextSliceExistingReference { Kind = "issue", Number = 0 }
+                    : null,
+            });
+            var hostLoopClass = readiness.ToHostLoopClassification();
 
-        // 6. publish next issue
-        if (input.NextSliceIssueCutReady && input.PublishNextSliceExecutionUnit is { } unit && !input.OpenIntentTargetPrOrIssueExists)
-        {
-            return Result(ClassificationPublishNextIssue, mutationAllowed: true,
-                $"intent-cli packet draft --execution-unit {unit} --target-repo {input.Repo} --format json",
-                new[]
-                {
-                    $"intent next-slice --dry-run reports `issue-cut-ready` for execution unit `{unit}`.",
-                    "WIP cap is empty (no open intent-target issue/PR). Proceed with the deterministic publish chain: packet draft → issue publish-flow --write → automation issue-publish --write."
-                },
-                $"Next slice ready to publish: `{unit}`.");
+            // 5b. stale-next-slice reconcile (duplicate-existing): publishing now
+            //     would duplicate the GitHub issue. Fires ABOVE publish-next-issue.
+            if (string.Equals(hostLoopClass, ClassificationStaleNextSliceReconcile, StringComparison.Ordinal))
+            {
+                return Result(ClassificationStaleNextSliceReconcile, mutationAllowed: false,
+                    $"intent-cli automation reconcile --repo {input.Repo} --lane next-slice --format json",
+                    new[]
+                    {
+                        $"intent next-slice --dry-run reports `issue-cut-ready` for execution unit `{unit}`, but GitHub already has an open issue or PR for that unit.",
+                        "Queue-state is stale: publishing now would create a DUPLICATE issue. Run `automation reconcile --lane next-slice` to resync queue-state with GitHub reality, then re-run the wake.",
+                        "Do NOT run the publish chain (packet draft → issue publish-flow → automation issue-publish) while next-slice and GitHub disagree."
+                    },
+                    $"Stale next-slice (G444): `{unit}` already on GitHub — reconcile, do not publish a duplicate.");
+            }
+
+            // 6. publish next issue (issue-cut-ready + empty WIP cap).
+            if (string.Equals(hostLoopClass, ClassificationPublishNextIssue, StringComparison.Ordinal)
+                && !input.OpenIntentTargetPrOrIssueExists)
+            {
+                return Result(ClassificationPublishNextIssue, mutationAllowed: true,
+                    $"intent-cli packet draft --execution-unit {unit} --target-repo {input.Repo} --format json",
+                    new[]
+                    {
+                        $"intent next-slice --dry-run reports `issue-cut-ready` for execution unit `{unit}`.",
+                        "WIP cap is empty (no open intent-target issue/PR). Proceed with the deterministic publish chain: packet draft → issue publish-flow --write → automation issue-publish --write."
+                    },
+                    $"Next slice ready to publish: `{unit}`.");
+            }
         }
 
         // 7. hard clarification
