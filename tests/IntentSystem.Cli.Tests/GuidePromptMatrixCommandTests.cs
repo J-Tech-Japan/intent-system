@@ -2016,6 +2016,98 @@ public sealed class GuidePromptMatrixCommandTests
         }
     }
 
+    // ── G451: host-loop guidance consumes the domain review standing policy ──
+
+    [Fact]
+    public void HostLoop_NoPolicyFile_ReviewPolicySourceIsBuiltInDefault_AndGuidanceConsumesPolicy()
+    {
+        var root = Directory.CreateTempSubdirectory("prompt-matrix-g451-").FullName;
+        try
+        {
+            using var writer = new StringWriter();
+            var exit = GuidePromptMatrixCommand.Execute(
+                ContextAt(root),
+                ["--mode", "host-loop", "--domain", "intent-cli", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            using var doc = JsonDocument.Parse(writer.ToString());
+            Assert.Equal("built-in-default", doc.RootElement.GetProperty("review_policy_source").GetString());
+            // The host-loop guidance instructs consuming the standing policy.
+            Assert.Contains("Domain review standing policy (G451)", doc.RootElement.GetProperty("prompt").GetString()!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostLoop_WithPolicyFile_ReviewPolicySourceIsDomainFile()
+    {
+        var root = Directory.CreateTempSubdirectory("prompt-matrix-g451-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, ".intent-cli"));
+            File.WriteAllText(
+                Path.Combine(root, ".intent-cli", "review-policy.json"),
+                """{ "draft_handling": { "rules": ["custom"] } }""");
+
+            using var writer = new StringWriter();
+            var exit = GuidePromptMatrixCommand.Execute(
+                ContextAt(root),
+                ["--mode", "host-loop", "--domain", "intent-cli", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+            using var doc = JsonDocument.Parse(writer.ToString());
+            // A present policy file CHANGES the host-loop guidance output.
+            Assert.Equal("domain-file", doc.RootElement.GetProperty("review_policy_source").GetString());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ChildLoop_ReviewPolicySourceIsNull_ChildDoesNotMakeStandingPolicyDecisions()
+    {
+        var root = Directory.CreateTempSubdirectory("prompt-matrix-g451-").FullName;
+        try
+        {
+            using var writer = new StringWriter();
+            GuidePromptMatrixCommand.Execute(
+                ContextAt(root),
+                ["--mode", "child-loop", "--domain", "intent-cli", "--format", "json"],
+                writer);
+
+            using var doc = JsonDocument.Parse(writer.ToString());
+            // null source is omitted from JSON (WhenWritingNull): child entries
+            // carry no review_policy_source, or it is explicitly null.
+            var hasSource = doc.RootElement.TryGetProperty("review_policy_source", out var source);
+            Assert.True(!hasSource || source.ValueKind == JsonValueKind.Null);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static CliContext ContextAt(string root) => new()
+    {
+        RepoRoot = root,
+        Config = new CliConfig
+        {
+            Project = new ProjectConfig
+            {
+                Domain = "intent-cli",
+                ArtifactRoot = ".intent-cli",
+                WorktreeRoot = ".intent-cli/worktrees",
+            },
+        },
+    };
+
     private static CliContext CreateContext()
     {
         return new CliContext
