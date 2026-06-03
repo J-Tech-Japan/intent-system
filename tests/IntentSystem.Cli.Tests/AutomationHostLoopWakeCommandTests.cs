@@ -1,0 +1,427 @@
+using System.Text.Json;
+using IntentSystem.Cli;
+using IntentSystem.Cli.Commands;
+using IntentSystem.Cli.Models;
+
+namespace IntentSystem.Cli.Tests;
+
+/// <summary>
+/// G450: coverage for the one-wake host-loop orchestration command — the four
+/// wake-action classes (true-idle / review / publish / blocker), the
+/// at-most-one-PR / at-most-one-publish invariant, the stale-cli gate, and the
+/// fail-closed <c>--write</c> behavior.
+/// </summary>
+public sealed class AutomationHostLoopWakeCommandTests : IDisposable
+{
+    private const string Repo = "J-Tech-Japan/intent-system";
+
+    public AutomationHostLoopWakeCommandTests()
+    {
+        AutomationHostLoopWakeCommand.NextActionDelegate = null;
+        AutomationHostLoopWakeCommand.PublishRecoveryDelegate = null;
+        AutomationHostLoopWakeCommand.CloseoutDriftCheckDelegate = null;
+        AutomationHostLoopWakeCommand.PacketDraftDelegate = null;
+        AutomationHostLoopWakeCommand.IssuePublishFlowDelegate = null;
+        AutomationHostLoopWakeCommand.IssuePublishDelegate = null;
+        AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
+        AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = null;
+    }
+
+    public void Dispose()
+    {
+        AutomationHostLoopWakeCommand.NextActionDelegate = null;
+        AutomationHostLoopWakeCommand.PublishRecoveryDelegate = null;
+        AutomationHostLoopWakeCommand.CloseoutDriftCheckDelegate = null;
+        AutomationHostLoopWakeCommand.PacketDraftDelegate = null;
+        AutomationHostLoopWakeCommand.IssuePublishFlowDelegate = null;
+        AutomationHostLoopWakeCommand.IssuePublishDelegate = null;
+        AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
+        AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = null;
+    }
+
+    [Fact]
+    public void Execute_TrueIdle_ReportsTrueIdle_NoPlannedWork()
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction("true-idle", mutationAllowed: false);
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("true-idle", doc.RootElement.GetProperty("wake_action").GetString());
+        Assert.Equal(0, doc.RootElement.GetProperty("processed_pr_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("processed_issue_publish_count").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("write_executed").GetBoolean());
+    }
+
+    [Fact]
+    public void Execute_ReviewPr_ReportsReviewAction_OnePrPlanned()
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            HostLoopNextActionAnalyzer.ClassificationReviewPr,
+            mutationAllowed: false,
+            recommendedCommand: "intent-cli automation host-review-preflight --repo " + Repo);
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("review", doc.RootElement.GetProperty("wake_action").GetString());
+        Assert.Equal(1, doc.RootElement.GetProperty("processed_pr_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("processed_issue_publish_count").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_PublishNextIssue_ReportsPublishAction_OnePublishPlanned()
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            HostLoopNextActionAnalyzer.ClassificationPublishNextIssue,
+            mutationAllowed: true,
+            candidateExecutionUnit: "G500",
+            recommendedCommand: "intent-cli automation issue-publish --issue 0 --write");
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("publish", doc.RootElement.GetProperty("wake_action").GetString());
+        Assert.Equal(0, doc.RootElement.GetProperty("processed_pr_count").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("processed_issue_publish_count").GetInt32());
+        Assert.Equal("G500", doc.RootElement.GetProperty("candidate_execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_DirtyHostState_ReportsBlocker()
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            HostLoopNextActionAnalyzer.ClassificationDirtyHostState,
+            mutationAllowed: false);
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("blocker", doc.RootElement.GetProperty("wake_action").GetString());
+        Assert.Equal(
+            HostLoopNextActionAnalyzer.ClassificationDirtyHostState,
+            doc.RootElement.GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_StaleCliSurface_ReportsStaleCliBlocker_AndDoesNotDelegate()
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceUnavailable();
+        var delegated = false;
+        AutomationHostLoopWakeCommand.NextActionDelegate = (_, _, w) =>
+        {
+            delegated = true;
+            w.WriteLine("{}");
+            return 0;
+        };
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--format", "json"], writer);
+
+        Assert.Equal(1, exit);
+        Assert.False(delegated);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("blocker", doc.RootElement.GetProperty("wake_action").GetString());
+        Assert.Equal(
+            HostLoopNextActionAnalyzer.ClassificationStaleCli,
+            doc.RootElement.GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_ReadOnly_PerformsNoWrite_NoPendingCommand()
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            "repair-host-metadata",
+            mutationAllowed: true,
+            recommendedCommand: "intent-cli automation publish-recovery --repo " + Repo + " --write");
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("read-only", doc.RootElement.GetProperty("mode").GetString());
+        Assert.False(doc.RootElement.GetProperty("write_executed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("pending_command").ValueKind);
+        Assert.Equal(0, doc.RootElement.GetProperty("mutations").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_Write_RepairHostMetadataLane_ExecutesSafeRepairThroughExistingSurface()
+    {
+        // G450 review fix: --write must actually drive the documented safe
+        // mutation lane (deterministic host-metadata repair) through the
+        // existing publish-recovery surface — not just surface a pending command.
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            "repair-host-metadata",
+            mutationAllowed: true,
+            recommendedCommand: "intent-cli automation publish-recovery --repo " + Repo + " --write");
+
+        var executed = false;
+        AutomationHostLoopWakeCommand.PublishRecoveryDelegate = (_, args, w) =>
+        {
+            executed = true;
+            // Assert the wake invoked the existing surface with --write.
+            Assert.Contains("--write", args);
+            w.WriteLine("{\"summary\":\"applied 1 repair\",\"applied_count\":1}");
+            return 0;
+        };
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        Assert.True(executed, "expected the safe repair lane to drive publish-recovery --write");
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("write", doc.RootElement.GetProperty("mode").GetString());
+        Assert.True(doc.RootElement.GetProperty("write_executed").GetBoolean());
+        Assert.True(doc.RootElement.GetProperty("mutations").GetArrayLength() >= 1);
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("pending_command").ValueKind);
+        // The one-PR / one-publish invariant holds (a repair is neither).
+        Assert.Equal(0, doc.RootElement.GetProperty("processed_pr_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("processed_issue_publish_count").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_Write_RepairLaneFailure_StaysFailClosed_NoMutationClaimed()
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            "repair-host-metadata",
+            mutationAllowed: true,
+            recommendedCommand: "intent-cli automation publish-recovery --repo " + Repo + " --write");
+        // The underlying surface fails (non-zero exit) → no mutation may be claimed.
+        AutomationHostLoopWakeCommand.PublishRecoveryDelegate = (_, _, w) =>
+        {
+            w.WriteLine("{}");
+            return 1;
+        };
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("write_executed").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("mutations").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_Write_JudgementGatedReviewLane_StaysFailClosed_SurfacesPendingCommand()
+    {
+        // Review approval requires expert judgement: --write must NOT auto-execute
+        // it; it surfaces pending_command for the host to run after review.
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        const string command = "intent-cli automation pr-transition --transition approved --repo " + Repo + " --pr 5 --write";
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            HostLoopNextActionAnalyzer.ClassificationReviewPr,
+            mutationAllowed: true,
+            recommendedCommand: command);
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("review", doc.RootElement.GetProperty("wake_action").GetString());
+        Assert.False(doc.RootElement.GetProperty("write_executed").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("mutations").GetArrayLength());
+        Assert.Equal(command, doc.RootElement.GetProperty("pending_command").GetString());
+    }
+
+    [Fact]
+    public void Execute_Write_PublishLane_ExecutesPublishChainThroughExistingSurfaces()
+    {
+        // G450 review fix 2: the deterministic next-slice publish lane runs the
+        // documented chain (packet draft → issue publish-flow --write →
+        // automation issue-publish --write) — no expert judgement needed.
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            HostLoopNextActionAnalyzer.ClassificationPublishNextIssue,
+            mutationAllowed: true,
+            candidateExecutionUnit: "G500",
+            recommendedCommand: "intent-cli packet draft --execution-unit G500 --target-repo " + Repo);
+
+        var draftRan = false; var flowRan = false; var publishIssue = 0;
+        AutomationHostLoopWakeCommand.PacketDraftDelegate = (_, args, w) =>
+        {
+            draftRan = true;
+            Assert.Contains("G500", args);
+            w.WriteLine("{}");
+            return 0;
+        };
+        AutomationHostLoopWakeCommand.IssuePublishFlowDelegate = (_, args, w) =>
+        {
+            flowRan = true;
+            Assert.Contains("--write", args);
+            w.WriteLine("{\"issue_number\":4242,\"created\":true}");
+            return 0;
+        };
+        AutomationHostLoopWakeCommand.IssuePublishDelegate = (_, args, w) =>
+        {
+            publishIssue = Array.IndexOf(args, "--issue") is var i && i >= 0 ? int.Parse(args[i + 1]) : 0;
+            Assert.Contains("--write", args);
+            w.WriteLine("{}");
+            return 0;
+        };
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        Assert.True(draftRan && flowRan);
+        Assert.Equal(4242, publishIssue);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("write_executed").GetBoolean());
+        Assert.Equal(3, doc.RootElement.GetProperty("mutations").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("pending_command").ValueKind);
+        Assert.Equal(1, doc.RootElement.GetProperty("processed_issue_publish_count").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_Write_PublishLane_FlowFailure_FailsClosed_DoesNotRunIssuePublish()
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            HostLoopNextActionAnalyzer.ClassificationPublishNextIssue,
+            mutationAllowed: true,
+            candidateExecutionUnit: "G500");
+
+        AutomationHostLoopWakeCommand.PacketDraftDelegate = (_, _, w) => { w.WriteLine("{}"); return 0; };
+        AutomationHostLoopWakeCommand.IssuePublishFlowDelegate = (_, _, w) => { w.WriteLine("{}"); return 1; }; // fail
+        var issuePublishRan = false;
+        AutomationHostLoopWakeCommand.IssuePublishDelegate = (_, _, w) => { issuePublishRan = true; w.WriteLine("{}"); return 0; };
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        Assert.False(issuePublishRan, "issue-publish must not run after publish-flow failed");
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.False(doc.RootElement.GetProperty("write_executed").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("true-idle")]
+    [InlineData("review-pr")]
+    [InlineData("publish-next-issue")]
+    [InlineData("dirty-host-state")]
+    public void Execute_NeverExceedsOnePrAndOnePublish(string classification)
+    {
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(classification, mutationAllowed: false);
+
+        using var writer = new StringWriter();
+        AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--format", "json"], writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("processed_pr_count").GetInt32() <= 1);
+        Assert.True(doc.RootElement.GetProperty("processed_issue_publish_count").GetInt32() <= 1);
+    }
+
+    // --- helpers -------------------------------------------------------------
+
+    private static Func<CliContext, string[], TextWriter, int> CannedNextAction(
+        string classification,
+        bool mutationAllowed,
+        string? recommendedCommand = null,
+        string? candidateExecutionUnit = null)
+        => (_, _, writer) =>
+        {
+            var payload = new
+            {
+                repo = Repo,
+                classification,
+                mutation_allowed = mutationAllowed,
+                recommended_command = recommendedCommand,
+                candidate_execution_unit = candidateExecutionUnit,
+                evidence = new[] { $"canned evidence for {classification}" },
+                summary = $"canned summary for {classification}",
+            };
+            writer.WriteLine(JsonSerializer.Serialize(payload));
+            return 0;
+        };
+
+    private sealed class Workspace : IDisposable
+    {
+        private readonly string installedCliPath;
+
+        public Workspace()
+        {
+            RootPath = Directory.CreateTempSubdirectory("host-loop-wake-tests-").FullName;
+            Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
+            installedCliPath = Path.Combine(RootPath, ".intent-cli", "installed-cli-stub");
+            Context = new CliContext
+            {
+                RepoRoot = RootPath,
+                Config = new CliConfig
+                {
+                    Project = new ProjectConfig
+                    {
+                        Domain = "intent-cli",
+                        ArtifactRoot = ".intent-cli",
+                    },
+                },
+            };
+        }
+
+        public string RootPath { get; }
+        public CliContext Context { get; }
+
+        public void StubSurfaceAvailable()
+        {
+            File.WriteAllText(installedCliPath, "stub");
+            AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = () => installedCliPath;
+            AutomationInstalledCliSurfaceProbe.ProbeRunner = (_, _) =>
+                new InstalledCliProbeResult(
+                    0,
+                    "automation summary host-review-preflight issue-publish pr-transition review-start request-update approved",
+                    string.Empty);
+        }
+
+        public void StubSurfaceUnavailable()
+        {
+            // Resolvable path, but the probe reports every surface as
+            // not-yet-implemented → the report is deterministically unavailable
+            // (independent of any real intent-cli on PATH).
+            File.WriteAllText(installedCliPath, "stub");
+            AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = () => installedCliPath;
+            AutomationInstalledCliSurfaceProbe.ProbeRunner = (_, _) =>
+                new InstalledCliProbeResult(1, "Command is not yet implemented.", string.Empty);
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(RootPath))
+            {
+                Directory.Delete(RootPath, recursive: true);
+            }
+        }
+    }
+}
