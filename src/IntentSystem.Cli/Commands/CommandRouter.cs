@@ -70,6 +70,7 @@ internal static class CommandRouter
         "automation publish-lifecycle-repair --repo <r> [--write]",
         "automation publish-recovery --repo <r> [--write]",
         "automation reconcile [--lane host-review|next-slice|all] [--write]",
+        "automation state-doctor [--repo <r>] [--read-only] [--write]",
         "automation summary",
         "automation workspace-guard --mode plan|begin|end [--write]"
     ];
@@ -181,6 +182,7 @@ internal static class CommandRouter
                 ["queue-seed-from-packet"] = AutomationQueueSeedFromPacketCommand.Execute,
                 ["reconcile"] = AutomationReconcileCommand.Execute,
                 ["same-repo-metadata-preflight"] = AutomationSameRepoMetadataPreflightCommand.Execute,
+                ["state-doctor"] = AutomationStateDoctorCommand.Execute,
                 ["summary"] = AutomationSummaryCommand.Execute,
                 ["workspace-guard"] = AutomationWorkspaceGuardCommand.Execute
             },
