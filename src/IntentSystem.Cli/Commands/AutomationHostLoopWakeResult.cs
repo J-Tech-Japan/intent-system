@@ -90,9 +90,16 @@ internal sealed record AutomationHostLoopWakeResult
     [JsonPropertyName("validations")]
     public required IReadOnlyList<string> Validations { get; init; }
 
-    /// <summary>True only when this command itself applied a mutation. Fail-closed:
-    /// false in this slice — mutation lanes are delegated to the existing
-    /// command surfaced in <see cref="PendingCommand"/>.</summary>
+    /// <summary>Non-fatal warnings — e.g. a safe-repair lane that failed to
+    /// execute and therefore claimed no mutation (fail-closed).</summary>
+    [JsonPropertyName("warnings")]
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+
+    /// <summary>True when this command executed a safe mutation lane through an
+    /// existing surface (the deterministic host-metadata repair lane under
+    /// <c>--write</c>). Judgement-gated (review approval) and multi-step (publish
+    /// chain) lanes stay fail-closed: <c>false</c>, with the single safe command
+    /// surfaced in <see cref="PendingCommand"/>.</summary>
     [JsonPropertyName("write_executed")]
     public required bool WriteExecuted { get; init; }
 

@@ -20,12 +20,16 @@ namespace IntentSystem.Cli.Commands;
 ///      <c>true-idle</c>, <c>review</c>, <c>publish</c>, <c>blocker</c> — and
 ///      enforces the at-most-one-PR / at-most-one-issue-publish invariant.
 ///
-/// Read-only by default. <c>--write</c> is fail-closed: this command performs
-/// no destructive git operation, never auto-approves review, and never bypasses
-/// the existing label-transition / closeout / publish surfaces. Mutation lanes
-/// are surfaced as the single safe <c>pending_command</c> for the host to run
-/// through the existing detailed commands, which remain available and
-/// compatible.
+/// Read-only by default. Under <c>--write</c> it executes the documented SAFE
+/// mutation lane — the deterministic host-metadata repair — through the existing
+/// <c>automation publish-recovery</c> / <c>closeout-drift-check --write</c>
+/// surface, preserving the one-PR / one-publish invariant (a repair is neither).
+/// It performs no destructive git operation and never auto-approves review.
+/// Judgement-gated (review approval) and multi-step (publish chain) lanes stay
+/// fail-closed: the single safe command is surfaced as <c>pending_command</c>
+/// for the host to run through the existing detailed commands, which remain
+/// available and compatible. A safe-lane execution that fails stays fail-closed
+/// (no mutation claimed) and records a warning.
 /// </summary>
 internal static class AutomationHostLoopWakeCommand
 {
@@ -43,6 +47,17 @@ internal static class AutomationHostLoopWakeCommand
     /// <see cref="AutomationHostLoopNextActionCommand.Execute"/>; tests inject a
     /// fake to model each classification without GitHub access.</summary>
     public static Func<CliContext, string[], TextWriter, int>? NextActionDelegate { get; set; }
+
+    /// <summary>G450 (review fix): testability seam for the safe-mutation lane
+    /// executor. Production delegates to the existing
+    /// <see cref="AutomationPublishRecoveryCommand.Execute"/>; tests inject a
+    /// fake to assert <c>--write</c> actually drives the existing surface.</summary>
+    public static Func<CliContext, string[], TextWriter, int>? PublishRecoveryDelegate { get; set; }
+
+    /// <summary>G450 (review fix): testability seam for the closeout-drift-check
+    /// safe-mutation lane. Production delegates to
+    /// <see cref="AutomationCloseoutDriftCheckCommand.Execute"/>.</summary>
+    public static Func<CliContext, string[], TextWriter, int>? CloseoutDriftCheckDelegate { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -134,8 +149,111 @@ internal static class AutomationHostLoopWakeCommand
         }
 
         var result = BuildResult(repo!, domain, mode, inner, surfaceReport.InstalledCliPath);
+
+        // G450 (review fix): under --write, actually execute the documented safe
+        // mutation lane (deterministic host-metadata repair) through the existing
+        // automation surface, preserving the one-PR / one-publish invariant (a
+        // repair is neither). Judgement-gated (review approval) and multi-step
+        // (publish chain) lanes stay fail-closed and only surface pending_command.
+        if (string.Equals(mode, AutomationHostLoopWakeModes.Write, StringComparison.Ordinal)
+            && string.Equals(result.Classification, HostLoopNextActionAnalyzer.ClassificationRepairHostMetadata, StringComparison.Ordinal))
+        {
+            result = ExecuteSafeRepairLane(context, repo!, inner, result);
+        }
+
         Emit(writer, result, format);
         return 0;
+    }
+
+    /// <summary>
+    /// G450 (review fix): execute the safe host-metadata repair lane through the
+    /// existing <c>automation publish-recovery --write</c> / <c>closeout-drift-check
+    /// --write</c> surface. These are deterministic, forward-only queue-state
+    /// repairs (each gated by its own command's fail-closed logic), so running
+    /// them from the one-wake command is safe. Returns an updated result with
+    /// <c>write_executed</c> / <c>mutations</c> populated on success; on failure
+    /// it stays fail-closed (no mutation claimed) and records a warning.
+    /// </summary>
+    private static AutomationHostLoopWakeResult ExecuteSafeRepairLane(
+        CliContext context,
+        string repo,
+        NextActionProjection inner,
+        AutomationHostLoopWakeResult result)
+    {
+        var recommended = inner.RecommendedCommand ?? string.Empty;
+        string command;
+        Func<CliContext, string[], TextWriter, int> executor;
+        if (recommended.Contains("publish-recovery", StringComparison.Ordinal))
+        {
+            command = "automation publish-recovery";
+            executor = PublishRecoveryDelegate ?? AutomationPublishRecoveryCommand.Execute;
+        }
+        else if (recommended.Contains("closeout-drift-check", StringComparison.Ordinal))
+        {
+            command = "automation closeout-drift-check";
+            executor = CloseoutDriftCheckDelegate ?? AutomationCloseoutDriftCheckCommand.Execute;
+        }
+        else
+        {
+            // Unknown repair command — stay fail-closed and keep pending_command.
+            return result with
+            {
+                Warnings = [.. result.Warnings, $"repair lane recommended an unrecognized command; not auto-executed: {recommended}"],
+            };
+        }
+
+        using var buffer = new StringWriter();
+        int exit;
+        try
+        {
+            exit = executor(context, ["--repo", repo, "--write", "--format", "json"], buffer);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
+        {
+            return result with
+            {
+                Warnings = [.. result.Warnings, $"safe repair lane failed to execute `{command} --write`: {exception.Message}"],
+            };
+        }
+
+        if (exit != 0)
+        {
+            return result with
+            {
+                Warnings = [.. result.Warnings, $"`{command} --write` returned exit {exit.ToString(System.Globalization.CultureInfo.InvariantCulture)}; no mutation claimed (fail-closed)."],
+            };
+        }
+
+        var detail = ExtractSummary(buffer.ToString()) ?? $"{command} --write completed.";
+        return result with
+        {
+            WriteExecuted = true,
+            PendingCommand = null,
+            Mutations = [$"{command} --write: {detail}"],
+            StopReason = $"safe repair executed via existing surface ({command} --write).",
+            Summary = $"host-loop-wake: executed safe host-metadata repair ({command} --write).",
+        };
+    }
+
+    private static string? ExtractSummary(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("summary", out var s)
+                && s.ValueKind == JsonValueKind.String
+                ? s.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static AutomationHostLoopWakeResult BuildResult(
@@ -169,7 +287,7 @@ internal static class AutomationHostLoopWakeCommand
         var evidence = new List<string>(inner.Evidence)
         {
             isWrite
-                ? "--write is fail-closed: host-loop-wake performs no destructive op and never auto-approves review; run pending_command through the existing surface."
+                ? "--write executes the safe host-metadata repair lane through the existing surface; judgement-gated/multi-step lanes stay fail-closed and surface pending_command."
                 : "read-only wake: no mutation performed; the recommended command is advisory.",
         };
 
@@ -390,7 +508,7 @@ internal static class AutomationHostLoopWakeCommand
         writer.WriteLine("automation host-loop-wake");
         writer.WriteLine("Usage: intent-cli automation host-loop-wake --repo <owner/repo> [--domain <d>] [--write] [--format json|markdown]");
         writer.WriteLine("One safe-wake orchestration: gates on installed-CLI surface, reuses host-loop-next-action, and reports one of true-idle / review / publish / blocker.");
-        writer.WriteLine("Read-only by default. --write is fail-closed: no destructive op, no auto-approval; mutation lanes surface the single safe pending_command.");
+        writer.WriteLine("Read-only by default. --write runs the safe host-metadata repair lane via the existing publish-recovery/closeout-drift-check surface; judgement-gated/multi-step lanes stay fail-closed and surface pending_command.");
         writer.WriteLine("Processes at most one PR review/closeout and one issue publish per wake. Existing detailed commands remain available.");
     }
 

@@ -18,6 +18,8 @@ public sealed class AutomationHostLoopWakeCommandTests : IDisposable
     public AutomationHostLoopWakeCommandTests()
     {
         AutomationHostLoopWakeCommand.NextActionDelegate = null;
+        AutomationHostLoopWakeCommand.PublishRecoveryDelegate = null;
+        AutomationHostLoopWakeCommand.CloseoutDriftCheckDelegate = null;
         AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
         AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = null;
     }
@@ -25,6 +27,8 @@ public sealed class AutomationHostLoopWakeCommandTests : IDisposable
     public void Dispose()
     {
         AutomationHostLoopWakeCommand.NextActionDelegate = null;
+        AutomationHostLoopWakeCommand.PublishRecoveryDelegate = null;
+        AutomationHostLoopWakeCommand.CloseoutDriftCheckDelegate = null;
         AutomationInstalledCliSurfaceProbe.ProbeRunner = null;
         AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = null;
     }
@@ -156,22 +160,87 @@ public sealed class AutomationHostLoopWakeCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_Write_FailClosed_SurfacesPendingCommand_ButDoesNotExecute()
+    public void Execute_Write_RepairHostMetadataLane_ExecutesSafeRepairThroughExistingSurface()
+    {
+        // G450 review fix: --write must actually drive the documented safe
+        // mutation lane (deterministic host-metadata repair) through the
+        // existing publish-recovery surface — not just surface a pending command.
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            "repair-host-metadata",
+            mutationAllowed: true,
+            recommendedCommand: "intent-cli automation publish-recovery --repo " + Repo + " --write");
+
+        var executed = false;
+        AutomationHostLoopWakeCommand.PublishRecoveryDelegate = (_, args, w) =>
+        {
+            executed = true;
+            // Assert the wake invoked the existing surface with --write.
+            Assert.Contains("--write", args);
+            w.WriteLine("{\"summary\":\"applied 1 repair\",\"applied_count\":1}");
+            return 0;
+        };
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        Assert.True(executed, "expected the safe repair lane to drive publish-recovery --write");
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("write", doc.RootElement.GetProperty("mode").GetString());
+        Assert.True(doc.RootElement.GetProperty("write_executed").GetBoolean());
+        Assert.True(doc.RootElement.GetProperty("mutations").GetArrayLength() >= 1);
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("pending_command").ValueKind);
+        // The one-PR / one-publish invariant holds (a repair is neither).
+        Assert.Equal(0, doc.RootElement.GetProperty("processed_pr_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("processed_issue_publish_count").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_Write_RepairLaneFailure_StaysFailClosed_NoMutationClaimed()
     {
         using var ws = new Workspace();
         ws.StubSurfaceAvailable();
-        const string command = "intent-cli automation publish-recovery --repo " + Repo + " --write";
         AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
-            "repair-host-metadata", mutationAllowed: true, recommendedCommand: command);
+            "repair-host-metadata",
+            mutationAllowed: true,
+            recommendedCommand: "intent-cli automation publish-recovery --repo " + Repo + " --write");
+        // The underlying surface fails (non-zero exit) → no mutation may be claimed.
+        AutomationHostLoopWakeCommand.PublishRecoveryDelegate = (_, _, w) =>
+        {
+            w.WriteLine("{}");
+            return 1;
+        };
 
         using var writer = new StringWriter();
         var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
 
         Assert.Equal(0, exit);
         using var doc = JsonDocument.Parse(writer.ToString());
-        Assert.Equal("write", doc.RootElement.GetProperty("mode").GetString());
-        // Fail-closed: the command itself executes nothing; it hands the host
-        // the single safe pending command.
+        Assert.False(doc.RootElement.GetProperty("write_executed").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("mutations").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_Write_JudgementGatedLane_StaysFailClosed_SurfacesPendingCommand()
+    {
+        // Review approval requires expert judgement and publish is a multi-step
+        // chain: --write must NOT auto-execute those; it surfaces pending_command.
+        using var ws = new Workspace();
+        ws.StubSurfaceAvailable();
+        const string command = "intent-cli packet draft --execution-unit G500 --target-repo " + Repo;
+        AutomationHostLoopWakeCommand.NextActionDelegate = CannedNextAction(
+            HostLoopNextActionAnalyzer.ClassificationPublishNextIssue,
+            mutationAllowed: true,
+            candidateExecutionUnit: "G500",
+            recommendedCommand: command);
+
+        using var writer = new StringWriter();
+        var exit = AutomationHostLoopWakeCommand.Execute(ws.Context, ["--repo", Repo, "--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
         Assert.False(doc.RootElement.GetProperty("write_executed").GetBoolean());
         Assert.Equal(0, doc.RootElement.GetProperty("mutations").GetArrayLength());
         Assert.Equal(command, doc.RootElement.GetProperty("pending_command").GetString());
