@@ -66,6 +66,27 @@ public sealed class ReviewStandingPolicyRegistryTests : IDisposable
     }
 
     [Fact]
+    public void Default_DraftHandling_PreservesInstalledDraftAwareFlow_NoRequestUpdateSolelyForDraft()
+    {
+        var draft = ReviewStandingPolicy.Default("intent-cli").DraftHandling.Rules;
+        var joined = string.Join("\n", draft);
+
+        // Draft state alone is NOT a stop and NOT a request-update reason.
+        Assert.Contains(draft, r =>
+            r.Contains("Draft state ALONE is not a review stop", StringComparison.Ordinal));
+        Assert.Contains(draft, r =>
+            r.Contains("never solely because the PR is draft", StringComparison.Ordinal));
+        // It must NOT instruct "request the author mark it ready-for-review first"
+        // as the default response to a draft (the regressed pre-fix behavior).
+        Assert.DoesNotContain("Request the author mark it ready-for-review first", joined, StringComparison.Ordinal);
+        // Approval/merge while the draft flag is set is still forbidden.
+        Assert.Contains(draft, r =>
+            r.Contains("NEVER approve or merge while the draft flag is still set", StringComparison.Ordinal));
+        // The promote-then-approve path is referenced.
+        Assert.Contains(draft, r => r.Contains("draft-ready-to-promote", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Resolve_ValidPolicyFile_AppliesOverrides_KeepsOmittedSectionDefaults()
     {
         File.WriteAllText(PolicyPath, """

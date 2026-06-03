@@ -63,10 +63,14 @@ internal sealed record ReviewStandingPolicy
         },
         DraftHandling = new ReviewPolicySection
         {
+            // Preserves the installed draft-aware flow (G297/G376/G398): draft
+            // state alone is NOT a review stop and NOT a reason to request-update.
             Rules =
             [
-                "A draft PR is NOT review-ready: do not approve, merge, or run the approval transition on a draft. Request the author mark it ready-for-review first.",
-                "Do not re-ask whether drafts are reviewable once this policy is established for the domain; treat every draft as not-ready by default.",
+                "Draft state ALONE is not a review stop and not a request-update reason: a draft PR is still review-eligible. Gather packet / implementation / review-context evidence first; review eligibility is distinct from merge eligibility.",
+                "NEVER approve or merge while the draft flag is still set. Resolve the draft only at the merge boundary.",
+                "If review is ready (closeout-plan + guide review ready, base matches policy, diff check passed, no implementation findings) AND the draft is NOT operator-intended, use the installed diagnostics to promote: `automation host-review-diagnostics --pr-draft true --draft-review-ready` → on `draft-ready-to-promote` run `gh pr ready` then continue approval/merge/closeout.",
+                "Otherwise route by diagnostics: `draft-request-update` → request update for real implementation findings (never solely because the PR is draft); `draft-merge-blocked` (operator-intended draft or readiness unverified) → release the review lease and surface the gap. Do not re-ask the standing draft-handling question once established.",
             ],
         },
         ExternalArtifactIntake = new ReviewPolicySection
