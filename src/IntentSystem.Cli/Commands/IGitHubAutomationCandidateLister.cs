@@ -19,6 +19,17 @@ internal interface IGitHubAutomationCandidateLister
     IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
         string repo,
         IReadOnlyCollection<string> requiredLabels);
+
+    /// <summary>
+    /// G448: list MERGED pull requests (with closing-issue references) for the
+    /// unified state doctor's merged-PR-not-completed lane. Default returns an
+    /// empty list so existing fakes/implementations keep compiling; the
+    /// gh-backed lister overrides it with a <c>--state merged</c> query.
+    /// </summary>
+    IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels)
+        => Array.Empty<GitHubAutomationPrCandidate>();
 }
 
 /// <summary>
@@ -163,6 +174,34 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     /// <summary>
     /// G206: builds the <c>gh issue list</c> argument list.
     /// </summary>
+    /// <summary>
+    /// G448: builds the <c>gh pr list --state merged</c> argument list used by
+    /// the unified state doctor's merged-PR lane.
+    /// </summary>
+    internal static IReadOnlyList<string> BuildMergedPrListArguments(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        ArgumentNullException.ThrowIfNull(requiredLabels);
+
+        var args = new List<string>
+        {
+            "pr",
+            "list",
+            "--repo", repo,
+            "--state", "merged",
+            "--json", PrListJsonFields,
+            "--limit", "200"
+        };
+        foreach (var label in requiredLabels)
+        {
+            args.Add("--label");
+            args.Add(label);
+        }
+        return args;
+    }
+
     internal static IReadOnlyList<string> BuildIssueListArguments(
         string repo,
         IReadOnlyCollection<string> requiredLabels)
@@ -203,6 +242,15 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         var args = BuildIssueListArguments(repo, requiredLabels);
         var stdout = RunGh(args, $"list issues in {repo}");
         return DeserializeList<GitHubAutomationIssueCandidate>(stdout, $"`gh issue list` for {repo}");
+    }
+
+    public IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(
+        string repo,
+        IReadOnlyCollection<string> requiredLabels)
+    {
+        var args = BuildMergedPrListArguments(repo, requiredLabels);
+        var stdout = RunGh(args, $"list merged PRs in {repo}");
+        return DeserializeList<GitHubAutomationPrCandidate>(stdout, $"`gh pr list --state merged` for {repo}");
     }
 
     private static string RunGh(IReadOnlyList<string> arguments, string description)
