@@ -265,6 +265,68 @@ public sealed class AutomationStateDoctorTests : IDisposable
     }
 
     [Fact]
+    public void Execute_Write_WithNonDefaultWorkdir_MutatesOnlyThatHostRoot_NotCallerContext()
+    {
+        // G448 review fix: --workdir must drive the host context for ALL I/O.
+        // The caller context points at one root; --workdir points at a DIFFERENT
+        // host root that has the drift. Only the --workdir host may be read or
+        // written; the caller's `.intent-cli` state must be untouched.
+        using var caller = new DoctorWorkspace();
+        // Caller has its own queue-state with NO drift — it must stay byte-identical.
+        var callerQueueBefore = BuildQueue(("CALLER-UNIT", Li(111), $"https://github.com/{Repo}/pull/9", QueueItemState.Completed));
+        caller.WriteQueueState(callerQueueBefore);
+
+        // Separate host root (the --workdir target) with a repairable item.
+        var hostRoot = Directory.CreateTempSubdirectory("state-doctor-host-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(hostRoot, ".intent-cli"));
+            File.WriteAllText(
+                Path.Combine(hostRoot, ".intent-cli", "queue-state.json"),
+                BuildQueue(("HOST-UNIT", null, null, QueueItemState.Queued)));
+            var publishDir = Path.Combine(hostRoot, ".intent-cli", "issues", "HOST-UNIT");
+            Directory.CreateDirectory(publishDir);
+            var artifact = new IssuePublishArtifact
+            {
+                ExecutionUnit = "HOST-UNIT",
+                PublishStatus = "published",
+                PacketPath = ".intent-cli/issues/HOST-UNIT/packet.yaml",
+                IssueBodyPath = ".intent-cli/issues/HOST-UNIT/github-body.md",
+                CreatedIssueNumber = 777,
+                CreatedIssueUrl = $"https://github.com/{Repo}/issues/777",
+                PublishedLabelName = "intent-target",
+            };
+            File.WriteAllText(Path.Combine(publishDir, "publish.yaml"), IssuePublishArtifactYaml.Serialize(artifact));
+
+            AutomationStateDoctorCommand.CandidateListerFactory = () => new FakeLister(
+                open: new[] { Pr(778, merged: false, closes: 777) });
+
+            using var writer = new StringWriter();
+            var exit = AutomationStateDoctorCommand.Execute(
+                caller.Context,
+                ["--repo", Repo, "--workdir", hostRoot, "--write", "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exit);
+
+            // The --workdir host root WAS repaired.
+            var hostAfter = QueueStateSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(hostRoot, ".intent-cli", "queue-state.json")));
+            Assert.Equal(777, hostAfter.Items[0].LinkedIssue!.Number);
+            Assert.Contains("/pull/778", hostAfter.Items[0].LinkedPr!, StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(hostRoot, ".intent-cli", "runs.jsonl")));
+
+            // The CALLER context was NOT touched — same bytes, no run log.
+            Assert.Equal(callerQueueBefore, File.ReadAllText(caller.Context.GetQueueStatePath()));
+            Assert.False(File.Exists(caller.Context.GetRunLogPath()));
+        }
+        finally
+        {
+            Directory.Delete(hostRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Execute_ChildLoopContext_IsRejected_HostOnly()
     {
         using var workspace = new DoctorWorkspace();

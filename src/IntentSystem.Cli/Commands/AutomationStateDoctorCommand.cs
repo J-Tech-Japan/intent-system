@@ -75,6 +75,19 @@ internal static class AutomationStateDoctorCommand
         }
 
         var resolvedWorkdir = ResolveWorkdir(context, workdir);
+
+        // G448 (review fix): --workdir must consistently drive the HOST context
+        // used for every read/write — queue-state, publish artifacts, and the
+        // run log — not just repo inference. Otherwise
+        // `state-doctor --workdir /path/to/host --repo other/repo --write` could
+        // mutate the caller cwd's `.intent-cli` state while inferring/reporting a
+        // different target host, risking corruption of the wrong host metadata.
+        // Rebind the context to the resolved workdir so all I/O targets that one
+        // host root (fail-closed host-data safety).
+        var hostContext = string.Equals(resolvedWorkdir, context.RepoRoot, StringComparison.Ordinal)
+            ? context
+            : context with { RepoRoot = resolvedWorkdir };
+
         if (string.IsNullOrWhiteSpace(repo)
             && !AutomationCheckCommand.TryInferGitHubRepo(resolvedWorkdir, out repo, out error))
         {
@@ -82,7 +95,7 @@ internal static class AutomationStateDoctorCommand
             return 1;
         }
 
-        var surfaceReport = AutomationInstalledCliSurfaceProbe.Check(context);
+        var surfaceReport = AutomationInstalledCliSurfaceProbe.Check(hostContext);
         if (!surfaceReport.Available)
         {
             var stale = BuildSingleUnsafe(
@@ -96,9 +109,9 @@ internal static class AutomationStateDoctorCommand
         }
 
         // ---- gather queue-state (forward-compat: missing/old files are fine) ----
-        QueueState? queueState = TryReadQueueState(context);
+        QueueState? queueState = TryReadQueueState(hostContext);
         var queueItems = ProjectQueueItems(queueState);
-        var publishEvidence = ProjectPublishEvidence(context, queueState, repo!);
+        var publishEvidence = ProjectPublishEvidence(hostContext, queueState, repo!);
 
         IGitHubAutomationCandidateLister lister;
         try
@@ -129,7 +142,7 @@ internal static class AutomationStateDoctorCommand
         var warnings = new List<string>();
         if (string.Equals(mode, AutomationStateDoctorModes.Write, StringComparison.Ordinal))
         {
-            findings = ApplyHighConfidenceRepairs(context, findings, warnings);
+            findings = ApplyHighConfidenceRepairs(hostContext, findings, warnings);
         }
 
         var result = new AutomationStateDoctorResult
