@@ -132,15 +132,13 @@ internal static class GuideReviewCommand
     // when code conformance is otherwise verified, hard-block for primary /
     // high-risk device evidence, and never claim evidence that was not
     // collected.
-    private static readonly IReadOnlyList<string> DeviceGatedEvidencePolicy = new[]
-    {
-        "Definition: a `device-gap` is an acceptance criterion whose ONLY missing evidence is real physical-device / operator / hardware proof that this automation cannot generate (e.g. a real two-finger touch gesture), while source, log, unit-test, and simulator evidence for the same criterion IS available and passes.",
-        "Approve-with-recorded-gap (NOT an operator stop) when ALL hold: (a) code/packet conformance is verified by available source/log/unit/simulator evidence; (b) the missing evidence is purely a device/automation limitation; (c) the gap is explicitly recorded as a `device-gap` in the approval summary AND a durable follow-up (PR comment / closeout note / follow-up issue) tracks collecting the real-device evidence.",
-        "HARD-BLOCK (request-update or operator stop, never approve) when the device-gated evidence IS the primary deliverable of the slice, OR is safety / security / data-loss / payment / other high-risk proof. These are not eligible for approve-with-gap.",
-        "NEVER claim physical evidence was collected when it was not. State plainly: \"real-device evidence for <criterion> was NOT collected (device-gap); verified by <source/log/unit/simulator> instead\" — fabricating or implying device evidence is a false-claim violation.",
-        "Do NOT re-ask the standing-policy question once a device-gap policy is established for this domain/wave; apply the same rule to subsequent packets with equivalent device gaps and only escalate genuinely new high-risk gates.",
-        "Record every accepted device-gap durably (closeout note / PR comment / follow-up issue) so the deferred real-device verification is tracked and not silently lost."
-    };
+    // G451: the device-gated evidence rules are now the default of the
+    // data-driven ReviewStandingPolicy registry, so a domain can override them
+    // through an optional `.intent-cli/review-policy.json` without changing
+    // code. The default reproduces the prior G445 rules verbatim, keeping a
+    // host with no policy file byte-identical to before.
+    private static IReadOnlyList<string> DeviceGatedEvidencePolicy =>
+        ReviewStandingPolicy.DefaultDeviceGatedEvidenceRules;
 
     private static readonly IReadOnlyList<string> DefaultValidationSuggestions = new[]
     {
@@ -173,6 +171,10 @@ internal static class GuideReviewCommand
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
             : domainOverride!;
+
+        // G451: resolve the domain standing-policy registry (optional file,
+        // safe defaults when absent/invalid). Fail-closed and read-only.
+        var standingPolicy = ReviewStandingPolicyRegistry.Resolve(context, domain);
 
         var queueStatePath = context.GetQueueStatePath();
         var gaps = new List<string>();
@@ -282,7 +284,11 @@ internal static class GuideReviewCommand
             ReviewBoundaries = ReviewBoundaries,
             ApprovalSummaryRequirements = ApprovalSummaryRequirements,
             RequestUpdateRequirements = RequestUpdateRequirements,
-            DeviceGatedEvidencePolicy = DeviceGatedEvidencePolicy,
+            // G451: device-gated rules now come from the resolved standing
+            // policy (default == prior G445 rules; overridable per domain).
+            DeviceGatedEvidencePolicy = standingPolicy.DeviceGatedEvidence.Rules,
+            ReviewStandingPolicy = standingPolicy,
+            ReviewPolicySource = standingPolicy.Source,
             ReviewBlockerProtocol = ReviewBlockerProtocol.ProtocolRules,
             PrBlockerCommentTemplate = ReviewBlockerProtocol.BlockerCommentTemplateSections,
             ReviewBlockerRoutingExamples = BuildBlockerRoutingExamples(),
@@ -536,6 +542,25 @@ internal static class GuideReviewCommand
         }
         writer.WriteLine();
 
+        // G451: the broader domain standing-policy registry (draft handling,
+        // external intake, test-evidence sufficiency, follow-up tracking) and
+        // where it was resolved from.
+        if (result.ReviewStandingPolicy is { } policy)
+        {
+            writer.WriteLine("## Review standing policy (G451)");
+            writer.WriteLine($"- source: {result.ReviewPolicySource}");
+            foreach (var warning in policy.Warnings)
+            {
+                writer.WriteLine($"- warning: {warning}");
+            }
+            WritePolicySection(writer, "Draft handling", policy.DraftHandling.Rules);
+            WritePolicySection(writer, "External artifact intake", policy.ExternalArtifactIntake.Rules);
+            WritePolicySection(writer, "Test-evidence sufficiency", policy.TestEvidenceSufficiency.Rules);
+            WritePolicySection(writer, "Follow-up tracking", policy.FollowUpTracking.Rules);
+            writer.WriteLine();
+        }
+
+        // G451 helper is defined below; render the durable blocker protocol next.
         // G394: durable blocker protocol + PR blocker comment template +
         // worked routing examples. Record current-PR blockers on the PR, not
         // only in chat, before completing as request-update / clarification.
@@ -687,6 +712,16 @@ internal static class GuideReviewCommand
         writer.WriteLine("Read-only PR-specific review guidance: execution unit, packet refs, review-context excerpt, deterministic review checklist, boundaries, and validation suggestions.");
     }
 
+    // G451: render one standing-policy section's rules in markdown.
+    private static void WritePolicySection(TextWriter writer, string heading, IReadOnlyList<string> rules)
+    {
+        writer.WriteLine($"### {heading}");
+        foreach (var rule in rules)
+        {
+            writer.WriteLine($"- {rule}");
+        }
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -772,6 +807,23 @@ internal sealed record GuideReviewResult
     /// </summary>
     [JsonPropertyName("device_gated_evidence_policy")]
     public required IReadOnlyList<string> DeviceGatedEvidencePolicy { get; init; }
+
+    /// <summary>
+    /// G451: the full resolved domain standing-policy registry (draft handling,
+    /// device-gated evidence, external artifact intake, test-evidence
+    /// sufficiency, follow-up tracking). Defaults are emitted when no policy
+    /// file is present so consumers always see a complete, actionable policy.
+    /// </summary>
+    [JsonPropertyName("review_standing_policy")]
+    public ReviewStandingPolicy? ReviewStandingPolicy { get; init; }
+
+    /// <summary>
+    /// G451: where the resolved standing policy came from —
+    /// <c>built-in-default</c>, <c>domain-file</c>, or
+    /// <c>invalid-fallback-default</c>.
+    /// </summary>
+    [JsonPropertyName("review_policy_source")]
+    public string? ReviewPolicySource { get; init; }
 
     /// <summary>
     /// G394: durable-routing rules for review clarification stops — record
