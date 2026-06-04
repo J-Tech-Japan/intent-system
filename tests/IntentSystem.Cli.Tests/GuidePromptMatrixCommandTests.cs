@@ -248,6 +248,52 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("20 minutes", prompt, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Execute_ModeHostLoopJson_PromptContainsContinuationContract_ApprovedIsIntermediate()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // G454: the host-loop guidance MUST teach the continuation contract:
+        // intent-pr-approved is intermediate, approval continues to merge +
+        // closeout, and a partial stop is classified terminal/non-terminal.
+        Assert.Contains("Host-loop continuation contract", prompt, StringComparison.Ordinal);
+        Assert.Contains("host-loop-continuation/v1", prompt, StringComparison.Ordinal);
+        Assert.Contains("G454", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-pr-approved`", prompt, StringComparison.Ordinal);
+        Assert.Contains("INTERMEDIATE", prompt, StringComparison.Ordinal);
+        // Approval continuation names merge verification + closeout.
+        Assert.Contains("closeout pr", prompt, StringComparison.Ordinal);
+        Assert.Contains("merged == true", prompt, StringComparison.Ordinal);
+        // Rail recovery section present for partial-stop wakes.
+        Assert.Contains("rail-recovery", prompt, StringComparison.OrdinalIgnoreCase);
+        // Repair-and-retry-once for recoverable blockers.
+        Assert.Contains("retry", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("workspace-safe-dirty", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ModeHostLoopJson_ContinuationContract_TargetRepoSubstituted()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+        // The `<r>` placeholder inside the contract must be resolved to the
+        // concrete target repo, never leaked as a literal token.
+        Assert.Contains("closeout pr --pr <n> --repo J-Tech-Japan/intent-system", prompt, StringComparison.Ordinal);
+    }
+
     // ── child-oneshot tests ──────────────────────────────────────────────
 
     [Fact]
