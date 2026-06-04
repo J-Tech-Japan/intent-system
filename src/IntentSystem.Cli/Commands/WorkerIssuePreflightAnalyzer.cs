@@ -107,6 +107,37 @@ internal static class WorkerIssuePreflightAnalyzer
                 WorkerIssuePreflightConstants.RecommendedActions.DeclineWithSummary);
         }
 
+        // Step 4.5: host-only-packet (G462). The issue carries intent-target
+        // (passed step 4) but its declared `Target paths:` are exclusively
+        // host/design-owned (intents/**, .intent-cli/**). A GitHub-contract-only
+        // child loop must not edit host metadata, so this is NOT a child
+        // implementation issue — it must be released from the child target (or
+        // retargeted to child-owned paths) on the host/design side. Checked
+        // BEFORE target-mismatch so the more specific host-only signal wins over
+        // the generic mismatch heuristics. (G458 / issue #1018 regression.)
+        var hostOnlyVerdict = HostOnlyPacketClassifier.Classify(body);
+        if (hostOnlyVerdict.IsHostOnly)
+        {
+            return Build(
+                lookup,
+                repo,
+                issueNumber,
+                title,
+                state,
+                labels,
+                WorkerIssuePreflightConstants.Classifications.HostOnlyPacket,
+                new[]
+                {
+                    "issue is a host-only packet: every declared target path is host/design-owned ("
+                        + string.Join(", ", hostOnlyVerdict.HostOwnedPaths)
+                        + ") with no child-owned implementation path (src/**, tests/**, docs/**, README.md, ...).",
+                    "a GitHub-contract-only child loop must not edit host metadata (intents/**, .intent-cli/**); host/design packets stay in the host/design workflow unless retargeted to child-owned paths.",
+                    $"release this issue from the child target via `intent-cli automation issue-release --repo {repo} --issue {issueNumber} --write` (never raw gh label mutation), or retarget the packet to child-owned paths.",
+                },
+                actionable: false,
+                WorkerIssuePreflightConstants.RecommendedActions.ReleaseFromTarget);
+        }
+
         // Step 5: target-mismatch.
         var mismatchReasons = DetectTargetMismatch(body, repo, workdir);
         if (mismatchReasons.Count > 0)

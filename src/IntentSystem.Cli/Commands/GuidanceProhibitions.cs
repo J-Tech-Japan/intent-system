@@ -40,6 +40,7 @@ internal static class GuidanceProhibitionCatalog
     public const string ProviderLaunchForbidden = "provider-launch-forbidden";
     public const string IntentCliRunForbidden = "intent-cli-run-forbidden";
     public const string StaleMemoryFallbackForbidden = "stale-memory-fallback-forbidden";
+    public const string HostOnlyPacketChildPublishForbidden = "host-only-packet-child-publish-forbidden";
 
     /// <summary>
     /// G323: canonical prohibition list for setup contracts AND task
@@ -97,6 +98,11 @@ internal static class GuidanceProhibitionCatalog
         {
             Id = IntentCliRunForbidden,
             Description = "Do not call `intent-cli run` from chat-first loops; `run` is advanced runtime (integration smoke / replay / dogfooding) and is not part of the routine collaboration path."
+        },
+        new()
+        {
+            Id = HostOnlyPacketChildPublishForbidden,
+            Description = "Do not publish a host-only packet (all target paths host-owned: `intents/**`, `.intent-cli/**`) as a child `intent-target` issue; host/design packets stay in the host/design workflow unless retargeted to child-owned paths (`src/**`, `tests/**`, `docs/**`, `README.md`). If one was mis-published, release it via `intent-cli automation issue-release --write` (never raw `gh` label mutation)."
         }
     };
 }

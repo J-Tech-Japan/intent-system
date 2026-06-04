@@ -123,6 +123,64 @@ public sealed class WorkerIssuePreflightCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenHostOnlyPacket_ClassifiesAsHostOnlyPacket_NonActionable()
+    {
+        // G462 regression (G458 / issue #1018): an intent-target issue whose
+        // declared Target paths are all host-owned (intents/**) must NOT be
+        // reported as ready-to-implement.
+        using var workspace = new WorkerIssuePreflightWorkspace();
+        var hostOnlyBody = ValidBody("J-Tech-Japan/intent-system")
+            + "\n\nTarget paths: `intents/intent-cli/intent-tree/purpose/04-product-goal.md`, `intents/intent-cli/intent-tree/00-map.md`, `.intent-cli/issues/G458`\n";
+        WorkerIssuePreflightCommand.IssueLookupFactory = () => new FakeLookup(BuildIssue(
+            number: 1018,
+            state: "OPEN",
+            title: "G458 Refresh canonical product goal",
+            body: hostOnlyBody,
+            labelNames: new[] { "intent-target" }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerIssuePreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--issue", "1018", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerIssuePreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerIssuePreflightConstants.Classifications.HostOnlyPacket, result.Classification);
+        Assert.False(result.Actionable);
+        Assert.Equal(WorkerIssuePreflightConstants.RecommendedActions.ReleaseFromTarget, result.RecommendedAction);
+        Assert.Contains(result.Reasons, r => r.Contains("issue-release", StringComparison.Ordinal));
+        Assert.Contains(result.Reasons, r => r.Contains("host-only packet", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_GivenIntentTargetWithChildPaths_StaysReadyToImplement()
+    {
+        // A child-implementable intent-target issue (target paths include
+        // src/** / docs / README.md) must still classify ready-to-implement.
+        using var workspace = new WorkerIssuePreflightWorkspace();
+        var childBody = ValidBody("J-Tech-Japan/intent-system")
+            + "\n\nTarget paths: `intents/intent-cli/specs/14.md`, `src/IntentSystem.Cli/Commands`, `tests/IntentSystem.Cli.Tests`\n";
+        WorkerIssuePreflightCommand.IssueLookupFactory = () => new FakeLookup(BuildIssue(
+            number: 1019,
+            state: "OPEN",
+            title: "G462 child-implementable",
+            body: childBody,
+            labelNames: new[] { "intent-target" }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerIssuePreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--issue", "1019", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerIssuePreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerIssuePreflightConstants.Classifications.ReadyToImplement, result.Classification);
+        Assert.True(result.Actionable);
+    }
+
+    [Fact]
     public void Execute_GivenContractIncompleteBody_ClassifiesAsContractIncomplete()
     {
         using var workspace = new WorkerIssuePreflightWorkspace();

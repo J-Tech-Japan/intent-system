@@ -15,6 +15,10 @@ public sealed class AutomationIssuePublishCommandTests : IDisposable
         AutomationIssuePublishCommand.MutatorFactory = null;
         AutomationIssuePublishCommand.UtcNowFactory = () => FixedNow;
         AutomationIssuePublishCommand.NestedProviderLauncher = null;
+        // G462: default the host-only gate's issue-body lookup to a child-path
+        // fake so existing publish tests neither hit live `gh` nor get refused.
+        AutomationIssuePublishCommand.IssueLookupFactory =
+            () => new FakeIssueLookup("Target paths: `src/Foo`, `docs`, `README.md`");
     }
 
     public void Dispose()
@@ -22,6 +26,57 @@ public sealed class AutomationIssuePublishCommandTests : IDisposable
         AutomationIssuePublishCommand.MutatorFactory = null;
         AutomationIssuePublishCommand.UtcNowFactory = null;
         AutomationIssuePublishCommand.NestedProviderLauncher = null;
+        AutomationIssuePublishCommand.IssueLookupFactory = null;
+    }
+
+    [Fact]
+    public void Execute_HostOnlyPacket_RefusesPublish_NonZero()
+    {
+        // G462 / G458 regression: a packet whose target paths are all
+        // host-owned must NOT be published as a child intent-target issue.
+        using var workspace = new AutomationIssuePublishWorkspace();
+        var mutator = new FakeMutator();
+        AutomationIssuePublishCommand.MutatorFactory = () => mutator;
+        AutomationIssuePublishCommand.IssueLookupFactory = () => new FakeIssueLookup(
+            "Target paths: `intents/intent-cli/intent-tree/purpose/04-product-goal.md`, `.intent-cli/issues/G458`");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssuePublishCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--issue", "1018", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationIssuePublishResult>(writer.ToString())!;
+        Assert.True(result.Refused);
+        Assert.False(result.Applied);
+        Assert.NotNull(result.RefusalReason);
+        Assert.Contains("host-only packet", result.RefusalReason!, StringComparison.Ordinal);
+        // The label was NEVER applied.
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_HostOnlyPacket_WithOverride_StillPublishes()
+    {
+        using var workspace = new AutomationIssuePublishWorkspace();
+        var mutator = new FakeMutator();
+        AutomationIssuePublishCommand.MutatorFactory = () => mutator;
+        AutomationIssuePublishCommand.IssueLookupFactory = () => new FakeIssueLookup(
+            "Target paths: `intents/intent-cli/x.md`");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssuePublishCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--issue", "1018", "--write",
+             "--allow-host-only-override", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationIssuePublishResult>(writer.ToString())!;
+        Assert.False(result.Refused);
+        Assert.True(result.Applied);
+        Assert.Single(mutator.AppliedTransitions);
     }
 
     [Fact]
@@ -206,6 +261,14 @@ public sealed class AutomationIssuePublishCommandTests : IDisposable
 
         Assert.False(launcherInvoked,
             "AutomationIssuePublishCommand must never invoke NestedProviderLauncher.");
+    }
+
+    private sealed class FakeIssueLookup : IGitHubIssueLookup
+    {
+        private readonly string body;
+        public FakeIssueLookup(string body) => this.body = body;
+        public GitHubIssueLookupResult Lookup(string repo, int issueNumber) =>
+            new() { Number = issueNumber, State = "OPEN", Body = body };
     }
 
     private sealed class FakeMutator : IGitHubLabelMutator
