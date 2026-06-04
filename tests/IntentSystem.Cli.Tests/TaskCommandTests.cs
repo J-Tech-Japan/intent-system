@@ -175,6 +175,58 @@ public sealed class TaskCommandTests
         Assert.Empty(doc.RootElement.GetProperty("steps").EnumerateArray());
     }
 
+    [Fact]
+    public void ReviewPr_HappyPath_CarriesContinuationContract_ApprovedIsIntermediate()
+    {
+        using var writer = new StringWriter();
+        var exit = TaskCommand.Execute(
+            CreateContext(),
+            ["review-pr", "--repo", "J-Tech-Japan/intent-system", "--pr", "777",
+             "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+
+        // G454: the review-pr planner advertises the structured host-loop
+        // continuation contract so a controller dispatching a review knows
+        // intent-pr-approved is intermediate, not terminal.
+        var contract = root.GetProperty("continuation_contract");
+        Assert.Equal("host-loop-continuation/v1", contract.GetProperty("contract_id").GetString());
+        Assert.False(contract.GetProperty("approval_is_terminal").GetBoolean());
+
+        // Stop classifications: approved is NOT terminal (continue this wake);
+        // request-update IS terminal-for-wake.
+        var stops = contract.GetProperty("stop_classifications").EnumerateArray().ToArray();
+        var approved = stops.Single(s => s.GetProperty("stop_state").GetString() == "approved");
+        Assert.False(approved.GetProperty("terminal").GetBoolean());
+        Assert.Contains("closeout pr", approved.GetProperty("next_command").GetString()!, StringComparison.Ordinal);
+        var requestUpdate = stops.Single(s => s.GetProperty("stop_state").GetString() == "request-update");
+        Assert.True(requestUpdate.GetProperty("terminal").GetBoolean());
+
+        // Blocker contracts: recoverable blockers carry repair_command,
+        // resume_stage, retry_command, mutation_allowed; unrecoverable ones
+        // carry operator_action_required + terminal.
+        var blockers = contract.GetProperty("blocker_contracts").EnumerateArray().ToArray();
+        var workspaceDirty = blockers.Single(b => b.GetProperty("blocker_category").GetString() == "workspace-safe-dirty");
+        Assert.True(workspaceDirty.GetProperty("recoverable").GetBoolean());
+        Assert.False(workspaceDirty.GetProperty("terminal").GetBoolean());
+        Assert.True(workspaceDirty.GetProperty("mutation_allowed").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(workspaceDirty.GetProperty("repair_command").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(workspaceDirty.GetProperty("resume_stage").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(workspaceDirty.GetProperty("retry_command").GetString()));
+
+        var mergeConflict = blockers.Single(b => b.GetProperty("blocker_category").GetString() == "merge-conflict");
+        Assert.False(mergeConflict.GetProperty("recoverable").GetBoolean());
+        Assert.True(mergeConflict.GetProperty("terminal").GetBoolean());
+        Assert.False(mergeConflict.GetProperty("mutation_allowed").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(mergeConflict.GetProperty("operator_action_required").GetString()));
+
+        // Rail-recovery guidance is present for partial-stop wakes.
+        Assert.NotEmpty(contract.GetProperty("rail_recovery").EnumerateArray());
+    }
+
     // ---- task fix-pr-comments ----------------------------------------------
 
     [Fact]

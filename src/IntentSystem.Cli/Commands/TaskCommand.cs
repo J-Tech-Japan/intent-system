@@ -251,9 +251,11 @@ internal static class TaskCommand
             {
                 "`task review-pr` is the explicit-target counterpart to autonomous host-review. Selector-driven host-review-preflight remains valid; this is for controllers who already know the PR.",
                 "G316 is non-negotiable: every approval summary must satisfy `guide review` `approval_summary_requirements`.",
-                "Never launch AI providers from intent-cli; this planner only emits text the controller runs."
+                "Never launch AI providers from intent-cli; this planner only emits text the controller runs.",
+                "G454: `intent-pr-approved` is intermediate, not terminal — see `continuation_contract`. After approval, the same wake MUST merge, verify `merged == true`, and run `closeout pr` unless a concrete gate blocks merge. A recoverable blocker is repaired and retried once before declaring the PR blocked."
             },
-            Prohibitions = GuidanceProhibitionCatalog.All
+            Prohibitions = GuidanceProhibitionCatalog.All,
+            ContinuationContract = HostLoopContinuationContract.Default
         };
 
         WritePlan(plan, parsed.Format, writer);
@@ -507,6 +509,13 @@ internal static class TaskCommand
         WriteSection(writer, "Label transitions", plan.LabelTransitions);
         WriteSection(writer, "Abort conditions", plan.AbortConditions);
         WriteSection(writer, "Notes", plan.Notes);
+
+        if (plan.ContinuationContract is not null)
+        {
+            writer.WriteLine("## Continuation contract");
+            writer.WriteLine(HostLoopContinuationContract.RenderMarkdown(plan.Repo ?? "<r>"));
+            writer.WriteLine();
+        }
     }
 
     private static void WriteSection(TextWriter writer, string title, IReadOnlyList<string> entries)
@@ -720,4 +729,15 @@ internal sealed record TaskPlan
     /// </summary>
     [JsonPropertyName("prohibitions")]
     public IReadOnlyList<GuidanceProhibition>? Prohibitions { get; init; }
+
+    /// <summary>
+    /// G454: the canonical host-loop continuation contract. Present on
+    /// <c>task review-pr</c> so a controller dispatching a review knows that
+    /// <c>intent-pr-approved</c> is intermediate (not terminal), that
+    /// approval continues to merge + closeout in the same wake, how to repair
+    /// and retry a recoverable blocker once, and how to classify a wake that
+    /// stopped after a partial label transition.
+    /// </summary>
+    [JsonPropertyName("continuation_contract")]
+    public HostLoopContinuationContractModel? ContinuationContract { get; init; }
 }
