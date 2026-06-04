@@ -283,6 +283,41 @@ internal static class AutomationHostReviewDiagnosticsClassifications
     /// pass <c>--domain</c> explicitly or update the binding.
     /// </summary>
     public const string MissingDomainBinding = "missing-domain-binding";
+
+    /// <summary>
+    /// G453: terminal class returned when a selected review PR is blocked by a
+    /// dirty host worktree whose dirty set includes UNPUBLISHED host durable
+    /// metadata (<c>.intent-cli/queue-state.json</c>, <c>.intent-cli/runs.jsonl</c>,
+    /// <c>.intent-cli/issues/**</c> packets/publish artifacts, <c>intents/**</c>).
+    /// This is distinct from a generic <c>dirty-mixed</c> / <c>workspace-safe-dirty</c>
+    /// stop: clearing the dirty state with <c>git reset</c>/<c>checkout</c>/<c>clean</c>
+    /// would DELETE the metadata that <c>review closeout-plan</c> and
+    /// <c>guide review</c> need, producing a later <c>host-metadata-blocked</c>
+    /// review. The host loop must salvage first (commit/push, metadata-branch
+    /// sync, state-doctor / reconcile / publish-recovery, or switch to a clean
+    /// review worktree) before any destructive cleanup.
+    /// </summary>
+    public const string SelectedReviewBlockedByUnpublishedHostMetadata = "selected-review-blocked-by-unpublished-host-metadata";
+
+    /// <summary>
+    /// G453: terminal class returned when same-repo topology is configured and
+    /// the review wake is running from the wrong worktree / branch — typically
+    /// an implementation feature branch rather than the configured metadata
+    /// source branch. Reviewing from an implementation branch is what makes the
+    /// host worktree dirty with in-flight metadata in the first place; the fix
+    /// is to switch to a clean review worktree checked out on the metadata
+    /// branch (which already has the published metadata), not to clean the
+    /// current one.
+    /// </summary>
+    public const string WrongReviewWorktreeBranch = "wrong-review-worktree-branch";
+
+    /// <summary>
+    /// G453: classification returned when the selected review PR's workspace is
+    /// clean (no dirty host metadata, correct review worktree/branch) and CI is
+    /// not failing — review may proceed. Used by the workspace-salvage lane to
+    /// confirm there is no cleanup-safety blocker.
+    /// </summary>
+    public const string WorkspaceCleanReviewReady = "workspace-clean-review-ready";
 }
 
 /// <summary>

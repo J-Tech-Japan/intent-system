@@ -72,6 +72,17 @@ internal static class AutomationHostReviewDiagnosticsCommand
             return HandleReviewLeasePreservation(args, writer);
         }
 
+        // G453: isolated lane — classify a selected review PR blocked by a dirty
+        // host worktree that contains UNPUBLISHED host metadata, so cleanup does
+        // not destroy the queue-state / runs.jsonl / packet / publish / intent
+        // metadata that review/closeout needs. Also detects wrong review
+        // worktree / branch in same-repo topology and keeps failing CI separate
+        // from workspace-dirty blockers.
+        if (Array.IndexOf(args, "--selected-review-workspace") >= 0)
+        {
+            return HandleSelectedReviewWorkspace(args, writer);
+        }
+
         if (!TryParseArguments(
                 args,
                 out var repo,
@@ -1016,6 +1027,186 @@ internal static class AutomationHostReviewDiagnosticsCommand
     /// comment. Read-only — the host loop applies the stale-review-lease
     /// restore based on the emitted decision.
     /// </summary>
+    private static int HandleSelectedReviewWorkspace(string[] args, TextWriter writer)
+    {
+        int? selectedPr = null;
+        int? linkedIssue = null;
+        string? repo = null;
+        string? domain = null;
+        var dirtyDurablePaths = new List<string>();
+        var dirtyUnrelatedPaths = new List<string>();
+        var sameRepoTopology = false;
+        string? metadataSourceBranch = null;
+        string? currentBranch = null;
+        string? ciStatus = null;
+        var format = FormatText;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            var argument = args[index];
+            switch (argument)
+            {
+                case "--selected-review-workspace":
+                    break;
+                case "--selected-pr":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var prValue)
+                        || prValue <= 0)
+                    {
+                        writer.WriteLine("--selected-pr requires a positive integer.");
+                        return 1;
+                    }
+                    selectedPr = prValue;
+                    index++;
+                    break;
+                case "--linked-issue":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var issueValue)
+                        || issueValue <= 0)
+                    {
+                        writer.WriteLine("--linked-issue requires a positive integer.");
+                        return 1;
+                    }
+                    linkedIssue = issueValue;
+                    index++;
+                    break;
+                case "--repo":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--repo requires a value (e.g. owner/repo)."); return 1; }
+                    repo = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--domain":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--domain requires a value."); return 1; }
+                    domain = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--dirty-durable-path":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--dirty-durable-path requires a value."); return 1; }
+                    dirtyDurablePaths.Add(args[index + 1].Trim());
+                    index++;
+                    break;
+                case "--dirty-unrelated-path":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--dirty-unrelated-path requires a value."); return 1; }
+                    dirtyUnrelatedPaths.Add(args[index + 1].Trim());
+                    index++;
+                    break;
+                case "--same-repo-topology":
+                    sameRepoTopology = true;
+                    break;
+                case "--metadata-source-branch":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--metadata-source-branch requires a value."); return 1; }
+                    metadataSourceBranch = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--current-branch":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--current-branch requires a value."); return 1; }
+                    currentBranch = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--ci-status":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--ci-status requires a value (e.g. passing|failing|pending)."); return 1; }
+                    ciStatus = args[index + 1].Trim();
+                    index++;
+                    break;
+                case "--format":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1])) { writer.WriteLine("--format requires a value (text or json)."); return 1; }
+                    var requested = args[index + 1];
+                    if (!string.Equals(requested, FormatText, StringComparison.Ordinal) && !string.Equals(requested, FormatJson, StringComparison.Ordinal))
+                    {
+                        writer.WriteLine($"--format must be 'text' or 'json' (got '{requested}').");
+                        return 1;
+                    }
+                    format = requested;
+                    index++;
+                    break;
+                default:
+                    writer.WriteLine($"Unknown argument '{argument}' for --selected-review-workspace. Supported: --selected-review-workspace --selected-pr <n> [--linked-issue <n>] [--repo <owner/repo>] [--domain <name>] [--dirty-durable-path <p> ...] [--dirty-unrelated-path <p> ...] [--same-repo-topology] [--metadata-source-branch <b>] [--current-branch <b>] [--ci-status passing|failing|pending] [--format text|json].");
+                    return 1;
+            }
+        }
+
+        if (selectedPr is null)
+        {
+            writer.WriteLine("--selected-pr <n> is required for --selected-review-workspace.");
+            return 1;
+        }
+
+        var decision = SelectedReviewWorkspaceSalvageAnalyzer.Analyze(new SelectedReviewWorkspaceSalvageInput
+        {
+            SelectedPr = selectedPr.Value,
+            LinkedIssue = linkedIssue,
+            Repo = repo,
+            Domain = domain,
+            DirtyDurablePaths = dirtyDurablePaths,
+            DirtyUnrelatedPaths = dirtyUnrelatedPaths,
+            SameRepoTopology = sameRepoTopology,
+            MetadataSourceBranch = metadataSourceBranch,
+            CurrentBranch = currentBranch,
+            CiStatus = ciStatus,
+        });
+
+        var summary = "G453: " + decision.Reason
+            + (decision.DestructiveCleanupWarning
+                ? " WARNING: `git reset`/`checkout`/`clean`/stash-drop on these paths may remove host metadata needed by review/closeout — salvage first."
+                : string.Empty)
+            + (decision.CiFailing && decision.Classification != AutomationHostReviewDiagnosticsClassifications.RequiredCiFailing
+                ? " (Required CI is ALSO failing — that is a separate implementation blocker, not a workspace-cleanup problem.)"
+                : string.Empty);
+
+        var details = new List<AutomationHostReviewDiagnosticsDetail>
+        {
+            new()
+            {
+                Kind = decision.Classification,
+                TargetKind = "pr",
+                TargetNumber = selectedPr,
+                TargetUrl = null,
+                Description = $"destructive_cleanup_warning={decision.DestructiveCleanupWarning.ToString().ToLowerInvariant()}; "
+                    + $"salvage_first={decision.SalvageFirst.ToString().ToLowerInvariant()}; "
+                    + $"ci_failing={decision.CiFailing.ToString().ToLowerInvariant()}; "
+                    + $"same_repo_topology={sameRepoTopology.ToString().ToLowerInvariant()}; "
+                    + $"current_branch={currentBranch ?? "(unknown)"}; "
+                    + $"metadata_source_branch={metadataSourceBranch ?? "(none)"}; "
+                    + $"linked_issue={(linkedIssue is null ? "(unknown)" : linkedIssue.ToString())}; "
+                    + $"unpublished_metadata_paths=[{string.Join(", ", decision.UnpublishedMetadataPaths)}]; "
+                    + $"unrelated_paths=[{string.Join(", ", decision.UnrelatedPaths)}]",
+            },
+        };
+        foreach (var action in decision.RecommendedSalvageActions)
+        {
+            details.Add(new AutomationHostReviewDiagnosticsDetail
+            {
+                Kind = "salvage-action",
+                TargetKind = null,
+                TargetNumber = null,
+                TargetUrl = null,
+                Description = action,
+            });
+        }
+
+        var result = new AutomationHostReviewDiagnosticsResult
+        {
+            Repo = repo ?? "(repo)",
+            Classification = decision.Classification,
+            Summary = summary,
+            ReadOnly = true,
+            RecommendedNextCommand = decision.RecommendedNextCommand,
+            StructuredClarification = null,
+            Details = details,
+            Warnings = Array.Empty<string>(),
+            // Salvage of unpublished metadata is NOT a blind auto-repair: it may
+            // require committing operator-owned `intents/**` edits, which the
+            // host loop must never auto-commit. So safe_repair_available stays
+            // false; the recommended salvage actions guide the operator-aware
+            // recovery before any cleanup.
+            SafeRepairAvailable = false,
+            SafeRepairCategory = null,
+        };
+
+        Emit(writer, result, format);
+        return 0;
+    }
+
     private static int HandleReviewLeasePreservation(string[] args, TextWriter writer)
     {
         var rereviewReadyConsumed = false;

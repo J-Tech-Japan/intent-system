@@ -949,6 +949,91 @@ public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
         Assert.Equal("implementation-finding", result.Classification);
     }
 
+    // ── G453 selected-review-workspace salvage lane ────────────────────
+
+    [Fact]
+    public void Execute_SelectedReviewWorkspace_DirtyUnpublishedMetadata_ClassifiesBlocked_NoSafeRepair()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--selected-review-workspace", "--selected-pr", "3746",
+             "--repo", "J-Tech-Japan/intent-system", "--domain", "aic",
+             "--dirty-durable-path", ".intent-cli/queue-state.json",
+             "--dirty-durable-path", ".intent-cli/runs.jsonl",
+             "--dirty-unrelated-path", "package-lock.json",
+             "--ci-status", "passing", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("selected-review-blocked-by-unpublished-host-metadata", result.Classification);
+        Assert.True(result.ReadOnly);
+        // Salvage is operator-aware, not a blind auto-repair.
+        Assert.False(result.SafeRepairAvailable);
+        Assert.Equal(
+            "intent-cli automation durable-state-preflight --domain aic --target-repo J-Tech-Japan/intent-system --format json",
+            result.RecommendedNextCommand);
+        // The summary carries the destructive-cleanup warning.
+        Assert.Contains("salvage first", result.Summary, StringComparison.OrdinalIgnoreCase);
+        // Salvage actions are surfaced as detail rows.
+        Assert.Contains(result.Details, d => d.Kind == "salvage-action");
+    }
+
+    [Fact]
+    public void Execute_SelectedReviewWorkspace_WrongBranchSameRepo_ClassifiesWrongWorktree()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--selected-review-workspace", "--selected-pr", "3746",
+             "--same-repo-topology", "--metadata-source-branch", "main-metadata",
+             "--current-branch", "g34-feature",
+             "--dirty-durable-path", ".intent-cli/queue-state.json",
+             "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("wrong-review-worktree-branch", result.Classification);
+    }
+
+    [Fact]
+    public void Execute_SelectedReviewWorkspace_CiFailingCleanTree_ClassifiesCiSeparately()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--selected-review-workspace", "--selected-pr", "3746",
+             "--ci-status", "failing", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationHostReviewDiagnosticsResult>(writer.ToString())!;
+        Assert.Equal("required-ci-failing", result.Classification);
+    }
+
+    [Fact]
+    public void Execute_SelectedReviewWorkspace_MissingSelectedPr_ReturnsError()
+    {
+        using var workspace = new HostReviewDiagnosticsWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = AutomationHostReviewDiagnosticsCommand.Execute(
+            workspace.Context,
+            ["--selected-review-workspace", "--ci-status", "passing", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--selected-pr", writer.ToString(), StringComparison.Ordinal);
+    }
+
     // ── G384 redundant in-submodule-edit decision lane ─────────────────
 
     [Fact]
