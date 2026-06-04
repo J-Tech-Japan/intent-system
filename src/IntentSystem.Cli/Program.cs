@@ -41,6 +41,7 @@ internal static class Program
             if (IsIntentInitCommand(args)
                 || IsAutomationWorktreeCommand(args)
                 || IsGuideOneshotCommand(args)
+                || IsImproveCommand(args)
                 || IsWorkerCommand(args)
                 || IsHelpCommand(args))
             {
@@ -160,6 +161,21 @@ internal static class Program
                 || string.Equals(args[1], "--help", StringComparison.Ordinal)
                 // G438: external artifact intake guidance — read-only, no host state required.
                 || string.Equals(args[1], "artifact-intake", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// G457: the top-level <c>intent-cli improve</c> alias is a read-only
+    /// design-thread reflection surface (delegates to
+    /// <c>GuideImproveCommand</c>). Like the <c>guide improve</c> form it
+    /// emits Markdown / JSON without touching parent durable state, so it
+    /// must bootstrap from any cwd — including a child implementation repo
+    /// with no <c>.intent-cli/</c> directory — rather than failing the
+    /// host-state gate and pushing the agent toward an operational recovery
+    /// command instead.
+    /// </summary>
+    private static bool IsImproveCommand(string[] args)
+    {
+        return args.Length >= 1 && string.Equals(args[0], "improve", StringComparison.Ordinal);
     }
 
     /// <summary>

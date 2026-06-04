@@ -57,11 +57,20 @@ natural-language request and let the agent run the guide internally:
 intent-cli で improve プロセスを実行してください。
 ```
 
-The agent then fetches the current guidance and produces a structured report:
+The agent then fetches the current guidance and produces a structured report.
+`improve` is a first-class top-level command (with `guide improve` as the
+equivalent guide-namespaced form):
 
 ```bash
+intent-cli improve --domain <domain> --format markdown
 intent-cli guide improve --domain <domain> --format markdown
 ```
+
+Both forms return identical guidance and are discoverable via `intent-cli
+--help` and `intent-cli guide commands list`. If the installed CLI has no
+`improve` surface, report `improve guidance unavailable` and update the CLI —
+do **not** substitute `bug-to-intent-repair`, host-loop recovery,
+`state-doctor`, or dirty-state repair.
 
 `guide improve` is a design-thread reflection process — **not** a scheduler, a
 provider launcher, or a routine host-loop / worker-loop recovery diagnostic.

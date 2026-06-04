@@ -56,11 +56,20 @@ values・ADR / design note・intent tree とまだ整合しているかを確認
 intent-cli で improve プロセスを実行してください。
 ```
 
-agent は現在のガイダンスを取得し、構造化レポートを生成します:
+agent は現在のガイダンスを取得し、構造化レポートを生成します。`improve` は
+first-class の top-level コマンドで、`guide improve` も同等の guide 名前空間形式
+です:
 
 ```bash
+intent-cli improve --domain <domain> --format markdown
 intent-cli guide improve --domain <domain> --format markdown
 ```
+
+両形式は同一のガイダンスを返し、`intent-cli --help` と
+`intent-cli guide commands list` から discoverable です。installed CLI に
+`improve` サーフェスが無い場合は `improve guidance unavailable` を報告して CLI を
+更新します。`bug-to-intent-repair`・host-loop recovery・`state-doctor`・
+dirty-state repair で**代替しない**でください。
 
 `guide improve` はデザインスレッドのリフレクション工程であり、スケジューラでも
 provider 起動でも、host-loop / worker-loop の通常の復旧診断でもありません。

@@ -333,6 +333,21 @@ internal static class CommandRouter
             return TaskCommand.Execute(context, args[1..], writer);
         }
 
+        // G457: top-level `intent-cli improve` alias for the design-thread
+        // improve / realignment process. Without a first-class top-level
+        // surface, an agent given the short request "intent-cli で improve
+        // プロセスを実行してください" searches the CLI, fails to find an
+        // obvious improve command, and misroutes to bug-to-intent-repair /
+        // host-loop recovery / state-doctor. `improve` takes only flags
+        // (`--domain` / `--format` / `--help`), so it is intercepted here
+        // before group/subcommand dispatch (which would treat `--domain` as
+        // a subcommand) and delegated verbatim to the same guidance surface
+        // as `guide improve`.
+        if (string.Equals(args[0], "improve", StringComparison.Ordinal))
+        {
+            return GuideImproveCommand.Execute(context, args[1..], writer);
+        }
+
         // G334: per-group help routing. `intent-cli <group> --help` and
         // `intent-cli <group> help` must reach a useful surface before
         // we fall through to "group and subcommand required" / "not
@@ -559,7 +574,8 @@ internal static class CommandRouter
         "bug repair — `intent-cli guide worker pr-comment-fix --format json` (narrow PR-comment repair guidance).",
         "implementation-loop — `intent-cli guide workflow task implementation-loop --target-repo <r> --agent claude --frequency 5m --format markdown` (paste-ready child implementation-loop prompt with current label/claim/complete rules, G338).",
         "review-next-slice-loop — `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` (paste-ready host review / next-slice-loop prompt with current host-sync preflight + packet/issue lifecycle rules, G338).",
-        "bug-to-intent-repair — `intent-cli guide workflow task bug-to-intent-repair --format json` (report → triage → plan → intent-repair → implementation-repair chain; classifies implementation-mismatch / intent-gap / packet-gap / rule-gap / metadata-workflow-gap; recommends packet creation when the bug is in intent-cli rules/guidance, G339)."
+        "bug-to-intent-repair — `intent-cli guide workflow task bug-to-intent-repair --format json` (report → triage → plan → intent-repair → implementation-repair chain; classifies implementation-mismatch / intent-gap / packet-gap / rule-gap / metadata-workflow-gap; recommends packet creation when the bug is in intent-cli rules/guidance, G339).",
+        "improve (design-thread reflection) — `intent-cli improve --domain <d> --format markdown` (alias of `intent-cli guide improve`): periodic MVV / ADR / intent-tree / packet-history / clarification-history realignment review, G456/G457. NOT bug-to-intent-repair, host-loop recovery, state-doctor, or dirty-state repair."
     };
 
     /// <summary>
