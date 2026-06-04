@@ -45,6 +45,35 @@ intent-cli interview compile
 intent-cli guide workflow
 ```
 
+## デザインスレッド improve / 再整合
+
+デザインスレッドで定期的に一歩引いて、最近の作業が当初の mission / vision /
+values・ADR / design note・intent tree とまだ整合しているかを確認するための
+リフレクション工程です。デザインスレッドでは次の自然言語リクエストをそのまま
+貼り付ければ、agent が内部で guide を実行します:
+
+```text
+intent-cli で improve プロセスを実行してください。
+```
+
+agent は現在のガイダンスを取得し、構造化レポートを生成します:
+
+```bash
+intent-cli guide improve --domain <domain> --format markdown
+```
+
+`guide improve` はデザインスレッドのリフレクション工程であり、スケジューラでも
+provider 起動でも、host-loop / worker-loop の通常の復旧診断でもありません。
+metadata / label / queue の復旧は既存の運用サーフェス
+（`automation reconcile` / `automation publish-recovery` /
+`review closeout-plan`）に残します。MVV・ADR / design note・intent tree・直近の
+packet 履歴・clarification 履歴・短期ループの兆候を点検し、結果を `aligned` /
+`intent-strengthening-recommended` / `clarification-recommended` /
+`corrective-packet-recommended` / `adr-update-recommended` /
+`short-term-loop-detected` / `operator-policy-required` のいずれかに分類します。
+変更はまず提案し、operator の同意後にサポートされた intent-cli / repo 経路でのみ
+適用します。
+
 ## Packet / issue
 
 ```bash

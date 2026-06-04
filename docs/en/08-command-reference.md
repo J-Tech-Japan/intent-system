@@ -46,6 +46,36 @@ intent-cli interview compile
 intent-cli guide workflow
 ```
 
+## Design-thread improve / realignment
+
+A periodic reflection step for a design thread: step back and check whether
+recent work still aligns with the original mission, vision, values, ADR/design
+notes, and intent tree. In a design thread you can simply paste the
+natural-language request and let the agent run the guide internally:
+
+```text
+intent-cli で improve プロセスを実行してください。
+```
+
+The agent then fetches the current guidance and produces a structured report:
+
+```bash
+intent-cli guide improve --domain <domain> --format markdown
+```
+
+`guide improve` is a design-thread reflection process — **not** a scheduler, a
+provider launcher, or a routine host-loop / worker-loop recovery diagnostic.
+Operational metadata/label/queue repair stays in the existing operational
+surfaces (`automation reconcile`, `automation publish-recovery`,
+`review closeout-plan`). It inspects MVV, ADR/design notes, the intent tree,
+recent packet history, clarification history, and short-term-loop signals, and
+classifies the outcome as one of `aligned`,
+`intent-strengthening-recommended`, `clarification-recommended`,
+`corrective-packet-recommended`, `adr-update-recommended`,
+`short-term-loop-detected`, or `operator-policy-required`. Mutations are
+proposed first and applied only after operator agreement through supported
+intent-cli / repo paths.
+
 ## Packets / issues
 
 ```bash

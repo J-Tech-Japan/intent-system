@@ -135,6 +135,8 @@ internal static class Program
                 || string.Equals(args[1], "rules", StringComparison.Ordinal)
                 || string.Equals(args[1], "workflow", StringComparison.Ordinal)
                 || string.Equals(args[1], "model", StringComparison.Ordinal)
+                // G456: design-thread improve / realignment guidance — read-only, no host state required.
+                || string.Equals(args[1], "improve", StringComparison.Ordinal)
                 || string.Equals(args[1], "commands", StringComparison.Ordinal)
                 || string.Equals(args[1], "onboarding", StringComparison.Ordinal)
                 || string.Equals(args[1], "prompt-matrix", StringComparison.Ordinal)
