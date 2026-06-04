@@ -15,11 +15,17 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         // returning the issue numbers they want to reconstruct.
         ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
             () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+        // G455: default the PR-body fetcher to an empty result so unit tests
+        // never shell out to live `gh`. Tests exercising the body fallback
+        // override this with a fake returning a `Closes #N` body.
+        ReviewCloseoutPlanCommand.PrBodyFetcherFactory =
+            () => new FakePrBodyFetcher(null);
     }
 
     public void Dispose()
     {
         ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory = null;
+        ReviewCloseoutPlanCommand.PrBodyFetcherFactory = null;
     }
 
     private sealed class FakePrClosingIssuesFetcher : IPrClosingIssuesFetcher
@@ -30,6 +36,13 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             this.closingIssues = closingIssues;
         }
         public IReadOnlyList<int> Fetch(string repo, int prNumber) => closingIssues;
+    }
+
+    private sealed class FakePrBodyFetcher : IPrBodyFetcher
+    {
+        private readonly string? body;
+        public FakePrBodyFetcher(string? body) => this.body = body;
+        public string? Fetch(string repo, int prNumber) => body;
     }
 
     [Fact]
@@ -249,6 +262,105 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         Assert.Contains("--pr 647", cmd, StringComparison.Ordinal);
         Assert.Contains("--write", cmd, StringComparison.Ordinal);
         Assert.Equal(cmd, root.GetProperty("recommended_recovery_command").GetString());
+    }
+
+    [Fact]
+    public void Execute_G455_EmptyGitHubRefs_BodyClosesRecoversLinkage_ReadyWithBodyFallbackSource()
+    {
+        // AIC #3750 shape: PR targets a non-default base, GitHub
+        // closingIssuesReferences is empty, but the PR body has `Closes #595`
+        // and a queue item carries linked_issue 595 with no linked_pr.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review", linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 595, "https://github.com/J-Tech-Japan/intent-system/issues/595")));
+        workspace.WriteFile(".intent-cli/issues/G247/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G247/packet.yaml", "x");
+
+        // GitHub closing refs empty (non-default base); body carries Closes #595.
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+        ReviewCloseoutPlanCommand.PrBodyFetcherFactory =
+            () => new FakePrBodyFetcher("Implements develop-v2 work.\n\nCloses #595\n");
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("G247", root.GetProperty("execution_unit").GetString());
+        // Provenance marks the body fallback recovery.
+        Assert.Equal("pr-body-fallback", root.GetProperty("closing_issues_source").GetString());
+        Assert.True(root.TryGetProperty("recovered_linkage", out var recovered), "expected recovered_linkage payload");
+        Assert.Equal(596, recovered.GetProperty("linked_pr_number").GetInt32());
+        Assert.Equal(595, recovered.GetProperty("linked_issue_number").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_G455_EmptyGitHubRefs_MultipleBodyReferences_SurfacesLinkageAmbiguousGap()
+    {
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review", linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 595, null)));
+        workspace.WriteFile(".intent-cli/issues/G247/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G247/packet.yaml", "x");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+        ReviewCloseoutPlanCommand.PrBodyFetcherFactory =
+            () => new FakePrBodyFetcher("Closes #595\nFixes #777\n");
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.False(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("host-metadata-blocked", root.GetProperty("blocker_classification").GetString());
+        var gapClassifications = root.GetProperty("classified_gaps").EnumerateArray()
+            .Select(g => g.GetProperty("classification").GetString()).ToArray();
+        Assert.Contains("linkage-ambiguous", gapClassifications);
+        // The ambiguity must not also produce a redundant "no queue item found"
+        // host-metadata gap.
+        var gapDescriptions = root.GetProperty("gaps").EnumerateArray()
+            .Select(g => g.GetString()!).ToArray();
+        Assert.DoesNotContain(gapDescriptions, d => d.Contains("no queue item found with linked_pr", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G455_GitHubRefsPresent_StillUsesGitHub_NotBodyFallback()
+    {
+        // Regression: when GitHub provides closing refs, the body fallback must
+        // not override them — provenance stays github-auto-fetch.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review", linkedPr: null,
+            linkedIssue: ("J-Tech-Japan/intent-system", 595, "https://github.com/J-Tech-Japan/intent-system/issues/595")));
+        workspace.WriteFile(".intent-cli/issues/G247/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G247/packet.yaml", "x");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(new[] { 595 });
+        // Body references a DIFFERENT issue; it must be ignored because GitHub won.
+        ReviewCloseoutPlanCommand.PrBodyFetcherFactory =
+            () => new FakePrBodyFetcher("Closes #777");
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("github-auto-fetch", doc.RootElement.GetProperty("closing_issues_source").GetString());
     }
 
     [Fact]
