@@ -47,6 +47,40 @@ internal sealed class GhCliPrClosingIssuesFetcher : IPrClosingIssuesFetcher
 }
 
 /// <summary>
+/// G455: read-only seam for fetching a PR's body so linkage recovery can fall
+/// back to a canonical <c>Closes #N</c> reference when GitHub's
+/// <c>closingIssuesReferences</c> API is empty (non-default-base PRs). The
+/// default production implementation reuses <see cref="GhCliGitHubPrLookup"/>;
+/// tests inject a deterministic fake. Returns <c>null</c> on any failure so the
+/// planner falls through to its existing host-metadata-blocked path.
+/// </summary>
+internal interface IPrBodyFetcher
+{
+    string? Fetch(string repo, int prNumber);
+}
+
+/// <summary>
+/// G455: default PR-body fetcher backed by the existing
+/// <see cref="GhCliGitHubPrLookup"/> shell adapter. Fail-soft: any GitHub error
+/// returns <c>null</c>.
+/// </summary>
+internal sealed class GhCliPrBodyFetcher : IPrBodyFetcher
+{
+    public string? Fetch(string repo, int prNumber)
+    {
+        try
+        {
+            var lookup = new GhCliGitHubPrLookup();
+            return lookup.Lookup(repo, prNumber).Body;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+}
+
+/// <summary>
 /// G247: Read-only <c>intent-cli review closeout-plan</c> command. Reports
 /// what a review-pass closeout would mutate before any merge or parent
 /// state write. Resolves the queue item via <c>linked_pr</c>, lists the
@@ -95,6 +129,14 @@ internal static class ReviewCloseoutPlanCommand
     /// <see cref="GhCliPrClosingIssuesFetcher"/>.
     /// </summary>
     public static Func<IPrClosingIssuesFetcher>? PrClosingIssuesFetcherFactory { get; set; }
+
+    /// <summary>
+    /// G455: test seam for the PR-body fetcher used by the canonical
+    /// closing-reference fallback (when GitHub <c>closingIssuesReferences</c>
+    /// is empty for a non-default-base PR). Production callers leave this null
+    /// and the planner uses <see cref="GhCliPrBodyFetcher"/>.
+    /// </summary>
+    public static Func<IPrBodyFetcher>? PrBodyFetcherFactory { get; set; }
 
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
@@ -194,52 +236,86 @@ internal static class ReviewCloseoutPlanCommand
                     }
                 }
 
+                // G455: GitHub `closingIssuesReferences` comes back EMPTY for
+                // PRs targeting a non-default base branch (e.g. `develop-v2`),
+                // even when the PR body carries a deterministic `Closes #N`.
+                // Fall back to the canonical body reference: exactly ONE
+                // same-repo Close/Fix/Resolve reference recovers the closing
+                // issue; multiple distinct references surface as a structured
+                // ambiguity gap (no guessing). Only consult the body when the
+                // operator did not pass `--closing-issues` and GitHub provided
+                // none.
+                var bodyFallbackAmbiguous = false;
+                if (closingIssues.Count == 0)
+                {
+                    var bodyFetcher = PrBodyFetcherFactory?.Invoke() ?? new GhCliPrBodyFetcher();
+                    var prBody = bodyFetcher.Fetch(repo!, pr!.Value);
+                    var fallback = PrBodyClosingReferenceFallbackAnalyzer.Resolve(closingIssues, prBody, repo!);
+                    if (fallback.ResolvedClosingIssues.Count > 0)
+                    {
+                        closingIssues = fallback.ResolvedClosingIssues;
+                        closingIssuesSource = fallback.Source;
+                    }
+                    else if (fallback.Ambiguous)
+                    {
+                        bodyFallbackAmbiguous = true;
+                        gaps.Add(LinkageAmbiguousGap(
+                            $"linkage-ambiguous: {fallback.Reason}"));
+                    }
+                }
+
                 // G329: before classifying this as host-metadata-blocked,
                 // try to reconstruct the linkage from GitHub closing-issue
                 // facts. If exactly one queue item matches a closing issue,
                 // recover the linkage and treat that queue item as matched
                 // for the rest of planning. Multiple matches surface as a
                 // structured `linkage-ambiguous` gap (no guessing per G329
-                // out-of-scope).
-                var reconstruction = GitHubLinkageReconstructor.Reconstruct(closingIssues, queueState);
-                switch (reconstruction.Kind)
+                // out-of-scope). When the G455 body fallback already surfaced
+                // an ambiguity gap, skip reconstruction entirely so the wake
+                // reports a single structured ambiguity rather than a
+                // redundant host-metadata gap.
+                if (!bodyFallbackAmbiguous)
                 {
-                    case LinkageReconstructionKind.Deterministic:
-                        var candidate = reconstruction.Candidates[0];
-                        matchedItem = queueState.Items.First(item =>
-                            string.Equals(item.ExecutionUnit, candidate.ExecutionUnit, StringComparison.Ordinal));
-                        recoveredLinkage = new RecoveredLinkagePayload
-                        {
-                            ExecutionUnit = candidate.ExecutionUnit,
-                            LinkedPrNumber = pr!.Value,
-                            LinkedPrRepo = repo!,
-                            LinkedPrUrl = $"https://github.com/{repo}/pull/{pr}",
-                            LinkedIssueNumber = candidate.LinkedIssueNumber,
-                            LinkedIssueRepo = candidate.LinkedIssueRepo,
-                            LinkedIssueUrl = candidate.LinkedIssueUrl,
-                            RecoverySource = LinkageReconstructionConstants.RecoverySourceGitHubClosingReference
-                        };
-                        break;
+                    var reconstruction = GitHubLinkageReconstructor.Reconstruct(closingIssues, queueState);
+                    switch (reconstruction.Kind)
+                    {
+                        case LinkageReconstructionKind.Deterministic:
+                            var candidate = reconstruction.Candidates[0];
+                            matchedItem = queueState.Items.First(item =>
+                                string.Equals(item.ExecutionUnit, candidate.ExecutionUnit, StringComparison.Ordinal));
+                            recoveredLinkage = new RecoveredLinkagePayload
+                            {
+                                ExecutionUnit = candidate.ExecutionUnit,
+                                LinkedPrNumber = pr!.Value,
+                                LinkedPrRepo = repo!,
+                                LinkedPrUrl = $"https://github.com/{repo}/pull/{pr}",
+                                LinkedIssueNumber = candidate.LinkedIssueNumber,
+                                LinkedIssueRepo = candidate.LinkedIssueRepo,
+                                LinkedIssueUrl = candidate.LinkedIssueUrl,
+                                RecoverySource = LinkageReconstructionConstants.RecoverySourceGitHubClosingReference
+                            };
+                            break;
 
-                    case LinkageReconstructionKind.Ambiguous:
-                        ambiguousLinkage = new AmbiguousLinkagePayload
-                        {
-                            Candidates = reconstruction.Candidates,
-                            Reason = $"PR #{pr} closes {closingIssues.Count} issue(s) matching {reconstruction.Candidates.Count} queue items; cannot deterministically recover linkage."
-                        };
-                        gaps.Add(LinkageAmbiguousGap(
-                            $"linkage-ambiguous: PR #{pr} closing-issues match {reconstruction.Candidates.Count} queue items "
-                            + $"({string.Join(", ", reconstruction.Candidates.Select(c => c.ExecutionUnit))}); refusing to guess."));
-                        break;
+                        case LinkageReconstructionKind.Ambiguous:
+                            ambiguousLinkage = new AmbiguousLinkagePayload
+                            {
+                                Candidates = reconstruction.Candidates,
+                                Reason = $"PR #{pr} closes {closingIssues.Count} issue(s) matching {reconstruction.Candidates.Count} queue items; cannot deterministically recover linkage."
+                            };
+                            gaps.Add(LinkageAmbiguousGap(
+                                $"linkage-ambiguous: PR #{pr} closing-issues match {reconstruction.Candidates.Count} queue items "
+                                + $"({string.Join(", ", reconstruction.Candidates.Select(c => c.ExecutionUnit))}); refusing to guess."));
+                            break;
 
-                    case LinkageReconstructionKind.NoClosingReferences:
-                    case LinkageReconstructionKind.NoMatch:
-                    default:
-                        // G287: this is the PR #670-shaped gap — host metadata drift,
-                        // not an implementation defect. The host loop must run
-                        // `automation reconcile`, not request a child PR repair.
-                        gaps.Add(HostMetadataGap($"no queue item found with linked_pr matching #{pr}."));
-                        break;
+                        case LinkageReconstructionKind.NoClosingReferences:
+                        case LinkageReconstructionKind.NoMatch:
+                        default:
+                            // G287: this is the PR #670-shaped gap — host metadata drift,
+                            // not an implementation defect. The host loop must run
+                            // `automation reconcile`, not request a child PR repair.
+                            gaps.Add(HostMetadataGap($"no queue item found with linked_pr matching #{pr}."));
+                            break;
+                    }
                 }
             }
         }

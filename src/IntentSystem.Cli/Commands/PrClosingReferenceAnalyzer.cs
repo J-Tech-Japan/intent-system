@@ -126,6 +126,22 @@ internal static class PrClosingReferenceAnalyzer
         };
     }
 
+    /// <summary>
+    /// G455: public access to the canonical closing-reference parser so the
+    /// linkage-recovery fallback (<see cref="PrBodyClosingReferenceFallbackAnalyzer"/>)
+    /// can derive closing issues from a PR body when GitHub's
+    /// <c>closingIssuesReferences</c> API is empty (which happens for
+    /// non-default-base PRs). Returns only canonical references
+    /// (Close/Fix/Resolve forms) targeting <paramref name="repo"/>; loose
+    /// prose like <c>see #N</c> / <c>Linked Issue #N</c> and cross-repo
+    /// references are already excluded.
+    /// </summary>
+    public static IReadOnlyList<PrClosingReference> ExtractCanonicalReferences(string? prBody, string repo)
+    {
+        ArgumentNullException.ThrowIfNull(repo);
+        return ExtractReferences(prBody, repo);
+    }
+
     private static IReadOnlyList<PrClosingReference> ExtractReferences(string? prBody, string repo)
     {
         if (string.IsNullOrWhiteSpace(prBody))
