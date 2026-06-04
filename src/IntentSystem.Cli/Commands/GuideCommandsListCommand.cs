@@ -42,6 +42,14 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "improve",
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Design-thread improve / realignment process (G456/G457): `intent-cli improve --domain <d>` (alias of `guide improve`) returns the periodic MVV / ADR / intent-tree / packet-history / clarification-history reflection review. A design-thread reflection process — NOT bug-to-intent-repair, host-loop recovery, state-doctor, dirty-state repair, or any operational diagnostic."
+        },
+        new CommandGroupEntry
+        {
             Name = "intent",
             Classification = ClassificationPrimary,
             Mutability = MutabilityMixed,

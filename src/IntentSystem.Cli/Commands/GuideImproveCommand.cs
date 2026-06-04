@@ -96,6 +96,14 @@ internal static class GuideImproveCommand
                 "This is NOT a scheduler and NOT a routine host-loop / worker-loop recovery diagnostic — operational metadata/label/queue recovery stays in the existing operational surfaces (`automation reconcile`, `automation publish-recovery`, `automation host-review-diagnostics`, `review closeout-plan`).",
                 "intent-cli does not make semantic product-direction decisions; it owns deterministic guidance, discovery, artifact locations, report shape, and mutation boundaries."
             },
+            DoNotSubstitute = new[]
+            {
+                "When the operator asks to run the improve process, run `intent-cli improve` (or `intent-cli guide improve`) — do NOT substitute an operational recovery workflow.",
+                "Do NOT route improve to `guide workflow task bug-to-intent-repair` — that is a bug → triage → intent/implementation-repair chain, not a design-thread realignment review.",
+                "Do NOT route improve to host-loop recovery (`automation host-loop-wake` / `automation host-review-diagnostics` / `automation reconcile`) — those advance or repair the operational queue, not the intent alignment.",
+                "Do NOT route improve to `automation state-doctor` or any dirty-state / workspace repair — improve never inspects or repairs queue-state, labels, or publish metadata.",
+                "If a first-class improve surface is not found in the installed CLI (e.g. `intent-cli improve --help` fails), report `improve guidance unavailable` and request a CLI update — do NOT silently choose another workflow."
+            },
             InspectionChecklist = new[]
             {
                 $"Mission / Vision / Values and product goal — read `intents/{domainToken}/` MVV and product-goal artifacts; restate them in your own words and check recent work against them.",
@@ -151,6 +159,13 @@ internal static class GuideImproveCommand
 
         writer.WriteLine("## What this is NOT");
         foreach (var item in result.NotThis)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## Do not substitute another workflow");
+        foreach (var item in result.DoNotSubstitute)
         {
             writer.WriteLine($"- {item}");
         }
@@ -265,6 +280,9 @@ internal sealed record GuideImproveResult
 
     [JsonPropertyName("not_this")]
     public required IReadOnlyList<string> NotThis { get; init; }
+
+    [JsonPropertyName("do_not_substitute")]
+    public required IReadOnlyList<string> DoNotSubstitute { get; init; }
 
     [JsonPropertyName("inspection_checklist")]
     public required IReadOnlyList<string> InspectionChecklist { get; init; }

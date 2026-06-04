@@ -121,6 +121,26 @@ public sealed class GuideImproveCommandTests
         Assert.Contains("improve", names);
     }
 
+    [Fact]
+    public void Execute_Json_EmitsDoNotSubstituteAntiMisroutingGuidance()
+    {
+        // G457: improve output must explicitly tell agents not to substitute
+        // operational recovery workflows.
+        using var writer = new StringWriter();
+        var exitCode = GuideImproveCommand.Execute(CreateContext(), ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var doNotSubstitute = doc.RootElement.GetProperty("do_not_substitute").EnumerateArray()
+            .Select(e => e.GetString()!).ToArray();
+        Assert.Contains(doNotSubstitute, s => s.Contains("bug-to-intent-repair", StringComparison.Ordinal));
+        Assert.Contains(doNotSubstitute, s => s.Contains("host-loop", StringComparison.Ordinal));
+        Assert.Contains(doNotSubstitute, s => s.Contains("state-doctor", StringComparison.Ordinal));
+        Assert.Contains(doNotSubstitute, s => s.Contains("dirty-state", StringComparison.Ordinal));
+        // AC: missing improve surfaces `improve guidance unavailable`.
+        Assert.Contains(doNotSubstitute, s => s.Contains("improve guidance unavailable", StringComparison.Ordinal));
+    }
+
     private static CliContext CreateContext()
     {
         return new CliContext
