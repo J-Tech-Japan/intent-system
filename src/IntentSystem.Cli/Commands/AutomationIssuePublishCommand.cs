@@ -19,6 +19,16 @@ internal static class AutomationIssuePublishCommand
 
     public static Func<bool>? NestedProviderLauncher { get; set; }
 
+    /// <summary>
+    /// G462: test seam / optional issue-body source for the host-only publish
+    /// gate. When set (or in production, the default <c>gh</c>-backed lookup),
+    /// the command reads the issue body before applying <c>intent-target</c> and
+    /// refuses to publish a host-only packet (all target paths host-owned) as a
+    /// child implementation issue unless <c>--allow-host-only-override</c> is
+    /// passed. Tests inject a fake to avoid touching GitHub.
+    /// </summary>
+    public static Func<IGitHubIssueLookup>? IssueLookupFactory { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -44,6 +54,7 @@ internal static class AutomationIssuePublishCommand
                 out var issue,
                 out var mode,
                 out var format,
+                out var allowHostOnlyOverride,
                 out var error))
         {
             writer.WriteLine(error);
@@ -89,6 +100,58 @@ internal static class AutomationIssuePublishCommand
             return 1;
         }
 
+        // G462: host-only publish gate. Read the issue body and refuse to
+        // publish a host-only packet (every declared target path is host-owned:
+        // intents/**, .intent-cli/**) as a child intent-target issue, unless the
+        // operator explicitly overrides. This stops the G458 / issue #1018
+        // mis-routing class at the publish boundary. The body fetch is fail-soft:
+        // a lookup error simply skips the gate (the existing behavior).
+        HostOnlyPacketVerdict? hostOnlyVerdict = null;
+        try
+        {
+            var lookup = IssueLookupFactory?.Invoke() ?? new GhCliGitHubIssueLookup();
+            var issuePayload = lookup.Lookup(repo!, issue!.Value);
+            hostOnlyVerdict = HostOnlyPacketClassifier.Classify(issuePayload.Body);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            hostOnlyVerdict = null;
+        }
+
+        if (hostOnlyVerdict is { IsHostOnly: true } && !allowHostOnlyOverride)
+        {
+            var refusal = new AutomationIssuePublishResult
+            {
+                Repo = repo!,
+                Issue = issue!.Value,
+                IssueUrl = BuildIssueUrl(repo!, issue.Value),
+                Mode = mode,
+                Applied = false,
+                Refused = true,
+                RefusalReason = "host-only packet: every declared target path is host/design-owned ("
+                    + string.Join(", ", hostOnlyVerdict.HostOwnedPaths)
+                    + "); a GitHub-contract-only child loop cannot edit host metadata, so this packet must not be published as a child intent-target issue. Retarget it to child-owned paths (src/**, tests/**, docs/**, README.md) or keep it in the host/design workflow. Pass --allow-host-only-override only if intent-target is genuinely intended here.",
+                AppliedLabel = AppliedLabel,
+                AddLabels = Array.Empty<string>(),
+                RemoveLabels = Array.Empty<string>(),
+                CurrentLabels = currentLabels,
+                PublishedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+                Summary = $"Refused to publish issue #{issue.Value}: host-only packet (host-owned target paths only).",
+            };
+
+            if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+            {
+                writer.WriteLine(JsonSerializer.Serialize(refusal, JsonOptions));
+            }
+            else
+            {
+                writer.WriteLine(refusal.Summary);
+                writer.WriteLine($"refusal_reason: {refusal.RefusalReason}");
+            }
+
+            return 1;
+        }
+
         var applied = false;
         var publishedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow)
             .ToUniversalTime();
@@ -121,6 +184,8 @@ internal static class AutomationIssuePublishCommand
             IssueUrl = BuildIssueUrl(repo!, issue.Value),
             Mode = mode,
             Applied = applied,
+            Refused = false,
+            RefusalReason = null,
             AppliedLabel = AppliedLabel,
             AddLabels = [AppliedLabel],
             RemoveLabels = Array.Empty<string>(),
@@ -148,6 +213,7 @@ internal static class AutomationIssuePublishCommand
         out int? issue,
         out string mode,
         out string format,
+        out bool allowHostOnlyOverride,
         out string error)
     {
         repo = null;
@@ -155,6 +221,7 @@ internal static class AutomationIssuePublishCommand
         issue = null;
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
         format = FormatText;
+        allowHostOnlyOverride = false;
         error = string.Empty;
 
         for (var index = 0; index < args.Length; index++)
@@ -197,6 +264,10 @@ internal static class AutomationIssuePublishCommand
 
                 case "--dry-run":
                     mode = WorkerClaimCompleteConstants.Modes.DryRun;
+                    break;
+
+                case "--allow-host-only-override":
+                    allowHostOnlyOverride = true;
                     break;
 
                 case "--format":
@@ -312,6 +383,13 @@ internal sealed record AutomationIssuePublishResult
 
     [JsonPropertyName("applied")]
     public required bool Applied { get; init; }
+
+    /// <summary>G462: true when publishing was refused because the issue is a host-only packet.</summary>
+    [JsonPropertyName("refused")]
+    public bool Refused { get; init; }
+
+    [JsonPropertyName("refusal_reason")]
+    public string? RefusalReason { get; init; }
 
     [JsonPropertyName("applied_label")]
     public required string AppliedLabel { get; init; }

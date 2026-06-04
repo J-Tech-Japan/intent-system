@@ -70,6 +70,17 @@ internal static class WorkerIssuePreflightConstants
         public const string ContractIncomplete = "contract-incomplete";
         public const string TargetMismatch = "target-mismatch";
         public const string NonActionable = "non-actionable";
+
+        /// <summary>
+        /// G462: the issue carries <c>intent-target</c> but its declared target
+        /// paths are exclusively host/design-owned (<c>intents/**</c>,
+        /// <c>.intent-cli/**</c>). A GitHub-contract-only child loop cannot edit
+        /// host metadata, so the issue is NOT actionable as a child
+        /// implementation issue; it should be released from the child target
+        /// (or retargeted to child-owned paths) on the host/design side. This is
+        /// the G458 / issue #1018 regression class.
+        /// </summary>
+        public const string HostOnlyPacket = "host-only-packet";
     }
 
     public static class RecommendedActions
@@ -79,6 +90,14 @@ internal static class WorkerIssuePreflightConstants
         public const string WaitForClarification = "wait-for-clarification";
         public const string SwitchRepo = "switch-repo";
         public const string NoAction = "no-action";
+
+        /// <summary>
+        /// G462: release the mistakenly-targeted host-only issue from the child
+        /// target via <c>intent-cli automation issue-release --write</c> (never
+        /// raw <c>gh</c> label mutation), or retarget it to child-owned paths on
+        /// the host/design side.
+        /// </summary>
+        public const string ReleaseFromTarget = "release-from-target";
     }
 
     public static class Labels
