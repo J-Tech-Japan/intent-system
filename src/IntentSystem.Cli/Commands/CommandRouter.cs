@@ -246,6 +246,7 @@ internal static class CommandRouter
                 ["rules"] = GuideRulesCommand.Execute,
                 ["workflow"] = GuideWorkflowCommand.Execute,
                 ["model"] = GuideModelCommand.Execute,
+                ["improve"] = GuideImproveCommand.Execute,
                 ["commands"] = GuideCommandsCommand.Execute,
                 ["onboarding"] = GuideOnboardingCommand.Execute,
                 ["intent-work"] = GuideIntentWorkCommand.Execute,

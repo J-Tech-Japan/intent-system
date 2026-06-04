@@ -139,6 +139,12 @@ internal static class GuideHelpCommand
         },
         new GuideSubcommandEntry
         {
+            Name = "improve",
+            Purpose = "Design-thread improve / realignment process (G456): periodically review MVV, ADR/design notes, intent tree, packet history, and clarification history for drift, short-term loops, and intent-strengthening opportunities. Run it by asking: `intent-cli で improve プロセスを実行してください。`. A reflection process, not a scheduler / provider launcher / loop-recovery diagnostic.",
+            Example = "intent-cli guide improve --domain <domain> --format markdown"
+        },
+        new GuideSubcommandEntry
+        {
             Name = "onboarding",
             Purpose = "First-call sequence for a fresh agent. Ordered list of guide / automation surfaces to read before any mutation.",
             Example = "intent-cli guide onboarding --format json"
