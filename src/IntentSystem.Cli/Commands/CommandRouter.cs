@@ -251,6 +251,7 @@ internal static class CommandRouter
                 ["grill"] = GuideGrillCommand.Execute,
                 ["stack"] = GuideStackCommand.Execute,
                 ["next"] = GuideNextCommand.Execute,
+                ["inspect"] = GuideInspectCommand.Execute,
                 ["commands"] = GuideCommandsCommand.Execute,
                 ["onboarding"] = GuideOnboardingCommand.Execute,
                 ["intent-work"] = GuideIntentWorkCommand.Execute,
@@ -386,6 +387,17 @@ internal static class CommandRouter
         if (string.Equals(args[0], "next", StringComparison.Ordinal))
         {
             return GuideNextCommand.Execute(context, args[1..], writer);
+        }
+
+        // G466: top-level `intent-cli inspect` alias for the evidence-backed
+        // observation process. Like `improve` / `grill` / `stack` / `next`, it
+        // takes only flags (`--domain` / `--target-repo` / `--format` /
+        // `--help`), so it is intercepted here before group/subcommand dispatch
+        // and delegated verbatim to the same guidance surface as
+        // `guide inspect`.
+        if (string.Equals(args[0], "inspect", StringComparison.Ordinal))
+        {
+            return GuideInspectCommand.Execute(context, args[1..], writer);
         }
 
         // G334: per-group help routing. `intent-cli <group> --help` and
@@ -618,7 +630,8 @@ internal static class CommandRouter
         "improve (design-thread reflection) — `intent-cli improve --domain <d> --format markdown` (alias of `intent-cli guide improve`): periodic MVV / ADR / intent-tree / packet-history / clarification-history realignment review, G456/G457. NOT bug-to-intent-repair, host-loop recovery, state-doctor, or dirty-state repair.",
         "grill (persistent interview mode) — `intent-cli grill --domain <d> --format markdown` (alias of `intent-cli guide grill`): once the user asks to grill a topic, stay in grill mode — generate an open-question backlog from current intents/packets/ADRs/docs, ask one question at a time, and continue after each answer until a stop condition holds, G463. Built on the interview artifacts; NOT clarification (blocker resolution) and NOT improve (retrospective realignment).",
         "stack (packet backlog creation) — `intent-cli stack --domain <d> --target-repo <r> --format markdown` (alias of `intent-cli guide stack`): forward planning — create an ordered packet backlog from the current intents (often ~10), commit/push durable state, and publish AT MOST the first GitHub issue by default, G464. Distinct from improve (retrospective realignment), grill (open-question interview), clarification (blocker resolution), and runtime queue transitions.",
-        "next (design-side action advisor) — `intent-cli next --domain <d> --target-repo <r> --format markdown` (alias of `intent-cli guide next`): answers \"what should I do next?\" by recommending ONE design-side process among grill / stack / improve / inspect / issue-publish / review / recovery / idle, with a paste-ready suggested prompt, G465. Read-only by default; never auto-executes."
+        "next (design-side action advisor) — `intent-cli next --domain <d> --target-repo <r> --format markdown` (alias of `intent-cli guide next`): answers \"what should I do next?\" by recommending ONE design-side process among grill / stack / improve / inspect / issue-publish / review / recovery / idle, with a paste-ready suggested prompt, G465. Read-only by default; never auto-executes.",
+        "inspect (evidence-backed observation) — `intent-cli inspect --domain <d> --target-repo <r> --format markdown` (alias of `intent-cli guide inspect`): observe the real app / CLI / UI / log / test behavior, separate observed evidence from inference, compare against expected intent, and turn gaps into packet candidates, G466. First pass read-only; routes to stack / grill / improve / recovery / no-action. Distinct from grill, stack, and improve."
     };
 
     /// <summary>

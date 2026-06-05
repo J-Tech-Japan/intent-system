@@ -222,6 +222,49 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_TopLevelInspect_DelegatesToGuideInspect_EvidenceBackedObservation()
+    {
+        // G466: `intent-cli inspect` is a first-class top-level alias that
+        // delegates to the same evidence-backed observation guidance as `guide inspect`.
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(
+            ["inspect", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        Assert.Equal("evidence-backed-inspect", doc.RootElement.GetProperty("process").GetString());
+    }
+
+    [Fact]
+    public void Execute_GuideInspect_ReachesEvidenceBackedObservationSurface()
+    {
+        // G466: the guide-namespaced form returns the same surface.
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(
+            ["guide", "inspect", "--domain", "intent-cli", "--format", "json"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        Assert.Equal("evidence-backed-inspect", doc.RootElement.GetProperty("process").GetString());
+    }
+
+    [Fact]
+    public void Execute_DefaultHelp_ExposesInspectPointer()
+    {
+        // G466: inspect is discoverable from `intent-cli --help`.
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(Array.Empty<string>(), CreateContext("/tmp/intent-system"), writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("intent-cli inspect", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenHelpAll_ListsEveryCommandGroup_AndGenerateFromCurrent()
     {
         // G379: `intent-cli --help --all` restores the full group catalog,

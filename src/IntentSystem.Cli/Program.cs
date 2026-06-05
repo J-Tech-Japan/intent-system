@@ -45,6 +45,7 @@ internal static class Program
                 || IsGrillCommand(args)
                 || IsStackCommand(args)
                 || IsNextCommand(args)
+                || IsInspectCommand(args)
                 || IsWorkerCommand(args)
                 || IsHelpCommand(args))
             {
@@ -148,6 +149,8 @@ internal static class Program
                 || string.Equals(args[1], "stack", StringComparison.Ordinal)
                 // G465: next design-side action advisor — read-only, no host state required.
                 || string.Equals(args[1], "next", StringComparison.Ordinal)
+                // G466: inspect evidence-backed observation guidance — read-only, no host state required.
+                || string.Equals(args[1], "inspect", StringComparison.Ordinal)
                 || string.Equals(args[1], "commands", StringComparison.Ordinal)
                 || string.Equals(args[1], "onboarding", StringComparison.Ordinal)
                 || string.Equals(args[1], "prompt-matrix", StringComparison.Ordinal)
@@ -225,6 +228,19 @@ internal static class Program
     private static bool IsNextCommand(string[] args)
     {
         return args.Length >= 1 && string.Equals(args[0], "next", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G466: the top-level <c>intent-cli inspect</c> alias is a read-only
+    /// evidence-backed observation guidance surface (delegates to
+    /// <c>GuideInspectCommand</c>). Like <c>guide inspect</c> it emits Markdown /
+    /// JSON without touching parent durable state, so it must bootstrap from
+    /// any cwd — including a child implementation repo with no
+    /// <c>.intent-cli/</c> directory.
+    /// </summary>
+    private static bool IsInspectCommand(string[] args)
+    {
+        return args.Length >= 1 && string.Equals(args[0], "inspect", StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -83,6 +83,11 @@ repository and paste one of these prompts:
 > intent-cli に聞いて、次に何をしたらいいか教えてください。
 > (Ask intent-cli `next` to recommend the right design-side process.)
 
+**Inspect the real product (evidence-backed observation):**
+
+> Inspect `<target>` with intent-cli.
+> Observe the real behavior, separate evidence from inference, and propose packet candidates.
+
 The agent runs `intent-cli` commands internally and brings back questions or
 results. You focus on intent, priorities, and approval decisions. In **grill**
 mode (`intent-cli grill`) the thread stays persistent — it builds an

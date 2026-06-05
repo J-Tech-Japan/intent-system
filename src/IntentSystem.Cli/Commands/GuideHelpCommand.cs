@@ -163,6 +163,12 @@ internal static class GuideHelpCommand
         },
         new GuideSubcommandEntry
         {
+            Name = "inspect",
+            Purpose = "Evidence-backed observation (G466): observe the real app/CLI/UI/log/test behavior, separate observed evidence from inference, compare against expected intent, and turn gaps into packet candidates. First pass read-only; routes to stack/grill/improve/recovery/no-action. Guides how to use browser/computer-use/log/test tooling rather than replacing it; distinct from grill, stack, and improve.",
+            Example = "intent-cli guide inspect --domain <domain> --target-repo <owner/repo> --format markdown"
+        },
+        new GuideSubcommandEntry
+        {
             Name = "onboarding",
             Purpose = "First-call sequence for a fresh agent. Ordered list of guide / automation surfaces to read before any mutation.",
             Example = "intent-cli guide onboarding --format json"
