@@ -42,6 +42,7 @@ internal static class Program
                 || IsAutomationWorktreeCommand(args)
                 || IsGuideOneshotCommand(args)
                 || IsImproveCommand(args)
+                || IsGrillCommand(args)
                 || IsWorkerCommand(args)
                 || IsHelpCommand(args))
             {
@@ -139,6 +140,8 @@ internal static class Program
                 || string.Equals(args[1], "model", StringComparison.Ordinal)
                 // G456: design-thread improve / realignment guidance — read-only, no host state required.
                 || string.Equals(args[1], "improve", StringComparison.Ordinal)
+                // G463: persistent grill interview-mode guidance — read-only, no host state required.
+                || string.Equals(args[1], "grill", StringComparison.Ordinal)
                 || string.Equals(args[1], "commands", StringComparison.Ordinal)
                 || string.Equals(args[1], "onboarding", StringComparison.Ordinal)
                 || string.Equals(args[1], "prompt-matrix", StringComparison.Ordinal)
@@ -177,6 +180,19 @@ internal static class Program
     private static bool IsImproveCommand(string[] args)
     {
         return args.Length >= 1 && string.Equals(args[0], "improve", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G463: the top-level <c>intent-cli grill</c> alias is a read-only
+    /// persistent-interview guidance surface (delegates to
+    /// <c>GuideGrillCommand</c>). Like <c>guide grill</c> it emits Markdown /
+    /// JSON without touching parent durable state, so it must bootstrap from
+    /// any cwd — including a child implementation repo with no
+    /// <c>.intent-cli/</c> directory.
+    /// </summary>
+    private static bool IsGrillCommand(string[] args)
+    {
+        return args.Length >= 1 && string.Equals(args[0], "grill", StringComparison.Ordinal);
     }
 
     /// <summary>
