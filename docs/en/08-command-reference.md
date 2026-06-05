@@ -137,6 +137,28 @@ only when the backlog is empty and rediscovery finds nothing), `packet-ready`,
 `too-broad-split-needed`. Packet / issue / intent-update actions are proposed at
 a stop condition and applied only after explicit operator acceptance.
 
+## Inspect — evidence-backed observation
+
+A named process for **observing the real product** before cutting tasks (G466).
+`inspect` guides an agent to exercise the actual app / CLI / UI / logs / tests,
+strictly separate observed evidence from inference, compare against expected
+intent, and turn the gaps into packet candidates.
+
+```bash
+intent-cli inspect --domain <domain> --target-repo <owner/repo> --format markdown
+intent-cli guide inspect --domain <domain> --target-repo <owner/repo> --format markdown
+```
+
+The **Inspect Report** separates `observed_behavior`, `expected_intent`,
+`evidence`, `gaps`, `risk_severity`, `recommended_next_action`, and
+`packet_candidates`. The first pass is **read-only by default** — it never runs
+destructive interactions or auto-publishes — and it *guides how to use*
+browser / computer-use / log / test tooling rather than replacing it. Based on
+what it finds, an inspect pass routes to **stack** (package the gaps),
+**grill** (extract unclear intent), **improve** (systemic drift), **recovery**
+(broken operational state), or **no-action** (behavior matches intent). It is
+distinct from grill, stack, and improve.
+
 ## Next — design-side action advisor
 
 The simplest design-thread question — "what should I do next?" — answered by

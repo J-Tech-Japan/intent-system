@@ -135,6 +135,27 @@ record-answer` で記録し、保留中の質問は `intent-cli interview next-q
 intent-update のアクションは停止条件で提案し、operator の明示的な同意後にのみ
 適用します。
 
+## Inspect — evidence-backed 観測
+
+タスクを切る前に**実際のプロダクトを観測する**ための名前付きプロセスです（G466）。
+`inspect` は agent に、実際の app / CLI / UI / logs / tests を動かし、観測した
+evidence と inference を厳密に分離し、expected intent と比較し、その gap を packet
+candidate に変換するよう導きます。
+
+```bash
+intent-cli inspect --domain <domain> --target-repo <owner/repo> --format markdown
+intent-cli guide inspect --domain <domain> --target-repo <owner/repo> --format markdown
+```
+
+**Inspect Report** は `observed_behavior`・`expected_intent`・`evidence`・`gaps`・
+`risk_severity`・`recommended_next_action`・`packet_candidates` を分離します。最初の
+パスはデフォルトで **read-only** で、破壊的な操作や自動 publish を行わず、
+browser / computer-use / log / test ツールを**置き換えるのではなく使い方を導きます**。
+観測結果に応じて inspect パスは **stack**（gap を packet 化）・**grill**（不明確な
+intent を抽出）・**improve**（systemic drift）・**recovery**（壊れた運用状態）・
+**no-action**（intent と一致）へルーティングします。grill・stack・improve とは
+区別されます。
+
 ## Next — design-side アクションアドバイザー
 
 デザインスレッドで最もシンプルな問い「次に何をしたらいいか」に答えるのが
