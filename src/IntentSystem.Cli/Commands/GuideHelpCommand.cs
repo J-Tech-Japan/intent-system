@@ -151,6 +151,12 @@ internal static class GuideHelpCommand
         },
         new GuideSubcommandEntry
         {
+            Name = "stack",
+            Purpose = "Packet backlog creation (G464): forward planning that creates an ordered packet backlog from the current intents (often ~10), commits/pushes durable state, and publishes at most the first GitHub issue by default. Distinct from improve (retrospective realignment), grill (open-question interview), clarification (blocker resolution), and runtime queue transitions.",
+            Example = "intent-cli guide stack --domain <domain> --target-repo <owner/repo> --format markdown"
+        },
+        new GuideSubcommandEntry
+        {
             Name = "onboarding",
             Purpose = "First-call sequence for a fresh agent. Ordered list of guide / automation surfaces to read before any mutation.",
             Example = "intent-cli guide onboarding --format json"

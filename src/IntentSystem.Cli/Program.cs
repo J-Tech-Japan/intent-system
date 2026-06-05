@@ -43,6 +43,7 @@ internal static class Program
                 || IsGuideOneshotCommand(args)
                 || IsImproveCommand(args)
                 || IsGrillCommand(args)
+                || IsStackCommand(args)
                 || IsWorkerCommand(args)
                 || IsHelpCommand(args))
             {
@@ -142,6 +143,8 @@ internal static class Program
                 || string.Equals(args[1], "improve", StringComparison.Ordinal)
                 // G463: persistent grill interview-mode guidance — read-only, no host state required.
                 || string.Equals(args[1], "grill", StringComparison.Ordinal)
+                // G464: stack packet-backlog-creation guidance — read-only, no host state required.
+                || string.Equals(args[1], "stack", StringComparison.Ordinal)
                 || string.Equals(args[1], "commands", StringComparison.Ordinal)
                 || string.Equals(args[1], "onboarding", StringComparison.Ordinal)
                 || string.Equals(args[1], "prompt-matrix", StringComparison.Ordinal)
@@ -193,6 +196,19 @@ internal static class Program
     private static bool IsGrillCommand(string[] args)
     {
         return args.Length >= 1 && string.Equals(args[0], "grill", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G464: the top-level <c>intent-cli stack</c> alias is a read-only
+    /// packet-backlog-creation guidance surface (delegates to
+    /// <c>GuideStackCommand</c>). Like <c>guide stack</c> it emits Markdown /
+    /// JSON without touching parent durable state, so it must bootstrap from
+    /// any cwd — including a child implementation repo with no
+    /// <c>.intent-cli/</c> directory.
+    /// </summary>
+    private static bool IsStackCommand(string[] args)
+    {
+        return args.Length >= 1 && string.Equals(args[0], "stack", StringComparison.Ordinal);
     }
 
     /// <summary>
