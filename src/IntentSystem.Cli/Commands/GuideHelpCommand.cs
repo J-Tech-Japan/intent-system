@@ -338,6 +338,17 @@ internal static class GuideHelpCommand
         writer.WriteLine("`guide` is the read-only entry surface. Every subcommand returns Markdown by default and JSON via `--format json`. None of the guide subcommands mutate state or launch AI providers.");
         writer.WriteLine();
 
+        writer.WriteLine("## Surfaces by operator role (G467)");
+        writer.WriteLine();
+        writer.WriteLine("Pick the surface by what you are trying to do. `intent-cli guide commands list` carries the same `role` category on every command group.");
+        writer.WriteLine();
+        writer.WriteLine("- **Design-side planning** — shape intent and cut work: `intent-cli improve` (realignment), `intent-cli grill` (persistent interview), `intent-cli stack` (packet backlog + first issue), `intent-cli inspect` (evidence-backed observation), `intent-cli next` (which of these to run), plus `intent` / `interview` / `packet` / `clarify`.");
+        writer.WriteLine("- **Host review / next-slice** — review PRs and plan the next slice: `intent-cli guide review`, `intent-cli review closeout-plan`, `intent-cli automation host-review-preflight`, `intent-cli closeout pr`, `intent-cli issue publish-flow`, and the `guide workflow task review-next-slice-loop` prompt generator.");
+        writer.WriteLine("- **Child implementation** — implement an issue into a PR: `intent-cli worker next-action / claim / complete / result-summary` (GitHub-contract-only with `--github-only`), and the `guide workflow task implementation-loop` prompt generator.");
+        writer.WriteLine("- **Recovery / diagnostics** — repair operational state: `intent-cli automation doctor`, `intent-cli automation reconcile`, `intent-cli automation publish-recovery`, plus `metadata` / `queue` inspection.");
+        writer.WriteLine("- **Loop-prompt creation** — turn a minimal user ask into a paste-ready loop prompt: `intent-cli guide prompt-template` / `prompt-matrix` (catalog) and `intent-cli guide workflow task implementation-loop|review-next-slice-loop` (generators with current fixed conditions).");
+        writer.WriteLine();
+
         writer.WriteLine("## Subcommands");
         writer.WriteLine();
         writer.WriteLine("| subcommand | purpose | example |");

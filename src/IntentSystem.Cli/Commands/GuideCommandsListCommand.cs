@@ -27,6 +27,14 @@ internal static class GuideCommandsListCommand
     private const string CallerHostLoop = "host-loop";
     private const string CallerOperator = "operator";
 
+    // G467: operator-role categories so an unfamiliar AI agent can find the
+    // right surface by role, not just by lifecycle classification.
+    private const string RoleDesign = "design";                       // design-side planning (host design thread)
+    private const string RoleHostReview = "host-review";              // host review / next-slice / publish
+    private const string RoleChildImplementation = "child-implementation"; // child implementation loop
+    private const string RoleRecoveryDiagnostics = "recovery-diagnostics"; // operational recovery / diagnostics
+    private const string RoleAdvancedDeveloper = "advanced-developer";     // advanced / developer / dogfooding
+
     private const string UsageLine =
         "Usage: intent-cli guide commands list [--format markdown|json]";
 
@@ -35,14 +43,16 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "guide",
+            Role = RoleDesign,
             Classification = ClassificationPrimary,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Operator-facing guidance: collaboration model, rules-by-topic, workflow suggestion, prompt-template catalog, one-shot/automation/review prompts."
+            Purpose = "Operator-facing guidance: collaboration model, rules-by-topic, workflow suggestion, prompt-template catalog, one-shot/automation/review prompts. The single entry point an unfamiliar AI agent reads first."
         },
         new CommandGroupEntry
         {
             Name = "improve",
+            Role = RoleDesign,
             Classification = ClassificationPrimary,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
@@ -50,7 +60,44 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "grill",
+            Role = RoleDesign,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Persistent interview mode (G463): `intent-cli grill --domain <d>` (alias of `guide grill`) stays in grill mode, generates an open-question backlog from current intents, and asks one question at a time until a stop condition. Built on the interview artifacts; not clarification, not improve."
+        },
+        new CommandGroupEntry
+        {
+            Name = "stack",
+            Role = RoleDesign,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Packet backlog creation (G464): `intent-cli stack --domain <d> --target-repo <r>` (alias of `guide stack`) creates an ordered packet backlog from current intents, commits/pushes durable state, and publishes at most the first GitHub issue by default. Forward planning — not improve, grill, clarification, or a queue transition."
+        },
+        new CommandGroupEntry
+        {
+            Name = "next",
+            Role = RoleDesign,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Design-side action advisor (G465): `intent-cli next --domain <d> --target-repo <r>` (alias of `guide next`) recommends ONE design-side process — grill / stack / improve / inspect / issue-publish / review / recovery / idle — with a paste-ready suggested prompt. Read-only; never auto-executes."
+        },
+        new CommandGroupEntry
+        {
+            Name = "inspect",
+            Role = RoleDesign,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Evidence-backed observation (G466): `intent-cli inspect --domain <d> --target-repo <r>` (alias of `guide inspect`) observes real app/CLI/UI/log/test behavior, separates observed evidence from inference, and turns gaps into packet candidates. NOT status / next-slice checking; routes to stack / grill / improve / recovery / no-action."
+        },
+        new CommandGroupEntry
+        {
             Name = "intent",
+            Role = RoleDesign,
             Classification = ClassificationPrimary,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerChatAgent,
@@ -59,14 +106,16 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "interview",
+            Role = RoleDesign,
             Classification = ClassificationPrimary,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Durable per-domain Q/A artifact: next-question/record-answer/compile (older start/answer/resume retained)."
+            Purpose = "Durable per-domain Q/A artifact: next-question/record-answer/compile (older start/answer/resume retained). grill is the persistent wrapper over this surface."
         },
         new CommandGroupEntry
         {
             Name = "packet",
+            Role = RoleDesign,
             Classification = ClassificationPrimary,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerChatAgent,
@@ -75,22 +124,25 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "worker",
+            Role = RoleChildImplementation,
             Classification = ClassificationPrimary,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerImplementationLoop,
-            Purpose = "Child implementation loop selector: next-action / claim / complete / result-summary."
+            Purpose = "Child implementation loop selector: next-action / claim / complete / result-summary / issue-preflight / pr-comment-preflight. GitHub-contract-only with --github-only."
         },
         new CommandGroupEntry
         {
             Name = "automation",
+            Role = RoleHostReview,
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerHostLoop,
-            Purpose = "Host-side label transitions and capability JSON: summary / doctor / host-review-preflight / issue-publish / pr-transition / check / complete / clarification-stop."
+            Purpose = "Host-side label transitions and capability JSON: summary / doctor / host-review-preflight / issue-publish / pr-transition / check / complete / clarification-stop. doctor / reconcile / publish-recovery are the recovery-diagnostics subset."
         },
         new CommandGroupEntry
         {
             Name = "metadata",
+            Role = RoleRecoveryDiagnostics,
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerHostLoop,
@@ -99,6 +151,7 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "review",
+            Role = RoleHostReview,
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerHostLoop,
@@ -107,6 +160,7 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "closeout",
+            Role = RoleHostReview,
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerHostLoop,
@@ -115,6 +169,7 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "issue",
+            Role = RoleHostReview,
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerOperator,
@@ -123,6 +178,7 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "queue",
+            Role = RoleRecoveryDiagnostics,
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerOperator,
@@ -131,6 +187,7 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "status",
+            Role = RoleDesign,
             Classification = ClassificationSupport,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
@@ -139,6 +196,7 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "context",
+            Role = RoleDesign,
             Classification = ClassificationSupport,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
@@ -147,6 +205,7 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "clarify",
+            Role = RoleDesign,
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerOperator,
@@ -155,6 +214,7 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "next-slice",
+            Role = RoleDesign,
             Classification = ClassificationSupport,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerOperator,
@@ -163,10 +223,38 @@ internal static class GuideCommandsListCommand
         new CommandGroupEntry
         {
             Name = "task",
+            Role = RoleAdvancedDeveloper,
             Classification = ClassificationSupport,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerOperator,
             Purpose = "G317 explicit one-shot task planners (issue-to-pr / review-pr / fix-pr-comments / publish-next-issue). Returns a bounded executable contract — preconditions, steps, label transitions, abort conditions — for controllers that already know the target. Read-only: never calls gh, never mutates state, never launches AI providers."
+        },
+        new CommandGroupEntry
+        {
+            Name = "guide prompt-template",
+            Role = RoleDesign,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Loop-prompt creation: `intent-cli guide prompt-template` + `intent-cli guide prompt-matrix` are the canonical catalog of paste-ready prompts. The short way to turn a minimal user ask (`intent-cli に聞いて...`) into a fixed-condition loop prompt."
+        },
+        new CommandGroupEntry
+        {
+            Name = "guide workflow task implementation-loop",
+            Role = RoleChildImplementation,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Canonical child implementation-loop prompt generator: `intent-cli guide workflow task implementation-loop --target-repo <r> --agent claude --frequency 5m --format markdown` emits the paste-ready loop prompt with current claim/complete/label rules (G338)."
+        },
+        new CommandGroupEntry
+        {
+            Name = "guide workflow task review-next-slice-loop",
+            Role = RoleHostReview,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Canonical host review / next-slice-loop prompt generator: `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` emits the paste-ready host loop prompt with current preflight + packet/issue lifecycle rules (G338)."
         },
     };
 
@@ -207,13 +295,17 @@ internal static class GuideCommandsListCommand
     {
         writer.WriteLine("# Guide commands — top-level groups");
         writer.WriteLine();
+        writer.WriteLine("Operator-role categories (G467): `design` (design-side planning — improve / grill / stack / next / inspect / intent / interview / packet / clarify), `host-review` (host review / next-slice / publish — review / closeout / automation / issue), `child-implementation` (child loop — worker), `recovery-diagnostics` (operational recovery — automation doctor / metadata / queue), `advanced-developer` (one-shot planners / dogfooding — task).");
+        writer.WriteLine();
         writer.WriteLine("Lifecycle classification: `primary` (chat-agent's first calls), `support` (used inside the same flow).");
         writer.WriteLine();
-        writer.WriteLine("| group | classification | mutability | caller | purpose |");
-        writer.WriteLine("|-------|----------------|------------|--------|---------|");
+        writer.WriteLine("Loop-prompt creation: ask for a loop prompt with a minimal user request — `intent-cli guide prompt-template` / `prompt-matrix` catalog them, and `intent-cli guide workflow task implementation-loop` / `review-next-slice-loop` emit the paste-ready prompt with current fixed conditions.");
+        writer.WriteLine();
+        writer.WriteLine("| group | role | classification | mutability | caller | purpose |");
+        writer.WriteLine("|-------|------|----------------|------------|--------|---------|");
         foreach (var group in Groups)
         {
-            writer.WriteLine($"| {group.Name} | {group.Classification} | {group.Mutability} | {group.RecommendedCaller} | {group.Purpose} |");
+            writer.WriteLine($"| {group.Name} | {group.Role} | {group.Classification} | {group.Mutability} | {group.RecommendedCaller} | {group.Purpose} |");
         }
     }
 
@@ -259,7 +351,7 @@ internal static class GuideCommandsListCommand
     {
         writer.WriteLine("guide commands list");
         writer.WriteLine(UsageLine);
-        writer.WriteLine("Read-only listing of intent-cli command groups with primary/support/advanced/experimental classification.");
+        writer.WriteLine("Read-only role-based catalog of intent-cli command groups: each entry carries an operator-role category (design / host-review / child-implementation / recovery-diagnostics / advanced-developer) and a primary/support lifecycle classification.");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -273,6 +365,10 @@ internal sealed record CommandGroupEntry
 {
     [JsonPropertyName("name")]
     public required string Name { get; init; }
+
+    /// <summary>G467: operator-role category (design / host-review / child-implementation / recovery-diagnostics / advanced-developer).</summary>
+    [JsonPropertyName("role")]
+    public required string Role { get; init; }
 
     [JsonPropertyName("classification")]
     public required string Classification { get; init; }
