@@ -78,6 +78,11 @@ repository and paste one of these prompts:
 > Stack the available packets for `<owner>/<repo>` with intent-cli.
 > Create the ready packets and publish only the first issue.
 
+**Ask what to do next:**
+
+> intent-cli に聞いて、次に何をしたらいいか教えてください。
+> (Ask intent-cli `next` to recommend the right design-side process.)
+
 The agent runs `intent-cli` commands internally and brings back questions or
 results. You focus on intent, priorities, and approval decisions. In **grill**
 mode (`intent-cli grill`) the thread stays persistent — it builds an

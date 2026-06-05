@@ -137,6 +137,29 @@ only when the backlog is empty and rediscovery finds nothing), `packet-ready`,
 `too-broad-split-needed`. Packet / issue / intent-update actions are proposed at
 a stop condition and applied only after explicit operator acceptance.
 
+## Next — design-side action advisor
+
+The simplest design-thread question — "what should I do next?" — answered by
+`intent-cli next` (G465). It lays out the catalog of design-side processes and
+recommends one, so users do not have to remember every command name.
+
+```bash
+intent-cli next --domain <domain> --target-repo <owner/repo> --format markdown
+intent-cli guide next --domain <domain> --target-repo <owner/repo> --format markdown
+```
+
+Ask it in natural language: `intent-cli に聞いて、次に何をしたらいいか教えてくださ
+い。`. It checks the evidence (current intents, open questions, packet backlog,
+open PRs / review state, CLI / queue health) and recommends exactly one of
+**grill** (extract open questions), **stack** (create packet backlog + publish
+first issue), **improve** (retrospective realignment), **inspect** (read-only
+state), **issue-publish** (publish a ready packet), **review** (review an open
+PR), **recovery** (repair stale CLI / queue), or **idle** (nothing actionable).
+The output includes the recommended action, the reason, the evidence checked, a
+paste-ready suggested prompt, and the safety boundary. `next` is **read-only by
+default** and never auto-executes the chosen action — the user decides whether
+to run the suggested prompt.
+
 ## Stack — packet backlog creation + first issue publish
 
 A named **forward planning** process (G464). `stack` reads the current intents,

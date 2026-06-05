@@ -135,6 +135,28 @@ record-answer` で記録し、保留中の質問は `intent-cli interview next-q
 intent-update のアクションは停止条件で提案し、operator の明示的な同意後にのみ
 適用します。
 
+## Next — design-side アクションアドバイザー
+
+デザインスレッドで最もシンプルな問い「次に何をしたらいいか」に答えるのが
+`intent-cli next`（G465）です。design-side プロセスのカタログを提示し、その中から
+1つを推奨するので、ユーザーは全コマンド名を覚える必要がありません。
+
+```bash
+intent-cli next --domain <domain> --target-repo <owner/repo> --format markdown
+intent-cli guide next --domain <domain> --target-repo <owner/repo> --format markdown
+```
+
+自然言語で `intent-cli に聞いて、次に何をしたらいいか教えてください。` と尋ねれば、
+agent が evidence（現在の intents・open question・packet backlog・open PR / review
+状態・CLI / queue health）を確認し、**grill**（open question 抽出）・**stack**
+（packet backlog 作成 + 最初の issue publish）・**improve**（遡及的再整合）・
+**inspect**（read-only な状態確認）・**issue-publish**（ready な packet の publish）・
+**review**（open PR のレビュー）・**recovery**（stale CLI / queue の修復）・**idle**
+（着手可能な作業なし）のいずれか1つを推奨します。出力には recommended action・
+reason・確認した evidence・paste 可能な suggested prompt・safety boundary が含まれ
+ます。`next` はデフォルトで **read-only** で、選択したアクションを自動実行しません。
+実行するかはユーザーが判断します。
+
 ## Stack — packet backlog 作成 + 最初の issue publish
 
 名前付きの**前方計画**プロセス（G464）です。`stack` は現在の intents を読み、
