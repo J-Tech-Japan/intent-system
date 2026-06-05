@@ -38,6 +38,57 @@ public sealed class GuideImproveCommandTests
     }
 
     [Fact]
+    public void Execute_DefaultJson_IsImplementationAware_WithDeepSections()
+    {
+        // G460: the DEFAULT improve path is implementation-aware with the three
+        // deep report sections and shallow-vs-target contrast examples.
+        using var writer = new StringWriter();
+        var exitCode = GuideImproveCommand.Execute(CreateContext(), ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("implementation-aware", root.GetProperty("mode").GetString());
+
+        var report = string.Join("\n", root.GetProperty("report_template").EnumerateArray().Select(e => e.GetString()));
+        Assert.Contains("Implementation Reality Check", report, StringComparison.Ordinal);
+        Assert.Contains("Blocker Cluster Analysis", report, StringComparison.Ordinal);
+        Assert.Contains("Corrective Backlog Candidates", report, StringComparison.Ordinal);
+
+        var checklist = root.GetProperty("inspection_checklist").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Contains(checklist, c => c.Contains("Implementation reality", StringComparison.Ordinal));
+        Assert.Contains(checklist, c => c.Contains("top product blocker", StringComparison.Ordinal));
+
+        // Contrast examples (AIC shallow vs Sekiban target) present in default mode.
+        var labels = root.GetProperty("contrast_examples").EnumerateArray()
+            .Select(e => e.GetProperty("label").GetString()!).ToArray();
+        Assert.Contains(labels, l => l.Contains("AIC", StringComparison.Ordinal));
+        Assert.Contains(labels, l => l.Contains("SekibanAsAService", StringComparison.Ordinal));
+
+        // Mutation boundary: at most one first issue after approval.
+        var boundary = root.GetProperty("mutation_boundary").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Contains(boundary, b => b.Contains("AT MOST ONE first GitHub issue", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_LightMode_IsIntentOnly_NoDeepSections()
+    {
+        // G460: --light keeps the quick intent-only reflection (no deep sections).
+        using var writer = new StringWriter();
+        var exitCode = GuideImproveCommand.Execute(CreateContext(), ["--light", "--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("light", root.GetProperty("mode").GetString());
+
+        var report = string.Join("\n", root.GetProperty("report_template").EnumerateArray().Select(e => e.GetString()));
+        Assert.DoesNotContain("Implementation Reality Check", report, StringComparison.Ordinal);
+        Assert.DoesNotContain("Corrective Backlog Candidates", report, StringComparison.Ordinal);
+        Assert.Empty(root.GetProperty("contrast_examples").EnumerateArray());
+    }
+
+    [Fact]
     public void Execute_Json_EmitsOutcomeClassificationsAndShortPrompt()
     {
         using var writer = new StringWriter();

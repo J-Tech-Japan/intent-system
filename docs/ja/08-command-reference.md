@@ -71,6 +71,21 @@ intent-cli guide improve --domain <domain> --format markdown
 更新します。`bug-to-intent-repair`・host-loop recovery・`state-doctor`・
 dirty-state repair で**代替しない**でください。
 
+`improve` はデフォルトで **implementation-aware** です。evidence が利用可能なら
+関連 GitHub issue/PR・実装 diff・テスト・レビュー所見・product evidence も点検し、
+現在の最上位 blocker を特定して corrective backlog を提案します
+（`Implementation Reality Check` / `Blocker Cluster Analysis` /
+`Corrective Backlog Candidates`）。packet 履歴が未解決の product blocker を示す場合、
+intent-tree の整理だけでは不十分です。素早い intent-only リフレクションには
+`--light` を付けます:
+
+```bash
+intent-cli improve --domain <domain> --light --format markdown
+```
+
+operator 承認後、agent は提案した corrective packet を作成し、最初の GitHub issue を
+**最大1件**だけ publish できます（明示的に依頼された場合を除く）。
+
 `guide improve` はデザインスレッドのリフレクション工程であり、スケジューラでも
 provider 起動でも、host-loop / worker-loop の通常の復旧診断でもありません。
 metadata / label / queue の復旧は既存の運用サーフェス

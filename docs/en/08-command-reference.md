@@ -72,6 +72,21 @@ Both forms return identical guidance and are discoverable via `intent-cli
 do **not** substitute `bug-to-intent-repair`, host-loop recovery,
 `state-doctor`, or dirty-state repair.
 
+By default `improve` is **implementation-aware**: when evidence is available it
+also inspects related GitHub issues/PRs, implementation diffs, tests, review
+findings, and product evidence to find the current top blocker and propose a
+corrective backlog (`Implementation Reality Check`, `Blocker Cluster Analysis`,
+`Corrective Backlog Candidates`) — intent-tree cleanup alone is not enough when
+packet history suggests an unresolved product blocker. Pass `--light` for a
+quick intent-only reflection:
+
+```bash
+intent-cli improve --domain <domain> --light --format markdown
+```
+
+After operator approval the agent may create the proposed corrective packets and
+publish **at most one** first GitHub issue unless asked for more.
+
 `guide improve` is a design-thread reflection process — **not** a scheduler, a
 provider launcher, or a routine host-loop / worker-loop recovery diagnostic.
 Operational metadata/label/queue repair stays in the existing operational
