@@ -5,6 +5,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationIssuePublishCommandTests : IDisposable
 {
     private static readonly DateTimeOffset FixedNow =

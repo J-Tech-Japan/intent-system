@@ -249,6 +249,7 @@ internal static class CommandRouter
                 ["model"] = GuideModelCommand.Execute,
                 ["improve"] = GuideImproveCommand.Execute,
                 ["grill"] = GuideGrillCommand.Execute,
+                ["stack"] = GuideStackCommand.Execute,
                 ["commands"] = GuideCommandsCommand.Execute,
                 ["onboarding"] = GuideOnboardingCommand.Execute,
                 ["intent-work"] = GuideIntentWorkCommand.Execute,
@@ -359,6 +360,19 @@ internal static class CommandRouter
         if (string.Equals(args[0], "grill", StringComparison.Ordinal))
         {
             return GuideGrillCommand.Execute(context, args[1..], writer);
+        }
+
+        // G464: top-level `intent-cli stack` alias for the packet-backlog
+        // creation process. Like `improve` / `grill`, it takes only flags
+        // (`--domain` / `--target-repo` / `--format` / `--help`), so it is
+        // intercepted here before group/subcommand dispatch and delegated
+        // verbatim to the same guidance surface as `guide stack`. A
+        // first-class top-level surface keeps an agent asked to "create the
+        // available packets and publish the first issue" from improvising an
+        // ad-hoc multi-issue publish.
+        if (string.Equals(args[0], "stack", StringComparison.Ordinal))
+        {
+            return GuideStackCommand.Execute(context, args[1..], writer);
         }
 
         // G334: per-group help routing. `intent-cli <group> --help` and
@@ -589,7 +603,8 @@ internal static class CommandRouter
         "review-next-slice-loop — `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` (paste-ready host review / next-slice-loop prompt with current host-sync preflight + packet/issue lifecycle rules, G338).",
         "bug-to-intent-repair — `intent-cli guide workflow task bug-to-intent-repair --format json` (report → triage → plan → intent-repair → implementation-repair chain; classifies implementation-mismatch / intent-gap / packet-gap / rule-gap / metadata-workflow-gap; recommends packet creation when the bug is in intent-cli rules/guidance, G339).",
         "improve (design-thread reflection) — `intent-cli improve --domain <d> --format markdown` (alias of `intent-cli guide improve`): periodic MVV / ADR / intent-tree / packet-history / clarification-history realignment review, G456/G457. NOT bug-to-intent-repair, host-loop recovery, state-doctor, or dirty-state repair.",
-        "grill (persistent interview mode) — `intent-cli grill --domain <d> --format markdown` (alias of `intent-cli guide grill`): once the user asks to grill a topic, stay in grill mode — generate an open-question backlog from current intents/packets/ADRs/docs, ask one question at a time, and continue after each answer until a stop condition holds, G463. Built on the interview artifacts; NOT clarification (blocker resolution) and NOT improve (retrospective realignment)."
+        "grill (persistent interview mode) — `intent-cli grill --domain <d> --format markdown` (alias of `intent-cli guide grill`): once the user asks to grill a topic, stay in grill mode — generate an open-question backlog from current intents/packets/ADRs/docs, ask one question at a time, and continue after each answer until a stop condition holds, G463. Built on the interview artifacts; NOT clarification (blocker resolution) and NOT improve (retrospective realignment).",
+        "stack (packet backlog creation) — `intent-cli stack --domain <d> --target-repo <r> --format markdown` (alias of `intent-cli guide stack`): forward planning — create an ordered packet backlog from the current intents (often ~10), commit/push durable state, and publish AT MOST the first GitHub issue by default, G464. Distinct from improve (retrospective realignment), grill (open-question interview), clarification (blocker resolution), and runtime queue transitions."
     };
 
     /// <summary>

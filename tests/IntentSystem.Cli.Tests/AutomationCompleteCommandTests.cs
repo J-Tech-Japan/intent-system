@@ -12,6 +12,7 @@ namespace IntentSystem.Cli.Tests;
 /// transition, defaults to dry-run, and only writes labels when explicitly
 /// requested.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationCompleteCommandTests : IDisposable
 {
     public AutomationCompleteCommandTests()

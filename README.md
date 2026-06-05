@@ -73,6 +73,11 @@ repository and paste one of these prompts:
 > Grill `<topic>` with intent-cli.
 > Keep asking me one question at a time until the intent is packet-ready.
 
+**Stack the backlog (create packets, publish the first issue):**
+
+> Stack the available packets for `<owner>/<repo>` with intent-cli.
+> Create the ready packets and publish only the first issue.
+
 The agent runs `intent-cli` commands internally and brings back questions or
 results. You focus on intent, priorities, and approval decisions. In **grill**
 mode (`intent-cli grill`) the thread stays persistent — it builds an

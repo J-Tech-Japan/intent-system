@@ -135,6 +135,26 @@ record-answer` で記録し、保留中の質問は `intent-cli interview next-q
 intent-update のアクションは停止条件で提案し、operator の明示的な同意後にのみ
 適用します。
 
+## Stack — packet backlog 作成 + 最初の issue publish
+
+名前付きの**前方計画**プロセス（G464）です。`stack` は現在の intents を読み、
+いま着手可能な packet（しばしば10件程度）を依存順に backlog として作成し、その
+durable state を commit / push してから、デフォルトでは**最初の1件だけ** GitHub
+issue を publish します。残りは deferred backlog として残します。
+
+```bash
+intent-cli stack --domain <domain> --target-repo <owner/repo> --format markdown
+intent-cli guide stack --domain <domain> --target-repo <owner/repo> --format markdown
+```
+
+`stack` は「タスクを積む」に対応します。`improve`（drift / loop 危機からの遡及的
+再整合）・`grill`（永続的な open-question インタビュー）・`clarification`（blocker
+解決）・runtime `queue` 遷移とは区別されます。open question・WIP・host-only packet
+境界を尊重し、issue-publish の前に durable な packet state を commit / push し、
+`intent-target` を手で付けません（host の publish 境界が付与）。出力 shape は
+`created_packets`・`recommended_first_issue`・`published_issue`・`deferred_items`
+を列挙します。
+
 ## Packet / issue
 
 ```bash

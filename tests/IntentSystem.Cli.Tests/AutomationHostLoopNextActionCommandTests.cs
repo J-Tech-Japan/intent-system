@@ -12,6 +12,7 @@ namespace IntentSystem.Cli.Tests;
 /// analyzer with the correct `is_draft` + merge-state + metadata flags,
 /// and the analyzer surfaces it BEFORE the wip-cap-blocked stop.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationHostLoopNextActionCommandTests : IDisposable
 {
     public AutomationHostLoopNextActionCommandTests()

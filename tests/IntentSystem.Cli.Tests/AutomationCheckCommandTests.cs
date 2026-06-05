@@ -12,6 +12,7 @@ namespace IntentSystem.Cli.Tests;
 /// without mutating files, labels, issues, PRs, branches, or launching a
 /// provider.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationCheckCommandTests : IDisposable
 {
     public AutomationCheckCommandTests()

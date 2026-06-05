@@ -136,6 +136,49 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_TopLevelStack_DelegatesToGuideStack_PacketBacklogProcess()
+    {
+        // G464: `intent-cli stack` is a first-class top-level alias that
+        // delegates to the same packet-backlog guidance as `guide stack`.
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(
+            ["stack", "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        Assert.Equal("task-stack", doc.RootElement.GetProperty("process").GetString());
+    }
+
+    [Fact]
+    public void Execute_GuideStack_ReachesPacketBacklogSurface()
+    {
+        // G464: the guide-namespaced form returns the same surface.
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(
+            ["guide", "stack", "--domain", "intent-cli", "--format", "json"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        Assert.Equal("task-stack", doc.RootElement.GetProperty("process").GetString());
+    }
+
+    [Fact]
+    public void Execute_DefaultHelp_ExposesStackPointer()
+    {
+        // G464: stack is discoverable from `intent-cli --help`.
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(Array.Empty<string>(), CreateContext("/tmp/intent-system"), writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("intent-cli stack", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenHelpAll_ListsEveryCommandGroup_AndGenerateFromCurrent()
     {
         // G379: `intent-cli --help --all` restores the full group catalog,

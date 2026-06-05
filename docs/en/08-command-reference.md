@@ -137,6 +137,27 @@ only when the backlog is empty and rediscovery finds nothing), `packet-ready`,
 `too-broad-split-needed`. Packet / issue / intent-update actions are proposed at
 a stop condition and applied only after explicit operator acceptance.
 
+## Stack — packet backlog creation + first issue publish
+
+A named **forward planning** process (G464). `stack` reads the current intents,
+creates an ordered backlog of the packets that are ready now (often around ten),
+commits and pushes that durable state, and by default publishes **at most the
+first** GitHub issue — leaving the rest as a deferred backlog.
+
+```bash
+intent-cli stack --domain <domain> --target-repo <owner/repo> --format markdown
+intent-cli guide stack --domain <domain> --target-repo <owner/repo> --format markdown
+```
+
+`stack` matches タスクを積む. It is distinct from `improve` (retrospective
+realignment from a drift / loop crisis), `grill` (persistent open-question
+interview), `clarification` (blocker resolution), and runtime `queue`
+transitions. It respects open questions, work-in-progress, and host-only packet
+boundaries, commits/pushes durable packet state before issue-publish, and never
+hand-applies `intent-target` (the host publish boundary applies it). The output
+shape lists `created_packets`, `recommended_first_issue`, `published_issue`, and
+`deferred_items`.
+
 ## Packets / issues
 
 ```bash

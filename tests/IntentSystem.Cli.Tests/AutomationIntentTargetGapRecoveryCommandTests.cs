@@ -12,6 +12,7 @@ namespace IntentSystem.Cli.Tests;
 /// command. Reviewer flagged the analyzer was unreachable without
 /// this surface.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationIntentTargetGapRecoveryCommandTests : IDisposable
 {
     public AutomationIntentTargetGapRecoveryCommandTests()
