@@ -59,10 +59,16 @@ public sealed class GuideCommandsListCommandTests
         // worker is the child-implementation surface.
         Assert.Equal("child-implementation", byName["worker"].GetProperty("role").GetString());
 
-        // Loop-prompt creation surfaces are discoverable in the catalog.
+        // Loop-prompt creation surfaces are discoverable in the catalog —
+        // prompt-template AND prompt-matrix each as their own role-categorized
+        // entry (G467 review: prompt-matrix must be a discoverable entry, not
+        // only mentioned inside prompt-template's purpose text).
         Assert.Contains("guide workflow task implementation-loop", byName.Keys);
         Assert.Contains("guide workflow task review-next-slice-loop", byName.Keys);
         Assert.Contains("guide prompt-template", byName.Keys);
+        Assert.Contains("guide prompt-matrix", byName.Keys);
+        Assert.Equal("design", byName["guide prompt-matrix"].GetProperty("role").GetString());
+        Assert.Equal("support", byName["guide prompt-matrix"].GetProperty("classification").GetString());
     }
 
     [Fact]

@@ -236,7 +236,16 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationSupport,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Loop-prompt creation: `intent-cli guide prompt-template` + `intent-cli guide prompt-matrix` are the canonical catalog of paste-ready prompts. The short way to turn a minimal user ask (`intent-cli に聞いて...`) into a fixed-condition loop prompt."
+            Purpose = "Loop-prompt creation: `intent-cli guide prompt-template` returns a single paste-ready prompt by name. The short way to turn a minimal user ask (`intent-cli に聞いて...`) into a fixed-condition prompt."
+        },
+        new CommandGroupEntry
+        {
+            Name = "guide prompt-matrix",
+            Role = RoleDesign,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Loop-prompt creation: `intent-cli guide prompt-matrix` is the catalog of available prompt templates (design / host-review / child-implementation / recovery) so an agent can discover which loop or one-shot prompt to request."
         },
         new CommandGroupEntry
         {
