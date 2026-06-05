@@ -157,6 +157,12 @@ internal static class GuideHelpCommand
         },
         new GuideSubcommandEntry
         {
+            Name = "next",
+            Purpose = "Design-side action advisor (G465): answers 'what should I do next?' by recommending one design-side process among grill, stack, improve, inspect, issue-publish, review, recovery, and idle — with the evidence to check and a paste-ready suggested prompt. Read-only by default; never auto-executes; the user decides whether to run the recommendation.",
+            Example = "intent-cli guide next --domain <domain> --target-repo <owner/repo> --format markdown"
+        },
+        new GuideSubcommandEntry
+        {
             Name = "onboarding",
             Purpose = "First-call sequence for a fresh agent. Ordered list of guide / automation surfaces to read before any mutation.",
             Example = "intent-cli guide onboarding --format json"
