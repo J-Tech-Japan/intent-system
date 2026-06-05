@@ -87,6 +87,15 @@ intent-cli improve --domain <domain> --light --format markdown
 After operator approval the agent may create the proposed corrective packets and
 publish **at most one** first GitHub issue unless asked for more.
 
+`improve` is a **safety net**, not the first line of defense. The normal path is
+**packet-time intent maintenance** (G461): when a packet is drafted, the agent is
+already prompted to consider intent placement, ADR candidates, diagram candidates,
+docs updates, and closeout knowledge writeback — see `intent-cli guide workflow task
+packet-draft`. That metadata is optional and backward-compatible (legacy packets
+without it stay valid), but capturing it while the design context is fresh keeps the
+intent tree, ADRs, and diagrams from drifting behind packet history in the first
+place. `improve` then catches whatever the packet-time check missed.
+
 `guide improve` is a design-thread reflection process — **not** a scheduler, a
 provider launcher, or a routine host-loop / worker-loop recovery diagnostic.
 Operational metadata/label/queue repair stays in the existing operational

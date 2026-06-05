@@ -232,6 +232,43 @@ public sealed class PacketDraftCommandTests
         Assert.Contains("Expected PR base branch: `main`", githubBody, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_GeneratesOptionalIntentMaintenanceMetadata_WithoutAddingRequiredSections()
+    {
+        // G461 AC: new generated packet templates include the optional intent
+        // maintenance sections/fields by default, but the metadata is OPTIONAL —
+        // it must NOT be added to the required standalone-contract sections.
+        using var workspace = new PacketDraftWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G461", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G461");
+
+        var packetYaml = File.ReadAllText(Path.Combine(packetDir, "packet.yaml"));
+        foreach (var key in new[] { "intent_placement:", "knowledge_updates:", "adr:", "diagram:", "closeout_learning:", "write_back_required:" })
+        {
+            Assert.Contains(key, packetYaml, StringComparison.Ordinal);
+        }
+
+        var implementation = File.ReadAllText(Path.Combine(packetDir, "implementation.md"));
+        Assert.Contains("Knowledge Maintenance", implementation, StringComparison.Ordinal);
+
+        var githubBody = File.ReadAllText(Path.Combine(packetDir, "github-body.md"));
+        Assert.Contains("## Knowledge Maintenance", githubBody, StringComparison.Ordinal);
+
+        var reviewContext = File.ReadAllText(Path.Combine(packetDir, "review-context.md"));
+        Assert.Contains("Knowledge Writeback Expectation", reviewContext, StringComparison.Ordinal);
+
+        // Backward-compat invariant: the optional metadata is NOT a required section.
+        Assert.DoesNotContain("Knowledge Maintenance", string.Join("\n", PacketDraftCommand.RequiredContractSections), StringComparison.Ordinal);
+        Assert.DoesNotContain("intent_placement", string.Join("\n", PacketDraftCommand.RequiredContractSections), StringComparison.Ordinal);
+    }
+
     private sealed class PacketDraftWorkspace : IDisposable
     {
         public PacketDraftWorkspace()

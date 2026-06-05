@@ -86,6 +86,15 @@ intent-cli improve --domain <domain> --light --format markdown
 operator 承認後、agent は提案した corrective packet を作成し、最初の GitHub issue を
 **最大1件**だけ publish できます（明示的に依頼された場合を除く）。
 
+`improve` は first line of defense ではなく **safety net** です。通常パスは
+**packet-time intent maintenance**（G461）です。packet draft 時点で agent は intent
+placement・ADR candidate・diagram candidate・docs update・closeout knowledge writeback
+を検討するよう促されます（`intent-cli guide workflow task packet-draft` 参照）。この
+metadata は optional かつ backward-compatible で（metadata を持たない legacy packet も
+有効のまま）、設計コンテキストが新鮮なうちに記録することで intent tree・ADR・diagram が
+packet 履歴から遅れて drift するのを最初の段階で防ぎます。`improve` は packet-time
+チェックが見逃した drift を後から拾います。
+
 `guide improve` はデザインスレッドのリフレクション工程であり、スケジューラでも
 provider 起動でも、host-loop / worker-loop の通常の復旧診断でもありません。
 metadata / label / queue の復旧は既存の運用サーフェス

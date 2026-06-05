@@ -78,6 +78,24 @@ internal static class GuideWorkflowTaskPacketDraftCommand
     };
 
     /// <summary>
+    /// G461: packet-time intent-maintenance prompts. A packet draft is the
+    /// earliest, cheapest moment to capture design knowledge (intent placement,
+    /// ADR / diagram / docs candidates, closeout writeback) while the design
+    /// context is fresh. These prompts are OPTIONAL and backward-compatible —
+    /// the agent may explicitly decline each one — but they make the
+    /// `improve` reflection process (G456 / G460) the safety net rather than
+    /// the only place this knowledge is considered. Tests pin each id.
+    /// </summary>
+    internal static readonly IReadOnlyList<IntentMaintenancePrompt> IntentMaintenancePrompts = new[]
+    {
+        new IntentMaintenancePrompt { Id = "intent-placement", Prompt = "Which intent node does this slice support? Name the primary intent path (and any supporting intents). If no existing node fits, flag `new_intent_needed: true` with a one-line placement rationale instead of leaving the design knowledge trapped in packet history." },
+        new IntentMaintenancePrompt { Id = "adr-candidate", Prompt = "Does this slice make an ADR-worthy decision (a hard-to-reverse choice, a rejected alternative, a new constraint)? If so, name the decision title and target ADR path; otherwise explicitly decline (`adr.required: false`). ADRs are not required for every packet." },
+        new IntentMaintenancePrompt { Id = "diagram-candidate", Prompt = "Does a concept / workflow / topology / state diagram need to change because of this slice? Name the diagram type and target path, or decline (`diagram.required: false`)." },
+        new IntentMaintenancePrompt { Id = "docs-update", Prompt = "Which user-facing docs must change so the documented behavior matches this slice once it lands? List target doc paths, or decline (`docs.required: false`)." },
+        new IntentMaintenancePrompt { Id = "closeout-learning", Prompt = "What knowledge should be written back AFTER this slice lands (intent tree, ADR, diagram, docs)? Set `closeout_learning.write_back_required` and name the write-back targets so review / closeout can verify it happened or open a follow-up packet." }
+    };
+
+    /// <summary>
     /// G337: the canonical commands an external agent runs to produce
     /// a packet draft. Tests pin every flag against the corresponding
     /// command source file (regression for the G336 PR #776 finding).
@@ -112,7 +130,8 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         "Packet ownership is design-side; runtime-created packets carry an explicit `runtime-created` flag in `packet.yaml`. The review-runtime workspace MUST NOT silently edit the four files; it goes through `packet draft --write` with the runtime ownership label (G326).",
         "Prefer intent-cli-backed metadata mutation over hand-editing. Ask `intent-cli guide commands list --format json` or `intent-cli automation summary --domain <d> --format json` which command performs the transition, run that command, then validate the result.",
         "Child implementation loops MUST NOT inspect or mutate parent host queue-state, runs logs, packet directories, intent tree, review-runtime state, local rules, or local skills (G300 / G330 / G333). The packet directory is host-owned; child agents see only the rendered GitHub issue body.",
-        "Never launch AI providers (Claude / Codex / any LLM) from intent-cli. The chat-first model has the human agent driving the conversation; intent-cli emits text the agent acts on."
+        "Never launch AI providers (Claude / Codex / any LLM) from intent-cli. The chat-first model has the human agent driving the conversation; intent-cli emits text the agent acts on.",
+        "Packet-time intent maintenance is the NORMAL path: every packet draft considers intent placement, ADR / diagram / docs candidates, and closeout writeback while the design context is fresh (G461). The `improve` reflection process (G456 / G460) is the later SAFETY NET that catches drift the packet-time check missed — it is not a substitute for thinking about knowledge maintenance when the packet is written. This metadata is OPTIONAL and backward-compatible: legacy packets without it stay valid, and the agent may explicitly decline each prompt."
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
@@ -135,6 +154,7 @@ internal static class GuideWorkflowTaskPacketDraftCommand
                 Usage = UsageLine,
                 PacketFiles = PacketFiles,
                 IssueContractSections = IssueContractSections,
+                IntentMaintenancePrompts = IntentMaintenancePrompts,
                 Commands = Commands,
                 StopConditions = StopConditions,
                 Invariants = Invariants
@@ -176,6 +196,16 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         foreach (var section in IssueContractSections)
         {
             writer.WriteLine($"- **{section.Section}** — {section.Purpose}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## Packet-time intent maintenance (optional, normal path)");
+        writer.WriteLine();
+        writer.WriteLine("A packet draft is the earliest, cheapest moment to capture design knowledge while the context is fresh. Consider — and explicitly answer or decline — each prompt. The metadata is optional and backward-compatible; `improve` (G456 / G460) is the later safety net, not a substitute:");
+        writer.WriteLine();
+        foreach (var prompt in IntentMaintenancePrompts)
+        {
+            writer.WriteLine($"- **{prompt.Id}** — {prompt.Prompt}");
         }
         writer.WriteLine();
 
@@ -272,6 +302,19 @@ internal sealed record IssueContractSection
 }
 
 /// <summary>
+/// G461: one packet-time intent-maintenance prompt the agent should answer
+/// or explicitly decline while the design context is fresh.
+/// </summary>
+internal sealed record IntentMaintenancePrompt
+{
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    [JsonPropertyName("prompt")]
+    public required string Prompt { get; init; }
+}
+
+/// <summary>
 /// G337: full JSON payload for <c>guide workflow task packet-draft</c>.
 /// </summary>
 internal sealed record PacketDraftGuidance
@@ -284,6 +327,9 @@ internal sealed record PacketDraftGuidance
 
     [JsonPropertyName("issue_contract_sections")]
     public required IReadOnlyList<IssueContractSection> IssueContractSections { get; init; }
+
+    [JsonPropertyName("intent_maintenance_prompts")]
+    public required IReadOnlyList<IntentMaintenancePrompt> IntentMaintenancePrompts { get; init; }
 
     [JsonPropertyName("commands")]
     public required IReadOnlyList<string> Commands { get; init; }

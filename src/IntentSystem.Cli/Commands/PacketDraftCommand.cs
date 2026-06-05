@@ -216,6 +216,37 @@ internal static class PacketDraftCommand
               intent_references: []
               acceptance_criteria:
                 - "TODO: at least one acceptance criterion"
+
+            # G461: optional packet-time intent-maintenance metadata. OPTIONAL and
+            # backward-compatible — packets that omit this whole block stay valid.
+            # Fill it in or explicitly decline each part while the design context is
+            # fresh; `improve` (G456 / G460) is the later safety net, not a substitute.
+            intent_placement:
+              primary_intent: <intents/{domain}/intent-tree/...>
+              supporting_intents: []
+              new_intent_needed: false
+              placement_rationale: ""
+            knowledge_updates:
+              intent_tree:
+                required: false
+                target_paths: []
+                summary: ""
+              adr:
+                required: false
+                target_paths: []
+                decision_title: ""
+              diagram:
+                required: false
+                target_paths: []
+                diagram_type: none
+              docs:
+                required: false
+                target_paths: []
+                summary: ""
+            closeout_learning:
+              expected: ""
+              write_back_required: false
+              write_back_targets: []
             """;
     }
 
@@ -243,6 +274,18 @@ internal static class PacketDraftCommand
             ## Verification
 
             TODO: focused tests and `git diff --check`.
+
+            ## Knowledge Maintenance (G461, optional)
+
+            Captured while the design context is fresh. Answer or explicitly decline:
+
+            - Intent placement: TODO which intent node this supports / whether a new node is needed.
+            - ADR candidate: TODO ADR-worthy decision + path, or decline.
+            - Diagram candidate: TODO concept/workflow/topology/state diagram update, or decline.
+            - Docs update: TODO user-facing docs to change, or decline.
+            - Closeout learning: TODO knowledge to write back after landing + whether `write_back_required`.
+
+            `improve` (G456 / G460) is the later safety net; packet-time maintenance is the normal path.
             """;
     }
 
@@ -259,6 +302,13 @@ internal static class PacketDraftCommand
             - launches AI providers from `intent-cli`;
             - mutates GitHub or parent state when the issue is read-only;
             - skips required contract sections.
+
+            ## Knowledge Writeback Expectation (G461)
+
+            If the packet's `closeout_learning.write_back_required` is `true`, confirm the
+            expected intent-tree / ADR / diagram / docs writeback landed in this PR or was
+            captured as a follow-up packet. If the packet declined all knowledge maintenance,
+            that is acceptable — note it rather than blocking.
             """;
     }
 
@@ -313,6 +363,17 @@ internal static class PacketDraftCommand
             ## Related Links
 
             - TODO
+
+            ## Knowledge Maintenance
+
+            Optional (G461). Tells the implementer/reviewer whether intent / ADR / diagram / docs
+            writeback is expected for this slice. Answer or explicitly decline:
+
+            - Intent placement: TODO / none
+            - ADR candidate: TODO / none
+            - Diagram candidate: TODO / none
+            - Docs update: TODO / none
+            - Closeout writeback expected: no
 
             ## Base Branch Policy
 

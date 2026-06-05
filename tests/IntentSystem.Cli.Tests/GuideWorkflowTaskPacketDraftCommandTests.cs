@@ -99,6 +99,50 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
     }
 
     [Fact]
+    public void Execute_EmitsPacketTimeIntentMaintenancePrompts()
+    {
+        // G461 AC: new packet draft guidance includes intent placement, ADR
+        // candidate, diagram candidate, docs update, and closeout learning prompts.
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkflowTaskPacketDraftCommand.Execute(
+            CreateContext(), new[] { "--format", "json" }, writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.TryGetProperty("intent_maintenance_prompts", out var prompts));
+        var ids = prompts.EnumerateArray().Select(p => p.GetProperty("id").GetString()).ToArray();
+        Assert.Equal(
+            new[] { "intent-placement", "adr-candidate", "diagram-candidate", "docs-update", "closeout-learning" },
+            ids);
+        // Each prompt carries actionable text.
+        foreach (var p in prompts.EnumerateArray())
+        {
+            Assert.False(string.IsNullOrWhiteSpace(p.GetProperty("prompt").GetString()));
+        }
+    }
+
+    [Fact]
+    public void Execute_Markdown_DescribesPacketTimeMaintenanceAsNormalPathAndImproveAsSafetyNet()
+    {
+        // G461 AC: docs/guide text explains packet-time intent maintenance is the
+        // normal path, while improve catches missed drift later.
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkflowTaskPacketDraftCommand.Execute(
+            CreateContext(), Array.Empty<string>(), writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Packet-time intent maintenance", output, StringComparison.Ordinal);
+        Assert.Contains("safety net", output, StringComparison.OrdinalIgnoreCase);
+        // The five prompt ids surface in the markdown too.
+        foreach (var id in new[] { "intent-placement", "adr-candidate", "diagram-candidate", "docs-update", "closeout-learning" })
+        {
+            Assert.Contains(id, output, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Invariants_IncludeIntentTargetFinalBoundaryWarning()
     {
         // Acceptance criterion: "The guide warns that intent-target
