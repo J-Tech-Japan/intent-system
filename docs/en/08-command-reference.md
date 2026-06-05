@@ -174,9 +174,11 @@ Ask it in natural language: `intent-cli に聞いて、次に何をしたらい�
 い。`. It checks the evidence (current intents, open questions, packet backlog,
 open PRs / review state, CLI / queue health) and recommends exactly one of
 **grill** (extract open questions), **stack** (create packet backlog + publish
-first issue), **improve** (retrospective realignment), **inspect** (read-only
-state), **issue-publish** (publish a ready packet), **review** (review an open
-PR), **recovery** (repair stale CLI / queue), or **idle** (nothing actionable).
+first issue), **improve** (retrospective realignment), **inspect**
+(evidence-backed observation of real app/CLI/UI/log/test behavior, not just
+status checking), **issue-publish** (publish a ready packet), **review** (review
+an open PR), **recovery** (repair stale CLI / queue), or **idle** (nothing
+actionable).
 The output includes the recommended action, the reason, the evidence checked, a
 paste-ready suggested prompt, and the safety boundary. `next` is **read-only by
 default** and never auto-executes the chosen action — the user decides whether
@@ -237,6 +239,16 @@ intent-cli automation doctor --format json
 ---
 
 ## Command group overview
+
+`intent-cli guide commands list` is a **role-based catalog** (G467): every
+command group carries an operator-role category — **design** (improve / grill /
+stack / next / inspect / intent / interview / packet / clarify), **host-review**
+(review / closeout / automation / issue), **child-implementation** (worker),
+**recovery-diagnostics** (automation doctor / metadata / queue), and
+**advanced-developer** (task) — alongside its `primary`/`support` lifecycle
+classification. `intent-cli guide help` explains the same role buckets and points
+to the loop-prompt generators (`guide workflow task implementation-loop` /
+`review-next-slice-loop`).
 
 | Surface | Role |
 |---------|------|

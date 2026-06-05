@@ -60,6 +60,13 @@ public sealed class GuideNextCommandTests
         {
             Assert.False(string.IsNullOrWhiteSpace(a.GetProperty("suggested_prompt").GetString()));
         }
+
+        // G467 AC: inspect routes to evidence-backed observation and points to
+        // `intent-cli inspect`, NOT to status / next-slice checking.
+        var inspect = root.GetProperty("decision_set").EnumerateArray()
+            .Single(a => a.GetProperty("action").GetString() == "inspect");
+        Assert.Contains("evidence-backed", inspect.GetProperty("when_to_choose").GetString()!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("intent-cli inspect", inspect.GetProperty("suggested_prompt").GetString()!, StringComparison.Ordinal);
     }
 
     [Fact]

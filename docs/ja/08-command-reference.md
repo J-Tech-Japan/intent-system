@@ -171,7 +171,7 @@ intent-cli guide next --domain <domain> --target-repo <owner/repo> --format mark
 agent が evidence（現在の intents・open question・packet backlog・open PR / review
 状態・CLI / queue health）を確認し、**grill**（open question 抽出）・**stack**
 （packet backlog 作成 + 最初の issue publish）・**improve**（遡及的再整合）・
-**inspect**（read-only な状態確認）・**issue-publish**（ready な packet の publish）・
+**inspect**（実際の app/CLI/UI/log/test 挙動の evidence-backed 観測。単なる status 確認ではない）・**issue-publish**（ready な packet の publish）・
 **review**（open PR のレビュー）・**recovery**（stale CLI / queue の修復）・**idle**
 （着手可能な作業なし）のいずれか1つを推奨します。出力には recommended action・
 reason・確認した evidence・paste 可能な suggested prompt・safety boundary が含まれ
@@ -231,6 +231,16 @@ intent-cli automation doctor --format json
 ---
 
 ## コマンドグループ概要
+
+`intent-cli guide commands list` は **role ベースのカタログ**（G467）です。各
+command group が operator-role カテゴリ — **design**（improve / grill / stack /
+next / inspect / intent / interview / packet / clarify）・**host-review**（review /
+closeout / automation / issue）・**child-implementation**（worker）・
+**recovery-diagnostics**（automation doctor / metadata / queue）・
+**advanced-developer**（task）— を `primary`/`support` lifecycle classification
+とともに持ちます。`intent-cli guide help` も同じ role バケットを説明し、loop-prompt
+生成（`guide workflow task implementation-loop` / `review-next-slice-loop`）を案内
+します。
 
 | Surface | 役割 |
 |---------|------|

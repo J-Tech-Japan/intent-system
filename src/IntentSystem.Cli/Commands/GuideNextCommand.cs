@@ -117,8 +117,8 @@ $@"Advise the design thread on what to do next for `{domainArg}` ({repoArg}). Th
             new GuideNextAction
             {
                 Action = ActionInspect,
-                WhenToChoose = "You need to understand the current state before deciding — read-only status of intents, packets, and the next planned slice.",
-                SuggestedPrompt = $"`intent-cli status brief --format json` / `intent-cli intent status` / `intent-cli intent next-slice --dry-run --domain {domainArg} --format json`",
+                WhenToChoose = "You need to observe what the product ACTUALLY does before deciding — evidence-backed observation of real app / CLI / UI / log / test behavior, separating observed evidence from inference and turning gaps into packet candidates (G466). This is NOT status / next-slice checking; for a quick read-only state summary use `intent-cli status brief` / `intent intent status` directly.",
+                SuggestedPrompt = $"intent-cli で <target> を inspect してください。（`intent-cli inspect --domain {domainArg} --target-repo {repoArg} --format markdown`, alias `intent-cli guide inspect`）",
             },
             new GuideNextAction
             {
