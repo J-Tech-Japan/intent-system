@@ -15,7 +15,32 @@
     -->
     <ToolCommandName>intent-cli</ToolCommandName>
     <PackageId>JTechJapan.IntentSystem.Cli</PackageId>
-    <Version>0.3.2</Version>
+    <!--
+      G468: the package version is derived from the repository version
+      policy (`eng/version.json` → `nextVersion`) instead of a stale
+      hard-coded literal. Previously this carried `<Version>0.3.2</Version>`,
+      so a plain local `dotnet pack` reported `0.3.2-<sha>-<G-unit>` long
+      after the source had moved on (the released line was already 0.3.5).
+
+      Resolution order:
+        * `-p:Version=<x>` (release tag-driven build, preview pack) is a
+          global property and always wins — those paths are unchanged.
+        * otherwise the local default is read from `eng/version.json`
+          `nextVersion` so local pack / install / the preview baseline pack
+          all track the in-development line from a single source of truth.
+        * a neutral `0.0.0-dev` last-resort fallback applies only if the
+          policy file is missing/unreadable — never a stale released number.
+
+      `IntentSystemNextVersionFromPolicy` is read with a nested
+      File.ReadAllText so the JSON (with its commas/quotes) is passed to the
+      regex as a real string argument rather than substituted into the
+      MSBuild argument parser. The version-policy guard test asserts this
+      file never reintroduces a hard-coded `<Version>` literal.
+    -->
+    <IntentSystemVersionPolicyFile>$(MSBuildProjectDirectory)/../../eng/version.json</IntentSystemVersionPolicyFile>
+    <IntentSystemNextVersionFromPolicy Condition="Exists('$(IntentSystemVersionPolicyFile)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText($(IntentSystemVersionPolicyFile))), '"nextVersion"\s*:\s*"([^"]+)"').get_Groups().get_Item(1).get_Value())</IntentSystemNextVersionFromPolicy>
+    <Version Condition="'$(Version)' == '' AND '$(IntentSystemNextVersionFromPolicy)' != ''">$(IntentSystemNextVersionFromPolicy)</Version>
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
     <Authors>J-Tech-Japan</Authors>
     <Description>Intent System CLI — deterministic support tooling for intent-driven development on GitHub. Install: dotnet tool install -g JTechJapan.IntentSystem.Cli. Command: intent-cli.</Description>
     <PackageTags>intent-cli;dotnet-tool;intent-system</PackageTags>
