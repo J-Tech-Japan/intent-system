@@ -68,8 +68,16 @@ repository and paste one of these prompts:
 > Set up a child implementation loop for `<owner>/<repo>`.
 > Ask intent-cli for the next step.
 
+**Grill a topic (persistent interview mode):**
+
+> Grill `<topic>` with intent-cli.
+> Keep asking me one question at a time until the intent is packet-ready.
+
 The agent runs `intent-cli` commands internally and brings back questions or
-results. You focus on intent, priorities, and approval decisions.
+results. You focus on intent, priorities, and approval decisions. In **grill**
+mode (`intent-cli grill`) the thread stays persistent — it builds an
+open-question backlog and keeps asking one question at a time, continuing after
+each answer until a stop condition is reached.
 
 ---
 

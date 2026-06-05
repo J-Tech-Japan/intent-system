@@ -248,6 +248,7 @@ internal static class CommandRouter
                 ["workflow"] = GuideWorkflowCommand.Execute,
                 ["model"] = GuideModelCommand.Execute,
                 ["improve"] = GuideImproveCommand.Execute,
+                ["grill"] = GuideGrillCommand.Execute,
                 ["commands"] = GuideCommandsCommand.Execute,
                 ["onboarding"] = GuideOnboardingCommand.Execute,
                 ["intent-work"] = GuideIntentWorkCommand.Execute,
@@ -347,6 +348,17 @@ internal static class CommandRouter
         if (string.Equals(args[0], "improve", StringComparison.Ordinal))
         {
             return GuideImproveCommand.Execute(context, args[1..], writer);
+        }
+
+        // G463: top-level `intent-cli grill` alias for persistent interview
+        // mode. Like `improve`, it takes only flags (`--domain` / `--format` /
+        // `--help`), so it is intercepted here before group/subcommand dispatch
+        // and delegated verbatim to the same guidance surface as `guide grill`.
+        // A first-class top-level surface keeps an agent asked to "grill a
+        // topic" from misrouting to clarification or improve.
+        if (string.Equals(args[0], "grill", StringComparison.Ordinal))
+        {
+            return GuideGrillCommand.Execute(context, args[1..], writer);
         }
 
         // G334: per-group help routing. `intent-cli <group> --help` and
@@ -576,7 +588,8 @@ internal static class CommandRouter
         "implementation-loop — `intent-cli guide workflow task implementation-loop --target-repo <r> --agent claude --frequency 5m --format markdown` (paste-ready child implementation-loop prompt with current label/claim/complete rules, G338).",
         "review-next-slice-loop — `intent-cli guide workflow task review-next-slice-loop --domain <d> --target-repo <r> --agent claude --frequency 20m --format markdown` (paste-ready host review / next-slice-loop prompt with current host-sync preflight + packet/issue lifecycle rules, G338).",
         "bug-to-intent-repair — `intent-cli guide workflow task bug-to-intent-repair --format json` (report → triage → plan → intent-repair → implementation-repair chain; classifies implementation-mismatch / intent-gap / packet-gap / rule-gap / metadata-workflow-gap; recommends packet creation when the bug is in intent-cli rules/guidance, G339).",
-        "improve (design-thread reflection) — `intent-cli improve --domain <d> --format markdown` (alias of `intent-cli guide improve`): periodic MVV / ADR / intent-tree / packet-history / clarification-history realignment review, G456/G457. NOT bug-to-intent-repair, host-loop recovery, state-doctor, or dirty-state repair."
+        "improve (design-thread reflection) — `intent-cli improve --domain <d> --format markdown` (alias of `intent-cli guide improve`): periodic MVV / ADR / intent-tree / packet-history / clarification-history realignment review, G456/G457. NOT bug-to-intent-repair, host-loop recovery, state-doctor, or dirty-state repair.",
+        "grill (persistent interview mode) — `intent-cli grill --domain <d> --format markdown` (alias of `intent-cli guide grill`): once the user asks to grill a topic, stay in grill mode — generate an open-question backlog from current intents/packets/ADRs/docs, ask one question at a time, and continue after each answer until a stop condition holds, G463. Built on the interview artifacts; NOT clarification (blocker resolution) and NOT improve (retrospective realignment)."
     };
 
     /// <summary>

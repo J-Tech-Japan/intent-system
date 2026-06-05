@@ -145,6 +145,12 @@ internal static class GuideHelpCommand
         },
         new GuideSubcommandEntry
         {
+            Name = "grill",
+            Purpose = "Persistent interview mode (G463): once the user asks to grill a topic, stay in grill mode — generate an open-question backlog from current intents/packets/ADRs/docs, ask one question at a time, and continue after each answer until a stop condition holds. Built on the interview artifacts; not clarification (blocker resolution) and not improve (retrospective realignment); never auto-publishes.",
+            Example = "intent-cli guide grill --domain <domain> --format markdown"
+        },
+        new GuideSubcommandEntry
+        {
             Name = "onboarding",
             Purpose = "First-call sequence for a fresh agent. Ordered list of guide / automation surfaces to read before any mutation.",
             Example = "intent-cli guide onboarding --format json"

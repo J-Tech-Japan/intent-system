@@ -93,6 +93,49 @@ public sealed class CommandRouterTests
     }
 
     [Fact]
+    public void Execute_TopLevelGrill_DelegatesToGuideGrill_PersistentInterviewMode()
+    {
+        // G463: `intent-cli grill` is a first-class top-level alias that
+        // delegates to the same persistent-interview guidance as `guide grill`.
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(
+            ["grill", "--domain", "intent-cli", "--format", "json"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        Assert.Equal("persistent-grill-interview", doc.RootElement.GetProperty("process").GetString());
+    }
+
+    [Fact]
+    public void Execute_GuideGrill_ReachesPersistentInterviewModeSurface()
+    {
+        // G463: the guide-namespaced form returns the same surface.
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(
+            ["guide", "grill", "--domain", "intent-cli", "--format", "json"],
+            CreateContext("/tmp/intent-system"),
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        Assert.Equal("persistent-grill-interview", doc.RootElement.GetProperty("process").GetString());
+    }
+
+    [Fact]
+    public void Execute_DefaultHelp_ExposesGrillPointer()
+    {
+        // G463: grill is discoverable from `intent-cli --help`.
+        using var writer = new StringWriter();
+        var exitCode = CommandRouter.Execute(Array.Empty<string>(), CreateContext("/tmp/intent-system"), writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("intent-cli grill", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenHelpAll_ListsEveryCommandGroup_AndGenerateFromCurrent()
     {
         // G379: `intent-cli --help --all` restores the full group catalog,

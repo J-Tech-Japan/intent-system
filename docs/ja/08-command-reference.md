@@ -107,6 +107,34 @@ packet 履歴・clarification 履歴・短期ループの兆候を点検し、�
 変更はまず提案し、operator の同意後にサポートされた intent-cli / repo 経路でのみ
 適用します。
 
+## Grill — 永続インタビューモード
+
+ユーザー向けの**永続インタビューモード**（G463）です。トピックを grill する
+よう依頼すると、デザインスレッドは grill モードに留まり、現在の intent
+コンテキスト（intents・packets・ADR / design note・docs・関連する実装
+evidence）から open-question backlog を生成し、**一度に1つずつ質問**を続けます。
+各回答のあとも `grill` を再入力させることなく自動的に継続し、構造化された
+停止条件に達するまで質問します。
+
+```bash
+intent-cli grill --domain <domain> --format markdown
+intent-cli guide grill --domain <domain> --format markdown
+```
+
+両形式は同一のガイダンスを返し、`intent-cli --help` と
+`intent-cli guide commands list` から discoverable です。grill は既存の
+`interview` artifact の上に構築されており（回答は `intent-cli interview
+record-answer` で記録し、保留中の質問は `intent-cli interview next-question`
+で読み出します）、`clarification`（blocker 解決）でも `improve`（遡及的な
+再整合）でもなく、packet / issue を自動 publish しません。
+
+停止条件: `no-more-questions`（backlog が空で rediscovery でも新しい質問が
+見つからない場合にのみ `今のところ追加質問はありません` を返す）・
+`packet-ready`・`intent-update-ready`・`clarification-needed`・
+`blocked-by-user-decision`・`too-broad-split-needed`。packet / issue /
+intent-update のアクションは停止条件で提案し、operator の明示的な同意後にのみ
+適用します。
+
 ## Packet / issue
 
 ```bash

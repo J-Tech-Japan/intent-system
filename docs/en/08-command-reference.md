@@ -109,6 +109,34 @@ classifies the outcome as one of `aligned`,
 proposed first and applied only after operator agreement through supported
 intent-cli / repo paths.
 
+## Grill — persistent interview mode
+
+A user-facing **persistent interview mode** (G463). Once you ask to grill a
+topic, the design thread STAYS in grill mode: it generates an open-question
+backlog from the current intent context (intents, packets, ADR/design notes,
+docs, and relevant implementation evidence) and keeps asking **one question at a
+time**, continuing after each answer without you repeating `grill`, until a
+structured stop condition is reached.
+
+```bash
+intent-cli grill --domain <domain> --format markdown
+intent-cli guide grill --domain <domain> --format markdown
+```
+
+Both forms return identical guidance and are discoverable via `intent-cli
+--help` and `intent-cli guide commands list`. grill is built on the existing
+`interview` artifacts (it records answers through `intent-cli interview
+record-answer` and reads pending questions through `intent-cli interview
+next-question`); it is **not** `clarification` (blocker resolution) and **not**
+`improve` (retrospective realignment), and it never auto-publishes packets or
+issues.
+
+Stop conditions: `no-more-questions` (returns `今のところ追加質問はありません`
+only when the backlog is empty and rediscovery finds nothing), `packet-ready`,
+`intent-update-ready`, `clarification-needed`, `blocked-by-user-decision`, and
+`too-broad-split-needed`. Packet / issue / intent-update actions are proposed at
+a stop condition and applied only after explicit operator acceptance.
+
 ## Packets / issues
 
 ```bash
