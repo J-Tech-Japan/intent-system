@@ -133,33 +133,76 @@ channel=preview built=<iso-utc> commit=<full-sha>
 
 ## バージョンフロー
 
-リポジトリのバージョンポリシーは `eng/version.json` に記載されています:
+リポジトリのバージョンポリシーは `eng/version.json` に記載されています。`stableVersion`
+（最新の公開済み安定版）と `nextVersion`（準備中 / 開発中のライン）の単一の source of
+truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Version>` はこのファイルから
+導出されるため、ローカル pack / install は stale な csproj リテラルではなく開発中の
+`nextVersion` を報告します:
 
 ```json
 {
-  "stableVersion": "0.3.0",
-  "nextVersion": "0.3.1"
+  "stableVersion": "0.3.5",
+  "nextVersion": "0.3.6"
 }
 ```
 
 | ステージ | バージョン形式 | 導出方法 |
 | --- | --- | --- |
-| Main CI preview | `0.3.1-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
-| リリース候補（任意） | `0.3.1-rc.N` | タグ `v0.3.1-rc.N` がリリースワークフローをトリガー |
-| 安定版リリース | `0.3.1` | タグ `v0.3.1` がリリースワークフローをトリガー |
-| リリース後の main ビルド | `0.4.0-preview.<run>.<attempt>` | `nextVersion` を `0.4.0` にバンプ後 |
+| ローカル pack / install | `0.3.6-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
+| Main CI preview | `0.3.6-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
+| リリース候補（任意） | `0.3.6-rc.N` | タグ `v0.3.6-rc.N` がリリースワークフローをトリガー |
+| 安定版リリース | `0.3.6` | タグ `v0.3.6` がリリースワークフローをトリガー（`-p:Version=<tag>` が優先） |
+| リリース後の main ビルド | `0.3.7-preview.<run>.<attempt>` | `nextVersion` を `0.3.7` にバンプ後 |
 
-**`v0.3.1` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
+**`v0.3.6` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
 
 ```json
 {
-  "stableVersion": "0.3.1",
-  "nextVersion": "0.4.0"
+  "stableVersion": "0.3.6",
+  "nextVersion": "0.3.7"
 }
 ```
 
-これにより次の main ブランチ CI ビルドが `0.4.0-preview.<run>.<attempt>` を生成し、
-`0.3.1-preview`（安定版リリースバージョンと衝突）の出力が継続されなくなります。
+これにより次の main ブランチ CI ビルド（およびローカル pack）が
+`0.3.7-preview.<run>.<attempt>` / `0.3.7-<sha>-<G-unit>` を生成し、`0.3.6`（安定版
+リリースバージョンと衝突）の出力が継続されなくなります。
+
+### 次リリース準備（v0.3.6）
+
+リポジトリは operator による明示的な **`v0.3.6`** リリース（現在の `nextVersion`）の
+準備が整っています。リリース自体はタグ付けで publish され、このパケットはリリースを
+cut しません。
+
+**`v0.3.5` 以降のユーザー可視の変更:**
+
+- **design-side プロセスファミリー** — 名前付きで discoverable な5つの design-thread
+  surface: `intent-cli improve`（G456）・`intent-cli grill`（G463）・
+  `intent-cli stack`（G464）・`intent-cli next`（G465）・`intent-cli inspect`（G466）。
+  各々に top-level alias と `guide <name>` 形式があります。
+- **guide カタログ / role 分類**（G467）— `intent-cli guide commands list` が role
+  ベースのカタログ（design / host-review / child-implementation /
+  recovery-diagnostics / advanced-developer）になり、`intent-cli guide help` が各
+  role の surface を説明します。
+- **version-source 整合**（G468）— ローカル pack/install・NuGet パッケージ・
+  self-contained リリース artifact が package version・git short SHA・最新 G-unit を
+  stale な csproj リテラルではなく `eng/version.json` と git から導出します。
+
+**リリース準備の検証（`v0.3.6` タグ付け前に実行）:**
+
+```bash
+cat eng/version.json   # stableVersion 0.3.5（公開済み）, nextVersion 0.3.6（リリース対象）
+dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
+dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
+#   期待形: intent-cli 0.3.6-<sha>-G46x （0.3.2-... ではない）
+dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.6.nupkg
+dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
+  -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
+```
+
+公式リリースは `v0.3.6` タグの GitHub Release publish で cut され、リリースワークフローが
+`-p:Version=0.3.6` を渡します（ローカルデフォルトより優先）。publish 後、上記のリリース後
+`eng/version.json` バンプを適用します。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
