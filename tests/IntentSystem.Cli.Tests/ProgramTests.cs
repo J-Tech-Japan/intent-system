@@ -3,6 +3,7 @@ using IntentSystem.Cli.Commands;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection("WorkerNextActionSharedState")]
 public sealed class ProgramTests
 {
     private static readonly Lock ProcessStateLock = new();

@@ -9,7 +9,7 @@ namespace IntentSystem.Cli.Tests;
 // CandidateListerFactory resets in this class's ctor/Dispose cannot race
 // with the FakeEmptyLister assignment in
 // DiagnosticsCommand_WithCloseoutDriftRepairsAvailableFlag_ClassifiesCloseoutDriftRepair.
-[Collection("HostReviewDiagnostics")]
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationHostReviewDiagnosticsCommandTests : IDisposable
 {
     public AutomationHostReviewDiagnosticsCommandTests()

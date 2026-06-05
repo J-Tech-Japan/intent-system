@@ -12,6 +12,7 @@ namespace IntentSystem.Cli.Tests;
 /// pr-created exclusions, the misplaced-PR-label warning, and the
 /// no-mutation invariants.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class WorkerNextActionCommandTests : IDisposable
 {
     public WorkerNextActionCommandTests()

@@ -11,6 +11,7 @@ namespace IntentSystem.Cli.Tests;
 /// helper renders a deterministic owner-facing stop summary and never
 /// mutates GitHub, labels, files, branches, or launches a provider.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationClarificationStopCommandTests : IDisposable
 {
     public AutomationClarificationStopCommandTests()

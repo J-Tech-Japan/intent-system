@@ -12,6 +12,7 @@ namespace IntentSystem.Cli.Tests;
 /// analyzer's four required drift categories plus the command's read-only
 /// vs fail-closed <c>--write</c> behavior and host-only prohibition.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class AutomationStateDoctorTests : IDisposable
 {
     private const string Repo = "J-Tech-Japan/intent-system";
