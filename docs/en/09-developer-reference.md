@@ -151,39 +151,40 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.3.5",
-  "nextVersion": "0.3.6"
-}
-```
-
-| Stage | Version form | How it is derived |
-| --- | --- | --- |
-| Local pack / install | `0.3.6-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.3.6-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.3.6-rc.N` | Tag `v0.3.6-rc.N` triggers release workflow |
-| Stable release | `0.3.6` | Tag `v0.3.6` triggers release workflow (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.3.7-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.7` |
-
-**After releasing `v0.3.6`**, bump both fields in `eng/version.json`:
-
-```json
-{
   "stableVersion": "0.3.6",
   "nextVersion": "0.3.7"
 }
 ```
 
+| Stage | Version form | How it is derived |
+| --- | --- | --- |
+| Local pack / install | `0.3.7-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `0.3.7-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.3.7-rc.N` | Tag `v0.3.7-rc.N` triggers release workflow |
+| Stable release | `0.3.7` | Tag `v0.3.7` triggers release workflow (`-p:Version=<tag>` wins) |
+| Post-release main builds | `0.3.8-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.8` |
+
+**After releasing `v0.3.7`**, bump both fields in `eng/version.json`:
+
+```json
+{
+  "stableVersion": "0.3.7",
+  "nextVersion": "0.3.8"
+}
+```
+
 This ensures the next main-branch CI build (and local pack) immediately produces
-`0.3.7-preview.<run>.<attempt>` / `0.3.7-<sha>-<G-unit>` rather than continuing to
-emit `0.3.6` (which would collide with the stable release version).
+`0.3.8-preview.<run>.<attempt>` / `0.3.8-<sha>-<G-unit>` rather than continuing to
+emit `0.3.7` (which would collide with the stable release version).
 
-### Next release readiness (v0.3.6)
+### Next release readiness (v0.3.7)
 
-The repository is prepared for an explicit operator release of **`v0.3.6`** (the
-current `nextVersion`). The release itself is published by tagging — this packet
-does not cut the release.
+**`v0.3.6` shipped** (GitHub Release + NuGet, 2026-06-05) and the version policy
+was bumped to the `0.3.7` development line (G470). The repository is now on the
+in-development **`0.3.7`** `nextVersion`; the next release is published by tagging
+`v0.3.7` once it is prepared — this bump does not cut a release.
 
-**User-visible changes since `v0.3.5`:**
+**Shipped in `v0.3.6` (changes since `v0.3.5`):**
 
 - **Design-side process family** — five named, discoverable design-thread
   surfaces: `intent-cli improve` (G456, retrospective realignment),
@@ -202,30 +203,30 @@ does not cut the release.
   latest G-unit from `eng/version.json` and git instead of a stale csproj
   literal, so `intent-cli --version` is coherent across build paths.
 
-**Release-readiness verification (run before tagging `v0.3.6`):**
+**Release-readiness verification (run before tagging the next `v0.3.7`):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.3.5 (published), nextVersion 0.3.6 (to release)
+cat eng/version.json   # stableVersion 0.3.6 (published), nextVersion 0.3.7 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.3.6-<sha>-G46x   (NOT 0.3.2-...)
+#   expected shape: intent-cli 0.3.7-<sha>-G47x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.6.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.7.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-The official release is then cut by publishing a GitHub Release tagged `v0.3.6`;
-the release workflow passes `-p:Version=0.3.6` (which wins over the local
+The official release is then cut by publishing a GitHub Release tagged `v0.3.7`;
+the release workflow passes `-p:Version=0.3.7` (which wins over the local
 default). After the release publishes, apply the post-release `eng/version.json`
-bump above.
+bump above (`stableVersion → 0.3.7`, `nextVersion → 0.3.8`).
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
