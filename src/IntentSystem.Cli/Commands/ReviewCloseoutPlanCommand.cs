@@ -276,7 +276,7 @@ internal static class ReviewCloseoutPlanCommand
                 // redundant host-metadata gap.
                 if (!bodyFallbackAmbiguous)
                 {
-                    var reconstruction = GitHubLinkageReconstructor.Reconstruct(closingIssues, queueState);
+                    var reconstruction = GitHubLinkageReconstructor.Reconstruct(closingIssues, queueState, repo);
                     switch (reconstruction.Kind)
                     {
                         case LinkageReconstructionKind.Deterministic:
