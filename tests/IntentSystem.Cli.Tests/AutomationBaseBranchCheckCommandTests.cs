@@ -291,6 +291,46 @@ public sealed class AutomationBaseBranchCheckCommandTests
         Assert.Equal("main", root.GetProperty("expected_base").GetString());
     }
 
+    [Fact]
+    public void Execute_G471_ImplementationBaseOverride_WinsOverPolicyDefault_AndConfigAbsent()
+    {
+        // G471: an explicit `--implementation-base develop-v2` validates against
+        // develop-v2 even when `--policy direct-main` is also supplied and the
+        // host config carries NO implementation_base_branch — so generated
+        // host-loop guidance no longer falsely reports a mismatch for a
+        // non-default base. This is the exact command-level gap the PR review
+        // flagged.
+        using var writer = new StringWriter();
+        var exitCode = AutomationBaseBranchCheckCommand.Execute(
+            CreateContext("direct-main"),
+            ["--repo", "owner/repo", "--pr", "42", "--actual-base", "develop-v2", "--policy", "direct-main", "--implementation-base", "develop-v2", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.Equal("develop-v2", root.GetProperty("expected_base").GetString());
+    }
+
+    [Fact]
+    public void Execute_G471_ImplementationBaseOverride_FlagsMismatch_WhenActualIsPolicyDefault()
+    {
+        // Companion: with `--implementation-base develop-v2`, a PR that still
+        // targets `main` is correctly flagged as a mismatch.
+        using var writer = new StringWriter();
+        var exitCode = AutomationBaseBranchCheckCommand.Execute(
+            CreateContext("direct-main"),
+            ["--repo", "owner/repo", "--pr", "42", "--actual-base", "main", "--implementation-base", "develop-v2", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("mismatch", root.GetProperty("status").GetString());
+        Assert.Equal("develop-v2", root.GetProperty("expected_base").GetString());
+    }
+
     private static CliContext CreateContext(string baseBranchPolicy)
     {
         return new CliContext

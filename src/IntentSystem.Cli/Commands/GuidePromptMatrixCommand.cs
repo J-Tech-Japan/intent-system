@@ -334,6 +334,20 @@ internal static class GuidePromptMatrixCommand
                     $"--jq .baseRefName` must equal `{policyDefaultBranch}`",
                     $"--jq .baseRefName` must equal `{decision.Branch}`",
                     StringComparison.Ordinal);
+
+                // G471 (review repair): the generated `base-branch-check`
+                // command must validate the EFFECTIVE branch, not force the
+                // policy default. `automation base-branch-check` treats
+                // `--policy <p>` as an explicit override that ignores the
+                // configured implementation_base_branch, so forcing
+                // `--policy direct-main` on a `develop-v2` host compares
+                // `develop-v2` against `main` and falsely reports a mismatch.
+                // Pass the resolved effective branch unambiguously via
+                // `--implementation-base <branch>` (highest precedence) instead.
+                prompt = prompt.Replace(
+                    $"base-branch-check --repo <r> --pr <n> --policy {entry.BaseBranchPolicy} --actual-base",
+                    $"base-branch-check --repo <r> --pr <n> --implementation-base {decision.Branch} --actual-base",
+                    StringComparison.Ordinal);
             }
 
             prompt +=

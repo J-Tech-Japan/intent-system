@@ -2805,6 +2805,44 @@ public sealed class GuidePromptMatrixCommandTests
     }
 
     [Fact]
+    public void Execute_G471_DevelopV2HostLoop_BaseBranchCheckCommandValidatesEffectiveBranch()
+    {
+        // Review repair AC: the generated host-loop base-branch-check COMMAND
+        // (not only the prose) must validate against develop-v2. Forcing
+        // `--policy direct-main` would make `automation base-branch-check`
+        // ignore the configured branch and compare against `main`, falsely
+        // reporting a mismatch — so the command must pass the effective branch
+        // unambiguously via `--implementation-base develop-v2`.
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContextWithImplementationBaseBranch("develop-v2"),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("base-branch-check --repo <r> --pr <n> --implementation-base develop-v2 --actual-base", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("--policy direct-main", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G471_DefaultDirectMainHostLoop_BaseBranchCheckKeepsPolicyFlag()
+    {
+        // Regression: default direct-main hosts keep the canonical
+        // `--policy direct-main` base-branch-check command (byte-stable).
+        using var writer = new StringWriter();
+        var exit = GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exit);
+        var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("base-branch-check --repo <r> --pr <n> --policy direct-main --actual-base", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("--implementation-base", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_G471_DefaultDirectMain_KeepsCanonicalMainProse()
     {
         // Regression: existing direct-main projects (no override) keep the exact
