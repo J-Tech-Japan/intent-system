@@ -47,15 +47,30 @@ internal static class BaseBranchPolicyContract
     }
 
     public static string DescribePolicy(string policy)
+        => DescribeEffectiveBranch(policy, ResolveExpectedBaseBranch(policy));
+
+    /// <summary>
+    /// G471: branch-aware policy description. When the effective implementation /
+    /// PR base branch is the policy default (e.g. <c>main</c> for
+    /// <c>direct-main</c>), this returns the canonical policy prose unchanged.
+    /// When a configured / explicit / topology override sets a non-default
+    /// branch (e.g. <c>develop-v2</c>), the prose names that branch consistently
+    /// instead of hard-coding <c>main</c>, so the guide never tells an
+    /// implementation / review loop to target <c>main</c> while the effective
+    /// branch is something else.
+    /// </summary>
+    public static string DescribeEffectiveBranch(string policy, string effectiveBranch)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(policy);
+        ArgumentException.ThrowIfNullOrWhiteSpace(effectiveBranch);
 
+        var branch = effectiveBranch.Trim();
         return policy switch
         {
             CliRuntimeContracts.DirectMainBaseBranchPolicy =>
-                "Child PRs target `main` directly; host merges land on `main`.",
+                $"Child PRs target `{branch}` directly; host merges land on `{branch}`.",
             CliRuntimeContracts.MainAiBaseBranchPolicy =>
-                "Child PRs target `main-ai` (the AI integration branch); the human operator periodically opens a `main-ai → main` batch PR. Never open a child PR against `main` directly under this policy.",
+                $"Child PRs target `{branch}` (the AI integration branch); the human operator periodically opens a `{branch} → main` batch PR. Never open a child PR against `main` directly under this policy.",
             _ => throw new InvalidOperationException(
                 $"Unknown base branch policy '{policy}'.")
         };
