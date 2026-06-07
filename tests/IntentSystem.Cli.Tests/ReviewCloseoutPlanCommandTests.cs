@@ -773,6 +773,47 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G329_ClosingIssueNumberMatchesDifferentRepo_IgnoresDifferentRepoCandidate()
+    {
+        // Closing issue numbers are only unique within a repository. A PR in
+        // J-Tech-Japan/intent-system that closes #759 must not be considered
+        // ambiguous just because another queue item links to
+        // J-Tech-Japan/SekibanAsAService#759.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithTwoItems(
+            ("SKS-G329", "review", null,
+                ("J-Tech-Japan/SekibanAsAService", 759,
+                    "https://github.com/J-Tech-Japan/SekibanAsAService/issues/759")),
+            ("G329", "review", null,
+                ("J-Tech-Japan/intent-system", 759,
+                    "https://github.com/J-Tech-Japan/intent-system/issues/759"))));
+        workspace.WriteFile(".intent-cli/issues/G329/github-body.md", BuildContractBody());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "760",
+                "--closing-issues", "759",
+                "--format", "json"
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("ready").GetBoolean());
+        Assert.Equal("G329", root.GetProperty("execution_unit").GetString());
+        Assert.False(root.TryGetProperty("ambiguous_linkage", out _));
+
+        var recovered = root.GetProperty("recovered_linkage");
+        Assert.Equal("G329", recovered.GetProperty("execution_unit").GetString());
+        Assert.Equal("J-Tech-Japan/intent-system", recovered.GetProperty("linked_issue_repo").GetString());
+    }
+
+    [Fact]
     public void Execute_G329_NoClosingIssuesSupplied_FallsThroughToHostMetadataBlocked()
     {
         // G329 out-of-scope: do NOT guess without a closing issue.

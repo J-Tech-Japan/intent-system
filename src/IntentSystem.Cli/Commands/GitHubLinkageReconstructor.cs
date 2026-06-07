@@ -42,7 +42,8 @@ internal static class GitHubLinkageReconstructor
     /// </summary>
     public static LinkageReconstructionResult Reconstruct(
         IReadOnlyList<int> closingIssueNumbers,
-        QueueState? queueState)
+        QueueState? queueState,
+        string? repo = null)
     {
         ArgumentNullException.ThrowIfNull(closingIssueNumbers);
 
@@ -74,6 +75,11 @@ internal static class GitHubLinkageReconstructor
                 continue;
             }
             if (!closingSet.Contains(linkedIssueNumber.Value))
+            {
+                continue;
+            }
+            if (!string.IsNullOrWhiteSpace(repo)
+                && !string.Equals(item.LinkedIssue!.Repo, repo, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

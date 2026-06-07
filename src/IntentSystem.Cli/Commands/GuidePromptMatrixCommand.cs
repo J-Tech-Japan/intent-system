@@ -315,6 +315,41 @@ internal static class GuidePromptMatrixCommand
                 $"expected base branch: `{policyDefaultBranch}`",
                 $"expected base branch: `{decision.Branch}`",
                 StringComparison.Ordinal);
+
+            // G471: rewrite the branch-specific policy prose so the description
+            // line (and the Copilot GitHub-facts check) name the effective
+            // branch instead of the policy default. Without this the prompt
+            // still said e.g. "Child PRs target `main` directly" while the
+            // effective branch was `develop-v2` — the exact contradiction this
+            // slice removes. Only applied when the entry carries a known policy
+            // so non-policy builders are untouched.
+            if (!string.IsNullOrWhiteSpace(entry.BaseBranchPolicy)
+                && BaseBranchPolicyContract.IsKnownPolicy(entry.BaseBranchPolicy))
+            {
+                prompt = prompt.Replace(
+                    BaseBranchPolicyContract.DescribePolicy(entry.BaseBranchPolicy),
+                    BaseBranchPolicyContract.DescribeEffectiveBranch(entry.BaseBranchPolicy, decision.Branch),
+                    StringComparison.Ordinal);
+                prompt = prompt.Replace(
+                    $"--jq .baseRefName` must equal `{policyDefaultBranch}`",
+                    $"--jq .baseRefName` must equal `{decision.Branch}`",
+                    StringComparison.Ordinal);
+
+                // G471 (review repair): the generated `base-branch-check`
+                // command must validate the EFFECTIVE branch, not force the
+                // policy default. `automation base-branch-check` treats
+                // `--policy <p>` as an explicit override that ignores the
+                // configured implementation_base_branch, so forcing
+                // `--policy direct-main` on a `develop-v2` host compares
+                // `develop-v2` against `main` and falsely reports a mismatch.
+                // Pass the resolved effective branch unambiguously via
+                // `--implementation-base <branch>` (highest precedence) instead.
+                prompt = prompt.Replace(
+                    $"base-branch-check --repo <r> --pr <n> --policy {entry.BaseBranchPolicy} --actual-base",
+                    $"base-branch-check --repo <r> --pr <n> --implementation-base {decision.Branch} --actual-base",
+                    StringComparison.Ordinal);
+            }
+
             prompt +=
                 $"\n\n> Effective implementation / PR base branch: `{decision.Branch}` "
                 + $"(source: {decision.Source}). This overrides the `{policyDefaultBranch}` "

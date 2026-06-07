@@ -22,7 +22,7 @@ internal static class AutomationBaseBranchCheckCommand
     private const string StatusMismatch = "mismatch";
 
     private const string UsageLine =
-        "Usage: intent-cli automation base-branch-check --repo <owner/repo> --pr <n> --actual-base <branch> [--policy direct-main|main-ai] [--format markdown|json]";
+        "Usage: intent-cli automation base-branch-check --repo <owner/repo> --pr <n> --actual-base <branch> [--policy direct-main|main-ai] [--implementation-base <branch>] [--format markdown|json]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -75,11 +75,22 @@ internal static class AutomationBaseBranchCheckCommand
         // implementation branch and hides a real mismatch.
         var configuredImplementationBase = context.Config.Project.ImplementationBaseBranch;
         var policyDerivedBase = BaseBranchPolicyContract.ResolveExpectedBaseBranch(configuredPolicy);
-        var expectedBase = !string.IsNullOrWhiteSpace(request.PolicyOverride)
-            ? policyDerivedBase
-            : string.IsNullOrWhiteSpace(configuredImplementationBase)
+
+        // G471: an explicit `--implementation-base <branch>` names the resolved
+        // effective implementation / PR base branch and takes the HIGHEST
+        // precedence — above both `--policy` and the config fallback. The
+        // generated host-loop guidance passes this for non-default branches so
+        // a `develop-v2` host validates against `develop-v2` unambiguously,
+        // instead of forcing `--policy direct-main` (which would compare against
+        // `main` and falsely report a mismatch) and instead of depending on the
+        // host having `implementation_base_branch` in its own config.
+        var expectedBase = !string.IsNullOrWhiteSpace(request.ImplementationBaseOverride)
+            ? request.ImplementationBaseOverride!.Trim()
+            : !string.IsNullOrWhiteSpace(request.PolicyOverride)
                 ? policyDerivedBase
-                : configuredImplementationBase.Trim();
+                : string.IsNullOrWhiteSpace(configuredImplementationBase)
+                    ? policyDerivedBase
+                    : configuredImplementationBase.Trim();
         var actualBase = request.ActualBase.Trim();
         var matches = string.Equals(actualBase, expectedBase, StringComparison.Ordinal);
 
@@ -146,6 +157,7 @@ internal static class AutomationBaseBranchCheckCommand
         int? prNumber = null;
         string? actualBase = null;
         string? policyOverride = null;
+        string? implementationBaseOverride = null;
         var format = FormatMarkdown;
 
         for (var index = 0; index < args.Length; index++)
@@ -189,6 +201,14 @@ internal static class AutomationBaseBranchCheckCommand
                         error = $"--policy must be '{CliRuntimeContracts.DirectMainBaseBranchPolicy}' or '{CliRuntimeContracts.MainAiBaseBranchPolicy}' (got '{policyOverride}').";
                         return false;
                     }
+                    break;
+                case "--implementation-base":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--implementation-base requires a branch name (e.g. 'develop-v2').";
+                        return false;
+                    }
+                    implementationBaseOverride = args[++index].Trim();
                     break;
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
@@ -235,6 +255,7 @@ internal static class AutomationBaseBranchCheckCommand
             PrNumber = prNumber.Value,
             ActualBase = actualBase!,
             PolicyOverride = policyOverride,
+            ImplementationBaseOverride = implementationBaseOverride,
             Format = format
         };
         return true;
@@ -258,6 +279,8 @@ internal static class AutomationBaseBranchCheckCommand
         public required string Format { get; init; }
 
         public string? PolicyOverride { get; init; }
+
+        public string? ImplementationBaseOverride { get; init; }
     }
 
     internal sealed record BaseBranchCheckResult

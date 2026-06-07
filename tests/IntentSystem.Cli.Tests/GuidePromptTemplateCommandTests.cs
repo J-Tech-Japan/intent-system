@@ -85,6 +85,27 @@ public sealed class GuidePromptTemplateCommandTests
     [Theory]
     [InlineData("implementation-loop")]
     [InlineData("review-next-slice-loop")]
+    public void Execute_G471_LoopTemplate_TellsUserToSupplyImplementationBase(string kind)
+    {
+        // AC: prompt-template examples must tell users to supply the
+        // implementation/PR base branch when the implementation repo cannot read
+        // host metadata, so the effective branch is never silently `main`.
+        using var writer = new StringWriter();
+        var exitCode = GuidePromptTemplateCommand.Execute(
+            CreateContext(),
+            ["--kind", kind, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Contains("--implementation-base <branch>", root.GetProperty("prompt").GetString(), StringComparison.Ordinal);
+        Assert.Contains("--implementation-base <branch>", root.GetProperty("detailed_guide_command").GetString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("implementation-loop")]
+    [InlineData("review-next-slice-loop")]
     [InlineData("implementation-oneshot")]
     [InlineData("review-next-slice-oneshot")]
     [InlineData("init-interview")]
