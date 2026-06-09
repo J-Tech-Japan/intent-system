@@ -84,6 +84,43 @@ public sealed class GuideWorkflowTaskReviewNextSliceLoopCommandTests
     }
 
     [Fact]
+    public void Execute_GeneratedPrompt_IsSkillFree_AndDefersOnPendingCi()
+    {
+        // G472: the review/next-slice loop guidance must route closeout through
+        // installed intent-cli surfaces only — no historical local closeout
+        // skill dependency — and must treat CI-pending as a defer condition.
+        using var writer = new StringWriter();
+
+        var exitCode = GuideWorkflowTaskReviewNextSliceLoopCommand.Execute(
+            CreateContext(),
+            new[] { "--domain", "intent-cli", "--target-repo", "example/repo", "--agent", "claude", "--frequency", "20m", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString();
+        Assert.NotNull(prompt);
+
+        // No routine dependency on the historical local closeout skill: the
+        // obsolete name may only appear in a sentence that forbids it.
+        foreach (var line in prompt!.Split('\n'))
+        {
+            if (line.Contains("intent-review-closeout", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Contains("Do NOT invoke a local closeout skill", line, StringComparison.Ordinal);
+            }
+        }
+
+        // Closeout names the installed surfaces.
+        Assert.Contains("Closeout is skill-free", prompt!, StringComparison.Ordinal);
+        Assert.Contains("closeout pr", prompt!, StringComparison.Ordinal);
+
+        // CI-pending defers without a request-update finding or a stale lease.
+        Assert.Contains("CI-pending is a defer condition", prompt!, StringComparison.Ordinal);
+        Assert.Contains("review-release", prompt!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_HelpFlag_PrintsTaskUsage()
     {
         using var writer = new StringWriter();

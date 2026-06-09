@@ -145,6 +145,29 @@ procedure in
 do not fall back to raw `gh pr edit` label mutation for installed
 transitions, and do not infer command availability from `--help` text.
 
+**CI-pending is a defer condition, not a request-update finding.**
+At or immediately after candidate discovery, inspect the PR's required
+checks against its current head SHA
+(`gh pr view <n> --json headRefOid` + `gh pr checks <n>` or the
+`statusCheckRollup`). When required checks are still pending / queued /
+in-progress, DEFER the PR: do not acquire `intent-pr-reviewing` solely
+to wait on CI, and if `review-start` was already applied this wake,
+release it cleanly with `intent-cli automation pr-transition
+--transition review-release --write` rather than leaving a stale review
+lease. A pending check is never an implementation finding and MUST NOT
+become a `request-update` comment — the implementer cannot repair
+pending CI from the PR branch. Only a concluded FAILED required check is
+a request-update finding.
+
+**Closeout runs through installed intent-cli surfaces only.** Review,
+approval, merge verification, and closeout are driven by installed
+commands — `intent-cli review closeout-plan`, `intent-cli guide review`,
+`intent-cli automation pr-transition`, `gh pr view --json merged`, and
+`intent-cli closeout pr`. Local runtime skills (for example a historical
+`intent-review-closeout` skill) are convenience adapters, not canonical
+dependencies; routine host review and closeout MUST NOT require them and
+MUST NOT fail a wake just because such a skill is not installed.
+
 Choose ONE of the following review verdicts. Each has an explicit
 label transition. For host-owned review-start, request-update, and
 approved transitions, the normal installed path is

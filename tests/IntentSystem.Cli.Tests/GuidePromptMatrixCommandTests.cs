@@ -294,6 +294,54 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("closeout pr --pr <n> --repo J-Tech-Japan/intent-system", prompt, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_ModeHostLoopJson_PromptHasNoObsoleteCloseoutSkillReference()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // G472: generated host-loop guidance MUST NOT reinstate the historical
+        // local closeout skill as a routine dependency. The obsolete skill name
+        // may only appear in a sentence that explicitly forbids it.
+        foreach (var line in prompt.Split('\n'))
+        {
+            if (line.Contains("intent-review-closeout", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Contains("Do NOT invoke a local closeout skill", line, StringComparison.Ordinal);
+            }
+        }
+
+        // Closeout routes through installed surfaces only.
+        Assert.Contains("Closeout is skill-free", prompt, StringComparison.Ordinal);
+        Assert.Contains("review closeout-plan", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ModeHostLoopJson_PromptDefersOnPendingCi_WithoutRequestUpdate()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // G472: CI-pending is a defer condition, not a request-update finding,
+        // and must not leave a stale review lease.
+        Assert.Contains("CI-pending is a defer condition", prompt, StringComparison.Ordinal);
+        Assert.Contains("headRefOid", prompt, StringComparison.Ordinal);
+        Assert.Contains("review-release", prompt, StringComparison.Ordinal);
+        Assert.Contains("MUST NOT become a `request-update` comment", prompt, StringComparison.Ordinal);
+    }
+
     // ── child-oneshot tests ──────────────────────────────────────────────
 
     [Fact]
