@@ -49,6 +49,12 @@ internal static class IntentNextSliceCommand
     // current blockers / open questions. The candidate may still publish.
     internal const string WarningStaleClarificationMetadata = "stale-clarification-metadata";
 
+    // G474: a packet directory carries a stale human-only retirement marker
+    // (e.g. "STATUS: ABSORBED") but no machine-readable lifecycle sidecar. The
+    // packet is excluded from selection and the operator/agent is told to
+    // convert it via `intent-cli packet retire` instead of publishing it.
+    internal const string WarningLegacyRetirementMarker = "legacy-retirement-marker-needs-machine-metadata";
+
     private const string UsageLine =
         "Usage: intent-cli intent next-slice --dry-run [--domain <name>] [--target-repo <owner/repo>] [--runtime-creation-allowed] [--format json|markdown]";
 
@@ -297,6 +303,12 @@ internal static class IntentNextSliceCommand
         // the note added above informs the operator. This aligns
         // next-slice with host-review-diagnostics which never gates on the
         // execution_unit_regex.
+        // G474: packet directories with machine-readable retirement metadata
+        // (absorbed / superseded / retired) are design history, not next-slice
+        // candidates. Stale human-only markers (STATUS: ABSORBED) are excluded
+        // from selection too and surfaced as a repair recommendation.
+        var legacyRetirementMarkerUnits = new List<string>();
+
         if (Directory.Exists(packetRoot) && !bindingsFailedClosed)
         {
             // Pick the first queued execution_unit in queue-state order whose packet
@@ -331,6 +343,17 @@ internal static class IntentNextSliceCommand
                     continue;
                 }
 
+                if (PacketLifecycle.IsRetired(directory))
+                {
+                    continue;
+                }
+
+                if (PacketLifecycle.HasLegacyHumanMarker(directory))
+                {
+                    legacyRetirementMarkerUnits.Add(executionUnit);
+                    continue;
+                }
+
                 candidate = BuildCandidate(executionUnit, directory);
                 break;
             }
@@ -357,6 +380,21 @@ internal static class IntentNextSliceCommand
                         continue;
                     }
 
+                    if (PacketLifecycle.IsRetired(directory))
+                    {
+                        continue;
+                    }
+
+                    if (PacketLifecycle.HasLegacyHumanMarker(directory))
+                    {
+                        if (!legacyRetirementMarkerUnits.Contains(executionUnit))
+                        {
+                            legacyRetirementMarkerUnits.Add(executionUnit);
+                        }
+
+                        continue;
+                    }
+
                     candidate = BuildCandidate(executionUnit, directory);
                     break;
                 }
@@ -377,6 +415,22 @@ internal static class IntentNextSliceCommand
             // the body explicitly records no current blockers / questions, so
             // a complete candidate still proceeds to `issue-cut-ready`.
             warnings.Add(WarningStaleClarificationMetadata);
+        }
+
+        if (legacyRetirementMarkerUnits.Count > 0)
+        {
+            // G474: a packet was excluded from selection because it carries a
+            // stale human-only retirement marker. Recommend converting it to
+            // machine-readable lifecycle metadata instead of publishing.
+            warnings.Add(WarningLegacyRetirementMarker);
+            foreach (var unit in legacyRetirementMarkerUnits)
+            {
+                notes.Add(
+                    $"packet '{unit}' carries a stale human-only retirement marker (e.g. 'STATUS: ABSORBED') "
+                    + "and was excluded from next-slice selection; convert it to machine-readable metadata via "
+                    + $"`intent-cli packet retire --execution-unit {unit} --absorbed-by <unit> --reason \"<text>\" --write` "
+                    + "(do not publish an absorbed packet).");
+            }
         }
 
         return new IntentNextSliceResult

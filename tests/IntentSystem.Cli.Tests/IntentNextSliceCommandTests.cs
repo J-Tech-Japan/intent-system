@@ -196,6 +196,117 @@ public sealed class IntentNextSliceCommandTests
     }
 
     [Fact]
+    public void Execute_RetiredPacket_IsExcludedAndNextPacketSelected()
+    {
+        // G474: an absorbed packet directory left under .intent-cli/issues must
+        // not be returned as issue-cut-ready; the next non-retired packet is
+        // selected instead.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: absorbed\nabsorbed_by: G245\nretired_reason: \"fully absorbed into G245\"\n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "absorbed slice",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                },
+                {
+                  "execution_unit": "G245",
+                  "title": "next slice",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G245", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_LegacyHumanRetirementMarker_ExcludedWithRepairWarning()
+    {
+        // G474: a packet carrying only a stale human marker (STATUS: ABSORBED)
+        // is not blindly published; it is excluded from selection and a repair
+        // warning recommends converting it to machine-readable metadata.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            "STATUS: ABSORBED - Do NOT seed or publish.\n\n" + BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "absorbed slice",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.NotEqual("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("legacy-retirement-marker-needs-machine-metadata", warnings);
+        var notes = root.GetProperty("notes").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Contains(notes, note => note.Contains("packet retire", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_GivenMarkdownFormat_EmitsHumanReadableOutput()
     {
         // G328: pass --runtime-creation-allowed so the recommendation

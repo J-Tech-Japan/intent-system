@@ -365,6 +365,26 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("EVEN WHEN the operator names those files", prompt, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_HostLoopJson_RetiresAbsorbedPacketsViaIntentCli()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // G474: absorbed/superseded/retired packets are retired through
+        // intent-cli, not surfaced as an operator publish question.
+        Assert.Contains("Absorbed / superseded / retired packets (G474)", prompt, StringComparison.Ordinal);
+        Assert.Contains("intent-cli packet retire", prompt, StringComparison.Ordinal);
+        Assert.Contains("legacy-retirement-marker-needs-machine-metadata", prompt, StringComparison.Ordinal);
+        Assert.Contains("Never delete the packet directory", prompt, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("child-loop")]
     [InlineData("host-loop")]
