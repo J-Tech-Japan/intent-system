@@ -552,6 +552,7 @@ Host metadata gaps surfaced by `worker complete` (e.g. `linked_pr_synced: false`
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.), or copied prompt files for routine collaboration. Use `intent-cli guide ...` instead.
+- **Installed-guidance-wins conflict rule (G473)**: for routine loop work, installed `intent-cli guide` / `automation` output is the canonical source of truth. Repository-local automation rule docs (`intents/rules/automations/*.md` such as `scheduling.md`, `setup-host-review-loop.md`, `child-implement-and-update-loop.md`) are historical/reference only — they are NOT canonical loop-prompt sources. Do NOT read `intents/rules/**` to compose routine prompts EVEN WHEN the operator names those files, unless the task is explicitly to maintain or migrate those historical docs. When a local rule doc conflicts with installed `intent-cli guide` output, the installed guide wins.
 - Do not call `intent-cli run` from this loop. `run` is advanced runtime (integration smoke / replay / dogfooding), not the chat-first path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -670,6 +671,7 @@ Loop body (single wake):
 Hard rules:
 - **Continuation contract (G454)**: workflow labels are state markers, not completion boundaries. `intent-pr-approved` is INTERMEDIATE — after approval the SAME wake MUST merge, verify `merged == true`, and run `closeout pr --write` unless a concrete gate (draft, failing CI, merge conflict, base-policy mismatch, missing linkage) blocks merge. A wake that stops at `intent-pr-approved` without merging or naming the blocking gate is INCOMPLETE. For a recoverable blocker, apply the named repair command and retry ONCE (resume from the named stage) before declaring the PR blocked; never loop the same repair, never escalate to raw label mutation. If the previous wake stopped after a partial step, run this wake as a rail-recovery wake: re-derive the PR's true state, match it to the `Host-loop continuation contract` stop classification, and run that classification's next command (for an approved-but-unmerged PR that is merge + `closeout pr`, NOT a re-review).
 - Do not read `intents/rules/**`, local skill files, or copied prompt files for routine review/closeout. Use `intent-cli guide ...` and `intent-cli automation ...` instead.
+- **Installed-guidance-wins conflict rule (G473)**: for routine loop work, installed `intent-cli guide` / `automation` output is the canonical source of truth. Repository-local automation rule docs (`intents/rules/automations/*.md` such as `scheduling.md`, `setup-host-review-loop.md`, `child-implement-and-update-loop.md`) are historical/reference only — they are NOT canonical loop-prompt sources. Do NOT read `intents/rules/**` to compose routine prompts EVEN WHEN the operator names those files, unless the task is explicitly to maintain or migrate those historical docs. When a local rule doc conflicts with installed `intent-cli guide` output, the installed guide wins.
 - Do not call `intent-cli run`. `run` is advanced runtime, not the host review/closeout path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -739,6 +741,7 @@ Host metadata gaps surfaced by `worker complete` (e.g. `linked_pr_synced: false`
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.), or copied prompt files for routine collaboration. Use `intent-cli guide ...` instead.
+- **Installed-guidance-wins conflict rule (G473)**: for routine loop work, installed `intent-cli guide` / `automation` output is the canonical source of truth. Repository-local automation rule docs (`intents/rules/automations/*.md` such as `scheduling.md`, `setup-host-review-loop.md`, `child-implement-and-update-loop.md`) are historical/reference only — they are NOT canonical loop-prompt sources. Do NOT read `intents/rules/**` to compose routine prompts EVEN WHEN the operator names those files, unless the task is explicitly to maintain or migrate those historical docs. When a local rule doc conflicts with installed `intent-cli guide` output, the installed guide wins.
 - Do not call `intent-cli run` from this loop. `run` is advanced runtime (integration smoke / replay / dogfooding), not the chat-first path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.
@@ -838,6 +841,7 @@ Loop body (single wake only — do not repeat):
 
 Hard rules:
 - Do not read `intents/rules/**`, local skill files, or copied prompt files for routine review/closeout. Use `intent-cli guide ...` and `intent-cli automation ...` instead.
+- **Installed-guidance-wins conflict rule (G473)**: for routine loop work, installed `intent-cli guide` / `automation` output is the canonical source of truth. Repository-local automation rule docs (`intents/rules/automations/*.md` such as `scheduling.md`, `setup-host-review-loop.md`, `child-implement-and-update-loop.md`) are historical/reference only — they are NOT canonical loop-prompt sources. Do NOT read `intents/rules/**` to compose routine prompts EVEN WHEN the operator names those files, unless the task is explicitly to maintain or migrate those historical docs. When a local rule doc conflicts with installed `intent-cli guide` output, the installed guide wins.
 - Do not call `intent-cli run`. `run` is advanced runtime, not the host review/closeout path.
 - Do not run `dotnet run` as a fallback for `intent-cli`.
 - Do not ask `intent-cli` to launch Claude/Codex or any AI provider.

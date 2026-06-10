@@ -342,6 +342,60 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("MUST NOT become a `request-update` comment", prompt, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("child-loop")]
+    [InlineData("host-loop")]
+    public void Execute_LoopJson_InstalledGuidanceWinsOverLocalRuleDocs(string mode)
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", mode, "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // G473: installed intent-cli guidance is canonical; local automation rule
+        // docs are historical/reference and must not be read to compose routine
+        // prompts even when the operator names them.
+        Assert.Contains("Installed-guidance-wins conflict rule", prompt, StringComparison.Ordinal);
+        Assert.Contains("intents/rules/automations/*.md", prompt, StringComparison.Ordinal);
+        Assert.Contains("the installed guide wins", prompt, StringComparison.Ordinal);
+        Assert.Contains("EVEN WHEN the operator names those files", prompt, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("child-loop")]
+    [InlineData("host-loop")]
+    public void Execute_LoopJson_DoesNotRecommendObsoleteDefaults(string mode)
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", mode, "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var prompt = document.RootElement.GetProperty("prompt").GetString()!;
+
+        // G473: generated loop prompts must not reintroduce obsolete concepts as
+        // canonical defaults. The historical local rule docs surfaced these; the
+        // installed guide must not. (Lines that explicitly forbid an obsolete name
+        // are allowed; bare default recommendations are not.)
+        Assert.DoesNotContain("intent-next-slice skill", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("/schedule every 5 minutes", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("/loop 3m", prompt, StringComparison.OrdinalIgnoreCase);
+        // The obsolete closeout skill may only appear inside a forbidding sentence.
+        foreach (var line in prompt.Split('\n'))
+        {
+            if (line.Contains("intent-review-closeout", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Contains("Do NOT invoke a local closeout skill", line, StringComparison.Ordinal);
+            }
+        }
+    }
+
     // ── child-oneshot tests ──────────────────────────────────────────────
 
     [Fact]
