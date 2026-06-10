@@ -61,6 +61,21 @@ public sealed class GuideRulesCommandTests
         Assert.Contains("intent-cli review closeout-plan", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli closeout pr", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli guide review", output, StringComparison.Ordinal);
+
+        // G472: the review-closeout topic must no longer point at the historical
+        // local `intent-review-closeout` skill as a source reference. It may only
+        // appear in a sentence that explicitly marks it as a non-canonical adapter.
+        foreach (var line in output.Split('\n'))
+        {
+            if (line.Contains("intent-review-closeout", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Contains("convenience adapters", line, StringComparison.Ordinal);
+            }
+        }
+        Assert.DoesNotContain("intents/rules/skills/intent-review-closeout.md", output, StringComparison.Ordinal);
+
+        // CI-pending deferral guidance is recorded as a closeout rule.
+        Assert.Contains("CI-pending is a defer condition", output, StringComparison.Ordinal);
     }
 
     [Fact]

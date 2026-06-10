@@ -109,12 +109,13 @@ internal static class GuideRulesCommand
                 "Stage 1 is review/closeout, Stage 2 is next-slice; both run in one wake but never inline next-slice work into review.",
                 "Closeout (queue completed → submodule sync → linked issue close → continuation classification) runs only after review acceptance.",
                 "`intent-target` PR transitions for review-start / request-update / approved go through `intent-cli automation pr-transition`.",
+                "Closeout is driven by installed intent-cli surfaces only — `review closeout-plan`, `guide review`, `automation pr-transition`, merge verification, and `closeout pr`. Local runtime skills (e.g. a historical `intent-review-closeout` skill) are convenience adapters, not canonical dependencies, and routine host review/closeout MUST NOT require them.",
+                "CI-pending is a defer condition, not a request-update finding: do not convert pending required checks into a request-update comment and do not leave a stale `intent-pr-reviewing` lease while waiting on CI.",
                 "Submodule pointer updates remain a manual step in the current closeout slice."
             },
             SourceReferences = new[]
             {
                 "intents/rules/automations/host-review-loop.md",
-                "intents/rules/skills/intent-review-closeout.md",
                 "docs/automation-templates/host-review-loop.md"
             },
             InstalledCommandHints = new[]
