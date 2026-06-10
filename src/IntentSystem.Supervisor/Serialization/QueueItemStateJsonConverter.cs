@@ -11,11 +11,14 @@ namespace IntentSystem.Supervisor.Serialization;
 /// </summary>
 /// <remarks>
 /// G178: parent-host queue-state may persist <c>state: "pending"</c> as a legacy
-/// synonym for canonical <see cref="QueueItemState.Queued"/>. Tolerate it at the
-/// deserialize boundary so submit/seed/numbering pipelines do not crash on a
-/// row that was emitted by an older or external producer. Any unknown value
-/// outside the recognized canonical set + alias still surfaces a clear
-/// <see cref="JsonException"/>.
+/// synonym for canonical <see cref="QueueItemState.Queued"/>.
+/// G472: parent-host queue-state may persist <c>state: "issue-published"</c>
+/// for a unit whose child issue has been cut and is now in flight; this is a
+/// read-only compatibility alias for canonical <see cref="QueueItemState.Active"/>.
+/// Tolerate these aliases at the deserialize boundary so submit/seed/numbering
+/// pipelines do not crash on a row that was emitted by an older or external
+/// producer. Any unknown value outside the recognized canonical set + aliases
+/// still surfaces a clear <see cref="JsonException"/>.
 /// </remarks>
 internal sealed class QueueItemStateJsonConverter : JsonConverter<QueueItemState>
 {
@@ -36,6 +39,11 @@ internal sealed class QueueItemStateJsonConverter : JsonConverter<QueueItemState
         if (string.Equals(raw, "pending", StringComparison.OrdinalIgnoreCase))
         {
             return QueueItemState.Queued;
+        }
+
+        if (string.Equals(raw, "issue-published", StringComparison.OrdinalIgnoreCase))
+        {
+            return QueueItemState.Active;
         }
 
         return raw switch

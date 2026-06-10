@@ -382,6 +382,49 @@ public sealed class QueueStateSerializerTests
     }
 
     [Fact]
+    public void Deserialize_GivenIssuePublishedState_TolerantlyMapsToActive()
+    {
+        // G472: issue-published was emitted by host metadata after a child issue
+        // was cut. It is an in-flight state, so deserialize it as canonical
+        // Active instead of failing the entire host review / closeout surface.
+        var json = """
+        {
+          "schema_version": "1",
+          "updated_at": "2026-06-10T03:04:00Z",
+          "items": [
+            {
+              "execution_unit": "G472",
+              "title": "Review closeout bootstrap compatibility",
+              "state": "issue-published",
+              "dependencies": [],
+              "blocked_by": [],
+              "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+              "packet_paths": {
+                "implementation": ".intent-cli/issues/G472/implementation.md",
+                "review_context": ".intent-cli/issues/G472/review-context.md",
+                "yaml": ".intent-cli/issues/G472/packet.yaml"
+              },
+              "linked_issue": {
+                "repo": "J-Tech-Japan/intent-system",
+                "number": 1045,
+                "url": "https://github.com/J-Tech-Japan/intent-system/issues/1045"
+              },
+              "linked_pr": null,
+              "worker_role": "coder",
+              "review_role": "reviewer",
+              "priority": "high"
+            }
+          ]
+        }
+        """;
+
+        var queueState = QueueStateSerializer.Deserialize(json);
+
+        var item = Assert.Single(queueState.Items);
+        Assert.Equal(QueueItemState.Active, item.State);
+    }
+
+    [Fact]
     public void Serialize_GivenQueuedState_EmitsCanonicalQueuedNotPending()
     {
         // G178: the legacy `pending` alias is read-only tolerance. On the way out
