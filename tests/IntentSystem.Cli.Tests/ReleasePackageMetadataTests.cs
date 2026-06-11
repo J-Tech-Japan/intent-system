@@ -60,6 +60,31 @@ public sealed class ReleasePackageMetadataTests
         Assert.Contains("--version", devRef, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ReleaseNotes_ForNextVersion_ExistInEnAndJa_WithInstallVersionAndGate()
+    {
+        // G475: every release-to-be-cut must ship paste-ready release notes
+        // (en + ja) so the operator has a release body and a readiness gate.
+        // Derived from nextVersion so this guard stays correct across bumps.
+        var policy = VersionPolicy.TryReadFromRepo(FindRepoRoot());
+        Assert.NotNull(policy);
+        var version = policy!.NextVersion;
+        var fileName = $"release-notes-v{version}.md";
+
+        foreach (var lang in new[] { "en", "ja" })
+        {
+            var path = Path.Combine(FindRepoRoot(), "docs", lang, fileName);
+            Assert.True(File.Exists(path), $"missing release notes: docs/{lang}/{fileName}");
+
+            var notes = File.ReadAllText(path);
+            // The notes must name the package + the exact release version so an
+            // install/upgrade copy-paste lands the intended version.
+            Assert.Contains($"JTechJapan.IntentSystem.Cli --version {version}", notes, StringComparison.Ordinal);
+            // The notes must point at the matching GitHub Release tag (language-neutral).
+            Assert.Contains($"releases/tag/v{version}", notes, StringComparison.Ordinal);
+        }
+    }
+
     private static (int Major, int Minor, int Patch) ParseVersion(string version)
     {
         var core = version.Split('-', 2)[0];

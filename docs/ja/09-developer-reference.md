@@ -171,22 +171,27 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 
 **`v0.3.6` は publish 済み**（GitHub Release + NuGet, 2026-06-05）で、バージョンポリシーは
 `0.3.7` 開発ラインにバンプされました（G470）。リポジトリは現在 in-development の **`0.3.7`**
-`nextVersion` 上にあります。次のリリースは準備完了後に `v0.3.7` タグ付けで publish され、
-このバンプはリリースを cut しません。
+`nextVersion` 上にあり、G475（本パケット）が `v0.3.7` リリースを準備します。次のリリースは
+[リリース準備ゲート](release-notes-v0.3.7.md#リリース準備ゲート-g475)を通過後に `v0.3.7`
+タグ付けで publish されます。準備はリリースを cut しません。完全な changelog と operator
+チェックリスト: [release-notes-v0.3.7.md](release-notes-v0.3.7.md)。
 
-**`v0.3.6` で出荷済み（`v0.3.5` 以降の変更）:**
+**`v0.3.7` で出荷予定（`v0.3.6` 以降の変更）— automation 安全性リリース:**
 
-- **design-side プロセスファミリー** — 名前付きで discoverable な5つの design-thread
-  surface: `intent-cli improve`（G456）・`intent-cli grill`（G463）・
-  `intent-cli stack`（G464）・`intent-cli next`（G465）・`intent-cli inspect`（G466）。
-  各々に top-level alias と `guide <name>` 形式があります。
-- **guide カタログ / role 分類**（G467）— `intent-cli guide commands list` が role
-  ベースのカタログ（design / host-review / child-implementation /
-  recovery-diagnostics / advanced-developer）になり、`intent-cli guide help` が各
-  role の surface を説明します。
-- **version-source 整合**（G468）— ローカル pack/install・NuGet パッケージ・
-  self-contained リリース artifact が package version・git short SHA・最新 G-unit を
-  stale な csproj リテラルではなく `eng/version.json` と git から導出します。
+- **非デフォルト実装 base branch**（G471）— loop-prompt 本文と review ガイダンスが非デフォルトの
+  実装 base branch を first-class として扱い、child loop は host メタデータを読まずに正しい PR
+  base を選択し、review は正しい base の PR を誤判定しません。
+- **`issue-published` queue 互換**（G472）— review-closeout parsing が `issue-published`
+  state の queue-state 行を許容し closeout 読み取りを中断しません。host review loop ガイダンスは
+  skill-free で CI-pending を defer 条件として扱います。
+- **installed guide を local rule docs より優先**（G473）— loop prompt 生成時、インストール済み
+  `intent-cli guide` の出力がローカル `intents/rules/automations/*.md` より正統です。hard rule は
+  operator が名指ししてもローカル rule docs を読むことを禁じます。
+- **absorbed パケット retirement の安全性**（G474）— machine-readable なパケット lifecycle
+  retirement（`lifecycle.yaml` サイドカー + `intent-cli packet retire`）が absorbed/superseded/
+  retired パケットを `intent next-slice` の issue-cut-ready 選択から除外し、古い human
+  `STATUS: ABSORBED` marker を修復対象として flag するため、absorbed パケットが重複 issue として
+  再 cut されることはありません。
 
 **リリース準備の検証（次の `v0.3.7` タグ付け前に実行）:**
 
