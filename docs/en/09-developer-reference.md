@@ -181,27 +181,31 @@ emit `0.3.7` (which would collide with the stable release version).
 
 **`v0.3.6` shipped** (GitHub Release + NuGet, 2026-06-05) and the version policy
 was bumped to the `0.3.7` development line (G470). The repository is now on the
-in-development **`0.3.7`** `nextVersion`; the next release is published by tagging
-`v0.3.7` once it is prepared — this bump does not cut a release.
+in-development **`0.3.7`** `nextVersion`; G475 (this packet) prepares the
+`v0.3.7` release — the next release is published by tagging `v0.3.7` once the
+[release-readiness gate](release-notes-v0.3.7.md#release-readiness-gate-g475)
+passes. Preparing the release does not cut it. Full changelog and operator
+checklist: [release-notes-v0.3.7.md](release-notes-v0.3.7.md).
 
-**Shipped in `v0.3.6` (changes since `v0.3.5`):**
+**To ship in `v0.3.7` (changes since `v0.3.6`) — an automation-safety release:**
 
-- **Design-side process family** — five named, discoverable design-thread
-  surfaces: `intent-cli improve` (G456, retrospective realignment),
-  `intent-cli grill` (G463, persistent open-question interview),
-  `intent-cli stack` (G464, packet backlog + first issue),
-  `intent-cli next` (G465, "what should I do next?" advisor), and
-  `intent-cli inspect` (G466, evidence-backed observation). Each has a
-  top-level alias and a `guide <name>` form.
-- **Guide catalog / role classification** (G467) — `intent-cli guide commands
-  list` is now a role-based catalog (design / host-review /
-  child-implementation / recovery-diagnostics / advanced-developer), and
-  `intent-cli guide help` explains which surfaces serve each role, including the
-  loop-prompt generators.
-- **Version-source alignment** (G468) — local pack/install, NuGet packages, and
-  self-contained release artifacts derive package version, git short SHA, and
-  latest G-unit from `eng/version.json` and git instead of a stale csproj
-  literal, so `intent-cli --version` is coherent across build paths.
+- **Non-default implementation base branches** (G471) — loop-prompt prose and
+  review guidance treat a non-default implementation base branch as a
+  first-class case, so child loops pick the correct PR base without reading host
+  metadata and review no longer mis-flags a correctly-based PR.
+- **`issue-published` queue compatibility** (G472) — review-closeout parsing
+  tolerates queue-state rows in the `issue-published` state instead of aborting
+  the closeout read; host review loop guidance is skill-free and treats
+  CI-pending as a defer condition.
+- **Installed guide over local rule docs** (G473) — when generating loop
+  prompts, the installed `intent-cli guide` output is canonical over local
+  `intents/rules/automations/*.md`; the hard rule forbids reading the local rule
+  docs even when an operator names them.
+- **Absorbed packet retirement safety** (G474) — machine-readable packet
+  lifecycle retirement (`lifecycle.yaml` sidecar + `intent-cli packet retire`)
+  excludes absorbed/superseded/retired packets from `intent next-slice`
+  issue-cut-ready selection and flags stale human `STATUS: ABSORBED` markers for
+  repair, so an absorbed packet is never re-cut as a duplicate issue.
 
 **Release-readiness verification (run before tagging the next `v0.3.7`):**
 
