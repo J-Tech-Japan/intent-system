@@ -75,6 +75,20 @@ you whether a child-loop-owned repair exists. Host-owned categories surface as
 > but the host loop reports no host drift, re-run `pr-comment-preflight` and check those
 > two path lists to disambiguate the real edit target rather than looping silently.
 
+> **Missing `linked_pr` closeout is host-owned deterministic recovery (G477).** When
+> `intent-cli closeout pr --pr <n>` cannot match a queue item only because `linked_pr`
+> was never projected into host durable state, it auto-recovers from GitHub facts: a
+> merged PR whose closing references identify exactly one queue item (by `linked_issue`)
+> is completed without a manual `--issue <n>` rerun. The result reports
+> `recoverable_missing_linked_pr: true`, `inferred_issue`, and
+> `recovery_action: recover-linked-pr-from-github-closing-reference`, and the write
+> repairs the missing `linked_pr`. This is host-owned projection recovery, not an
+> operator policy question — do not treat the manual `--issue` rerun as required tribal
+> knowledge. Ambiguous evidence (closing references match more than one queue item)
+> fails closed with a `linkage-ambiguous` error; only then rerun with the correct
+> `--issue <n>`. Child `--github-only` loops never write `linked_pr`; this recovery
+> belongs to the host closeout surface.
+
 ### Repeated-stall recovery (G408)
 
 When an automation loop hits the same blocker on the same target for **two or more

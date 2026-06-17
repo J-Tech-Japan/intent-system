@@ -11,11 +11,28 @@ public sealed class CloseoutPrCommandTests : IDisposable
     public CloseoutPrCommandTests()
     {
         CloseoutPrCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 4, 12, 0, 0, TimeSpan.Zero);
+        // G477: default the closing-issues fetcher to a deterministic empty
+        // result so the missing-linked_pr auto-recovery path never shells out
+        // to live GitHub during unit tests. Recovery tests override this.
+        CloseoutPrCommand.PrClosingIssuesFetcherFactory = () => new FakeClosingIssuesFetcher(Array.Empty<int>());
     }
 
     public void Dispose()
     {
         CloseoutPrCommand.UtcNowFactory = null;
+        CloseoutPrCommand.PrClosingIssuesFetcherFactory = null;
+    }
+
+    private sealed class FakeClosingIssuesFetcher : IPrClosingIssuesFetcher
+    {
+        private readonly IReadOnlyList<int> _closingIssues;
+
+        public FakeClosingIssuesFetcher(IReadOnlyList<int> closingIssues)
+        {
+            _closingIssues = closingIssues;
+        }
+
+        public IReadOnlyList<int> Fetch(string repo, int prNumber) => _closingIssues;
     }
 
     // --- G324: durable writes use current RunEvent schema + auto-commit safe ---
@@ -646,6 +663,154 @@ public sealed class CloseoutPrCommandTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("--pr-merged must be 'true' or 'false'", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    // --- G477: auto-fallback closeout when linked_pr missing but deterministic ---
+
+    [Fact]
+    public void Execute_G477_MissingLinkedPrButDeterministicClosingIssue_RecoversWithoutIssueFlag()
+    {
+        // Queue item G412 has linked_issue #820 and null linked_pr; GitHub says
+        // merged PR #821 closes #820. `closeout pr --pr 821 --write` must succeed
+        // without the operator passing --issue 820.
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G412", "review", linkedIssueNumber: 820));
+        CloseoutPrCommand.PrClosingIssuesFetcherFactory = () => new FakeClosingIssuesFetcher(new[] { 820 });
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "821", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutPrResult>(writer.ToString())!;
+        Assert.Equal("G412", result.ExecutionUnit);
+        Assert.Equal("completed", result.QueueStateAfterState);
+        Assert.True(result.RecoverableMissingLinkedPr);
+        Assert.Equal(820, result.InferredIssue);
+        Assert.Equal("github-closing-reference", result.RecoverySource);
+        Assert.Equal("recover-linked-pr-from-github-closing-reference", result.RecoveryAction);
+
+        // The host-owned linked_pr projection is repaired on write.
+        var persisted = File.ReadAllText(workspace.Context.GetQueueStatePath());
+        Assert.Contains("https://github.com/J-Tech-Japan/intent-system/pull/821", persisted, StringComparison.Ordinal);
+        Assert.Contains("\"state\": \"completed\"", persisted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G477_MissingLinkedPrDeterministicDryRun_ReportsRecoverableFields()
+    {
+        // Dry-run must surface recoverable_missing_linked_pr, the inferred issue,
+        // and the recovery action without mutating state.
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G412", "review", linkedIssueNumber: 820));
+        var before = File.ReadAllText(workspace.Context.GetQueueStatePath());
+        CloseoutPrCommand.PrClosingIssuesFetcherFactory = () => new FakeClosingIssuesFetcher(new[] { 820 });
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "821", "--dry-run", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutPrResult>(writer.ToString())!;
+        Assert.True(result.RecoverableMissingLinkedPr);
+        Assert.Equal(820, result.InferredIssue);
+        Assert.Equal("recover-linked-pr-from-github-closing-reference", result.RecoveryAction);
+        // No mutation on dry-run.
+        Assert.Equal(before, File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        Assert.False(File.Exists(workspace.Context.GetRunLogPath()));
+    }
+
+    [Fact]
+    public void Execute_G477_MissingLinkedPrAmbiguousClosingIssues_FailsClosed()
+    {
+        // Two queue items link to two issues the PR closes — ambiguous. Must fail
+        // closed with a structured reason, not guess.
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildTwoItemsWithLinkedIssues(
+            ("G412", "review", 820),
+            ("G413", "review", 822)));
+        CloseoutPrCommand.PrClosingIssuesFetcherFactory = () => new FakeClosingIssuesFetcher(new[] { 820, 822 });
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "821", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutPrResult>(writer.ToString())!;
+        Assert.Contains("linkage-ambiguous", result.Error!, StringComparison.Ordinal);
+        Assert.Contains("refusing to guess", result.Error!, StringComparison.Ordinal);
+        // No mutation: both items stay un-completed.
+        var persisted = File.ReadAllText(workspace.Context.GetQueueStatePath());
+        Assert.DoesNotContain("\"state\": \"completed\"", persisted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_G477_MissingLinkedPrNoClosingIssueMatch_StillHintsRetryWithIssue()
+    {
+        // GitHub returns a closing issue, but no queue item links to it. The
+        // command must fall through to the existing not-found failure (no guess).
+        using var workspace = new CloseoutPrWorkspace();
+        workspace.WriteQueueState(BuildQueueStateWithLinkedIssue("G412", "review", linkedIssueNumber: 820));
+        CloseoutPrCommand.PrClosingIssuesFetcherFactory = () => new FakeClosingIssuesFetcher(new[] { 999 });
+
+        using var writer = new StringWriter();
+        var exitCode = CloseoutPrCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "821", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        var result = JsonSerializer.Deserialize<CloseoutPrResult>(writer.ToString())!;
+        Assert.Contains("no queue item found with linked_pr matching #821", result.Error!, StringComparison.Ordinal);
+        Assert.False(result.RecoverableMissingLinkedPr);
+    }
+
+    private static string BuildTwoItemsWithLinkedIssues(
+        (string ExecutionUnit, string State, int LinkedIssueNumber) first,
+        (string ExecutionUnit, string State, int LinkedIssueNumber) second)
+    {
+        return $$"""
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "{{first.ExecutionUnit}}",
+                  "title": "first",
+                  "state": "{{first.State}}",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {"repo": "J-Tech-Japan/intent-system", "number": {{first.LinkedIssueNumber}}},
+                  "linked_pr": null,
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                },
+                {
+                  "execution_unit": "{{second.ExecutionUnit}}",
+                  "title": "second",
+                  "state": "{{second.State}}",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "linked_issue": {"repo": "J-Tech-Japan/intent-system", "number": {{second.LinkedIssueNumber}}},
+                  "linked_pr": null,
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """;
     }
 
     private static string BuildQueueStateWithLinkedIssue(string executionUnit, string state, int linkedIssueNumber)

@@ -30,10 +30,21 @@ internal static class CloseoutPrCommand
     private const string UsageLine =
         "Usage: intent-cli closeout pr --pr <n> --repo <owner/repo> [--issue <n>] [--domain <name>] [--pr-merged true|false] [--dry-run|--write] [--format json|markdown]";
 
+    private const string RecoveryActionRecoverLinkedPr = "recover-linked-pr-from-github-closing-reference";
+
     /// <summary>
     /// Test seam — replaces the default UTC timestamp source for runs events.
     /// </summary>
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
+
+    /// <summary>
+    /// G477: test seam for the PR closing-issues fetcher used by the
+    /// missing-<c>linked_pr</c> auto-recovery path. Production leaves this null
+    /// and falls back to <see cref="GhCliPrClosingIssuesFetcher"/> (which
+    /// fail-softs to an empty list on any <c>gh</c> error). Tests inject a
+    /// deterministic fake so closeout never shells out to live GitHub.
+    /// </summary>
+    public static Func<IPrClosingIssuesFetcher>? PrClosingIssuesFetcherFactory { get; set; }
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -140,11 +151,59 @@ internal static class CloseoutPrCommand
         var prToken = pr!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, repo!, prToken));
 
-        // Fallback: when linked_pr is absent, resolve via --issue (linked_issue.Number).
+        // Fallback A (operator-supplied): when linked_pr is absent, resolve via
+        // --issue (linked_issue.Number). Deterministic operator input wins.
         if (matchedItem is null && linkedIssueNumber.HasValue)
         {
             matchedItem = queueState.Items.FirstOrDefault(item =>
                 item.LinkedIssue?.Number == linkedIssueNumber.Value);
+        }
+
+        // G477 Fallback B (automatic, deterministic): when linked_pr is missing
+        // and the operator did not (or could not) disambiguate via --issue,
+        // recover from GitHub closing-issue facts. `linked_pr` is a host-owned
+        // projection that can be absent even when the GitHub issue/PR
+        // relationship is deterministic; a merged PR whose closing references
+        // identify exactly ONE queue item (by linked_issue) is safe to recover
+        // without forcing the operator to rerun with --issue <n>. Ambiguous
+        // evidence still fails closed (no guessing). The fetcher fail-softs to
+        // an empty list on any gh error, which routes to the existing
+        // not-found failure path.
+        var recoverableMissingLinkedPr = false;
+        int? inferredIssue = null;
+        string? recoverySource = null;
+        string? recoveryAction = null;
+        if (matchedItem is null)
+        {
+            var fetcher = PrClosingIssuesFetcherFactory?.Invoke() ?? new GhCliPrClosingIssuesFetcher();
+            var closingIssues = fetcher.Fetch(repo!, pr!.Value);
+            var reconstruction = GitHubLinkageReconstructor.Reconstruct(closingIssues, queueState, repo!);
+            switch (reconstruction.Kind)
+            {
+                case LinkageReconstructionKind.Deterministic:
+                    var candidate = reconstruction.Candidates[0];
+                    matchedItem = queueState.Items.First(item =>
+                        string.Equals(item.ExecutionUnit, candidate.ExecutionUnit, StringComparison.Ordinal));
+                    recoverableMissingLinkedPr = true;
+                    inferredIssue = candidate.LinkedIssueNumber;
+                    recoverySource = LinkageReconstructionConstants.RecoverySourceGitHubClosingReference;
+                    recoveryAction = RecoveryActionRecoverLinkedPr;
+                    break;
+
+                case LinkageReconstructionKind.Ambiguous:
+                    var candidateUnits = string.Join(", ", reconstruction.Candidates.Select(c =>
+                        $"{c.ExecutionUnit} (issue #{c.LinkedIssueNumber})"));
+                    EmitErrorResult(writer, format, NewFailureResult(domain, repo!, pr.Value, queueStatePath, runsLogPath, write,
+                        $"linkage-ambiguous: PR #{pr} closing-issues match {reconstruction.Candidates.Count} queue items "
+                        + $"({candidateUnits}); refusing to guess. Re-run `closeout pr --pr {pr} --issue <n>` with the correct linked issue.",
+                        stateLayout: stateLayout));
+                    return 1;
+
+                case LinkageReconstructionKind.NoClosingReferences:
+                case LinkageReconstructionKind.NoMatch:
+                default:
+                    break;
+            }
         }
 
         if (matchedItem is null)
@@ -184,11 +243,19 @@ internal static class CloseoutPrCommand
             BuildRunsEvent(executionUnit, "closeout-recorded", repo!, pr.Value, nowTs)
         };
 
+        // G477: when linkage was recovered from GitHub facts, repair the
+        // host-owned `linked_pr` projection while completing the item so the
+        // queue-state stops being deterministically incomplete. Stored as the
+        // canonical PR URL, matching the recovered-linkage payload shape.
+        var recoveredLinkedPr = recoverableMissingLinkedPr
+            ? $"https://github.com/{repo}/pull/{pr.Value}"
+            : null;
+
         if (write && !alreadyCompleted)
         {
             var updatedItems = queueState.Items
                 .Select(item => item.ExecutionUnit == matchedItem.ExecutionUnit
-                    ? UpdateItemState(item, QueueItemState.Completed)
+                    ? UpdateItemState(item, QueueItemState.Completed, recoveredLinkedPr)
                     : item)
                 .ToArray();
             var updatedState = new QueueState
@@ -257,7 +324,11 @@ internal static class CloseoutPrCommand
             ContinuationHint = continuation,
             NextSteps = nextSteps,
             Error = null,
-            StateLayout = stateLayout
+            StateLayout = stateLayout,
+            RecoverableMissingLinkedPr = recoverableMissingLinkedPr,
+            InferredIssue = inferredIssue,
+            RecoverySource = recoverySource,
+            RecoveryAction = recoveryAction
         };
 
         EmitResult(writer, result, format);
@@ -285,7 +356,7 @@ internal static class CloseoutPrCommand
         return linkedPr!.EndsWith($"/{prToken}", StringComparison.Ordinal);
     }
 
-    private static QueueItem UpdateItemState(QueueItem item, QueueItemState state)
+    private static QueueItem UpdateItemState(QueueItem item, QueueItemState state, string? recoveredLinkedPr = null)
     {
         return new QueueItem
         {
@@ -297,7 +368,9 @@ internal static class CloseoutPrCommand
             ClarificationReturnPath = item.ClarificationReturnPath,
             PacketPaths = item.PacketPaths,
             LinkedIssue = item.LinkedIssue,
-            LinkedPr = item.LinkedPr,
+            // G477: recover the missing linked_pr projection when GitHub facts
+            // deterministically identified this item; otherwise preserve it.
+            LinkedPr = recoveredLinkedPr ?? item.LinkedPr,
             WorkerRole = item.WorkerRole,
             ReviewRole = item.ReviewRole,
             Priority = item.Priority
@@ -419,6 +492,16 @@ internal static class CloseoutPrCommand
         writer.WriteLine($"- after: {result.QueueStateAfterState}");
         writer.WriteLine($"- already completed: {(result.QueueAlreadyCompleted ? "yes" : "no")}");
         writer.WriteLine();
+
+        if (result.RecoverableMissingLinkedPr)
+        {
+            writer.WriteLine("## Recovered linkage (G477)");
+            writer.WriteLine("- recoverable missing linked_pr: yes");
+            writer.WriteLine($"- inferred issue: #{result.InferredIssue}");
+            writer.WriteLine($"- recovery source: {result.RecoverySource}");
+            writer.WriteLine($"- recovery action: {result.RecoveryAction}");
+            writer.WriteLine();
+        }
 
         writer.WriteLine("## Runs events");
         if (result.RunsEvents.Count == 0)
@@ -619,6 +702,7 @@ internal static class CloseoutPrCommand
         writer.WriteLine("Records the queue/runs closeout for an accepted child PR. --dry-run plans only; --write applies queue + runs updates. Submodule sync remains a manual next step.");
         writer.WriteLine("  Supported states: queued, active, review, fixing → completed.");
         writer.WriteLine("  --issue <n>      Optional: fallback linked-issue number for queue items where linked_pr is absent.");
+        writer.WriteLine("  G477: when linked_pr is missing, closeout auto-recovers from GitHub closing-issue facts — a merged PR closing exactly one issue that maps to a single queue item completes without --issue. Ambiguous evidence fails closed (recovery_action / inferred_issue surfaced in the result).");
         writer.WriteLine("  --pr-merged true|false  Optional (G297): explicit GitHub merge state. When 'false', closeout refuses the operation so a draft / unmerged PR cannot record closeout; capture the value via 'gh pr view <n> --json merged --jq .merged'.");
     }
 
@@ -689,4 +773,37 @@ internal sealed record CloseoutPrResult
     /// </summary>
     [JsonPropertyName("state_layout")]
     public string? StateLayout { get; init; }
+
+    /// <summary>
+    /// G477: true when this closeout matched its queue item by recovering a
+    /// missing <c>linked_pr</c> from deterministic GitHub closing-issue facts
+    /// (the merged PR closed exactly one issue mapping to a single queue item)
+    /// rather than by a direct <c>linked_pr</c> match or an operator-supplied
+    /// <c>--issue</c>. Lets the host loop converge automatically instead of
+    /// treating the missing projection as an operator policy question.
+    /// </summary>
+    [JsonPropertyName("recoverable_missing_linked_pr")]
+    public bool RecoverableMissingLinkedPr { get; init; }
+
+    /// <summary>
+    /// G477: the linked-issue number inferred from GitHub closing references
+    /// when <see cref="RecoverableMissingLinkedPr"/> is true; null otherwise.
+    /// </summary>
+    [JsonPropertyName("inferred_issue")]
+    public int? InferredIssue { get; init; }
+
+    /// <summary>
+    /// G477: provenance of the recovery (<c>github-closing-reference</c>) when
+    /// linkage was recovered; null otherwise.
+    /// </summary>
+    [JsonPropertyName("recovery_source")]
+    public string? RecoverySource { get; init; }
+
+    /// <summary>
+    /// G477: the safe recovery/fallback action taken
+    /// (<c>recover-linked-pr-from-github-closing-reference</c>) when linkage was
+    /// recovered; null otherwise.
+    /// </summary>
+    [JsonPropertyName("recovery_action")]
+    public string? RecoveryAction { get; init; }
 }

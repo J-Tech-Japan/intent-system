@@ -75,6 +75,19 @@ child-loop 所有の修復が存在するかを示す。host 所有のカテゴ�
 > と言うのに host ループが host drift なしと報告する場合は、黙ってループせず
 > `pr-comment-preflight` を再実行し、この 2 つの path リストで実際の編集対象を切り分ける。
 
+> **`linked_pr` 欠落の closeout は host 所有の deterministic recovery（G477）。**
+> `intent-cli closeout pr --pr <n>` が、`linked_pr` が host durable state に projection
+> されていないことだけを理由に queue item を照合できない場合、GitHub facts から自動回復する:
+> merged PR の closing references が（`linked_issue` 経由で）ちょうど1つの queue item を
+> 特定できれば、手動の `--issue <n>` 再実行なしで completed になる。結果は
+> `recoverable_missing_linked_pr: true` / `inferred_issue` /
+> `recovery_action: recover-linked-pr-from-github-closing-reference` を報告し、write 時に
+> 欠落していた `linked_pr` を修復する。これは host 所有の projection recovery であり、
+> operator の policy 判断ではない — 手動 `--issue` 再実行を必須の tribal knowledge として
+> 扱わないこと。曖昧な証拠（closing references が複数の queue item に一致）は
+> `linkage-ambiguous` エラーで fail closed する。その場合のみ正しい `--issue <n>` で再実行する。
+> child `--github-only` ループは `linked_pr` を書かない。この recovery は host closeout surface の責務。
+
 ### 繰り返しストール回復（G408）
 
 同じターゲットで同じブロッカーに **2 回以上連続** してヒットした場合は、
