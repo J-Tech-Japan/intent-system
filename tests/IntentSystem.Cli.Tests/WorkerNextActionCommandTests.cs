@@ -308,6 +308,43 @@ public sealed class WorkerNextActionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G476_PrCommentFixWithPacketEvidenceCitation_StaysPrCommentFix()
+    {
+        // A request-update PR whose only comment cites a host packet path as
+        // evidence but asks to edit an implementation script. Before G476 the
+        // raw `.intent-cli/` substring downgraded this valid pr-comment-fix to a
+        // host-artifact wait. Now preflight classifies by edit target, stays
+        // repair-required/actionable:true, and next-action keeps pr-comment-fix.
+        using var workspace = new WorkerNextActionWorkspace();
+        WorkerNextActionCommand.CandidateListerFactory = () => new FakeLister
+        {
+            Prs = new[]
+            {
+                BuildPr(514, "Packet-evidence repair",
+                    "https://github.com/J-Tech-Japan/intent-system/pull/514",
+                    createdAt: "2026-05-23T00:00:00Z",
+                    labels: new[] { "intent-target", "intent-pr-request-update" }),
+            },
+        };
+        WorkerNextActionCommand.CommentsLookupFactory = () => new FakeCommentsLookup
+        {
+            Result = FakeCommentsLookup.PacketEvidenceWithImplTarget(),
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerNextActionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--github-only", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerNextActionResult>(writer.ToString())!;
+        Assert.Equal(WorkerNextActionConstants.Actions.PrCommentFix, result.Action);
+        Assert.Equal(514, result.Number);
+        Assert.Equal(WorkerNextActionConstants.SourceClassifications.RepairRequired, result.SourceClassification);
+    }
+
+    [Fact]
     public void Execute_G392_PreflightConsultLookupFailure_KeepsPrCommentFix()
     {
         // Fail-open: a transient comment-fetch failure must NOT abort the
@@ -1405,6 +1442,32 @@ public sealed class WorkerNextActionCommandTests : IDisposable
                                 Id = "C_host",
                                 Author = "human-reviewer",
                                 Body = "Please update intents/G392.md to reflect the new contract.",
+                            },
+                        },
+                    },
+                },
+            };
+
+        // G476: a comment that cites a host packet path as evidence but asks to
+        // edit implementation files. Preflight must stay repair-required/
+        // actionable:true so next-action does NOT downgrade pr-comment-fix.
+        public static GitHubPrCommentsLookupResult PacketEvidenceWithImplTarget() =>
+            new()
+            {
+                ReviewThreads = new[]
+                {
+                    new GitHubPrReviewThread
+                    {
+                        Id = "RT_evidence",
+                        IsResolved = false,
+                        Comments = new[]
+                        {
+                            new GitHubPrReviewThreadComment
+                            {
+                                Id = "C_evidence",
+                                Author = "human-reviewer",
+                                Body = "According to `.intent-cli/issues/E038/packet.yaml`, update " +
+                                       "`scripts/reset-dev-db.ps1` to honor the new flag.",
                             },
                         },
                     },

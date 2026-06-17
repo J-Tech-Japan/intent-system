@@ -325,21 +325,33 @@ internal static class WorkerPrCommentPreflightAnalyzer
             }
         }
 
-        // Step 8.5 (G353): host-artifact-repair-required — when EVERY
-        // actionable comment targets a host metadata path (.intent-cli/**
-        // or intents/**), the child worker must not attempt to repair them.
-        // The host agent must commit/push the artifact fix and re-run review
-        // readiness. If even one comment targets implementation code the
-        // standard repair-required path takes over so the child can still
-        // address it.
+        // Step 8.5 (G353 / G476): host-artifact-repair-required — when EVERY
+        // actionable comment's REQUESTED EDIT TARGET is a host metadata path
+        // (.intent-cli/** or intents/**), the child worker must not attempt to
+        // repair them. The host agent must commit/push the artifact fix and
+        // re-run review readiness. If even one comment asks to edit
+        // implementation code — even while citing a host packet path as
+        // evidence (G316 packet-aware review) — the standard repair-required
+        // path takes over so the child can still address it. The decision is
+        // made by edit target, not by incidental host-path text, so an evidence
+        // citation no longer deadlocks an implementation repair (G476).
         if (actionableComments.Count > 0
-            && actionableComments.All(c => CommentTargetsHostMetadata(c.Excerpt)))
+            && actionableComments.All(c => c.TargetsHostMetadata))
         {
+            var hostEditTargets = actionableComments
+                .SelectMany(c => c.RequestedEditPaths)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
             var reasons = new List<string>
             {
                 $"all {actionableComments.Count} actionable comment(s) target host metadata paths " +
                 "(.intent-cli/** or intents/**); child worker must not edit host artifacts"
             };
+            if (hostEditTargets.Length > 0)
+            {
+                reasons.Add(
+                    "requested host edit target(s): " + string.Join(", ", hostEditTargets));
+            }
             return Build(
                 pr,
                 repo,
@@ -424,12 +436,16 @@ internal static class WorkerPrCommentPreflightAnalyzer
                 continue;
             }
 
+            var targets = ClassifyCommentTargets(firstActionable.Body);
             entries.Add(new WorkerPrCommentPreflightActionableComment
             {
                 Id = string.IsNullOrEmpty(thread.Id) ? firstActionable.Id : thread.Id,
                 Author = firstActionable.Author,
                 Kind = WorkerPrCommentPreflightConstants.CommentKinds.ReviewThread,
-                Excerpt = TruncateExcerpt(firstActionable.Body)
+                Excerpt = TruncateExcerpt(firstActionable.Body),
+                RequestedEditPaths = targets.RequestedEditPaths,
+                HostEvidencePaths = targets.HostEvidencePaths,
+                TargetsHostMetadata = targets.TargetsHostMetadata
             });
         }
 
@@ -448,12 +464,16 @@ internal static class WorkerPrCommentPreflightAnalyzer
                 continue;
             }
 
+            var targets = ClassifyCommentTargets(review.Body);
             entries.Add(new WorkerPrCommentPreflightActionableComment
             {
                 Id = review.Id,
                 Author = review.Author,
                 Kind = WorkerPrCommentPreflightConstants.CommentKinds.Review,
-                Excerpt = TruncateExcerpt(review.Body)
+                Excerpt = TruncateExcerpt(review.Body),
+                RequestedEditPaths = targets.RequestedEditPaths,
+                HostEvidencePaths = targets.HostEvidencePaths,
+                TargetsHostMetadata = targets.TargetsHostMetadata
             });
         }
 
@@ -468,12 +488,16 @@ internal static class WorkerPrCommentPreflightAnalyzer
                 continue;
             }
 
+            var targets = ClassifyCommentTargets(comment.Body);
             entries.Add(new WorkerPrCommentPreflightActionableComment
             {
                 Id = comment.Id,
                 Author = comment.Author,
                 Kind = WorkerPrCommentPreflightConstants.CommentKinds.IssueComment,
-                Excerpt = TruncateExcerpt(comment.Body)
+                Excerpt = TruncateExcerpt(comment.Body),
+                RequestedEditPaths = targets.RequestedEditPaths,
+                HostEvidencePaths = targets.HostEvidencePaths,
+                TargetsHostMetadata = targets.TargetsHostMetadata
             });
         }
 
@@ -508,21 +532,134 @@ internal static class WorkerPrCommentPreflightAnalyzer
     }
 
     /// <summary>
-    /// G353: Returns true when a comment excerpt explicitly references a host
-    /// metadata path (<c>.intent-cli/</c> or <c>intents/</c>), indicating the
-    /// reviewer is asking to repair a host artifact rather than an
-    /// implementation file. The check is ordinal because path separators are
-    /// case-sensitive on Linux file systems and these path prefixes are always
-    /// lowercase in the intent-system layout.
+    /// G476: detected path sets for a single comment, computed over the FULL
+    /// comment body (never the truncated excerpt).
     /// </summary>
-    private static bool CommentTargetsHostMetadata(string excerpt)
+    internal readonly record struct CommentTargetClassification(
+        IReadOnlyList<string> RequestedEditPaths,
+        IReadOnlyList<string> HostEvidencePaths,
+        bool TargetsHostMetadata);
+
+    // Path-like token: one or more slash-separated segments of path characters,
+    // e.g. `.intent-cli/issues/E038/packet.yaml`, `scripts/reset-dev-db.ps1`,
+    // `intents/intent-cli/clarifications/open.md`. Backticks delimit (they are
+    // excluded from the segment character class) but are not required.
+    private static readonly System.Text.RegularExpressions.Regex PathTokenRegex =
+        new(
+            @"(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Evidence cues: when a host metadata path is introduced by one of these
+    // phrases it is being cited as packet/review evidence (G316), not as an
+    // edit target. Matched against the lowercased text immediately preceding
+    // the path occurrence.
+    private static readonly string[] EvidenceCues =
     {
-        if (string.IsNullOrEmpty(excerpt))
+        "according to",
+        "as per",
+        "as documented in",
+        "as described in",
+        "as noted in",
+        "as shown in",
+        "as referenced in",
+        "documented in",
+        "referenced in",
+        "cited in",
+        "based on",
+        "per ",
+        "see ",
+    };
+
+    private const int EvidenceWindow = 48;
+
+    /// <summary>
+    /// G353 / G476: classify the paths a comment references into requested edit
+    /// targets vs host-metadata evidence citations, then decide whether the
+    /// comment is a host-artifact edit request.
+    ///
+    /// A path is host metadata when (after trimming a leading <c>./</c>) it
+    /// starts with <c>.intent-cli/</c> or <c>intents/</c>. Implementation paths
+    /// are always treated as requested edit targets — a reviewer naming an
+    /// implementation file is asking for it to change. A host path is treated
+    /// as an edit target unless every occurrence is immediately preceded by an
+    /// evidence cue, in which case it is recorded as evidence only.
+    ///
+    /// <c>TargetsHostMetadata</c> is true only when the comment names at least
+    /// one edit target and every edit target is a host metadata path. A comment
+    /// that cites a host path purely as evidence (no edit target, or an
+    /// implementation edit target alongside) is NOT a host-artifact request, so
+    /// the child can still repair it (G476). Ordinal comparison is used because
+    /// these path prefixes are always lowercase in the intent-system layout and
+    /// path separators are case-sensitive on Linux file systems.
+    /// </summary>
+    internal static CommentTargetClassification ClassifyCommentTargets(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
         {
-            return false;
+            return new CommentTargetClassification(
+                Array.Empty<string>(), Array.Empty<string>(), false);
         }
-        return excerpt.Contains(".intent-cli/", StringComparison.Ordinal)
-            || excerpt.Contains("intents/", StringComparison.Ordinal);
+
+        var requestedEditPaths = new List<string>();
+        var hostEvidencePaths = new List<string>();
+        var seenEdit = new HashSet<string>(StringComparer.Ordinal);
+        var seenEvidence = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (System.Text.RegularExpressions.Match match in PathTokenRegex.Matches(body))
+        {
+            var token = match.Value;
+            var normalized = token.StartsWith("./", StringComparison.Ordinal)
+                ? token.Substring(2)
+                : token;
+
+            var isHost = normalized.StartsWith(".intent-cli/", StringComparison.Ordinal)
+                || normalized.StartsWith("intents/", StringComparison.Ordinal);
+
+            if (!isHost)
+            {
+                // Implementation path → always a requested edit target.
+                if (seenEdit.Add(normalized))
+                {
+                    requestedEditPaths.Add(normalized);
+                }
+                continue;
+            }
+
+            // Host path: edit target unless introduced by an evidence cue.
+            var windowStart = Math.Max(0, match.Index - EvidenceWindow);
+            var preceding = body.Substring(windowStart, match.Index - windowStart)
+                .ToLowerInvariant();
+            var isEvidence = EvidenceCues.Any(cue => preceding.Contains(cue, StringComparison.Ordinal));
+
+            if (isEvidence)
+            {
+                if (seenEvidence.Add(normalized))
+                {
+                    hostEvidencePaths.Add(normalized);
+                }
+            }
+            else if (seenEdit.Add(normalized))
+            {
+                requestedEditPaths.Add(normalized);
+            }
+        }
+
+        // A path recorded as an edit target in one occurrence wins over an
+        // evidence-only occurrence elsewhere: drop it from the evidence list.
+        if (hostEvidencePaths.Count > 0 && seenEdit.Count > 0)
+        {
+            hostEvidencePaths.RemoveAll(p => seenEdit.Contains(p));
+        }
+
+        var targetsHostMetadata = requestedEditPaths.Count > 0
+            && requestedEditPaths.All(p =>
+                p.StartsWith(".intent-cli/", StringComparison.Ordinal)
+                || p.StartsWith("intents/", StringComparison.Ordinal));
+
+        return new CommentTargetClassification(
+            requestedEditPaths,
+            hostEvidencePaths,
+            targetsHostMetadata);
     }
 
     private static string TruncateExcerpt(string? body)
