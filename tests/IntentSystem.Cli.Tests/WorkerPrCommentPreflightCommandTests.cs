@@ -1335,6 +1335,129 @@ public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
             result.Classification);
     }
 
+    // -----------------------------------------------------------------------
+    // G476: distinguish host-metadata evidence citations from edit targets.
+    // A request-update comment that cites a packet path (.intent-cli/**) as
+    // evidence but asks to edit implementation files must NOT be misclassified
+    // as host-artifact-repair-required.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_G476_PacketEvidenceCitationWithImplEditTarget_ClassifiesAsRepairRequired()
+    {
+        // The deadlock report: comment cites `.intent-cli/issues/E038/packet.yaml`
+        // as evidence (G316 packet-aware review) but the requested change is in
+        // implementation scripts. This must be repair-required/actionable so the
+        // child loop can claim and fix it — not host-artifact-repair-required.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        SetTargetedPrAndIssue(prNumber: 640);
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            reviewThreads: new[]
+            {
+                BuildThread(id: "t1", isResolved: false, comments: new[]
+                {
+                    BuildThreadComment(id: "c1", author: "tomohisa",
+                        body: "According to `.intent-cli/issues/E038/packet.yaml`, update " +
+                              "`scripts/reset-dev-db.ps1` and `scripts/start-dev.ps1` to honor the new flag.")
+                })
+            }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "640", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.RepairRequired, result.Classification);
+        Assert.True(result.Actionable, "packet evidence citation must not deadlock an implementation repair");
+        Assert.Equal(WorkerPrCommentPreflightConstants.RecommendedActions.RepairPr, result.RecommendedAction);
+
+        // The result must explain the decision: the packet path is evidence, the
+        // scripts are the requested edit targets.
+        var comment = Assert.Single(result.ActionableComments);
+        Assert.False(comment.TargetsHostMetadata);
+        Assert.Contains("scripts/reset-dev-db.ps1", comment.RequestedEditPaths);
+        Assert.Contains("scripts/start-dev.ps1", comment.RequestedEditPaths);
+        Assert.Contains(".intent-cli/issues/E038/packet.yaml", comment.HostEvidencePaths);
+        Assert.DoesNotContain(".intent-cli/issues/E038/packet.yaml", comment.RequestedEditPaths);
+    }
+
+    [Fact]
+    public void Execute_G476_TrueHostArtifactEditRequest_StillHostArtifactRepairRequired()
+    {
+        // G353 must be preserved: a comment that genuinely asks to edit a host
+        // artifact (no implementation edit target) stays host-artifact-repair-required.
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        SetTargetedPrAndIssue(prNumber: 641);
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            reviewThreads: new[]
+            {
+                BuildThread(id: "t1", isResolved: false, comments: new[]
+                {
+                    BuildThreadComment(id: "c1", author: "tomohisa",
+                        body: "Please update `.intent-cli/issues/G347/github-body.md` with the Related Links section.")
+                })
+            }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "641", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.HostArtifactRepairRequired, result.Classification);
+        Assert.False(result.Actionable);
+        Assert.Equal(WorkerPrCommentPreflightConstants.RecommendedActions.EscalateToHostRepair, result.RecommendedAction);
+
+        var comment = Assert.Single(result.ActionableComments);
+        Assert.True(comment.TargetsHostMetadata);
+        Assert.Contains(".intent-cli/issues/G347/github-body.md", comment.RequestedEditPaths);
+        // The reason surfaces the host edit target for the host repair agent.
+        Assert.Contains(result.Reasons, r => r.Contains(".intent-cli/issues/G347/github-body.md", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_G476_PacketEvidenceOnlyNoImplTarget_RemainsActionable()
+    {
+        // A comment that cites a packet path purely as evidence and uses repair
+        // language but names no implementation path must not become
+        // host-artifact-repair-required solely because of the `.intent-cli/`
+        // text — it remains actionable (repair-required) since repair language
+        // is present (G476 acceptance).
+        using var workspace = new WorkerPrCommentPreflightWorkspace();
+        SetTargetedPrAndIssue(prNumber: 642);
+        WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new FakeCommentsLookup(BuildComments(
+            reviewThreads: new[]
+            {
+                BuildThread(id: "t1", isResolved: false, comments: new[]
+                {
+                    BuildThreadComment(id: "c1", author: "tomohisa",
+                        body: "According to `.intent-cli/issues/E038/packet.yaml`, the reset flow is " +
+                              "missing the new validation. Please add it before merge.")
+                })
+            }));
+
+        using var writer = new StringWriter();
+        var exitCode = WorkerPrCommentPreflightCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "642", "--format", "json" },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<WorkerPrCommentPreflightResult>(writer.ToString())!;
+        Assert.Equal(WorkerPrCommentPreflightConstants.Classifications.RepairRequired, result.Classification);
+        Assert.True(result.Actionable);
+
+        var comment = Assert.Single(result.ActionableComments);
+        Assert.False(comment.TargetsHostMetadata);
+        Assert.Empty(comment.RequestedEditPaths);
+        Assert.Contains(".intent-cli/issues/E038/packet.yaml", comment.HostEvidencePaths);
+    }
+
     private static void SetTargetedPrAndIssue(int prNumber)
     {
         WorkerPrCommentPreflightCommand.PrLookupFactory = () => new FakePrLookup(BuildPr(

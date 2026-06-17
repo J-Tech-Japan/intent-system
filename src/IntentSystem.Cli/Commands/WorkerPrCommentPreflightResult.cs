@@ -83,6 +83,16 @@ internal sealed record WorkerPrCommentPreflightResult
 /// locked in <see cref="WorkerPrCommentPreflightConstants.CommentKinds"/>.
 /// <c>excerpt</c> is the first 120 characters of the comment body so AI
 /// consumers can disambiguate threads without fetching the full body.
+///
+/// G476: classification now runs over the FULL comment body, not the truncated
+/// excerpt, so a request-update comment that cites a host-metadata packet path
+/// as evidence (e.g. <c>.intent-cli/issues/E038/packet.yaml</c>) while asking
+/// to edit implementation files is not misread as a host-artifact edit request.
+/// The detected path sets are surfaced so the child loop can explain the
+/// decision without reading host metadata: <c>requested_edit_paths</c> are the
+/// paths the comment asks to change; <c>host_evidence_paths</c> are host
+/// metadata paths cited only as evidence; <c>targets_host_metadata</c> is true
+/// only when every requested edit target is a host metadata path.
 /// </summary>
 internal sealed record WorkerPrCommentPreflightActionableComment
 {
@@ -97,6 +107,31 @@ internal sealed record WorkerPrCommentPreflightActionableComment
 
     [JsonPropertyName("excerpt")]
     public required string Excerpt { get; init; }
+
+    /// <summary>
+    /// G476: paths the comment asks to edit (implementation files plus any host
+    /// metadata path used as the object of an edit verb). Empty when no path is
+    /// named as an edit target.
+    /// </summary>
+    [JsonPropertyName("requested_edit_paths")]
+    public IReadOnlyList<string> RequestedEditPaths { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// G476: host metadata paths (<c>.intent-cli/**</c> or <c>intents/**</c>)
+    /// the comment cites as evidence rather than as an edit target — e.g. a
+    /// G316-style packet citation. These do NOT make the comment a host-artifact
+    /// repair request on their own.
+    /// </summary>
+    [JsonPropertyName("host_evidence_paths")]
+    public IReadOnlyList<string> HostEvidencePaths { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// G476: true only when the comment names at least one edit target and every
+    /// requested edit target is a host metadata path. This is the per-comment
+    /// signal the host-artifact-repair-required gate (step 8.5) aggregates.
+    /// </summary>
+    [JsonPropertyName("targets_host_metadata")]
+    public bool TargetsHostMetadata { get; init; }
 }
 
 /// <summary>

@@ -63,6 +63,18 @@ intent-cli automation doctor --format json
 child-loop 所有の修復が存在するかを示す。host 所有のカテゴリは
 `host-artifact-repair-required` として現れ、host ループへ戻す。
 
+> **packet evidence の引用は host 編集要求ではない（G476）。** レビューコメントは、
+> 実装ファイルの変更を求めつつ `.intent-cli/issues/<unit>/packet.yaml` のような
+> host metadata path を packet-aware review の根拠（G316）として引用することがある。
+> `pr-comment-preflight` は付随的な `.intent-cli/` や `intents/` の言及ではなく
+> **要求された編集対象（requested edit target）** で分類する: すべての編集対象が
+> host metadata path のときだけ `host-artifact-repair-required` になる。結果は
+> `actionable_comments[].requested_edit_paths` と
+> `actionable_comments[].host_evidence_paths` を公開するので、host metadata を読まず
+> にどの path が判定を駆動したか確認できる。child が `host-artifact-repair-required`
+> と言うのに host ループが host drift なしと報告する場合は、黙ってループせず
+> `pr-comment-preflight` を再実行し、この 2 つの path リストで実際の編集対象を切り分ける。
+
 ### 繰り返しストール回復（G408）
 
 同じターゲットで同じブロッカーに **2 回以上連続** してヒットした場合は、

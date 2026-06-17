@@ -63,6 +63,18 @@ Reading the result: `actionable` / `safe_repair_available` / `repair_category` t
 you whether a child-loop-owned repair exists. Host-owned categories surface as
 `host-artifact-repair-required` and return to the host loop.
 
+> **Packet evidence citations are not host edit requests (G476).** A review
+> comment may cite a host metadata path such as `.intent-cli/issues/<unit>/packet.yaml`
+> as packet-aware review evidence (G316) while asking you to change implementation
+> files. `pr-comment-preflight` classifies by the **requested edit target**, not by
+> any incidental `.intent-cli/` or `intents/` mention: a comment is only
+> `host-artifact-repair-required` when every requested edit target is a host metadata
+> path. The result exposes `actionable_comments[].requested_edit_paths` and
+> `actionable_comments[].host_evidence_paths` so you can see which paths drove the
+> decision without reading host metadata. If the child says `host-artifact-repair-required`
+> but the host loop reports no host drift, re-run `pr-comment-preflight` and check those
+> two path lists to disambiguate the real edit target rather than looping silently.
+
 ### Repeated-stall recovery (G408)
 
 When an automation loop hits the same blocker on the same target for **two or more
