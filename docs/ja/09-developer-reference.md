@@ -141,74 +141,72 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 
 ```json
 {
-  "stableVersion": "0.3.6",
-  "nextVersion": "0.3.7"
-}
-```
-
-| ステージ | バージョン形式 | 導出方法 |
-| --- | --- | --- |
-| ローカル pack / install | `0.3.7-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
-| Main CI preview | `0.3.7-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
-| リリース候補（任意） | `0.3.7-rc.N` | タグ `v0.3.7-rc.N` がリリースワークフローをトリガー |
-| 安定版リリース | `0.3.7` | タグ `v0.3.7` がリリースワークフローをトリガー（`-p:Version=<tag>` が優先） |
-| リリース後の main ビルド | `0.3.8-preview.<run>.<attempt>` | `nextVersion` を `0.3.8` にバンプ後 |
-
-**`v0.3.7` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
-
-```json
-{
   "stableVersion": "0.3.7",
   "nextVersion": "0.3.8"
 }
 ```
 
+| ステージ | バージョン形式 | 導出方法 |
+| --- | --- | --- |
+| ローカル pack / install | `0.3.8-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
+| Main CI preview | `0.3.8-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
+| リリース候補（任意） | `0.3.8-rc.N` | タグ `v0.3.8-rc.N` がリリースワークフローをトリガー |
+| 安定版リリース | `0.3.8` | タグ `v0.3.8` がリリースワークフローをトリガー（`-p:Version=<tag>` が優先） |
+| リリース後の main ビルド | `0.3.9-preview.<run>.<attempt>` | `nextVersion` を `0.3.9` にバンプ後 |
+
+**`v0.3.8` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
+
+```json
+{
+  "stableVersion": "0.3.8",
+  "nextVersion": "0.3.9"
+}
+```
+
 これにより次の main ブランチ CI ビルド（およびローカル pack）が
-`0.3.8-preview.<run>.<attempt>` / `0.3.8-<sha>-<G-unit>` を生成し、`0.3.7`（安定版
+`0.3.9-preview.<run>.<attempt>` / `0.3.9-<sha>-<G-unit>` を生成し、`0.3.8`（安定版
 リリースバージョンと衝突）の出力が継続されなくなります。
 
-### 次リリース準備（v0.3.7）
+### 次リリース準備（v0.3.8）
 
-**`v0.3.6` は publish 済み**（GitHub Release + NuGet, 2026-06-05）で、バージョンポリシーは
-`0.3.7` 開発ラインにバンプされました（G470）。リポジトリは現在 in-development の **`0.3.7`**
-`nextVersion` 上にあり、G475（本パケット）が `v0.3.7` リリースを準備します。次のリリースは
-[リリース準備ゲート](release-notes-v0.3.7.md#リリース準備ゲート-g475)を通過後に `v0.3.7`
+**`v0.3.7` は publish 済み**（GitHub Release + NuGet）で、バージョンポリシーは
+`0.3.8` 開発ラインにバンプされました。リポジトリは現在 in-development の **`0.3.8`**
+`nextVersion` 上にあり、G478（本パケット）が `v0.3.8` リリースを準備します。次のリリースは
+[リリース準備ゲート](release-notes-v0.3.8.md#リリース準備ゲート-g478)を通過後に `v0.3.8`
 タグ付けで publish されます。準備はリリースを cut しません。完全な changelog と operator
-チェックリスト: [release-notes-v0.3.7.md](release-notes-v0.3.7.md)。
+チェックリスト: [release-notes-v0.3.8.md](release-notes-v0.3.8.md)。
 
-**`v0.3.7` で出荷予定（`v0.3.6` 以降の変更）— automation 安全性リリース:**
+**`v0.3.8` で出荷予定（`v0.3.7` 以降の変更）— loop 信頼性リリース:**
 
-- **非デフォルト実装 base branch**（G471）— loop-prompt 本文と review ガイダンスが非デフォルトの
-  実装 base branch を first-class として扱い、child loop は host メタデータを読まずに正しい PR
-  base を選択し、review は正しい base の PR を誤判定しません。
-- **`issue-published` queue 互換**（G472）— review-closeout parsing が `issue-published`
-  state の queue-state 行を許容し closeout 読み取りを中断しません。host review loop ガイダンスは
-  skill-free で CI-pending を defer 条件として扱います。
-- **installed guide を local rule docs より優先**（G473）— loop prompt 生成時、インストール済み
-  `intent-cli guide` の出力がローカル `intents/rules/automations/*.md` より正統です。hard rule は
-  operator が名指ししてもローカル rule docs を読むことを禁じます。
-- **absorbed パケット retirement の安全性**（G474）— machine-readable なパケット lifecycle
-  retirement（`lifecycle.yaml` サイドカー + `intent-cli packet retire`）が absorbed/superseded/
-  retired パケットを `intent next-slice` の issue-cut-ready 選択から除外し、古い human
-  `STATUS: ABSORBED` marker を修復対象として flag するため、absorbed パケットが重複 issue として
-  再 cut されることはありません。
+- **packet evidence の引用が child PR 修復をデッドロックさせない**（G476）—
+  `worker pr-comment-preflight` が review コメントを、付随的な `.intent-cli/` / `intents/`
+  の言及ではなく要求された編集対象で分類するため、packet path を根拠として引用しつつ実装ファイルの
+  変更を求めるコメントは host-artifact デッドロックではなく `repair-required` / actionable に
+  なります。結果は `requested_edit_paths` と `host_evidence_paths` を公開し、`worker next-action`
+  も同じ分類器を参照します。
+- **`linked_pr` 欠落時の deterministic な closeout 回復**（G477）—
+  `closeout pr --pr <n>` が、merged PR の GitHub closing references が `linked_issue` 経由で
+  ちょうど 1 つの queue item を特定できる場合に自動回復し、手動 `--issue <n>` 再実行なしで完了し
+  欠落していた `linked_pr` projection を修復します。曖昧な証拠は `linkage-ambiguous` エラーで
+  fail closed し、結果は `recoverable_missing_linked_pr` / `inferred_issue` / `recovery_action`
+  を surface します。
 
-**リリース準備の検証（次の `v0.3.7` タグ付け前に実行）:**
+**リリース準備の検証（次の `v0.3.8` タグ付け前に実行）:**
 
 ```bash
-cat eng/version.json   # stableVersion 0.3.6（公開済み）, nextVersion 0.3.7（リリース対象）
+cat eng/version.json   # stableVersion 0.3.7（公開済み）, nextVersion 0.3.8（リリース対象）
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待形: intent-cli 0.3.7-<sha>-G47x （stale なリテラルではない）
+#   期待形: intent-cli 0.3.8-<sha>-G47x （stale なリテラルではない）
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.7.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.8.nupkg
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-公式リリースは `v0.3.7` タグの GitHub Release publish で cut され、リリースワークフローが
-`-p:Version=0.3.7` を渡します（ローカルデフォルトより優先）。publish 後、上記のリリース後
-`eng/version.json` バンプ（`stableVersion → 0.3.7`, `nextVersion → 0.3.8`）を適用します。
+公式リリースは `v0.3.8` タグの GitHub Release publish で cut され、リリースワークフローが
+`-p:Version=0.3.8` を渡します（ローカルデフォルトより優先）。publish 後、上記のリリース後
+`eng/version.json` バンプ（`stableVersion → 0.3.8`, `nextVersion → 0.3.9`）を適用します。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 

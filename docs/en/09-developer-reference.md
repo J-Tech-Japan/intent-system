@@ -151,86 +151,83 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.3.6",
-  "nextVersion": "0.3.7"
-}
-```
-
-| Stage | Version form | How it is derived |
-| --- | --- | --- |
-| Local pack / install | `0.3.7-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.3.7-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.3.7-rc.N` | Tag `v0.3.7-rc.N` triggers release workflow |
-| Stable release | `0.3.7` | Tag `v0.3.7` triggers release workflow (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.3.8-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.8` |
-
-**After releasing `v0.3.7`**, bump both fields in `eng/version.json`:
-
-```json
-{
   "stableVersion": "0.3.7",
   "nextVersion": "0.3.8"
 }
 ```
 
+| Stage | Version form | How it is derived |
+| --- | --- | --- |
+| Local pack / install | `0.3.8-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `0.3.8-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.3.8-rc.N` | Tag `v0.3.8-rc.N` triggers release workflow |
+| Stable release | `0.3.8` | Tag `v0.3.8` triggers release workflow (`-p:Version=<tag>` wins) |
+| Post-release main builds | `0.3.9-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.9` |
+
+**After releasing `v0.3.8`**, bump both fields in `eng/version.json`:
+
+```json
+{
+  "stableVersion": "0.3.8",
+  "nextVersion": "0.3.9"
+}
+```
+
 This ensures the next main-branch CI build (and local pack) immediately produces
-`0.3.8-preview.<run>.<attempt>` / `0.3.8-<sha>-<G-unit>` rather than continuing to
-emit `0.3.7` (which would collide with the stable release version).
+`0.3.9-preview.<run>.<attempt>` / `0.3.9-<sha>-<G-unit>` rather than continuing to
+emit `0.3.8` (which would collide with the stable release version).
 
-### Next release readiness (v0.3.7)
+### Next release readiness (v0.3.8)
 
-**`v0.3.6` shipped** (GitHub Release + NuGet, 2026-06-05) and the version policy
-was bumped to the `0.3.7` development line (G470). The repository is now on the
-in-development **`0.3.7`** `nextVersion`; G475 (this packet) prepares the
-`v0.3.7` release — the next release is published by tagging `v0.3.7` once the
-[release-readiness gate](release-notes-v0.3.7.md#release-readiness-gate-g475)
+**`v0.3.7` shipped** (GitHub Release + NuGet) and the version policy was bumped
+to the `0.3.8` development line. The repository is now on the in-development
+**`0.3.8`** `nextVersion`; G478 (this packet) prepares the `v0.3.8` release — the
+next release is published by tagging `v0.3.8` once the
+[release-readiness gate](release-notes-v0.3.8.md#release-readiness-gate-g478)
 passes. Preparing the release does not cut it. Full changelog and operator
-checklist: [release-notes-v0.3.7.md](release-notes-v0.3.7.md).
+checklist: [release-notes-v0.3.8.md](release-notes-v0.3.8.md).
 
-**To ship in `v0.3.7` (changes since `v0.3.6`) — an automation-safety release:**
+**To ship in `v0.3.8` (changes since `v0.3.7`) — a loop-reliability release:**
 
-- **Non-default implementation base branches** (G471) — loop-prompt prose and
-  review guidance treat a non-default implementation base branch as a
-  first-class case, so child loops pick the correct PR base without reading host
-  metadata and review no longer mis-flags a correctly-based PR.
-- **`issue-published` queue compatibility** (G472) — review-closeout parsing
-  tolerates queue-state rows in the `issue-published` state instead of aborting
-  the closeout read; host review loop guidance is skill-free and treats
-  CI-pending as a defer condition.
-- **Installed guide over local rule docs** (G473) — when generating loop
-  prompts, the installed `intent-cli guide` output is canonical over local
-  `intents/rules/automations/*.md`; the hard rule forbids reading the local rule
-  docs even when an operator names them.
-- **Absorbed packet retirement safety** (G474) — machine-readable packet
-  lifecycle retirement (`lifecycle.yaml` sidecar + `intent-cli packet retire`)
-  excludes absorbed/superseded/retired packets from `intent next-slice`
-  issue-cut-ready selection and flags stale human `STATUS: ABSORBED` markers for
-  repair, so an absorbed packet is never re-cut as a duplicate issue.
+- **Packet evidence citations no longer deadlock child PR repair** (G476) —
+  `worker pr-comment-preflight` classifies a review comment by its requested
+  edit target, not by an incidental `.intent-cli/` / `intents/` mention, so a
+  comment that cites a packet path as evidence while asking to change
+  implementation files is `repair-required` / actionable instead of a
+  host-artifact deadlock. The result exposes `requested_edit_paths` vs
+  `host_evidence_paths`, and `worker next-action` consults the same classifier.
+- **Deterministic closeout recovery when `linked_pr` is missing** (G477) —
+  `closeout pr --pr <n>` auto-recovers when a merged PR's GitHub closing
+  references identify exactly one queue item by `linked_issue`, completing
+  without a manual `--issue <n>` rerun and repairing the missing `linked_pr`
+  projection. Ambiguous evidence fails closed with a `linkage-ambiguous` error;
+  the result surfaces `recoverable_missing_linked_pr` / `inferred_issue` /
+  `recovery_action`.
 
-**Release-readiness verification (run before tagging the next `v0.3.7`):**
+**Release-readiness verification (run before tagging the next `v0.3.8`):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.3.6 (published), nextVersion 0.3.7 (to release)
+cat eng/version.json   # stableVersion 0.3.7 (published), nextVersion 0.3.8 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.3.7-<sha>-G47x   (NOT a stale literal)
+#   expected shape: intent-cli 0.3.8-<sha>-G47x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.7.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.8.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-The official release is then cut by publishing a GitHub Release tagged `v0.3.7`;
-the release workflow passes `-p:Version=0.3.7` (which wins over the local
+The official release is then cut by publishing a GitHub Release tagged `v0.3.8`;
+the release workflow passes `-p:Version=0.3.8` (which wins over the local
 default). After the release publishes, apply the post-release `eng/version.json`
-bump above (`stableVersion → 0.3.7`, `nextVersion → 0.3.8`).
+bump above (`stableVersion → 0.3.8`, `nextVersion → 0.3.9`).
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
