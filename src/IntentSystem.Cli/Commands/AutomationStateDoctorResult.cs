@@ -162,6 +162,16 @@ internal static class AutomationStateDoctorCategories
     public const string MissingLinkedPr = "missing-linked-pr";
     public const string MissingLinkedIssue = "missing-linked-issue";
     public const string MergedPrNotCompleted = "merged-pr-not-completed";
+
+    /// <summary>
+    /// G481: a single execution unit resolves to MORE THAN ONE GitHub issue,
+    /// but a unique canonical issue is determined from durable evidence and the
+    /// non-canonical duplicate(s) carry no active PR. Reported as an advisory
+    /// finding (safe repair offered: close the non-canonical issue) — never
+    /// auto-applied, because closing a GitHub issue is outside the doctor's
+    /// forward-only queue-state write contract.
+    /// </summary>
+    public const string DuplicateExecutionUnitIssue = "duplicate-execution-unit-issue-detected";
 }
 
 internal static class AutomationStateDoctorRepairKinds
@@ -180,6 +190,31 @@ internal static class AutomationStateDoctorUnsafeKinds
     public const string DuplicateIssueEvidence = "duplicate-issue-evidence";
     public const string AmbiguousPrLinkage = "ambiguous-pr-linkage";
     public const string AmbiguousPublishEvidence = "ambiguous-publish-evidence";
+
+    /// <summary>
+    /// G481: a single execution unit resolves to more than one GitHub issue and
+    /// no durable source uniquely anchors the canonical issue (e.g. two publish
+    /// artifacts for the same unit record different created issues). Concurrent
+    /// or duplicate host publish — fail-closed; never pick a winner by recency.
+    /// </summary>
+    public const string ConcurrentHostPublishDetected = "concurrent-host-publish-detected";
+
+    /// <summary>
+    /// G481: durable sources disagree on the canonical issue for an execution
+    /// unit (e.g. queue-state <c>linked_issue</c> = #A but the packet
+    /// <c>publish.yaml</c> records created issue #B). Fail-closed: never
+    /// overwrite one durable record with another.
+    /// </summary>
+    public const string CanonicalIssueMismatch = "canonical-issue-mismatch";
+
+    /// <summary>
+    /// G481: an implementation PR closes a NON-canonical duplicate issue while a
+    /// different issue is canonical from durable evidence. Classified
+    /// separately from ordinary missing-<c>linked_pr</c> recovery and from
+    /// ambiguous-PR-linkage; fail-closed (do not auto-edit the PR body or
+    /// reopen/close issues during a race).
+    /// </summary>
+    public const string PrClosesNoncanonicalIssue = "pr-closes-noncanonical-issue";
 }
 
 /// <summary>

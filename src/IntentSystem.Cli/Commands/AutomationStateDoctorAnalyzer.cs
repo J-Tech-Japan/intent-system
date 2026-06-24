@@ -261,6 +261,21 @@ internal static class AutomationStateDoctorAnalyzer
             }
         }
 
+        // G481: duplicate execution-unit issue / concurrent host publish
+        // detection runs on the same durable projections. Its findings (advisory
+        // safe-repair offers) and unsafe findings (fail-closed classifications)
+        // merge into this analysis. The weaker-tier GitHub-issue enumeration is
+        // not yet projected by the command, so an empty list is passed; the
+        // queue-state-vs-publish mismatch and PR-closes-non-canonical hazards
+        // are fully covered by the durable evidence already supplied.
+        var duplicateAnalysis = DuplicateExecutionUnitIssueAnalyzer.Analyze(
+            repo,
+            queueItems,
+            publishEvidence,
+            pullRequests);
+        findings.AddRange(duplicateAnalysis.Findings);
+        unsafeFindings.AddRange(duplicateAnalysis.UnsafeFindings);
+
         return new AutomationStateDoctorAnalysis(findings, unsafeFindings);
     }
 
