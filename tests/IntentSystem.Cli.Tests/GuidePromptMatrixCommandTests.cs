@@ -2981,6 +2981,79 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.DoesNotContain("Effective implementation / PR base branch:", prompt, StringComparison.Ordinal);
     }
 
+    // ── G479: loop-wake Asking UI fail-closed policy ─────────────────────
+
+    [Theory]
+    [InlineData("child-loop", null)]
+    [InlineData("host-loop", null)]
+    [InlineData("child-loop", "copilot-local")]
+    [InlineData("host-loop", "copilot-local")]
+    public void Execute_LoopMode_PromptContainsLoopWakeAskingPolicy(string mode, string? agent)
+    {
+        using var writer = new StringWriter();
+        string[] args = agent is null
+            ? ["--mode", mode, "--format", "json"]
+            : ["--mode", mode, "--agent", agent, "--format", "json"];
+        GuidePromptMatrixCommand.Execute(CreateContext(), args, writer);
+
+        var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
+
+        // Clear "do not use Asking UI during loop wakes" rule.
+        Assert.Contains("Loop-wake Asking UI policy (G479)", prompt, StringComparison.Ordinal);
+        Assert.Contains("do NOT stop on interactive Asking UI", prompt, StringComparison.Ordinal);
+
+        // The narrow safety-gate exceptions are enumerated.
+        Assert.Contains("security-sensitive approval", prompt, StringComparison.Ordinal);
+        Assert.Contains("external credentials / login", prompt, StringComparison.Ordinal);
+        Assert.Contains("destructive local operations", prompt, StringComparison.Ordinal);
+        Assert.Contains("irreversible public release / publish", prompt, StringComparison.Ordinal);
+
+        // Recoverable conditions converge to safe repair / next wake, not an ask.
+        Assert.Contains("Recoverable ambiguity → safe repair or next wake (G479)", prompt, StringComparison.Ordinal);
+        Assert.Contains("safe_repair_available: true", prompt, StringComparison.Ordinal);
+
+        // Non-recoverable conditions STOP with exactly one next operator action.
+        Assert.Contains("STOP: <classification>", prompt, StringComparison.Ordinal);
+        Assert.Contains("exactly ONE next operator action", prompt, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("child-loop", null)]
+    [InlineData("host-loop", null)]
+    [InlineData("child-loop", "copilot-local")]
+    [InlineData("host-loop", "copilot-local")]
+    public void Execute_LoopMode_DoesNotRecommendUnsafeConcurrentLoops(string mode, string? agent)
+    {
+        using var writer = new StringWriter();
+        string[] args = agent is null
+            ? ["--mode", mode, "--format", "json"]
+            : ["--mode", mode, "--agent", agent, "--format", "json"];
+        GuidePromptMatrixCommand.Execute(CreateContext(), args, writer);
+
+        var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
+
+        // "continue both concurrent host loops" only ever appears as a FORBIDDEN
+        // choice, never as a recommended option (G479 unsafe-concurrency guard).
+        Assert.Contains("Never offer unsafe concurrency (G479)", prompt, StringComparison.Ordinal);
+        Assert.Contains("never present \"continue both concurrent host loops\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("exactly ONE active wake per host repo + domain", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_DefaultMarkdown_AllFourLoopModesCarryAskingPolicy()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(CreateContext(), [], writer);
+        var output = writer.ToString();
+
+        // child-loop + host-loop both render the shared policy; the heading must
+        // therefore appear at least twice in the full four-mode matrix output.
+        var occurrences = output.Split("Loop-wake Asking UI policy (G479)").Length - 1;
+        Assert.True(
+            occurrences >= 2,
+            $"Expected the G479 asking policy in both loop modes; found {occurrences} occurrence(s).");
+    }
+
     private static CliContext CreateContextWithImplementationBaseBranch(string implementationBaseBranch)
     {
         return new CliContext
