@@ -2981,6 +2981,93 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.DoesNotContain("Effective implementation / PR base branch:", prompt, StringComparison.Ordinal);
     }
 
+    // ── G480: host-orchestrator vs semantic-reviewer role boundaries ─────
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    [InlineData("generic")]
+    public void Execute_HostLoop_PromptDefinesThreeRoleBoundaries(string agent)
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--agent", agent, "--format", "json"],
+            writer);
+
+        var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
+
+        Assert.Contains("Role boundaries (G480)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Host-orchestrator", prompt, StringComparison.Ordinal);
+        Assert.Contains("Semantic-reviewer", prompt, StringComparison.Ordinal);
+        Assert.Contains("Child-implementer", prompt, StringComparison.Ordinal);
+
+        // Semantic review is gated on review_role; the host loop is NOT review-free.
+        Assert.Contains("review_role", prompt, StringComparison.Ordinal);
+        Assert.Contains("The host loop is NOT review-free", prompt, StringComparison.Ordinal);
+
+        // An already-approved PR is always mergeable by the orchestrator even
+        // when a different agent performed the review.
+        Assert.Contains(
+            "already-approved PR is always mergeable by the orchestrator",
+            prompt,
+            StringComparison.Ordinal);
+
+        // Role mismatch is a wait / STOP classification, never Asking UI.
+        Assert.Contains("STOP: review-role-mismatch", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("the host never reviews", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("host does not review", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_HostLoopClaude_FramedAsOrchestratorNotDefaultReviewer()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--agent", "claude", "--format", "json"],
+            writer);
+
+        var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
+
+        // Claude is the default implement role, not the default review role: it
+        // orchestrates and waits for intent-pr-approved unless it IS review_role.
+        Assert.Contains("running as `claude`", prompt, StringComparison.Ordinal);
+        Assert.Contains("NOT the default `review` role", prompt, StringComparison.Ordinal);
+        Assert.Contains("WAIT for the PR to reach `intent-pr-approved`", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopCodex_PermittedToPerformSemanticReview()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--agent", "codex", "--format", "json"],
+            writer);
+
+        var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
+
+        // Codex is the default review role: when review_role resolves to Codex it
+        // IS the semantic reviewer and may approve/request-update via intent-cli.
+        Assert.Contains("running as `codex`", prompt, StringComparison.Ordinal);
+        Assert.Contains("you ARE the semantic reviewer", prompt, StringComparison.Ordinal);
+        Assert.Contains("approved | request-update", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HostLoopHardRules_ContainRoleAwareReviewRule()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--agent", "claude", "--format", "json"],
+            writer);
+
+        var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
+        Assert.Contains("Role-aware review (G480)", prompt, StringComparison.Ordinal);
+    }
+
     // ── G479: loop-wake Asking UI fail-closed policy ─────────────────────
 
     [Theory]
