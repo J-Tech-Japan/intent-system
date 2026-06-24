@@ -32,24 +32,10 @@ internal static class PacketDraftCommand
         @"^[A-Za-z][A-Za-z0-9-]*$",
         RegexOptions.Compiled);
 
-    internal static readonly IReadOnlyList<string> RequiredContractSections =
-        new[]
-        {
-            "Goal",
-            "Why This Slice Exists Now",
-            "Current Observed State",
-            "Accepted Baseline You May Assume",
-            "Target Repo / Path / Part",
-            "In Scope",
-            "Out Of Scope",
-            "Acceptance Criteria",
-            "Verification",
-            "Related Links",
-            // G347: base branch policy must be explicit in the published contract so
-            // child implementation agents can choose the correct PR base branch
-            // without reading host metadata.
-            "Base Branch Policy"
-        };
+    // G482: the required publish-gate sections now live in the single shared
+    // source of truth so the scaffold's draft check and the publish-body
+    // validator can never drift apart.
+    internal static IReadOnlyList<string> RequiredContractSections => PublishContractSections.Required;
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -351,6 +337,10 @@ internal static class PacketDraftCommand
             ## Out Of Scope
 
             - TODO
+
+            ## Standalone Child Issue Contract
+
+            TODO: one-paragraph restatement of exactly what the child PR must deliver, readable on its own without the surrounding design thread.
 
             ## Acceptance Criteria
 

@@ -39,6 +39,54 @@ public sealed class PacketDraftCommandTests
         }
     }
 
+    // ── G482: scaffold emits the complete publish-ready contract shape ───
+
+    [Fact]
+    public void Execute_Scaffold_EmitsEveryScaffoldHeadingIncludingStandaloneContract()
+    {
+        using var workspace = new PacketDraftWorkspace();
+        using var writer = new StringWriter();
+
+        PacketDraftCommand.Execute(
+            workspace.Context,
+            ["--execution-unit", "G482", "--target-repo", "J-Tech-Japan/intent-system"],
+            writer);
+
+        var githubBody = File.ReadAllText(
+            Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G482", "github-body.md"));
+
+        // Every scaffolded heading (required gate + Standalone Child Issue
+        // Contract) must appear: removing one from the shared constant OR the
+        // template fails this test.
+        foreach (var section in PublishContractSections.ScaffoldHeadings)
+        {
+            Assert.Contains($"## {section}", githubBody, StringComparison.Ordinal);
+        }
+        Assert.Contains("## Standalone Child Issue Contract", githubBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RequiredContractSections_ShareSingleSourceOfTruthWithPublishValidator()
+    {
+        // G482: the packet scaffold's draft check and the publish-body validator
+        // must reference one shared list so they can never drift apart.
+        Assert.Same(PublishContractSections.Required, PacketDraftCommand.RequiredContractSections);
+        Assert.Same(PublishContractSections.Required, IssueValidateBodyValidator.RequiredHeadings);
+        Assert.Equal(PacketDraftCommand.RequiredContractSections, IssueValidateBodyValidator.RequiredHeadings);
+    }
+
+    [Fact]
+    public void ScaffoldHeadings_AreSupersetOfRequiredPlusStandaloneContract()
+    {
+        Assert.Contains(
+            PublishContractSections.StandaloneChildIssueContract,
+            PublishContractSections.ScaffoldHeadings);
+        foreach (var required in PublishContractSections.Required)
+        {
+            Assert.Contains(required, PublishContractSections.ScaffoldHeadings);
+        }
+    }
+
     [Fact]
     public void Execute_GivenExistingFiles_DoesNotOverwriteAndReportsSkipped()
     {
