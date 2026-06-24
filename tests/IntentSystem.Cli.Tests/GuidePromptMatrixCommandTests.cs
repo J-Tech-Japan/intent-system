@@ -3068,6 +3068,28 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("Role-aware review (G480)", prompt, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_HostLoopHardRules_ContainDuplicatePublishFailClosedRule()
+    {
+        using var writer = new StringWriter();
+        GuidePromptMatrixCommand.Execute(
+            CreateContext(),
+            ["--mode", "host-loop", "--format", "json"],
+            writer);
+
+        var prompt = JsonDocument.Parse(writer.ToString()).RootElement.GetProperty("prompt").GetString()!;
+
+        // Duplicate / concurrent host publish is fail-closed and routes through
+        // state-doctor; the guide must forbid the unsafe options (G481).
+        Assert.Contains("Duplicate publish is fail-closed (G481)", prompt, StringComparison.Ordinal);
+        Assert.Contains("concurrent-host-publish-detected", prompt, StringComparison.Ordinal);
+        Assert.Contains("canonical-issue-mismatch", prompt, StringComparison.Ordinal);
+        Assert.Contains("pr-closes-noncanonical-issue", prompt, StringComparison.Ordinal);
+        Assert.Contains("do NOT pick a canonical issue by recency", prompt, StringComparison.Ordinal);
+        Assert.Contains("do NOT continue both competing publishers", prompt, StringComparison.Ordinal);
+        Assert.Contains("do NOT arbitrarily reopen/close issues", prompt, StringComparison.Ordinal);
+    }
+
     // ── G479: loop-wake Asking UI fail-closed policy ─────────────────────
 
     [Theory]
