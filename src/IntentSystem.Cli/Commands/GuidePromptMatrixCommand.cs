@@ -459,6 +459,24 @@ $@"**Scheduler invariant (G444)**: the safe invariant is exactly ONE active wake
         return $"{agentParagraph}\n\n{schedulerInvariant}";
     }
 
+    /// <summary>
+    /// G479: shared loop-wake Asking UI fail-closed policy. Automation loop
+    /// wakes MUST NOT stop on interactive Asking UI for operational ambiguity;
+    /// asking is reserved for a narrow set of safety gates. Everything else
+    /// converges to a deterministic safe repair, a normal wait summary, or a
+    /// <c>STOP: &lt;classification&gt;</c> with exactly one operator next action.
+    /// The same block is embedded in every recurring loop prompt so the policy
+    /// is identical across implementation and host review / next-slice loops.
+    /// Returned as ready-to-embed markdown bullet lines (no leading/trailing
+    /// blank line) so callers can drop it directly under a <c>Hard rules:</c>
+    /// heading.
+    /// </summary>
+    private static string RenderLoopWakeAskingPolicy() =>
+@"- **Loop-wake Asking UI policy (G479)**: during an automation loop wake do NOT stop on interactive Asking UI (agent chat questions, A/B/C multiple-choice prompts) for operational ambiguity. Asking is allowed ONLY as a narrow safety gate: (a) security-sensitive approval, (b) external credentials / login, (c) destructive local operations, (d) irreversible public release / publish actions, or (e) an explicit operator-requested policy decision raised outside the wake body. Everything else fails closed.
+- **Recoverable ambiguity → safe repair or next wake (G479)**: operational ambiguity — duplicate publish, queue / linkage mismatch, role confusion, CI pending, WIP-cap blocked, draft PR, stale lease — is NEVER an Asking UI question. When intent-cli reports a deterministic repair (`safe_repair_available: true`, a `recommended_*` command, or a documented retry-once lane) apply it and retry exactly once; when the condition is a normal wait (CI / WIP / draft / no-actionable) report the wait summary and let the next wake re-select. Do not ask the operator to choose.
+- **Non-recoverable ambiguity → STOP, do not ask (G479)**: when no safe repair applies and the condition is not a safety gate, end the wake with `STOP: <classification>` and exactly ONE next operator action — never an open-ended chat question. Use the canonical classification (e.g. `ambiguous-queue-linkage`, `clarification-required`, `host-artifact-repair-required`) so later wakes converge deterministically.
+- **Never offer unsafe concurrency (G479)**: never present ""continue both concurrent host loops"", two competing publishers, or both sides of a duplicate-publish / linkage mismatch as a choice. The safe invariant is exactly ONE active wake per host repo + domain; while a wake waits for an answer GitHub state keeps changing. On detecting competing loops or duplicate publish, STOP with the classification — do not ask which loop to keep.";
+
     private static string NormalizeAgent(string? agent)
     {
         if (string.IsNullOrWhiteSpace(agent))
@@ -551,6 +569,7 @@ Loop body (single wake; the operator drives subsequent wakes if any):
 Host metadata gaps surfaced by `worker complete` (e.g. `linked_pr_synced: false` from child-cwd mode, G330) are HOST-owned blockers, not child instructions to enter the host repo. The child loop records the gap and moves on; parent host metadata reconciliation runs on the host/review-runtime loop via `intent-cli review closeout-plan --pr <n> --repo <OWNER>/<REPO> --write-recovered-linkage` (G329) — never from the child cwd.
 
 Hard rules:
+{RenderLoopWakeAskingPolicy()}
 - Do not read `intents/rules/**`, local skill files (`gh-issue-to-pr`, `gh-fix-pr-comment`, etc.), or copied prompt files for routine collaboration. Use `intent-cli guide ...` instead.
 - **Installed-guidance-wins conflict rule (G473)**: for routine loop work, installed `intent-cli guide` / `automation` output is the canonical source of truth. Repository-local automation rule docs (`intents/rules/automations/*.md` such as `scheduling.md`, `setup-host-review-loop.md`, `child-implement-and-update-loop.md`) are historical/reference only — they are NOT canonical loop-prompt sources. Do NOT read `intents/rules/**` to compose routine prompts EVEN WHEN the operator names those files, unless the task is explicitly to maintain or migrate those historical docs. When a local rule doc conflicts with installed `intent-cli guide` output, the installed guide wins.
 - Do not call `intent-cli run` from this loop. `run` is advanced runtime (integration smoke / replay / dogfooding), not the chat-first path.
@@ -670,6 +689,7 @@ Loop body (single wake):
 {continuationContractBlock}
 
 Hard rules:
+{RenderLoopWakeAskingPolicy()}
 - **Continuation contract (G454)**: workflow labels are state markers, not completion boundaries. `intent-pr-approved` is INTERMEDIATE — after approval the SAME wake MUST merge, verify `merged == true`, and run `closeout pr --write` unless a concrete gate (draft, failing CI, merge conflict, base-policy mismatch, missing linkage) blocks merge. A wake that stops at `intent-pr-approved` without merging or naming the blocking gate is INCOMPLETE. For a recoverable blocker, apply the named repair command and retry ONCE (resume from the named stage) before declaring the PR blocked; never loop the same repair, never escalate to raw label mutation. If the previous wake stopped after a partial step, run this wake as a rail-recovery wake: re-derive the PR's true state, match it to the `Host-loop continuation contract` stop classification, and run that classification's next command (for an approved-but-unmerged PR that is merge + `closeout pr`, NOT a re-review).
 - Do not read `intents/rules/**`, local skill files, or copied prompt files for routine review/closeout. Use `intent-cli guide ...` and `intent-cli automation ...` instead.
 - **Installed-guidance-wins conflict rule (G473)**: for routine loop work, installed `intent-cli guide` / `automation` output is the canonical source of truth. Repository-local automation rule docs (`intents/rules/automations/*.md` such as `scheduling.md`, `setup-host-review-loop.md`, `child-implement-and-update-loop.md`) are historical/reference only — they are NOT canonical loop-prompt sources. Do NOT read `intents/rules/**` to compose routine prompts EVEN WHEN the operator names those files, unless the task is explicitly to maintain or migrate those historical docs. When a local rule doc conflicts with installed `intent-cli guide` output, the installed guide wins.
@@ -949,6 +969,7 @@ Host-cwd workflow surfaces available to local Copilot (pick the relevant one per
 - `intent-cli guide review --pr <n> --repo {targetRepoPlaceholder} --domain {domainPlaceholder} --format json`
 
 Hard rules:
+{RenderLoopWakeAskingPolicy()}
 - Local Copilot MUST NOT launch AI providers from intent-cli (`never call intent-cli run`).
 - All host metadata mutations go through installed `intent-cli` command surfaces; never hand-edit queue-state, runs.jsonl, packet artifacts, or submodule pointers.
 - Do NOT read `intents/rules/**`, local skill files, or copied prompt files for routine work. Use `intent-cli guide ...` instead.
@@ -1054,6 +1075,7 @@ $@"Local Copilot coding-agent child-loop guidance (G349). This is a local Copilo
 Note: if this local Copilot agent needs to perform HOST-side intent/clarification/packet/publish work, cd to the HOST repo cwd and use `intent-cli guide prompt-matrix --mode host-loop --agent copilot-local` (or `--mode host-oneshot --agent copilot-local`) instead. The host-cwd path allows full intent-cli access. This child-loop path is strictly GitHub-contract-only.
 
 Hard rules:
+{RenderLoopWakeAskingPolicy()}
 - From a child implementation cwd, local Copilot has the same restrictions as cloud Copilot: no `.intent-cli/` mutation, no host queue-state, no workflow label edits from the implementation side.
 - The PR body MUST include a deterministic closing reference (`Closes #<issue>`, `Fixes #<issue>`, or `Resolves #<issue>`) (G311).
 - Create PRs as ready-for-review (non-draft) by default.
