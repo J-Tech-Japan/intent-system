@@ -477,6 +477,45 @@ $@"**Scheduler invariant (G444)**: the safe invariant is exactly ONE active wake
 - **Non-recoverable ambiguity → STOP, do not ask (G479)**: when no safe repair applies and the condition is not a safety gate, end the wake with `STOP: <classification>` and exactly ONE next operator action — never an open-ended chat question. Use the canonical classification (e.g. `ambiguous-queue-linkage`, `clarification-required`, `host-artifact-repair-required`) so later wakes converge deterministically.
 - **Never offer unsafe concurrency (G479)**: never present ""continue both concurrent host loops"", two competing publishers, or both sides of a duplicate-publish / linkage mismatch as a choice. The safe invariant is exactly ONE active wake per host repo + domain; while a wake waits for an answer GitHub state keeps changing. On detecting competing loops or duplicate publish, STOP with the classification — do not ask which loop to keep.";
 
+    /// <summary>
+    /// G480: role-aware host review / next-slice boundary block. Makes the
+    /// host-orchestrator, semantic-reviewer, and child-implementer
+    /// responsibilities explicit so the running agent neither over-reviews
+    /// (performing semantic code judgment when it is not the packet
+    /// <c>review_role</c>) nor under-reviews (concluding "the host never
+    /// reviews"). Semantic review is permitted only when the running agent
+    /// matches the packet <c>review_role</c> (host <c>roles.review</c>,
+    /// default <c>Codex</c>) or the prompt explicitly assigns review; an
+    /// already-approved PR is always mergeable by the orchestrator even when a
+    /// different agent performed the review. Role mismatch resolves to a
+    /// wait / <c>STOP</c> classification (never Asking UI, per G479). The lead
+    /// line is tailored to the resolved agent so the Claude host-orchestrator
+    /// and Codex semantic-reviewer variants read correctly.
+    /// </summary>
+    private static string RenderHostReviewRoleBoundary(string resolvedAgent, string targetRepoPlaceholder)
+    {
+        var leadLine = resolvedAgent switch
+        {
+            AgentCodex =>
+                "You are running as `codex` — the default `review` role. When this wake's packet `review_role` resolves to `Codex` (the default) or the prompt assigns you review, you ARE the semantic reviewer for this wake and perform the semantic review here.",
+            AgentClaude =>
+                "You are running as `claude` — the default `implement` role, NOT the default `review` role. Treat yourself as the host-orchestrator only, UNLESS this wake's packet `review_role` resolves to `Claude` or the prompt explicitly assigns you semantic review.",
+            _ =>
+                "Resolve this wake's packet `review_role` before deciding whether you may perform semantic review; do not assume you are or are not the reviewer.",
+        };
+
+        return
+$@"**Role boundaries (G480)**: {leadLine} Three responsibilities are distinct and MUST NOT be conflated:
+- **Host-orchestrator** (always this loop): run preflights and `automation host-review-diagnostics`, apply safe repairs, select review-eligible PRs, MERGE approved PRs, run `closeout pr`, publish the next slice, and reconcile host metadata. The orchestrator ALWAYS merges and closes out an already-approved PR — approval performed by a DIFFERENT agent never blocks the orchestrator from merging an `intent-pr-approved` PR.
+- **Semantic-reviewer** (role-gated): inspect the diff, map the implementation to the packet / intent contract, and drive approve / request-update through `intent-cli automation pr-transition`. This loop performs semantic review ONLY when the running agent matches the packet `review_role` (host `roles.review`, default `Codex`) OR the prompt explicitly assigns you review responsibility. The host loop is NOT review-free: when you ARE the `review_role`, you perform the semantic review in this wake — do not delegate it away or conclude that host loops skip review entirely.
+- **Child-implementer** (separate loop / agent): claims the issue / PR, writes implementation code, opens / updates the PR, and runs `worker complete`. The host loop never writes implementation code.
+
+Resolve your role every wake from `intent-cli guide review --pr <n> --repo {targetRepoPlaceholder} --domain <d> --format json` (the `review_role`) and `automation summary`:
+- If you ARE the semantic reviewer (running agent == `review_role`, or explicitly assigned): perform evidence-backed semantic review and apply `automation pr-transition --transition approved | request-update` per the `approval_summary_requirements` — never approve on ""tests passed"" alone (G316).
+- If you are NOT the semantic reviewer: do NOT approve or request-update on code judgment. Orchestrate only — WAIT for the PR to reach `intent-pr-approved` (the assigned reviewer approves), then merge, run `closeout pr`, and publish the next slice. A not-yet-approved PR with no reviewer action this wake is a normal WAIT, not an operator question.
+- On role mismatch (you are asked to review but you are not the `review_role`, or a PR needs semantic review but no reviewer is assigned), do NOT open Asking UI: emit `STOP: review-role-mismatch` with exactly one next operator action, or record the wait — per the loop-wake Asking UI policy (G479).";
+    }
+
     private static string NormalizeAgent(string? agent)
     {
         if (string.IsNullOrWhiteSpace(agent))
@@ -623,6 +662,7 @@ Hard rules:
         var resolvedAgent = NormalizeAgent(agent);
         var frequencyBlock = RenderFrequencyBlock(agent, frequency);
         var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Closeout / merge expectation honors");
+        var reviewRoleBoundary = RenderHostReviewRoleBoundary(resolvedAgent, targetRepoPlaceholder);
         var continuationContractBlock = HostLoopContinuationContract.RenderMarkdown(targetRepoPlaceholder);
         var prompt =
 $@"Set up the host review and next-slice loop for domain `{domainPlaceholder}` against `{targetRepoPlaceholder}`. Run the loop body exactly once per wake; the operator or scheduler drives subsequent wakes.
@@ -630,6 +670,8 @@ $@"Set up the host review and next-slice loop for domain `{domainPlaceholder}` a
 {frequencyBlock}
 
 {basePolicyBlock}
+
+{reviewRoleBoundary}
 
 If the installed CLI surface is stale or any required automation command is missing, abort the wake before any mutation: `intent-cli automation doctor --format json` (or `automation host-review-preflight` reporting `stale-host-cli`) is the canonical signal — refresh the installed CLI; never fall back to raw `gh` label mutation. The installed CLI may come from a global dotnet tool install on `PATH` (e.g. `$HOME/.dotnet/tools/intent-cli`); that is the default local-testing route and the doctor reports `binary_source: path-global-tool` in that case. A cwd-local `.intent-cli/bin/intent-cli` shim still wins when present (`binary_source: cwd-local-shim`) and `INTENT_CLI_INSTALLED_PATH` pins a specific binary for version-specific tests (`binary_source: explicit-override`).
 
@@ -700,6 +742,7 @@ Hard rules:
 - Never apply `intent-pr-created` to a PR.
 - Honor the WIP cap: do not cut a new child issue while any open `intent-target` issue/PR remains. **Operator-approved queue warming (G288)**: only when the operator explicitly asks to keep the child queue warm beyond the cap, pass `--allow-wip-cap-override` to `automation host-review-diagnostics`. With that flag and a complete candidate, the diagnostic returns `issue-publish-ready` with `wip-cap-overridden` in `warnings`. The override publishes at most one prepared next-slice issue per wake; clarification gates and contract completeness are still hard blockers, and the override never lands without an operator ask.
 - Stop on Hard Clarification rather than guessing when source-of-truth is ambiguous.
+- **Role-aware review (G480)**: perform semantic code review ONLY when the running agent is the packet `review_role` (host `roles.review`, default `Codex`) or the prompt explicitly assigns you review; otherwise orchestrate and WAIT for `intent-pr-approved` before merge / closeout. Never imply the host loop never reviews, and never perform semantic review regardless of `review_role`. An already-approved PR is always mergeable by the orchestrator even when a different agent did the review. Role mismatch is a wait / `STOP: review-role-mismatch`, never Asking UI (G479).
 - `automation reconcile --write` must come from this host loop only; child implementation loops never invoke it.
 - **Publish-artifact-backed metadata recovery (G303)**: when `closeout-plan` returns `host-metadata-blocked` because the queue item has BOTH `linked_issue` and `linked_pr` null but `.intent-cli/issues/<execution-unit>/publish.yaml` recorded a created GitHub issue, run `intent-cli automation publish-recovery --repo {targetRepoPlaceholder} --format json` (read-only) first. If the dry-run reports a single high-confidence repair, re-run with `--write` and retry the wake; if it reports unsafe stops (multiple closing PRs, repo mismatch, missing publish artifact), surface a structured operator stop. Host metadata blockers like this MUST NOT become PR repair comments.
 - **Queue-state-backed linked_pr recovery (G315)**: when `closeout-plan` returns `host-metadata-blocked` because the queue item already has `linked_issue` populated (durable host source-of-truth) but `linked_pr` is null, the same `intent-cli automation publish-recovery --repo {targetRepoPlaceholder} --format json` lane now also covers this case — publish artifact evidence is NOT required. The analyzer pairs the existing `linked_issue` with the unique open PR whose GitHub `closingIssuesReferences` (or PR body `Closes #<n>` text) closes that issue. If the dry-run reports a single high-confidence repair of type `queue-linked-issue-closing-pr-recovery`, re-run with `--write` and retry the wake. Unsafe stops in this lane (`no-closing-pr-for-linked-issue` → PR is missing a closing reference; G311 owns body repair / `multiple-closing-prs-for-linked-issue` / `multiple-queue-items-for-linked-issue` / `linked-issue-repo-mismatch`) MUST surface as a structured operator stop — never guess. Run G315 lane BEFORE falling back to `automation reconcile --lane host-review`; do not stop the wake just because the older publish-artifact lane (G303) reported `no publish artifact present`.
@@ -928,10 +971,13 @@ Hard rules:
         string baseBranchPolicy)
     {
         var basePolicyBlock = RenderBaseBranchPolicyBlock(baseBranchPolicy, "Closeout / merge expectation honors");
+        var reviewRoleBoundary = RenderHostReviewRoleBoundary(AgentCopilotLocal, targetRepoPlaceholder);
         var prompt =
 $@"Local Copilot coding-agent host-loop guidance (G349). This is a local Copilot agent running in the HOST repo cwd. Unlike the cloud/assignment Copilot path, a local Copilot agent CAN exec `intent-cli` to perform host-owned intent/clarification/packet/issue-publish workflows. This is a RECURRING loop — the operator or scheduler drives subsequent wakes. Run the loop body exactly once per wake.
 
 {basePolicyBlock}
+
+{reviewRoleBoundary}
 
 If the installed CLI surface is stale or any required automation command is missing, abort the wake before any mutation: `intent-cli automation doctor --format json` (or `automation host-review-preflight` reporting `stale-host-cli`) is the canonical signal — refresh the installed CLI before continuing.
 
