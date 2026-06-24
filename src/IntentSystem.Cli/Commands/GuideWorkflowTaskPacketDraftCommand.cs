@@ -71,9 +71,14 @@ internal static class GuideWorkflowTaskPacketDraftCommand
         new IssueContractSection { Section = "target-repo-path-part", Purpose = "Exact repository / folder / surface the change must land in. Disambiguates host-vs-child mutation targets." },
         new IssueContractSection { Section = "in-scope", Purpose = "Bullet list of what is in scope. Mirrors the slice goal; one slice cuts cleanly so this list stays small." },
         new IssueContractSection { Section = "out-of-scope", Purpose = "Bullet list of what is explicitly NOT in this slice. Reviewers refuse PRs that broaden scope without an out-of-scope amendment." },
+        // G482: standalone restatement and base branch policy are publish-ready
+        // contract sections too; list them so a scaffolded packet is complete by
+        // default and the agent does not have to memorize the full shape.
+        new IssueContractSection { Section = "standalone-child-issue-contract", Purpose = "One-paragraph restatement of exactly what the child PR must deliver, readable on its own without the surrounding design thread. The packet scaffold emits this section by default (G482)." },
         new IssueContractSection { Section = "acceptance-criteria", Purpose = "Testable, externally-verifiable criteria. Every criterion maps to a concrete assertion the reviewer can run." },
         new IssueContractSection { Section = "verification", Purpose = "Which tests / generated assertions prove the criteria. CI + the reviewer cite this list before approval (G316)." },
         new IssueContractSection { Section = "related-links", Purpose = "Predecessor slices and spec references (e.g. `specs/15-external-user-guided-workflow.md`). Operators trace the lineage without reading the host repo." },
+        new IssueContractSection { Section = "base-branch-policy", Purpose = "The expected PR base branch, stated in the body so child implementation agents pick the correct base without reading host metadata (G347). Required by the publish gate." },
         new IssueContractSection { Section = "additional-required-guidance", Purpose = "Standing guardrails: prefer intent-cli-backed mutation, child isolation rule, no AI provider launch. Repeated on every slice so the issue is self-contained." }
     };
 
@@ -115,6 +120,7 @@ internal static class GuideWorkflowTaskPacketDraftCommand
     internal static readonly IReadOnlyList<string> StopConditions = new[]
     {
         "`packet draft --dry-run` flags missing files: stop, repair the design host packet directory before publishing. Hand-editing the four files is allowed during design; routine automation mutates them through `packet draft --write` only.",
+        "**Dry-run the publish validation BEFORE declaring the packet issue-ready (G482)**: never call a packet ready for GitHub issue creation until a publish-validation dry-run reports zero missing contract sections. Run `intent-cli issue validate-body --from-file <github-body.md> --format json` (offline body check), `intent-cli packet draft --execution-unit <id> --dry-run --format json` (re-scaffold + contract check), and — for the host loop — `intent-cli intent next-slice --dry-run --format json`; all three share one required-section source of truth, so a clean result on one is a clean result on all. A freshly scaffolded packet already carries every required section (Goal, Current Observed State, Why This Slice Exists Now, Accepted Baseline You May Assume, Target Repo / Path / Part, In Scope, Out Of Scope, Standalone Child Issue Contract, Acceptance Criteria, Verification, Related Links, Base Branch Policy); fill the placeholders, do not delete sections.",
         "`issue validate-body --from-file <github-body.md> --format json` reports `errors[]` (missing contract sections): stop, repair the body, validate again, only then move to `issue publish-flow`.",
         "`packet.yaml` lacks `intent_reference_paths` or names them with broad-domain placeholders: stop, narrow to PR-specific references. Broad-domain intent paths defeat G316 review-context isolation.",
         "Operator names `intent-target` on the GitHub issue manually (raw `gh issue edit --add-label intent-target`): refuse, surface the gap — `intent-target` is the FINAL publish boundary applied by `automation issue-publish --write` after `issue publish-flow` succeeds, never the default."

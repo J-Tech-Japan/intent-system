@@ -143,6 +143,30 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
     }
 
     [Fact]
+    public void Execute_Guide_ListsCompletePublishContractAndPublishDryRunChecklist()
+    {
+        // G482: the guide enumerates the full publish-ready contract shape
+        // (including Standalone Child Issue Contract and Base Branch Policy) and
+        // tells agents to dry-run publish validation before declaring a packet
+        // ready for GitHub issue creation.
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkflowTaskPacketDraftCommand.Execute(
+            CreateContext(), Array.Empty<string>(), writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("standalone-child-issue-contract", output, StringComparison.Ordinal);
+        Assert.Contains("base-branch-policy", output, StringComparison.Ordinal);
+
+        var stopConditions = string.Join(" ", GuideWorkflowTaskPacketDraftCommand.StopConditions);
+        Assert.Contains(
+            "Dry-run the publish validation BEFORE declaring the packet issue-ready (G482)",
+            stopConditions,
+            StringComparison.Ordinal);
+        Assert.Contains("intent next-slice --dry-run", stopConditions, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Invariants_IncludeIntentTargetFinalBoundaryWarning()
     {
         // Acceptance criterion: "The guide warns that intent-target

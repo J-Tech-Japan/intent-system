@@ -14,22 +14,9 @@ internal static class IssueValidateBodyValidator
     /// "Target Repo-Path-Part" is also accepted because both shapes are in
     /// active use across the host workflow.
     /// </summary>
-    public static IReadOnlyList<string> RequiredHeadings { get; } =
-    [
-        "Goal",
-        "Why This Slice Exists Now",
-        "Current Observed State",
-        "Accepted Baseline You May Assume",
-        "Target Repo / Path / Part",
-        "In Scope",
-        "Out Of Scope",
-        "Acceptance Criteria",
-        "Verification",
-        "Related Links",
-        // G347: child implementation agents must know the expected PR base branch
-        // from the issue body alone (no host metadata access in child-cwd mode).
-        "Base Branch Policy"
-    ];
+    // G482: shares the single source of truth with the packet scaffold so the
+    // publish gate and the draft contract check never disagree.
+    public static IReadOnlyList<string> RequiredHeadings => PublishContractSections.Required;
 
     private static readonly IReadOnlyDictionary<string, string[]> HeadingAliases =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
