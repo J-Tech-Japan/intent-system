@@ -664,6 +664,151 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
             doc.RootElement.GetProperty("classification").GetString());
     }
 
+    // ── G485: same-repo binding resolution agrees with automation summary ──
+
+    [Fact]
+    public void Execute_EstivoSameRepoPacket_QueueSeedAndSummaryResolveSameRegex_AndSeedsReady()
+    {
+        // Estivo-style same-repo fixture: code branch main, metadata branch
+        // main-metadata, domain estivo, execution units `^E\d{3,}$`, unit E068.
+        const string domain = "estivo";
+        const string regex = @"^E\d{3,}$";
+        var ctx = EstivoSameRepoContext();
+        WriteBindingsFor(ctx.RepoRoot, domain, regex);
+        WritePreparedPacketFor(ctx.RepoRoot, "E068", targetRepo: "estivo-org/estivo");
+
+        // queue-seed now resolves the regex through the SAME shared resolver
+        // automation summary uses; both must agree on the active domain regex.
+        var sharedResolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(ctx, domain);
+        Assert.Equal(ExecutionUnitRegexResolutionKind.Present, sharedResolution.Kind);
+        Assert.Equal(regex, sharedResolution.Pattern);
+
+        var summary = AutomationSummaryAnalyzer.Analyze(ctx, domain);
+        Assert.Equal(regex, summary.ExecutionUnitRegex);
+        Assert.Equal(sharedResolution.Pattern, summary.ExecutionUnitRegex);
+
+        // The valid same-repo packet seeds (no `missing-domain-binding-regex`).
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            ctx,
+            new[]
+            {
+                "--execution-unit", "E068",
+                "--domain", domain,
+                "--target-repo", "estivo-org/estivo",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            AutomationQueueSeedFromPacketCommand.ClassificationReady,
+            doc.RootElement.GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public void Execute_MissingBindings_RefusesWithPreciseDiagnosticPointingAtSummarySource()
+    {
+        // No bindings.md for the domain → distinct, actionable diagnostic that
+        // names the consulted source and points at `automation summary`.
+        var ctx = EstivoSameRepoContext();
+        WritePreparedPacketFor(ctx.RepoRoot, "E068", targetRepo: "estivo-org/estivo");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            ctx,
+            new[]
+            {
+                "--execution-unit", "E068",
+                "--domain", "estivo",
+                "--target-repo", "estivo-org/estivo",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            AutomationQueueSeedFromPacketCommand.ClassificationUnsafe,
+            doc.RootElement.GetProperty("classification").GetString());
+        Assert.Equal(
+            PreparedPacketCommitReadyAnalyzer.ReasonMissingDomainBindingRegex,
+            doc.RootElement.GetProperty("unsafe_reason").GetString());
+        var summaryText = doc.RootElement.GetProperty("summary").GetString();
+        Assert.Contains("no `execution_unit_regex` resolved", summaryText, StringComparison.Ordinal);
+        Assert.Contains("automation summary --domain estivo", summaryText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_CrossDomainExecutionUnit_StillRefused()
+    {
+        // E-unit does not match the estivo `^E\d{3,}$` namespace → refused.
+        var ctx = EstivoSameRepoContext();
+        WriteBindingsFor(ctx.RepoRoot, "estivo", @"^E\d{3,}$");
+        WritePreparedPacketFor(ctx.RepoRoot, "Z4R-G10", targetRepo: "estivo-org/estivo");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            ctx,
+            new[]
+            {
+                "--execution-unit", "Z4R-G10",
+                "--domain", "estivo",
+                "--target-repo", "estivo-org/estivo",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            AutomationQueueSeedFromPacketCommand.ClassificationUnsafe,
+            doc.RootElement.GetProperty("classification").GetString());
+    }
+
+    private static CliContext EstivoSameRepoContext()
+    {
+        var root = Directory.CreateTempSubdirectory("g485-").FullName;
+        Directory.CreateDirectory(Path.Combine(root, ".intent-cli"));
+        return new CliContext
+        {
+            RepoRoot = root,
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "estivo",
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees",
+                    SameRepoTopology = true,
+                    MetadataSourceBranch = "main-metadata",
+                    MetadataWriteBranch = "main-metadata",
+                },
+            },
+        };
+    }
+
+    private static void WriteBindingsFor(string root, string domain, string executionUnitRegex)
+    {
+        var dir = Path.Combine(root, "intents", domain, "automation");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "bindings.md"),
+            $"---\nexecution_unit_regex: '{executionUnitRegex}'\n---\n");
+    }
+
+    private static void WritePreparedPacketFor(string root, string executionUnit, string targetRepo)
+    {
+        var dir = Path.Combine(root, ".intent-cli", "issues", executionUnit);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "packet.yaml"),
+            $"implementation_issue_packet:\n  source_execution_unit: {executionUnit}\n  issue_title: Demo\n  target_repo: {targetRepo}\n");
+        File.WriteAllText(Path.Combine(dir, "implementation.md"), "# impl\n");
+        File.WriteAllText(Path.Combine(dir, "review-context.md"), "# review\n");
+        File.WriteAllText(Path.Combine(dir, "github-body.md"),
+            "# Title\n## Goal\nx\n## Why This Slice Exists Now\nx\n## Current Observed State\nx\n## Accepted Baseline You May Assume\nx\n## Target Repo / Path / Part\nx\n## In Scope\nx\n## Out Of Scope\nx\n## Acceptance Criteria\nx\n## Verification\nx\n## Related Links\nx\n");
+    }
+
     private sealed class TestWorkspace : IDisposable
     {
         public TestWorkspace()

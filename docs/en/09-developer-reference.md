@@ -150,6 +150,39 @@ successfully. **OSS preview packages carry no expiry; they remain runnable indef
 
 ---
 
+## Same-repo metadata topology (G485)
+
+Same-repo topology keeps the **code branch** and the **metadata branch** in one
+GitHub repository — e.g. code on `main`, metadata (`.intent-cli/` queue-state,
+runs, packets, `intents/<domain>/`) on `main-metadata`. Configure it in
+`.intent-cli/config.toml` under `[project]`:
+
+```toml
+[project]
+domain = "estivo"
+artifact_root = ".intent-cli"
+same_repo_topology = true
+metadata_source_branch = "main-metadata"   # branch the host loop READS metadata from
+metadata_write_branch  = "main-metadata"   # branch the host loop WRITES metadata to
+```
+
+These exact keys are what `intent-cli automation same-repo-metadata-preflight`
+and `intent-cli automation summary` read. If `same-repo-metadata-preflight`
+reports `not-configured`, the keys above are not being resolved — check they are
+under `[project]` (not a different table) and spelled exactly
+`metadata_source_branch` / `metadata_write_branch`.
+
+The supported publish path for a packet is **`automation queue-seed-from-packet`
+→ `issue publish-flow` → `automation issue-publish`**, with no manual
+queue-state edits or raw `gh issue create`. The domain's `execution_unit_regex`
+(declared in `intents/<domain>/automation/bindings.md`, e.g. `^E\d{3,}$`) is
+resolved from one shared source, so `automation summary --domain <d>` and
+`queue-seed-from-packet --execution-unit <unit>` always agree on which units are
+valid. A unit that does not match the active domain's regex is refused with a
+precise diagnostic that names the consulted bindings source.
+
+---
+
 ## Version flow
 
 The repository version policy lives in `eng/version.json` — the single source of
