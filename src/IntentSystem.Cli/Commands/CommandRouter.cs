@@ -272,7 +272,9 @@ internal static class CommandRouter
                 // G334: self-discovery help surface for external users.
                 ["help"] = GuideHelpCommand.Execute,
                 // G438: external artifact intake guidance (external issue / PR review / PR adopt).
-                ["artifact-intake"] = GuideArtifactIntakeCommand.Execute
+                ["artifact-intake"] = GuideArtifactIntakeCommand.Execute,
+                // G487: optional agmsg-backed orchestrator-thread guide surface.
+                ["orchestrator-thread"] = GuideOrchestratorThreadCommand.Execute
             },
             ["intent"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

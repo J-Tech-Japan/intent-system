@@ -281,6 +281,13 @@ internal static class GuideHelpCommand
             Name = "artifact-intake",
             Purpose = "G438 AI-agent-facing guidance for importing external GitHub issues and PRs. Three lanes: external-issue (issue intake before intent-target), external-pr-review (PR review before transitions), external-pr-adopt (rare explicit host adoption). Each lane requires lightweight packet/review-context metadata before any label mutation.",
             Example = "intent-cli guide artifact-intake --lane external-issue --repo <owner/repo> --format markdown"
+        },
+        // G487: optional agmsg-backed orchestrator-thread guidance.
+        new GuideSubcommandEntry
+        {
+            Name = "orchestrator-thread",
+            Purpose = "G487 paste-ready prompts for an OPTIONAL agmsg-backed orchestrator thread plus the implementation/review threads it delegates to. agmsg is a message/progress/completion signal layer only; intent-cli and GitHub stay authoritative. Distinguishes timer-loop mode from orchestrator-message mode (no mixed-mode timer races), pins the structured reply contract, an orchestrator first-wake, and safety boundaries. Existing timer-loop mode is not replaced.",
+            Example = "intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --format markdown"
         }
     };
 
