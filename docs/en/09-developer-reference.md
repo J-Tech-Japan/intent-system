@@ -194,96 +194,81 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.3.8",
-  "nextVersion": "0.3.9"
-}
-```
-
-| Stage | Version form | How it is derived |
-| --- | --- | --- |
-| Local pack / install | `0.3.9-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.3.9-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.3.9-rc.N` | Tag `v0.3.9-rc.N` triggers release workflow |
-| Stable release | `0.3.9` | Tag `v0.3.9` triggers release workflow (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.3.10-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.10` |
-
-**After releasing `v0.3.9`**, bump both fields in `eng/version.json`:
-
-```json
-{
   "stableVersion": "0.3.9",
   "nextVersion": "0.3.10"
 }
 ```
 
+| Stage | Version form | How it is derived |
+| --- | --- | --- |
+| Local pack / install | `0.3.10-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `0.3.10-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.3.10-rc.N` | Tag `v0.3.10-rc.N` triggers release workflow |
+| Stable release | `0.3.10` | Tag `v0.3.10` triggers release workflow (`-p:Version=<tag>` wins) |
+| Post-release main builds | `0.3.11-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.11` |
+
+**After releasing `v0.3.10`**, bump both fields in `eng/version.json`:
+
+```json
+{
+  "stableVersion": "0.3.10",
+  "nextVersion": "0.3.11"
+}
+```
+
 This ensures the next main-branch CI build (and local pack) immediately produces
-`0.3.10-preview.<run>.<attempt>` / `0.3.10-<sha>-<G-unit>` rather than continuing to
-emit `0.3.9` (which would collide with the stable release version).
+`0.3.11-preview.<run>.<attempt>` / `0.3.11-<sha>-<G-unit>` rather than continuing to
+emit `0.3.10` (which would collide with the stable release version).
 
-### Next release readiness (v0.3.9)
+### Next release readiness (v0.3.10)
 
-**`v0.3.8` shipped** (GitHub Release + NuGet) and the version policy was bumped
-to the `0.3.9` development line. The repository is now on the in-development
-**`0.3.9`** `nextVersion`; G483 (this packet) prepares the `v0.3.9` release — the
-next release is published by tagging `v0.3.9` once the
-[release-readiness gate](release-notes-v0.3.9.md#release-readiness-gate-g483)
+**`v0.3.9` shipped** (GitHub Release + NuGet) and the version policy was bumped
+to the `0.3.10` development line. The repository is now on the in-development
+**`0.3.10`** `nextVersion`; G486 (this packet) prepares the `v0.3.10` release — the
+next release is published by tagging `v0.3.10` once the
+[release-readiness gate](release-notes-v0.3.10.md#release-readiness-gate-g486)
 passes. Preparing the release does not cut it. Full changelog and operator
-checklist: [release-notes-v0.3.9.md](release-notes-v0.3.9.md).
+checklist: [release-notes-v0.3.10.md](release-notes-v0.3.10.md).
 
-**To ship in `v0.3.9` (changes since `v0.3.8`) — a loop-stability release:**
+**To ship in `v0.3.10` (changes since `v0.3.9`) — a dogfooding-stability release:**
 
-- **Fail closed instead of Asking UI during loop wakes** (G479) — every
-  recurring loop prompt carries one shared policy: automation wakes do not stop
-  on interactive Asking UI for operational ambiguity. Asking is reserved for
-  narrow safety gates; recoverable ambiguity converges to safe repair or the
-  next wake, and non-recoverable ambiguity ends with `STOP: <classification>`
-  and one operator action. Unsafe options like continuing two concurrent host
-  loops are never offered.
-- **Host-orchestrator and semantic-reviewer roles are explicit** (G480) — the
-  host review / next-slice prompt makes the host-orchestrator, semantic-reviewer
-  (role-gated on the packet `review_role`, default `Codex`), and
-  child-implementer responsibilities distinct, so an agent neither over-reviews
-  nor concludes "the host never reviews." An already-approved PR stays mergeable
-  by the orchestrator even when a different agent performed the review; role
-  mismatch is a wait / `STOP`, never Asking UI.
-- **Duplicate host publish is detected and canonicalized fail-closed** (G481) —
-  `automation state-doctor` classifies duplicate execution-unit issues /
-  concurrent host publish (`concurrent-host-publish-detected`,
-  `canonical-issue-mismatch`, `pr-closes-noncanonical-issue`) and offers a safe
-  repair only for an unambiguous duplicate. Canonical selection prefers durable
-  queue-state over live GitHub recency; ambiguous races fail closed without
-  picking a winner by recency.
-- **Packet creation emits complete publish-ready contracts** (G482) — the packet
-  scaffold and the publish validator share one required-section source of truth,
-  the scaffold emits the full contract shape (including `Standalone Child Issue
-  Contract`) by default, and the guide tells agents to dry-run publish
-  validation before declaring a packet ready — so repeated missing-section
-  publish blocks stop recurring.
+- **Windows Japanese `gh` JSON decoding** (G484) — every `gh` subprocess pins
+  UTF-8 stream decoding, so Japanese issue/PR titles and bodies stay valid JSON
+  on a Japanese Windows console (cp932). `worker next-action` / preflight no
+  longer break on non-ASCII payloads, with no `chcp 65001` or manual output
+  encoding required; macOS/Linux behavior is unchanged.
+- **Same-repo metadata publish-flow reliability** (G485) — `queue-seed-from-packet`
+  resolves the domain `execution_unit_regex` through the same shared resolver
+  `automation summary` uses, so a valid same-repo packet (code branch `main`,
+  metadata branch `main-metadata`) seeds and publishes through the regular
+  `queue-seed-from-packet` → `issue publish-flow` → `automation issue-publish`
+  path instead of being rejected as `missing-domain-binding-regex`. The
+  supported `[project]` same-repo config keys are now documented.
 
-**Release-readiness verification (run before tagging the next `v0.3.9`):**
+**Release-readiness verification (run before tagging the next `v0.3.10`):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.3.8 (published), nextVersion 0.3.9 (to release)
+cat eng/version.json   # stableVersion 0.3.9 (published), nextVersion 0.3.10 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.3.9-<sha>-G48x   (NOT a stale literal)
+#   expected shape: intent-cli 0.3.10-<sha>-G48x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.9.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.10.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-The official release is then cut by publishing a GitHub Release tagged `v0.3.9`;
-the release workflow passes `-p:Version=0.3.9` (which wins over the local
+The official release is then cut by publishing a GitHub Release tagged `v0.3.10`;
+the release workflow passes `-p:Version=0.3.10` (which wins over the local
 default). After the release publishes, apply the post-release `eng/version.json`
-bump above (`stableVersion → 0.3.9`, `nextVersion → 0.3.10`).
+bump above (`stableVersion → 0.3.10`, `nextVersion → 0.3.11`).
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
