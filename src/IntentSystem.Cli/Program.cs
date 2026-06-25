@@ -173,7 +173,9 @@ internal static class Program
                 || string.Equals(args[1], "help", StringComparison.Ordinal)
                 || string.Equals(args[1], "--help", StringComparison.Ordinal)
                 // G438: external artifact intake guidance — read-only, no host state required.
-                || string.Equals(args[1], "artifact-intake", StringComparison.Ordinal));
+                || string.Equals(args[1], "artifact-intake", StringComparison.Ordinal)
+                // G487: optional agmsg-backed orchestrator-thread guidance — read-only, no host state required.
+                || string.Equals(args[1], "orchestrator-thread", StringComparison.Ordinal));
     }
 
     /// <summary>
