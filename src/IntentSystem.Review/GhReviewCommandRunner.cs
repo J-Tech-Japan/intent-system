@@ -1,9 +1,14 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace IntentSystem.Review;
 
 public sealed class GhReviewCommandRunner : IReviewCommandRunner
 {
+    // G484: decode gh stdout/stderr as UTF-8 regardless of the ambient console
+    // code page (Windows cp932) so Japanese payloads stay valid JSON/text.
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     public ReviewCommandResult Run(IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
@@ -13,7 +18,9 @@ public sealed class GhReviewCommandRunner : IReviewCommandRunner
             FileName = "gh",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            UseShellExecute = false
+            UseShellExecute = false,
+            StandardOutputEncoding = Utf8NoBom,
+            StandardErrorEncoding = Utf8NoBom
         };
 
         foreach (var argument in arguments)
