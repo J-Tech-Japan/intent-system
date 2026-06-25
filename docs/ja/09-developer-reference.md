@@ -141,6 +141,39 @@ channel=preview built=<iso-utc> commit=<full-sha>
 
 ---
 
+## same-repo メタデータトポロジ (G485)
+
+same-repo トポロジは **コードブランチ** と **メタデータブランチ** を 1 つの GitHub
+リポジトリに同居させる構成です（例: コードは `main`、メタデータ（`.intent-cli/` の
+queue-state・runs・packets・`intents/<domain>/`）は `main-metadata`）。
+`.intent-cli/config.toml` の `[project]` で設定します:
+
+```toml
+[project]
+domain = "estivo"
+artifact_root = ".intent-cli"
+same_repo_topology = true
+metadata_source_branch = "main-metadata"   # host loop がメタデータを READ するブランチ
+metadata_write_branch  = "main-metadata"   # host loop がメタデータを WRITE するブランチ
+```
+
+これらのキーがそのまま `intent-cli automation same-repo-metadata-preflight` と
+`intent-cli automation summary` に読み取られます。`same-repo-metadata-preflight` が
+`not-configured` を返す場合、上記キーが解決されていません。`[project]`（別テーブルでない）
+配下にあること、`metadata_source_branch` / `metadata_write_branch` の綴りが正確であることを
+確認してください。
+
+packet の正規の publish 経路は **`automation queue-seed-from-packet` →
+`issue publish-flow` → `automation issue-publish`** で、手動の queue-state 編集や raw
+`gh issue create` は不要です。ドメインの `execution_unit_regex`（
+`intents/<domain>/automation/bindings.md` に宣言、例 `^E\d{3,}$`）は単一の共有ソースから
+解決されるため、`automation summary --domain <d>` と
+`queue-seed-from-packet --execution-unit <unit>` がどの unit を有効とみなすか常に一致します。
+アクティブなドメインの regex に一致しない unit は、参照した bindings ソースを明示する精密な
+診断とともに拒否されます。
+
+---
+
 ## バージョンフロー
 
 リポジトリのバージョンポリシーは `eng/version.json` に記載されています。`stableVersion`

@@ -100,6 +100,14 @@ internal static class AutomationQueueSeedFromPacketCommand
             return 1;
         }
 
+        // G485: resolve the domain-binding `execution_unit_regex` through the
+        // SAME shared resolver the host loop and `automation summary` use
+        // (NextSliceDomainBindingsExecutionUnitRegex), instead of a duplicate
+        // local parser that could disagree with summary on the active domain's
+        // regex. The structured outcome also lets the diagnostic distinguish a
+        // missing bindings file from a present-but-empty regex field.
+        var regexResolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(context, effectiveDomain);
+
         // Validate via PreparedPacketCommitReadyAnalyzer (G361). The
         // probe reads the four canonical files and feeds them to the
         // pure analyzer.
@@ -110,7 +118,7 @@ internal static class AutomationQueueSeedFromPacketCommand
             ImplementationMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameImplementationMarkdown)),
             ReviewContextMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameReviewContextMarkdown)),
             GithubBodyMarkdown = TryReadFile(Path.Combine(packetDirectoryAbsolute, PreparedPacketCommitReadyAnalyzer.FileNameGithubBodyMarkdown)),
-            ExecutionUnitRegex = TryResolveExecutionUnitRegex(context, effectiveDomain),
+            ExecutionUnitRegex = regexResolution.Pattern,
             RequestedTargetRepo = targetRepo,
             // PR #830 review repair (19:07 comment): always require
             // a domain binding now that `effectiveDomain` is always
@@ -130,7 +138,8 @@ internal static class AutomationQueueSeedFromPacketCommand
                 Write = write,
                 UnsafeReason = validation.Reason,
                 Summary = $"refusing to seed queue-state from `{packetDirectoryRelative}`: "
-                    + validation.Summary,
+                    + validation.Summary
+                    + DescribeBindingResolution(validation.Reason, effectiveDomain, regexResolution),
             };
             EmitResult(writer, format, unsafeResult);
             return 1;
@@ -471,62 +480,35 @@ internal static class AutomationQueueSeedFromPacketCommand
         }
     }
 
-    private static string? TryResolveExecutionUnitRegex(CliContext context, string? domain)
+    /// <summary>
+    /// G485: turn the shared binding resolution outcome into a precise,
+    /// appended diagnostic so the operator can tell apart a missing bindings
+    /// file, a present-but-empty <c>execution_unit_regex</c> field, and an
+    /// invalid pattern — but only when the refusal is actually about the
+    /// domain binding (<c>missing-domain-binding-regex</c>). Other refusal
+    /// reasons (missing contract sections, wrong target repo, etc.) keep the
+    /// analyzer's own summary unchanged.
+    /// </summary>
+    private static string DescribeBindingResolution(
+        string? reason,
+        string domain,
+        ExecutionUnitRegexResolution resolution)
     {
-        if (string.IsNullOrWhiteSpace(domain))
+        if (!string.Equals(reason, PreparedPacketCommitReadyAnalyzer.ReasonMissingDomainBindingRegex, StringComparison.Ordinal))
         {
-            return null;
+            return string.Empty;
         }
-        var parentRoot = context.ResolveParentIntentRepoRootPath();
-        if (!string.IsNullOrWhiteSpace(parentRoot))
-        {
-            var parentPath = Path.Combine(parentRoot, "intents", domain, "automation", "bindings.md");
-            if (File.Exists(parentPath))
-            {
-                return ExtractExecutionUnitRegex(TryReadFile(parentPath));
-            }
-            return null;
-        }
-        if (string.IsNullOrWhiteSpace(context.RepoRoot))
-        {
-            return null;
-        }
-        var childPath = Path.Combine(context.RepoRoot, "intents", domain, "automation", "bindings.md");
-        if (!File.Exists(childPath))
-        {
-            return null;
-        }
-        return ExtractExecutionUnitRegex(TryReadFile(childPath));
-    }
 
-    private static string? ExtractExecutionUnitRegex(string? content)
-    {
-        if (string.IsNullOrWhiteSpace(content))
-        {
-            return null;
-        }
-        var normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);
-        foreach (var rawLine in normalized.Split('\n'))
-        {
-            var line = rawLine.TrimEnd();
-            if (line.Length == 0) continue;
-            if (line[0] == ' ' || line[0] == '\t') continue;
-            if (line.StartsWith('#') || line.StartsWith("- ", StringComparison.Ordinal)) continue;
-            if (string.Equals(line.Trim(), "---", StringComparison.Ordinal)) continue;
-            var colonIndex = line.IndexOf(':', StringComparison.Ordinal);
-            if (colonIndex <= 0) continue;
-            var key = line[..colonIndex].Trim();
-            if (!string.Equals(key, "execution_unit_regex", StringComparison.Ordinal)) continue;
-            var value = line[(colonIndex + 1)..].Trim();
-            if (value.Length >= 2
-                && ((value[0] == '\'' && value[^1] == '\'')
-                    || (value[0] == '"' && value[^1] == '"')))
-            {
-                value = value[1..^1];
-            }
-            return string.IsNullOrWhiteSpace(value) ? null : value;
-        }
-        return null;
+        // A `missing-domain-binding-regex` refusal always corresponds to a
+        // MissingOrAbsent resolution (a present pattern compiles to commit-ready
+        // or to the distinct `invalid-domain-binding-regex` reason the analyzer
+        // owns), so point the operator at the exact bindings source that was
+        // consulted — the same one `automation summary` reads.
+        return resolution.Kind == ExecutionUnitRegexResolutionKind.MissingOrAbsent
+            ? $" (domain `{domain}` binding: no `execution_unit_regex` resolved from `{resolution.BindingsPath}`"
+                + " — confirm the bindings file exists for this domain and declares a top-level `execution_unit_regex`;"
+                + $" `intent-cli automation summary --domain {domain} --format json` reads the same source.)"
+            : string.Empty;
     }
 
     private static void EmitResult(TextWriter writer, string format, QueueSeedFromPacketResult result)
