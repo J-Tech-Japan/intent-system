@@ -60,6 +60,16 @@ on your `PATH`.
 
 Release binaries and OSS preview CI artifacts carry no build-time expiry.
 
+### Japanese / non-UTF-8 Windows consoles (G484)
+
+intent-cli reads the GitHub CLI (`gh`) subprocess output as **UTF-8 regardless
+of the ambient console code page**, so Japanese issue/PR titles and bodies stay
+valid JSON on a Japanese Windows console (cp932/932). `worker next-action`,
+`worker issue-preflight`, `worker pr-comment-preflight`, and the host/review
+preflight paths all share this decoding. You do **not** need to run
+`chcp 65001` or set `$OutputEncoding` / `[Console]::OutputEncoding` manually.
+macOS/Linux behavior is unchanged (those consoles are already UTF-8).
+
 ---
 
 ## Packaged invocation (local smoke)

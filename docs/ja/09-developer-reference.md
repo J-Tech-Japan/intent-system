@@ -60,6 +60,16 @@ intent-cli --version
 
 リリースバイナリと OSS preview CI アーティファクトにはビルド時の有効期限はありません。
 
+### 日本語 / 非 UTF-8 の Windows コンソール (G484)
+
+intent-cli は GitHub CLI（`gh`）サブプロセスの出力を、**周囲のコンソールのコードページに
+依存せず UTF-8 として** 読み取ります。そのため日本語 Windows コンソール（cp932/932）でも
+issue/PR のタイトルや本文が valid な JSON のまま保たれます。`worker next-action`,
+`worker issue-preflight`, `worker pr-comment-preflight`, および host/review preflight の各経路が
+このデコードを共有します。`chcp 65001` の実行や `$OutputEncoding` /
+`[Console]::OutputEncoding` の手動設定は **不要** です。macOS/Linux の挙動は変わりません
+（これらのコンソールは既に UTF-8 です）。
+
 ---
 
 ## パッケージ化された実行（ローカルスモークテスト）

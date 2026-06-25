@@ -258,6 +258,10 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
         var startInfo = new ProcessStartInfo
         {
             FileName = "gh",
+            // G484: decode gh stdout/stderr as UTF-8 regardless of the ambient
+            // console code page (Windows cp932) so Japanese payloads stay valid.
+            StandardOutputEncoding = GitHubCliProcessEncoding.Utf8NoBom,
+            StandardErrorEncoding = GitHubCliProcessEncoding.Utf8NoBom,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
