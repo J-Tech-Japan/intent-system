@@ -288,6 +288,13 @@ internal static class GuideHelpCommand
             Name = "orchestrator-thread",
             Purpose = "G487 paste-ready prompts for an OPTIONAL agmsg-backed orchestrator thread plus the implementation/review threads it delegates to. agmsg is a message/progress/completion signal layer only; intent-cli and GitHub stay authoritative. Distinguishes timer-loop mode from orchestrator-message mode (no mixed-mode timer races), pins the structured reply contract, an orchestrator first-wake, and safety boundaries. Existing timer-loop mode is not replaced.",
             Example = "intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --format markdown"
+        },
+        // G488: thin, portable agent skill pack bootstrap (ADR-013 / spec-27).
+        new GuideSubcommandEntry
+        {
+            Name = "skill-pack",
+            Purpose = "G488 renders a THIN, portable agent skill/prompt bootstrap: one generic `intent-cli` skill body with role sections (design, implement, review, orchestrator, generic). Teaches the Intent CLI mental model and the fixed cwd/worktree/domain/repo/branch safety boundaries, then points back at installed `intent-cli guide` / `automation` as authoritative — it is NOT a workflow source of truth or a runbook copy. Dry-run install plan only (writes no files); never launches a provider; never embeds raw label edits, queue-state hand edits, or hard-coded issue/PR numbers.",
+            Example = "intent-cli guide skill-pack --domain <name> --target-repo <owner/repo> --format markdown"
         }
     };
 
