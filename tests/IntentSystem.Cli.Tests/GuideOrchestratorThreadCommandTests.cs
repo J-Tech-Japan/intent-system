@@ -106,6 +106,93 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_SingleDomain_ScopesToOneDomain_AndDefersOtherDomainMetadata()
+    {
+        // Default mode is single-domain.
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Domain routing — single-domain vs multi-domain", output, StringComparison.Ordinal);
+        Assert.Contains("selected mode: `single-domain`", output, StringComparison.Ordinal);
+        // The orchestrator prompt scopes to one domain and defers other-domain items.
+        Assert.Contains("SINGLE-DOMAIN mode", output, StringComparison.Ordinal);
+        Assert.Contains("OUT OF SCOPE", output, StringComparison.Ordinal);
+        Assert.Contains("switch", output, StringComparison.Ordinal);
+        // Prefix mismatch is explicitly not a wrong-repo signal.
+        Assert.Contains("prefix", output, StringComparison.Ordinal);
+        Assert.Contains("packet/domain metadata", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_MultiDomain_RequiresExplicitRoutingMetadata()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude", "--mode", "multi-domain"]);
+
+        Assert.Contains("selected mode: `multi-domain`", output, StringComparison.Ordinal);
+        Assert.Contains("MULTI-DOMAIN mode", output, StringComparison.Ordinal);
+        // All required routing fields are listed.
+        Assert.Contains("execution unit", output, StringComparison.Ordinal);
+        Assert.Contains("implementation cwd/worktree", output, StringComparison.Ordinal);
+        Assert.Contains("review cwd/worktree", output, StringComparison.Ordinal);
+        Assert.Contains("base branch policy", output, StringComparison.Ordinal);
+        Assert.Contains("destination thread", output, StringComparison.Ordinal);
+        // Delegation example carries the full routing payload, incl. one repo serving multiple domains.
+        Assert.Contains("\"execution_unit\":\"G491\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"base_branch_policy\":\"direct-main\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"destination_thread\":", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_ImplementationThread_VerifiesLocalCheckoutBeforeClaiming()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        // Implementation-thread prompt: target from worker next-action, checkout must match before claiming.
+        Assert.Contains("verify your local checkout context matches the delegation", output, StringComparison.Ordinal);
+        Assert.Contains("STOP and reply blocked instead of claiming", output, StringComparison.Ordinal);
+        Assert.Contains("worker next-action", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasDomainRoutingShape_ForMultiDomain()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--mode", "multi-domain", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var routing = doc.RootElement.GetProperty("domain_routing");
+
+        Assert.Equal("multi-domain", routing.GetProperty("mode").GetString());
+        Assert.True(routing.TryGetProperty("single_domain_rule", out _));
+        Assert.True(routing.TryGetProperty("multi_domain_rule", out _));
+        Assert.True(routing.TryGetProperty("prefix_mismatch_note", out _));
+
+        var fields = routing.GetProperty("routing_metadata_fields").EnumerateArray()
+            .Select(f => f.GetString())
+            .ToArray();
+        Assert.Contains("domain", fields);
+        Assert.Contains("execution unit", fields);
+        Assert.Contains("implementation cwd/worktree", fields);
+        Assert.Contains("review cwd/worktree", fields);
+        Assert.Contains("base branch policy", fields);
+        Assert.Contains("destination thread", fields);
+    }
+
+    [Fact]
+    public void Execute_UnknownMode_ExitsOne()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(), ["--mode", "all-domains", "--format", "markdown"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unknown --mode", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownArgument_ExitsOne()
     {
         using var writer = new StringWriter();

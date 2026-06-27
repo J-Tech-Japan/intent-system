@@ -14,14 +14,28 @@ namespace IntentSystem.Cli.Commands;
 /// NOT also launch implement/review recurring timer loops for the same
 /// domain/repo (no mixed-mode timer races). Host-state-free; never launches an
 /// AI provider; never sends agmsg messages itself.
+///
+/// G489: a host repo can legitimately hold several intent domains (e.g.
+/// <c>sekiban-as-a-service</c>, <c>sekiban-wasm-runtime</c>, <c>intent-cli</c>),
+/// and more than one domain may target the same GitHub repository. The guide
+/// therefore distinguishes a SINGLE-DOMAIN orchestrator (only one domain in
+/// scope even though other-domain metadata is visible) from a MULTI-DOMAIN
+/// orchestrator (intentionally coordinates several domains and must carry
+/// explicit per-delegation routing). <c>--mode single-domain|multi-domain</c>
+/// selects which contract the generated prompts emphasize. An execution-unit
+/// ID prefix mismatch alone is NOT a wrong-repo signal — packet/domain metadata
+/// and routing context decide.
 /// </summary>
 internal static class GuideOrchestratorThreadCommand
 {
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
 
+    private const string ModeSingleDomain = "single-domain";
+    private const string ModeMultiDomain = "multi-domain";
+
     private const string UsageLine =
-        "Usage: intent-cli guide orchestrator-thread [--domain <name>] [--target-repo <owner/repo>] [--agent <agent>] [--format markdown|json]";
+        "Usage: intent-cli guide orchestrator-thread [--domain <name>] [--target-repo <owner/repo>] [--agent <agent>] [--mode single-domain|multi-domain] [--format markdown|json]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -66,11 +80,32 @@ internal static class GuideOrchestratorThreadCommand
         var domain = values["<domain>"];
         var repo = values["<owner/repo>"];
         var agent = values["<agent>"];
+        var mode = values["<mode>"];
+        var multiDomain = string.Equals(mode, ModeMultiDomain, StringComparison.Ordinal);
 
         string Apply(string template) => template
             .Replace("<domain>", domain, StringComparison.Ordinal)
             .Replace("<owner/repo>", repo, StringComparison.Ordinal)
             .Replace("<agent>", agent, StringComparison.Ordinal);
+
+        // G489: the orchestrator prompt carries a mode-specific routing clause —
+        // single-domain orchestrators stay scoped to one domain; multi-domain
+        // orchestrators must attach explicit routing metadata to each delegation.
+        var routingClause = multiDomain
+            ? Apply(
+                " You are in MULTI-DOMAIN mode: you intentionally coordinate several domains, and a single host repo "
+                + "can hold several domains while one target repo (`<owner/repo>`) may receive work from more than one "
+                + "domain. Before EACH delegation you MUST attach explicit routing metadata — domain, execution unit, "
+                + "target repo, implementation cwd/worktree, review cwd/worktree, base branch policy, and destination "
+                + "thread — and send each execution unit only to the thread that owns that domain's checkout. Never "
+                + "delegate without complete routing. An execution-unit ID prefix that differs from the domain name is "
+                + "NOT by itself a wrong-repo signal — compare packet/domain metadata and the routing context, not the "
+                + "prefix.")
+            : Apply(
+                " You are in SINGLE-DOMAIN mode: only domain `<domain>` is in scope. A host checkout can expose other "
+                + "domains' metadata in the same repo; those other-domain items are OUT OF SCOPE — do NOT delegate, "
+                + "publish, or repair them, even if they target `<owner/repo>`. Escalate to the operator to switch "
+                + "domain/mode instead of treating a visible other-domain item as delegable.");
 
         return new OrchestratorThreadGuide
         {
@@ -95,6 +130,39 @@ internal static class GuideOrchestratorThreadCommand
                     + "orchestrator) would race on the same GitHub state. The orchestrator paces those threads; they do "
                     + "not also self-schedule.",
             },
+            DomainRouting = new OrchestratorDomainRouting
+            {
+                Mode = mode,
+                SingleDomainRule = Apply(
+                    "Single-domain orchestrator: only domain `<domain>` is in scope. A host repo can hold several "
+                    + "domains, so other-domain queue items may be VISIBLE in the same checkout — they are OUT OF SCOPE "
+                    + "unless the operator switches domain/mode. Do not publish, delegate, or repair another domain's "
+                    + "item just because it is visible or targets the same repo; escalate instead."),
+                MultiDomainRule = Apply(
+                    "Multi-domain orchestrator: intentionally coordinates several domains. One target repo can receive "
+                    + "work from more than one domain, so visibility is not authorization. Require explicit routing "
+                    + "metadata for EACH delegation before publishing, delegating, reviewing, or repairing, and route "
+                    + "each execution unit to the thread that owns that domain's checkout."),
+                RoutingMetadataFields = new[]
+                {
+                    "domain",
+                    "execution unit",
+                    "target repo",
+                    "implementation cwd/worktree",
+                    "review cwd/worktree",
+                    "base branch policy",
+                    "destination thread",
+                },
+                DelegationExample =
+                    "{\"delegate\":{\"domain\":\"sekiban-as-a-service\",\"execution_unit\":\"G491\","
+                    + "\"target_repo\":\"J-Tech-Japan/intent-system\",\"impl_cwd\":\"/work/sekiban-saas\","
+                    + "\"review_cwd\":\"/review/sekiban-saas\",\"base_branch_policy\":\"direct-main\","
+                    + "\"destination_thread\":\"implementation@sekiban-as-a-service\"}}",
+                PrefixMismatchNote =
+                    "Do NOT treat an execution-unit ID prefix that differs from the domain name as a wrong-repo signal "
+                    + "on its own (a host repo can hold several domains, and one repo can serve several domains). Compare "
+                    + "the packet/domain metadata and the routing context to decide ownership, not the prefix string.",
+            },
             Threads = new[]
             {
                 new OrchestratorThreadPrompt
@@ -116,7 +184,8 @@ internal static class GuideOrchestratorThreadCommand
                         + "thread back to the official intent-cli workflow), or an escalation to the operator. Do NOT "
                         + "launch recurring implement/review timers for this domain/repo while orchestrating. Fail "
                         + "closed: if you detect a second orchestrator for this domain/repo, or agmsg replies conflict "
-                        + "with GitHub/intent-cli facts, STOP and escalate rather than guessing."),
+                        + "with GitHub/intent-cli facts, STOP and escalate rather than guessing."
+                        + routingClause),
                 },
                 new OrchestratorThreadPrompt
                 {
@@ -127,12 +196,18 @@ internal static class GuideOrchestratorThreadCommand
                         "You are the IMPLEMENTATION thread for domain `<domain>` against `<owner/repo>` using `<agent>`, "
                         + "driven by orchestrator agmsg delegations (NOT a recurring timer). When delegated an item, run "
                         + "the normal child implementation workflow: the issue/PR number comes from `intent-cli worker "
-                        + "next-action --repo <owner/repo> --github-only`, NOT from the agmsg text; claim, implement, "
-                        + "open the PR with a `Closes #<issue>` reference, and `worker complete` — all label transitions "
-                        + "through intent-cli worker/automation only. intent-cli and GitHub remain authoritative; agmsg "
-                        + "is only how you receive the delegation and send back your reply. When done or blocked, send "
-                        + "ONE structured agmsg reply (accepted / progress / completed / blocked) citing the GitHub "
-                        + "facts (PR number, CI). Do NOT read host metadata (`.intent-cli/**`, `intents/**`)."),
+                        + "next-action --repo <owner/repo> --github-only`, NOT from the agmsg text. Before claiming, "
+                        + "verify your local checkout context matches the delegation: your cwd/worktree, the git remote "
+                        + "repo, and the delegated domain must line up with the routing you were handed. If the checkout "
+                        + "does not match the delegated repo/domain, STOP and reply blocked instead of claiming. An "
+                        + "execution-unit ID prefix that differs from the domain name is NOT by itself a wrong-repo "
+                        + "signal — confirm via packet/domain metadata and the routing context, not the prefix. Then "
+                        + "claim, implement, open the PR with a `Closes #<issue>` reference, and `worker complete` — all "
+                        + "label transitions through intent-cli worker/automation only. intent-cli and GitHub remain "
+                        + "authoritative; agmsg is only how you receive the delegation and send back your reply. When "
+                        + "done or blocked, send ONE structured agmsg reply (accepted / progress / completed / blocked) "
+                        + "citing the GitHub facts (PR number, CI). Do NOT read host metadata (`.intent-cli/**`, "
+                        + "`intents/**`)."),
                 },
                 new OrchestratorThreadPrompt
                 {
@@ -164,6 +239,7 @@ internal static class GuideOrchestratorThreadCommand
             OrchestratorFirstWake = new[]
             {
                 "Confirm you are the ONLY orchestrator for this domain/repo; if a second is detected, STOP and escalate (fail closed).",
+                Apply("Confirm domain scope: in single-domain mode, treat other-domain items visible in the host repo as OUT OF SCOPE (escalate, never delegate); in multi-domain mode, attach full routing metadata (domain, execution unit, target repo, implementation + review cwd/worktree, base branch policy, destination thread) before each delegation. Visibility is not authorization, and an execution-unit prefix mismatch alone is not a wrong-repo signal."),
                 "Read pending agmsg replies from the implementation/review threads (signals only — do not trust them as state).",
                 Apply("Ask intent-cli for the real state: `intent-cli intent status --domain <domain> --format json` and `intent-cli worker next-action --repo <owner/repo> --github-only --format json`."),
                 "Verify every GitHub fact an agmsg reply claims (PR merged, CI concluded, labels) before acting on it.",
@@ -177,6 +253,7 @@ internal static class GuideOrchestratorThreadCommand
                 "No hand-editing queue-state, runs.jsonl, packets, or any host metadata (`.intent-cli/**`, `intents/**`).",
                 "agmsg never replaces semantic review or authorizes a merge; review/closeout decisions run through intent-cli review surfaces (G480).",
                 "Process at most one delegation/repair/escalation per orchestrator wake; one delegated item per implementation/review wake.",
+                "Domain isolation: a host repo can hold several domains and one repo can serve several domains, so visibility is not authorization. Single-domain orchestrators ignore/escalate other-domain items; multi-domain orchestrators require explicit per-delegation routing. An execution-unit prefix mismatch alone is not a wrong-repo signal.",
                 "Fail closed on duplicate orchestrators for the same domain/repo, or when an agmsg reply conflicts with intent-cli/GitHub facts — STOP and escalate, never guess.",
                 "Never ask intent-cli to launch Claude/Codex/Copilot or any AI provider; intent-cli only emits text the human agent acts on.",
             },
@@ -203,6 +280,7 @@ internal static class GuideOrchestratorThreadCommand
             ["<domain>"] = "<domain>",
             ["<owner/repo>"] = "<owner/repo>",
             ["<agent>"] = "<agent>",
+            ["<mode>"] = ModeSingleDomain,
         };
 
         for (var i = 0; i < args.Length; i++)
@@ -237,6 +315,9 @@ internal static class GuideOrchestratorThreadCommand
                 case "--agent":
                     parsed["<agent>"] = value;
                     break;
+                case "--mode":
+                    parsed["<mode>"] = value;
+                    break;
             }
         }
 
@@ -248,6 +329,15 @@ internal static class GuideOrchestratorThreadCommand
             return false;
         }
 
+        var modeValue = parsed["<mode>"];
+        if (!string.Equals(modeValue, ModeSingleDomain, StringComparison.Ordinal)
+            && !string.Equals(modeValue, ModeMultiDomain, StringComparison.Ordinal))
+        {
+            values = parsed;
+            error = $"Unknown --mode '{modeValue}'. Supported: single-domain, multi-domain.";
+            return false;
+        }
+
         values = parsed;
         return true;
     }
@@ -256,7 +346,8 @@ internal static class GuideOrchestratorThreadCommand
         string.Equals(arg, "--format", StringComparison.Ordinal)
         || string.Equals(arg, "--domain", StringComparison.Ordinal)
         || string.Equals(arg, "--target-repo", StringComparison.Ordinal)
-        || string.Equals(arg, "--agent", StringComparison.Ordinal);
+        || string.Equals(arg, "--agent", StringComparison.Ordinal)
+        || string.Equals(arg, "--mode", StringComparison.Ordinal);
 
     private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide)
     {
@@ -270,6 +361,25 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **timer-loop mode** — {guide.ModeSeparation.TimerLoopMode}");
         writer.WriteLine($"- **orchestrator-message mode** — {guide.ModeSeparation.OrchestratorMessageMode}");
         writer.WriteLine($"- **mixed-mode warning** — {guide.ModeSeparation.MixedModeWarning}");
+        writer.WriteLine();
+
+        writer.WriteLine("## Domain routing — single-domain vs multi-domain");
+        writer.WriteLine();
+        writer.WriteLine($"- selected mode: `{guide.DomainRouting.Mode}`");
+        writer.WriteLine($"- **single-domain** — {guide.DomainRouting.SingleDomainRule}");
+        writer.WriteLine($"- **multi-domain** — {guide.DomainRouting.MultiDomainRule}");
+        writer.WriteLine($"- **execution-unit prefix** — {guide.DomainRouting.PrefixMismatchNote}");
+        writer.WriteLine();
+        writer.WriteLine("Routing metadata required for every multi-domain delegation:");
+        writer.WriteLine();
+        foreach (var field in guide.DomainRouting.RoutingMetadataFields)
+        {
+            writer.WriteLine($"- {field}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(guide.DomainRouting.DelegationExample);
+        writer.WriteLine("```");
         writer.WriteLine();
 
         writer.WriteLine("## Thread prompts");
@@ -330,6 +440,12 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("Renders paste-ready prompts for an OPTIONAL agmsg-backed orchestrator thread plus the");
         writer.WriteLine("implementation/review threads it delegates to. agmsg is a signal layer only; intent-cli and");
         writer.WriteLine("GitHub remain authoritative. Existing timer-loop mode stays valid and is not replaced.");
+        writer.WriteLine();
+        writer.WriteLine("--mode single-domain (default) scopes the orchestrator to one domain and treats other-domain");
+        writer.WriteLine("items visible in a shared host repo as out of scope. --mode multi-domain requires explicit");
+        writer.WriteLine("routing metadata (domain, execution unit, target repo, implementation + review cwd/worktree,");
+        writer.WriteLine("base branch policy, destination thread) for each delegation, since one repo may serve several");
+        writer.WriteLine("domains. An execution-unit prefix mismatch alone is not treated as a wrong-repo signal.");
     }
 }
 
@@ -340,6 +456,9 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("mode_separation")]
     public required OrchestratorModeSeparation ModeSeparation { get; init; }
+
+    [JsonPropertyName("domain_routing")]
+    public required OrchestratorDomainRouting DomainRouting { get; init; }
 
     [JsonPropertyName("threads")]
     public required IReadOnlyList<OrchestratorThreadPrompt> Threads { get; init; }
@@ -367,6 +486,27 @@ internal sealed record OrchestratorModeSeparation
 
     [JsonPropertyName("mixed_mode_warning")]
     public required string MixedModeWarning { get; init; }
+}
+
+internal sealed record OrchestratorDomainRouting
+{
+    [JsonPropertyName("mode")]
+    public required string Mode { get; init; }
+
+    [JsonPropertyName("single_domain_rule")]
+    public required string SingleDomainRule { get; init; }
+
+    [JsonPropertyName("multi_domain_rule")]
+    public required string MultiDomainRule { get; init; }
+
+    [JsonPropertyName("routing_metadata_fields")]
+    public required IReadOnlyList<string> RoutingMetadataFields { get; init; }
+
+    [JsonPropertyName("delegation_example")]
+    public required string DelegationExample { get; init; }
+
+    [JsonPropertyName("prefix_mismatch_note")]
+    public required string PrefixMismatchNote { get; init; }
 }
 
 internal sealed record OrchestratorThreadPrompt

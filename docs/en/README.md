@@ -25,6 +25,7 @@ The agent runs `intent-cli` internally and brings back questions or results. You
 7. [Recover when a loop looks wrong](07-recovery.md)
 8. [Command reference](08-command-reference.md) — agent-facing and power-user command surfaces
 9. [Developer reference](09-developer-reference.md) — packaged invocation, preview channel, version flow
+12. [Agent-message orchestration](12-agent-message-orchestration.md) — optional agmsg orchestrator thread; single-domain vs multi-domain routing
 
 ## What is Intent Storming?
 
