@@ -59,6 +59,31 @@ copy a long loop body from this document.
 - Passing tests is **necessary but not sufficient** — approval requires packet/intent conformance evidence (see `guide review`)
 - Current-PR acceptance-criterion blockers get a durable PR comment before completing as request-update/clarification (see [recovery](07-recovery.md))
 
+## Automated reviewer comment triage
+
+Some repositories enable automated reviewers (e.g. Copilot). Their comments are
+**signals, not authoritative requirements** — the review agent triages each one
+before it becomes implementation work, and does **not** blindly apply every
+automated suggestion. `intent-cli guide review` surfaces this policy, which
+applies to **both** the timer-loop review flow and the orchestrator-message
+review flow. Each automated comment is classified as one of:
+
+- **accepted-actionable** — a valid implementation finding; include it in the
+  request-update / repair instructions, tied to a packet clause or acceptance
+  criterion. The implementer fixes it on the PR branch.
+- **rejected-not-applicable** — does not apply (wrong context, false positive,
+  out of scope). Record a brief reason and resolve/close the thread where
+  supported; never silently drop it.
+- **duplicate** — restates an existing finding; link to the canonical one,
+  resolve the duplicate, and do not raise a second request-update item.
+- **informational** — a nit / FYI with no required change; acknowledge and
+  resolve without a request-update.
+- **needs-human-judgment** — a product/design, security, or canonical-ambiguity
+  call the review agent cannot settle; escalate to the operator, do not route
+  it to implementation as if settled.
+
+Only accepted-actionable comments enter request-update / repair instructions.
+
 ## Command reference (for agents, maintainers, and troubleshooting)
 
 > **Note:** The commands below are run by the AI agent internally. The authoritative

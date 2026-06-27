@@ -123,6 +123,70 @@ internal static class GuideReviewCommand
         "Tests-only failure mode (\"tests pass but evidence missing\") is itself an implementation-finding when the PR cannot show packet/intent conformance — request the implementer to add the missing evidence (test names mapped to AC, comments tying changes to packet clauses, etc.)."
     };
 
+    // G493: triage policy for automated coding-agent reviewer comments
+    // (e.g. Copilot). Such comments are SIGNALS, not authoritative
+    // requirements: the review agent classifies each before it becomes
+    // implementation work, so the loop never blindly forwards every
+    // automated suggestion to the implementer. The same policy applies to
+    // both timer-loop review mode and orchestrator-message review mode —
+    // both flows resolve their PR guidance through this command.
+    private static readonly GuideReviewAutomatedCommentTriage AutomatedReviewerCommentTriagePolicy = new()
+    {
+        Summary =
+            "Automated coding-agent reviewer comments (e.g. Copilot) are SIGNALS, not authoritative requirements. The "
+            + "review agent triages each comment BEFORE it becomes implementation work; do not blindly apply every "
+            + "automated suggestion. Only accepted-actionable comments enter request-update / repair instructions; "
+            + "rejected, duplicate, and informational comments are documented and resolved where the platform supports "
+            + "it; needs-human-judgment comments escalate to the operator.",
+        DoNotBlindlyApply = true,
+        AppliesTo = new[]
+        {
+            "timer-loop review mode",
+            "orchestrator-message review mode",
+        },
+        Classifications = new[]
+        {
+            new GuideReviewAutomatedCommentClass
+            {
+                Classification = "accepted-actionable",
+                Handling =
+                    "A valid implementation finding. Include it in the request-update / repair instructions, tied to a "
+                    + "specific packet contract clause or acceptance criterion. Becomes implementation work on the PR "
+                    + "branch (the implementer fixes it).",
+            },
+            new GuideReviewAutomatedCommentClass
+            {
+                Classification = "rejected-not-applicable",
+                Handling =
+                    "Does not apply to this change (wrong context, false positive, out of scope). Record a brief reason "
+                    + "and resolve/close the comment thread where the platform supports it. Never silently drop it — the "
+                    + "rejection reason is the audit trail.",
+            },
+            new GuideReviewAutomatedCommentClass
+            {
+                Classification = "duplicate",
+                Handling =
+                    "Restates an existing finding or another automated comment. Link to the canonical finding, resolve "
+                    + "the duplicate thread, and do NOT create a second request-update item for it.",
+            },
+            new GuideReviewAutomatedCommentClass
+            {
+                Classification = "informational",
+                Handling =
+                    "A nit / FYI with no required change. Acknowledge it, optionally fold it into existing work, and "
+                    + "resolve it without raising a request-update.",
+            },
+            new GuideReviewAutomatedCommentClass
+            {
+                Classification = "needs-human-judgment",
+                Handling =
+                    "A product/design, security, or canonical-ambiguity call the review agent cannot settle on its own. "
+                    + "Escalate to the operator as a structured stop; do NOT route it to implementation as if it were "
+                    + "settled.",
+            },
+        },
+    };
+
     // G445: standing policy for device/operator/hardware-gated acceptance
     // criteria. AI review loops cannot always operate physical devices or
     // produce real hardware evidence; without a stable rule they stall,
@@ -284,6 +348,7 @@ internal static class GuideReviewCommand
             ReviewBoundaries = ReviewBoundaries,
             ApprovalSummaryRequirements = ApprovalSummaryRequirements,
             RequestUpdateRequirements = RequestUpdateRequirements,
+            AutomatedReviewerCommentTriage = AutomatedReviewerCommentTriagePolicy,
             // G451: device-gated rules now come from the resolved standing
             // policy (default == prior G445 rules; overridable per domain).
             DeviceGatedEvidencePolicy = standingPolicy.DeviceGatedEvidence.Rules,
@@ -531,6 +596,19 @@ internal static class GuideReviewCommand
         foreach (var item in result.RequestUpdateRequirements)
         {
             writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+
+        // G493: triage policy for automated coding-agent reviewer comments.
+        writer.WriteLine("## Automated reviewer comment triage (G493)");
+        writer.WriteLine(result.AutomatedReviewerCommentTriage.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- do_not_blindly_apply: {(result.AutomatedReviewerCommentTriage.DoNotBlindlyApply ? "yes" : "no")}");
+        writer.WriteLine($"- applies to: {string.Join(", ", result.AutomatedReviewerCommentTriage.AppliesTo)}");
+        writer.WriteLine();
+        foreach (var classification in result.AutomatedReviewerCommentTriage.Classifications)
+        {
+            writer.WriteLine($"- **{classification.Classification}** — {classification.Handling}");
         }
         writer.WriteLine();
 
@@ -800,6 +878,16 @@ internal sealed record GuideReviewResult
     public required IReadOnlyList<string> RequestUpdateRequirements { get; init; }
 
     /// <summary>
+    /// G493: triage policy for automated coding-agent reviewer comments
+    /// (e.g. Copilot) — classifications and routing so the review agent
+    /// never blindly forwards every automated suggestion to the
+    /// implementer. Applies to both review flows (timer-loop and
+    /// orchestrator-message).
+    /// </summary>
+    [JsonPropertyName("automated_reviewer_comment_triage")]
+    public required GuideReviewAutomatedCommentTriage AutomatedReviewerCommentTriage { get; init; }
+
+    /// <summary>
     /// G445: standing policy for device/operator/hardware-gated evidence
     /// gaps — when to approve-with-recorded-gap vs hard-block, the
     /// no-false-claim rule, durable follow-up tracking, and not re-asking the
@@ -869,6 +957,39 @@ internal sealed record GuideReviewResult
 
     [JsonPropertyName("ready")]
     public required bool Ready { get; init; }
+}
+
+/// <summary>
+/// G493: triage policy for automated coding-agent reviewer comments —
+/// a summary, the review flows it applies to, the do-not-blindly-apply
+/// signal, and the per-classification handling/routing rules.
+/// </summary>
+internal sealed record GuideReviewAutomatedCommentTriage
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("do_not_blindly_apply")]
+    public required bool DoNotBlindlyApply { get; init; }
+
+    [JsonPropertyName("applies_to")]
+    public required IReadOnlyList<string> AppliesTo { get; init; }
+
+    [JsonPropertyName("classifications")]
+    public required IReadOnlyList<GuideReviewAutomatedCommentClass> Classifications { get; init; }
+}
+
+/// <summary>
+/// G493: a single automated-reviewer-comment classification and how the
+/// review agent routes it.
+/// </summary>
+internal sealed record GuideReviewAutomatedCommentClass
+{
+    [JsonPropertyName("classification")]
+    public required string Classification { get; init; }
+
+    [JsonPropertyName("handling")]
+    public required string Handling { get; init; }
 }
 
 /// <summary>

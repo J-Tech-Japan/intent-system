@@ -60,6 +60,70 @@ public sealed class GuideReviewCommandTests
     }
 
     [Fact]
+    public void Execute_EmitsAutomatedReviewerCommentTriage_WithFiveClassifications_G493()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G248", "review", title: "guide review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G248/packet.yaml", "x");
+
+        using var writer = new StringWriter();
+        var exitCode = GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var triage = document.RootElement.GetProperty("automated_reviewer_comment_triage");
+
+        // Automated comments are not blindly applied.
+        Assert.True(triage.GetProperty("do_not_blindly_apply").GetBoolean());
+
+        // Policy applies to both review flows.
+        var appliesTo = triage.GetProperty("applies_to").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Contains("timer-loop review mode", appliesTo);
+        Assert.Contains("orchestrator-message review mode", appliesTo);
+
+        // The five required classifications are present.
+        var classes = triage.GetProperty("classifications").EnumerateArray()
+            .Select(c => c.GetProperty("classification").GetString())
+            .ToArray();
+        Assert.Equal(
+            new[] { "accepted-actionable", "rejected-not-applicable", "duplicate", "informational", "needs-human-judgment" },
+            classes);
+
+        // Accepted routes to request-update; rejected requires a reason.
+        var handlingByClass = triage.GetProperty("classifications").EnumerateArray()
+            .ToDictionary(c => c.GetProperty("classification").GetString()!, c => c.GetProperty("handling").GetString()!);
+        Assert.Contains("request-update", handlingByClass["accepted-actionable"], StringComparison.Ordinal);
+        Assert.Contains("reason", handlingByClass["rejected-not-applicable"], StringComparison.Ordinal);
+        Assert.Contains("escalate", handlingByClass["needs-human-judgment"], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_Markdown_IncludesAutomatedReviewerCommentTriageSection_G493()
+    {
+        using var workspace = new GuideReviewWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G248", "review", title: "guide review", linkedPr: "598"));
+        workspace.WriteFile(".intent-cli/issues/G248/packet.yaml", "x");
+
+        using var writer = new StringWriter();
+        GuideReviewCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "598", "--format", "markdown"],
+            writer);
+
+        var output = writer.ToString();
+        Assert.Contains("## Automated reviewer comment triage (G493)", output, StringComparison.Ordinal);
+        Assert.Contains("SIGNALS, not authoritative requirements", output, StringComparison.Ordinal);
+        Assert.Contains("- **accepted-actionable**", output, StringComparison.Ordinal);
+        Assert.Contains("- **rejected-not-applicable**", output, StringComparison.Ordinal);
+        Assert.Contains("- **duplicate**", output, StringComparison.Ordinal);
+        Assert.Contains("- **informational**", output, StringComparison.Ordinal);
+        Assert.Contains("- **needs-human-judgment**", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenQueueMatchAndReviewContext_EmitsReadyTrueWithExcerpt()
     {
         using var workspace = new GuideReviewWorkspace();
