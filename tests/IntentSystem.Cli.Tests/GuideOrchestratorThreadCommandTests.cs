@@ -404,6 +404,61 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_DependencyPlanning_RoutesToEarliestUnmetDependency_NotOperator_G495()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Dependency planning", output, StringComparison.Ordinal);
+        // Unmet deps are normal work, not an operator stop.
+        Assert.Contains("NORMAL orchestration work when explicit and resolvable", output, StringComparison.Ordinal);
+        Assert.Contains("not an operator", output, StringComparison.Ordinal);
+        // Earliest unmet dependency first; dependent held.
+        Assert.Contains("EARLIEST unmet same-domain dependency first", output, StringComparison.Ordinal);
+        Assert.Contains("**dependent hold**", output, StringComparison.Ordinal);
+        // The five structured statuses.
+        Assert.Contains("- **dependency-publish-ready**", output, StringComparison.Ordinal);
+        Assert.Contains("- **dependency-actionable**", output, StringComparison.Ordinal);
+        Assert.Contains("- **dependency-waiting**", output, StringComparison.Ordinal);
+        Assert.Contains("- **dependency-ambiguous**", output, StringComparison.Ordinal);
+        Assert.Contains("- **dependency-cycle**", output, StringComparison.Ordinal);
+        // Escalation reserved for ambiguous/cycle/cross-domain/etc.
+        Assert.Contains("### Escalate only when", output, StringComparison.Ordinal);
+        Assert.Contains("dependency packet is missing", output, StringComparison.Ordinal);
+        Assert.Contains("cross-domain dependency has no explicit route mapping", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasDependencyPlanningShape_WithFiveStatuses_G495()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var planning = doc.RootElement.GetProperty("dependency_planning");
+
+        Assert.True(planning.TryGetProperty("selection_rule", out _));
+        Assert.True(planning.TryGetProperty("dependent_hold", out _));
+        var statuses = planning.GetProperty("statuses").EnumerateArray()
+            .Select(s => s.GetProperty("status").GetString())
+            .ToArray();
+        Assert.Equal(
+            new[] { "dependency-publish-ready", "dependency-actionable", "dependency-waiting", "dependency-ambiguous", "dependency-cycle" },
+            statuses);
+        Assert.NotEmpty(planning.GetProperty("escalation_cases").EnumerateArray());
+
+        // The orchestrator prompt treats unmet dependencies as routine, not a stop.
+        var orchestrator = doc.RootElement.GetProperty("threads").EnumerateArray()
+            .First(t => t.GetProperty("role").GetString() == "orchestrator")
+            .GetProperty("prompt").GetString()!;
+        Assert.Contains("Unmet dependencies are normal work", orchestrator, StringComparison.Ordinal);
+        Assert.Contains("EARLIEST unmet resolvable dependency", orchestrator, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();
