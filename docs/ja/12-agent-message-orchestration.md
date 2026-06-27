@@ -76,6 +76,25 @@ orchestrator のスケジュール方法は次の 2 通り:
   認証情報やセキュリティ、破壊的なローカル操作、または解決不能な canonical な曖昧さ
   （intent-cli/GitHub の事実が本当に矛盾するか欠落している）。
 
+### CI 待ち状態
+
+pending/running の CI を持つ PR は **アクティブな待ち状態** であり、ブロッカーでは
+ありません。GitHub checks が権威です。各 wake で必須チェックを再確認します。pending な CI
+はそれ単独では request-update label、repair メッセージ、オペレーターへの質問を引き起こしません。
+review / merge / closeout を委譲する直前には必ず必須チェックを再検証してください — 以前読んだ
+green は古くなっている可能性があります。
+
+- **pending / running** — 次の wake で待って再確認する。メッセージなし、request-update なし、
+  オペレーター質問なし。PR を in-flight として追跡し、先へ進む。
+- **green** — すべての必須チェックが通過。intent-cli review surface 経由で review/closeout を
+  委譲する。委譲時に green を再検証する。
+- **red** — 必須チェックが失敗。所有権でルーティング: 実装スレッドが直せる test/build/lint の
+  失敗には 1 通の repair メッセージ。プロダクト/設計や canonical 判断が必要なものはエスカレーション。
+  必須チェックが red の間は merge/closeout を委譲しない。
+- **stuck / ambiguous** — チェックが開始されない、妥当な時間を大きく超えてハングする、または
+  矛盾/不明なステータスを報告する。1 件のオペレーター判断にエスカレーション（fail closed）。
+  green を推測しない。
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:
