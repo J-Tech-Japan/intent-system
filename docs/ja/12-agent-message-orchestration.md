@@ -95,6 +95,34 @@ green は古くなっている可能性があります。
   矛盾/不明なステータスを報告する。1 件のオペレーター判断にエスカレーション（fail closed）。
   green を推測しない。
 
+## next-slice の publish
+
+ルーチンな next-slice issue の publish は **orchestrator の責務** であり、オペレーターへの
+質問ではありません。intent-cli が候補を `issue-cut-ready` と報告し、すべての安全ゲートを
+通過したら、orchestrator はオペレーターに GitHub issue 作成を依頼して止まるのではなく、
+canonical な intent-cli コマンドで自分で publish します。**1 wake につき最大 1 件** です。
+
+次の **すべて** が成り立つときのみ publish します:
+
+- same-domain コンテキスト、または明示的にルーティングされた multi-domain 委譲
+  （明示ルーティングなしに cross-domain 候補を publish しない）;
+- packet contract が完全（必須セクションの欠落なし）;
+- open な clarification や contract の曖昧さがない;
+- 依存が満たされている — 未 cut の依存より先に publish しない;
+- WIP 上限内;
+- host-sync / preflight がクリーンで、対象 repo/domain が一意。
+
+それ以外は **hold またはエスカレーション** — 必須セクションの欠落、open clarification、
+依存の不一致、WIP 上限到達、host-sync ブロッカー、対象 repo/domain の曖昧さはすべて
+ブロッカーです。
+
+publish は canonical な surface のみ — `intent-cli issue publish-flow` と
+`intent-cli automation issue-publish` — を使い、生の `gh issue create` や
+`gh ... --add-label` は使いません。publish 後は intent-cli / GitHub（チャットではなく）で
+issue が期待どおりの body と `intent-target` label を持つこと、durable state がそれを
+反映していることを検証し、その後 agmsg で実装を委譲します。実装 receiver は依然として
+`intent-cli worker next-action` からターゲットを得ます（agmsg テキストからではありません）。
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:

@@ -295,6 +295,69 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_NextSlicePublication_IsOrchestratorResponsibility_OnePerWake()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Next-slice publication", output, StringComparison.Ordinal);
+        // Routine publication is the orchestrator's job, not an operator question.
+        Assert.Contains("ORCHESTRATOR responsibility, not an operator question", output, StringComparison.Ordinal);
+        Assert.Contains("one_per_wake: yes", output, StringComparison.Ordinal);
+        // Canonical publish surfaces are required; no raw gh.
+        Assert.Contains("issue publish-flow", output, StringComparison.Ordinal);
+        Assert.Contains("automation issue-publish", output, StringComparison.Ordinal);
+        Assert.Contains("Never raw `gh issue create`", output, StringComparison.Ordinal);
+        // Post-publish verification before delegating; receiver still uses worker next-action.
+        Assert.Contains("### Post-publish verification", output, StringComparison.Ordinal);
+        Assert.Contains("worker next-action", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_NextSlicePublication_ListsReadyGatesAndBlockers()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "codex"]);
+
+        // Ready preconditions cover same-domain/routed, contract, clarification, dependencies, WIP, host-sync.
+        Assert.Contains("### Publish only when ALL hold", output, StringComparison.Ordinal);
+        Assert.Contains("never publish a cross-domain candidate without explicit routing", output, StringComparison.Ordinal);
+        Assert.Contains("Dependencies are satisfied", output, StringComparison.Ordinal);
+        Assert.Contains("WIP cap", output, StringComparison.Ordinal);
+        Assert.Contains("host-sync / preflight", output, StringComparison.Ordinal);
+        // Blocked cases.
+        Assert.Contains("### Blocked by (hold or escalate)", output, StringComparison.Ordinal);
+        Assert.Contains("Missing contract sections", output, StringComparison.Ordinal);
+        Assert.Contains("Dependency mismatch", output, StringComparison.Ordinal);
+        Assert.Contains("Ambiguous target repo or domain", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasNextSlicePublicationShape()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var publication = doc.RootElement.GetProperty("next_slice_publication");
+
+        Assert.True(publication.GetProperty("one_per_wake").GetBoolean());
+        Assert.NotEmpty(publication.GetProperty("preconditions").EnumerateArray());
+        Assert.NotEmpty(publication.GetProperty("blockers").EnumerateArray());
+        Assert.NotEmpty(publication.GetProperty("canonical_commands").EnumerateArray());
+        Assert.NotEmpty(publication.GetProperty("post_publish_verification").EnumerateArray());
+
+        // The orchestrator prompt lists publication as a possible single action.
+        var orchestrator = doc.RootElement.GetProperty("threads").EnumerateArray()
+            .First(t => t.GetProperty("role").GetString() == "orchestrator")
+            .GetProperty("prompt").GetString()!;
+        Assert.Contains("publish one ready next-slice issue", orchestrator, StringComparison.Ordinal);
+        Assert.Contains("issue-cut-ready", orchestrator, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();
