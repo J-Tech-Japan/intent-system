@@ -176,6 +176,31 @@ issue が期待どおりの body と `intent-target` label を持つこと、dur
 のみ**: 依存 packet の欠落、依存の循環、ルートマッピングのない cross-domain 依存、GitHub
 linkage の矛盾、破壊的な復旧、認証情報/セキュリティ、または人間のプロダクト/設計判断。
 
+## stale-thread ヘルスチェック
+
+receiver は loopless なので、**沈黙は曖昧** です — receiver は working、CI 待ち、
+permission プロンプト待ち、blocked、返信なしで completed、または本当に stale かもしれません。
+receiver がしきい値（デフォルト **30 分**、設定可能）を超えて返信しない場合、orchestrator は
+**安全な** liveness チェックを行います: 行動する前に尋ね、権威ある事実を検証し、作業の自動
+キャンセル・permission プロンプトの自動クリア・タスクの重複を決して行いません。
+
+手順:
+
+1. **非破壊的な status-request を 1 通** 送る — 尋ねるだけで、retry/cancel/reset しない。
+2. read-only の intent-cli / GitHub 事実を確認（`worker next-action`、issue/PR 状態、CI、label）。
+3. 事実が進捗を示すなら（新規コミット、PR 更新、CI 実行中）**監視を続ける** — 作業を再送しない。
+4. receiver が `waiting-permission` と返したら、それは **オペレーター通知** — surface する。
+   プロンプトを自動クリアしない。
+5. 繰り返しの no-reply **かつ** 進捗なしの後にのみ、同じ issue/PR を参照する
+   **冪等な re-entry を最大 1 通** 送る。
+6. 進捗のない沈黙が続く場合、または安全でないケース（cancel/reset、破壊的 git、認証情報）は
+   エスカレーションする。
+
+status-request は receiver に次のいずれかで返信するよう求めます: `working`、`waiting-ci`、
+`waiting-permission`、`blocked`、`completed`、`idle`。ヘルスチェックは permission プロンプトの
+クリア、作業の cancel/reset、label の変更、破壊的 git を決して行いません。（timer-loop モードは
+影響を受けません — これは orchestrator-message の receiver にのみ適用されます。）
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:
