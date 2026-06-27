@@ -151,6 +151,31 @@ issue が期待どおりの body と `intent-target` label を持つこと、dur
 反映していることを検証し、その後 agmsg で実装を委譲します。実装 receiver は依然として
 `intent-cli worker next-action` からターゲットを得ます（agmsg テキストからではありません）。
 
+## 依存の計画（dependency planning）
+
+未充足の依存は、明示的かつ解決可能であれば **通常のオーケストレーション作業** であり、
+オペレーターへの停止ではありません。次の候補が未完了の作業に依存している場合、orchestrator は
+オペレーター判断のために止まらず、チェーンを決定論的に計画します — 依存元の候補を hold し、
+この wake のアクションを **最も早い未充足の** same-domain（または明示ルーティングされた）依存に
+向けます。
+
+依存ステータスによるルーティング:
+
+- **dependency-publish-ready** — 最も早い未充足依存が `issue-cut-ready` で GitHub issue が
+  ない → この wake で publish（1 wake 1 件、next-slice publication ゲートに従う）。依存元は
+  hold のまま。
+- **dependency-actionable** — 依存にすでに issue または PR があり進められる → intent-cli /
+  GitHub の事実を使ってルーティング（実装・レビュー・closeout・repair）。
+- **dependency-waiting** — 依存が in flight（例: PR の CI が pending）→ 次の wake まで待って
+  再確認。依存元は hold のまま。
+- **dependency-ambiguous** — 決定論的に解決できない（依存 packet 欠落、GitHub linkage の矛盾、
+  ルートマッピングのない cross-domain）→ 1 件のオペレーター判断にエスカレーション。
+- **dependency-cycle** — 依存が循環している → エスカレーション（fail closed）。
+
+依存元の候補は、すべての依存が完了/cut されるまで hold されます。**エスカレーションは次の場合
+のみ**: 依存 packet の欠落、依存の循環、ルートマッピングのない cross-domain 依存、GitHub
+linkage の矛盾、破壊的な復旧、認証情報/セキュリティ、または人間のプロダクト/設計判断。
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:

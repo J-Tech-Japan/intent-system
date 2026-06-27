@@ -159,6 +159,35 @@ label and that durable state reflects it, then delegate implementation over
 agmsg. The implementation receiver still derives its target from
 `intent-cli worker next-action`, not the agmsg text.
 
+## Dependency planning
+
+Unmet dependencies are **normal orchestration work** when explicit and
+resolvable — not an operator stop. When the next candidate depends on work that
+is not yet complete, the orchestrator does **not** pause for operator judgment;
+it plans the chain deterministically: hold the dependent candidate and route
+this wake's action to the **earliest unmet** same-domain (or explicitly routed)
+dependency.
+
+Routing by dependency status:
+
+- **dependency-publish-ready** — the earliest unmet dependency is
+  `issue-cut-ready` with no GitHub issue → publish it this wake (one issue per
+  wake, under the next-slice publication gates); keep the dependent held.
+- **dependency-actionable** — the dependency already has an issue or PR that can
+  move → route it (implementation, review, closeout, or repair) using
+  intent-cli / GitHub facts.
+- **dependency-waiting** — the dependency is in flight (e.g. PR CI pending) →
+  wait and re-check next wake; keep the dependent held.
+- **dependency-ambiguous** — cannot be resolved deterministically (missing
+  dependency packet, conflicting GitHub linkage, cross-domain with no route
+  mapping) → escalate one operator decision.
+- **dependency-cycle** — the dependencies form a cycle → escalate (fail closed).
+
+The dependent candidate stays held until every dependency is completed/cut.
+**Escalate only** for: a missing dependency packet, a dependency cycle, a
+cross-domain dependency without route mapping, conflicting GitHub linkage,
+destructive recovery, credentials/security, or a human product/design judgment.
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for

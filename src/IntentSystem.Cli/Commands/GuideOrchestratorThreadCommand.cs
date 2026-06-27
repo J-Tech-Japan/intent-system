@@ -199,6 +199,7 @@ internal static class GuideOrchestratorThreadCommand
                     "Classify each open PR's CI: pending = wait-and-recheck next wake (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate. Pending CI is normal progress, not a reason to message the operator.",
                     "Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.",
                     "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), publish ONE issue this wake via canonical publish-flow / issue-publish, then verify — do not ask the operator to create it.",
+                    "If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.",
                     "Decide the single action for this wake: publish one ready next-slice issue, delegate the next slice/PR, send one repair message, or escalate one operator decision.",
                 },
                 RepairVsEscalate = new OrchestratorRepairEscalate
@@ -299,6 +300,72 @@ internal static class GuideOrchestratorThreadCommand
                     "Only after verification, delegate implementation over agmsg — and the implementation receiver still derives its target from `intent-cli worker next-action`, not the agmsg text.",
                 },
             },
+            DependencyPlanning = new OrchestratorDependencyPlanning
+            {
+                Summary =
+                    "Unmet dependencies are NORMAL orchestration work when explicit and resolvable — not an operator "
+                    + "stop. When a candidate depends on work that is not yet complete, do NOT pause for operator "
+                    + "judgment; plan the dependency chain deterministically: hold the dependent candidate and route this "
+                    + "wake's action to the earliest unmet dependency.",
+                SelectionRule =
+                    "Select the EARLIEST unmet same-domain dependency first (or an explicitly routed multi-domain "
+                    + "dependency). Act on that dependency this wake — publish or route it — rather than on the dependent "
+                    + "candidate. Walk the chain from its root, not from the visible leaf candidate.",
+                Statuses = new[]
+                {
+                    new OrchestratorDependencyStatus
+                    {
+                        Status = "dependency-publish-ready",
+                        Action =
+                            "The earliest unmet dependency is `issue-cut-ready` and has no GitHub issue — publish it this "
+                            + "wake under the next-slice publication gates (one issue per wake), then keep the dependent "
+                            + "candidate held.",
+                    },
+                    new OrchestratorDependencyStatus
+                    {
+                        Status = "dependency-actionable",
+                        Action =
+                            "The dependency already has an issue or PR that can move forward — route it (delegate "
+                            + "implementation, review, closeout, or repair) using intent-cli / GitHub facts, not the "
+                            + "dependent candidate.",
+                    },
+                    new OrchestratorDependencyStatus
+                    {
+                        Status = "dependency-waiting",
+                        Action =
+                            "The dependency is published and in flight (e.g. PR CI pending) — wait and re-check on the "
+                            + "next wake; do not ask the operator. Keep the dependent candidate held.",
+                    },
+                    new OrchestratorDependencyStatus
+                    {
+                        Status = "dependency-ambiguous",
+                        Action =
+                            "The dependency cannot be resolved deterministically (missing dependency packet, conflicting "
+                            + "GitHub linkage, or a cross-domain dependency with no route mapping) — escalate one operator "
+                            + "decision (fail closed).",
+                    },
+                    new OrchestratorDependencyStatus
+                    {
+                        Status = "dependency-cycle",
+                        Action =
+                            "The dependencies form a cycle — escalate (fail closed); never pick a node arbitrarily to "
+                            + "break the cycle.",
+                    },
+                },
+                DependentHold =
+                    "Keep the dependent candidate held — do not publish or delegate it — until every dependency is "
+                    + "completed/cut. Re-evaluate the chain on each wake.",
+                EscalationCases = new[]
+                {
+                    "A dependency packet is missing (referenced but no packet exists).",
+                    "The dependencies form a cycle.",
+                    "A cross-domain dependency has no explicit route mapping.",
+                    "Conflicting GitHub linkage (two issues/PRs claim the same dependency, or linkage disagrees with the packet).",
+                    "Destructive recovery would be required to proceed.",
+                    "Credentials / security are involved.",
+                    "A human product/design judgment is required.",
+                },
+            },
             Setup = new OrchestratorSetup
             {
                 Summary =
@@ -373,7 +440,10 @@ internal static class GuideOrchestratorThreadCommand
                         + "`issue-cut-ready` and all gates pass — via canonical `intent-cli issue publish-flow` / "
                         + "`automation issue-publish`, then verify), send one delegation (assign the next slice/PR), send "
                         + "one repair request (point a stalled thread back to the official intent-cli workflow), or "
-                        + "escalate one operator decision. Do NOT "
+                        + "escalate one operator decision. Unmet dependencies are normal work, not a stop: if the next "
+                        + "candidate depends on incomplete work, act on the EARLIEST unmet resolvable dependency "
+                        + "(publish or route it) and keep the dependent held, rather than pausing for the operator. Do "
+                        + "NOT "
                         + "launch recurring implement/review timers for this domain/repo while orchestrating. Fail "
                         + "closed: if you detect a second orchestrator for this domain/repo, or agmsg replies conflict "
                         + "with GitHub/intent-cli facts, STOP and escalate rather than guessing. In "
@@ -693,6 +763,28 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Dependency planning");
+        writer.WriteLine();
+        writer.WriteLine(guide.DependencyPlanning.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **selection rule** — {guide.DependencyPlanning.SelectionRule}");
+        writer.WriteLine($"- **dependent hold** — {guide.DependencyPlanning.DependentHold}");
+        writer.WriteLine();
+        writer.WriteLine("### Dependency statuses");
+        writer.WriteLine();
+        foreach (var status in guide.DependencyPlanning.Statuses)
+        {
+            writer.WriteLine($"- **{status.Status}** — {status.Action}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Escalate only when");
+        writer.WriteLine();
+        foreach (var escalation in guide.DependencyPlanning.EscalationCases)
+        {
+            writer.WriteLine($"- {escalation}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Thread prompts");
         foreach (var thread in guide.Threads)
         {
@@ -779,6 +871,9 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("next_slice_publication")]
     public required OrchestratorNextSlicePublication NextSlicePublication { get; init; }
+
+    [JsonPropertyName("dependency_planning")]
+    public required OrchestratorDependencyPlanning DependencyPlanning { get; init; }
 
     [JsonPropertyName("setup")]
     public required OrchestratorSetup Setup { get; init; }
@@ -881,6 +976,33 @@ internal sealed record OrchestratorCiState
 
     [JsonPropertyName("routing")]
     public required string Routing { get; init; }
+}
+
+internal sealed record OrchestratorDependencyPlanning
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("selection_rule")]
+    public required string SelectionRule { get; init; }
+
+    [JsonPropertyName("statuses")]
+    public required IReadOnlyList<OrchestratorDependencyStatus> Statuses { get; init; }
+
+    [JsonPropertyName("dependent_hold")]
+    public required string DependentHold { get; init; }
+
+    [JsonPropertyName("escalation_cases")]
+    public required IReadOnlyList<string> EscalationCases { get; init; }
+}
+
+internal sealed record OrchestratorDependencyStatus
+{
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("action")]
+    public required string Action { get; init; }
 }
 
 internal sealed record OrchestratorSetup
