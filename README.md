@@ -88,6 +88,11 @@ repository and paste one of these prompts:
 > Inspect `<target>` with intent-cli.
 > Observe the real behavior, separate evidence from inference, and propose packet candidates.
 
+**Start agmsg orchestrator mode (preview):**
+
+> I want to start agmsg orchestrator mode for `<owner>/<repo>` with intent-cli.
+> Ask intent-cli for the orchestrator setup checklist.
+
 The agent runs `intent-cli` commands internally and brings back questions or
 results. You focus on intent, priorities, and approval decisions. In **grill**
 mode (`intent-cli grill`) the thread stays persistent — it builds an
@@ -105,6 +110,20 @@ each answer until a stop condition is reached.
   — agent-facing and power-user command surfaces.
 - **Developer reference:** [`docs/en/09-developer-reference.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/09-developer-reference.md)
   — packaged invocation smoke test, preview channel, version flow.
+- **Agent-message orchestration (preview):** [`docs/en/12-agent-message-orchestration.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/12-agent-message-orchestration.md)
+  — the optional agmsg orchestrator mode (日本語: [`docs/ja/12`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/12-agent-message-orchestration.md)).
+
+> **Orchestrator mode is preview/experimental.** By default, implementation and
+> review run as independent **timer loops** (fully supported, unchanged). The
+> optional **agmsg orchestrator mode** adds a fourth orchestrator thread that
+> paces the implementation and review threads over a local message bus instead
+> of timers: the orchestrator is the only scheduled driver, the implementation
+> and review threads are loopless receivers, and you should not also run their
+> recurring timers for the same route. It covers single/multi-domain routing,
+> next-slice publication, CI wait, dependency planning, a safe stale-thread
+> health check, and safe-repair vs escalation. agmsg is a signal layer only —
+> intent-cli and GitHub stay authoritative. This mode is opt-in and still being
+> hardened.
 
 ---
 
