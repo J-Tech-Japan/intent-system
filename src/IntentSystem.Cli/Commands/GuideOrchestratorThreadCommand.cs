@@ -163,6 +163,55 @@ internal static class GuideOrchestratorThreadCommand
                     + "on its own (a host repo can hold several domains, and one repo can serve several domains). Compare "
                     + "the packet/domain metadata and the routing context to decide ownership, not the prefix string.",
             },
+            Scheduling = new OrchestratorScheduling
+            {
+                Summary =
+                    "In orchestrator-message mode the orchestrator thread is the SINGLE recurring driver. Schedule ONLY "
+                    + "the orchestrator (Codex automation every 5m, or Claude same-thread `/loop 5m`); the implementation "
+                    + "and review threads are long-lived but LOOPLESS receivers. This keeps a periodic driver — so "
+                    + "design progress, agmsg replies, completed CI, and approved PRs are noticed without the operator "
+                    + "poking stalled work — while avoiding the mixed-mode timer race.",
+                ScheduledThread = "orchestrator",
+                ReceiverNote =
+                    "Implementation and review threads are loopless receivers: do NOT start a recurring timer/loop in a "
+                    + "receiver thread for this domain/repo. A receiver waits for an agmsg delegation, acts once, replies "
+                    + "once, and waits again. Only the orchestrator is scheduled.",
+                CodexSetupPrompt = Apply(
+                    "Codex automation (run every 5 minutes) for the ORCHESTRATOR thread, domain `<domain>` against "
+                    + "`<owner/repo>` using `<agent>`: on each run perform exactly ONE orchestrator wake — check "
+                    + "design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker "
+                    + "next-action --github-only`, `automation host-review-preflight`), verify the GitHub facts "
+                    + "(CI/approval/merge/closeout), then send AT MOST ONE message (one delegation, one repair, or one "
+                    + "escalation) and exit. Do not run implementation/review loops; they are loopless receivers."),
+                ClaudeLoopSetupPrompt = Apply(
+                    "Claude same-thread setup for the ORCHESTRATOR thread, domain `<domain>` against `<owner/repo>`: in "
+                    + "the orchestrator thread run `/loop 5m` with the orchestrator prompt so the same thread re-wakes "
+                    + "every 5 minutes. Each wake does exactly one orchestrator pass (read replies, check intent-cli / "
+                    + "GitHub state, send AT MOST ONE message). Do NOT also launch `/loop` in the implementation or "
+                    + "review threads — those are loopless receivers driven only by your delegations."),
+                WakeResponsibilities = new[]
+                {
+                    Apply("Check design-side progress: newly published packets/issues and intent status changes via `intent-cli intent status --domain <domain> --format json`."),
+                    "Read pending agmsg replies from the implementation/review receivers (signals only — re-verify against intent-cli / GitHub).",
+                    Apply("Ask intent-cli for worker state: `intent-cli worker next-action --repo <owner/repo> --github-only --format json`."),
+                    Apply("Check host review readiness: `intent-cli automation host-review-preflight --repo <owner/repo> --format json`."),
+                    "Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.",
+                    "Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.",
+                    "Decide the single action for this wake: delegate the next slice/PR, send one repair message, or escalate one operator decision.",
+                },
+                RepairVsEscalate = new OrchestratorRepairEscalate
+                {
+                    Repair =
+                        "REPAIR routine off-rail states yourself by messaging the appropriate thread back onto the "
+                        + "official intent-cli workflow — e.g. a receiver that stalled, skipped `worker complete`, "
+                        + "applied a label by hand, or has not replied. Routine recovery is a repair message, not an "
+                        + "escalation.",
+                    Escalate =
+                        "ESCALATE to the operator ONLY for: product/design judgment, credentials or security, a "
+                        + "destructive local action, or an unresolved canonical ambiguity (intent-cli/GitHub facts "
+                        + "genuinely conflict or are missing). Do not escalate states you can repair by message.",
+                },
+            },
             Threads = new[]
             {
                 new OrchestratorThreadPrompt
@@ -184,7 +233,10 @@ internal static class GuideOrchestratorThreadCommand
                         + "thread back to the official intent-cli workflow), or an escalation to the operator. Do NOT "
                         + "launch recurring implement/review timers for this domain/repo while orchestrating. Fail "
                         + "closed: if you detect a second orchestrator for this domain/repo, or agmsg replies conflict "
-                        + "with GitHub/intent-cli facts, STOP and escalate rather than guessing."
+                        + "with GitHub/intent-cli facts, STOP and escalate rather than guessing. In "
+                        + "orchestrator-message mode YOU are the single recurring driver: schedule only this "
+                        + "orchestrator thread (Codex automation every 5m, or Claude same-thread `/loop 5m`); the "
+                        + "implementation/review receivers stay loopless and act only on your delegations."
                         + routingClause),
                 },
                 new OrchestratorThreadPrompt
@@ -194,7 +246,9 @@ internal static class GuideOrchestratorThreadCommand
                         "Implement exactly one delegated item, then report a structured agmsg reply.",
                     Prompt = Apply(
                         "You are the IMPLEMENTATION thread for domain `<domain>` against `<owner/repo>` using `<agent>`, "
-                        + "driven by orchestrator agmsg delegations (NOT a recurring timer). When delegated an item, run "
+                        + "driven by orchestrator agmsg delegations. You are a LOOPLESS receiver: do NOT start your own "
+                        + "recurring timer/loop for this domain/repo — wait for a delegation, act once, reply once, then "
+                        + "wait again (only the orchestrator is scheduled). When delegated an item, run "
                         + "the normal child implementation workflow: the issue/PR number comes from `intent-cli worker "
                         + "next-action --repo <owner/repo> --github-only`, NOT from the agmsg text. Before claiming, "
                         + "verify your local checkout context matches the delegation: your cwd/worktree, the git remote "
@@ -216,7 +270,9 @@ internal static class GuideOrchestratorThreadCommand
                         "Review/closeout exactly one delegated PR through intent-cli, then report a structured agmsg reply.",
                     Prompt = Apply(
                         "You are the REVIEW thread for domain `<domain>` against `<owner/repo>` using `<agent>`, driven "
-                        + "by orchestrator agmsg delegations (NOT a recurring timer). When delegated a PR, run the "
+                        + "by orchestrator agmsg delegations. You are a LOOPLESS receiver: do NOT start your own "
+                        + "recurring timer/loop for this domain/repo — wait for a delegation, act once, reply once, then "
+                        + "wait again (only the orchestrator is scheduled). When delegated a PR, run the "
                         + "official host review/closeout through intent-cli surfaces (`review closeout-plan`, `guide "
                         + "review`, `automation pr-transition`, `closeout pr`) — agmsg never replaces semantic review or "
                         + "authorizes a merge. Perform semantic review only when you are the packet `review_role` or "
@@ -382,6 +438,36 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("```");
         writer.WriteLine();
 
+        writer.WriteLine("## Scheduled orchestrator cadence");
+        writer.WriteLine();
+        writer.WriteLine(guide.Scheduling.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- scheduled thread: `{guide.Scheduling.ScheduledThread}` (the only scheduled thread)");
+        writer.WriteLine($"- **receivers are loopless** — {guide.Scheduling.ReceiverNote}");
+        writer.WriteLine();
+        writer.WriteLine("### Codex automation (5m) — orchestrator");
+        writer.WriteLine();
+        writer.WriteLine("```text");
+        writer.WriteLine(guide.Scheduling.CodexSetupPrompt);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine("### Claude `/loop 5m` — orchestrator");
+        writer.WriteLine();
+        writer.WriteLine("```text");
+        writer.WriteLine(guide.Scheduling.ClaudeLoopSetupPrompt);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine("### Each orchestrator wake");
+        writer.WriteLine();
+        foreach (var responsibility in guide.Scheduling.WakeResponsibilities)
+        {
+            writer.WriteLine($"- {responsibility}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **repair** — {guide.Scheduling.RepairVsEscalate.Repair}");
+        writer.WriteLine($"- **escalate** — {guide.Scheduling.RepairVsEscalate.Escalate}");
+        writer.WriteLine();
+
         writer.WriteLine("## Thread prompts");
         foreach (var thread in guide.Threads)
         {
@@ -460,6 +546,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("domain_routing")]
     public required OrchestratorDomainRouting DomainRouting { get; init; }
 
+    [JsonPropertyName("scheduling")]
+    public required OrchestratorScheduling Scheduling { get; init; }
+
     [JsonPropertyName("threads")]
     public required IReadOnlyList<OrchestratorThreadPrompt> Threads { get; init; }
 
@@ -507,6 +596,39 @@ internal sealed record OrchestratorDomainRouting
 
     [JsonPropertyName("prefix_mismatch_note")]
     public required string PrefixMismatchNote { get; init; }
+}
+
+internal sealed record OrchestratorScheduling
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("scheduled_thread")]
+    public required string ScheduledThread { get; init; }
+
+    [JsonPropertyName("receiver_note")]
+    public required string ReceiverNote { get; init; }
+
+    [JsonPropertyName("codex_setup_prompt")]
+    public required string CodexSetupPrompt { get; init; }
+
+    [JsonPropertyName("claude_loop_setup_prompt")]
+    public required string ClaudeLoopSetupPrompt { get; init; }
+
+    [JsonPropertyName("wake_responsibilities")]
+    public required IReadOnlyList<string> WakeResponsibilities { get; init; }
+
+    [JsonPropertyName("repair_vs_escalate")]
+    public required OrchestratorRepairEscalate RepairVsEscalate { get; init; }
+}
+
+internal sealed record OrchestratorRepairEscalate
+{
+    [JsonPropertyName("repair")]
+    public required string Repair { get; init; }
+
+    [JsonPropertyName("escalate")]
+    public required string Escalate { get; init; }
 }
 
 internal sealed record OrchestratorThreadPrompt

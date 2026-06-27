@@ -182,6 +182,72 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_SchedulesOnlyOrchestrator_WithCodexAndClaudeLoopPrompts()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Scheduled orchestrator cadence", output, StringComparison.Ordinal);
+        // Orchestrator is the single recurring driver.
+        Assert.Contains("single recurring driver", output, StringComparison.Ordinal);
+        Assert.Contains("scheduled thread: `orchestrator`", output, StringComparison.Ordinal);
+        // Both setup prompts are present.
+        Assert.Contains("Codex automation (5m)", output, StringComparison.Ordinal);
+        Assert.Contains("Claude `/loop 5m`", output, StringComparison.Ordinal);
+        // Receivers are explicitly loopless.
+        Assert.Contains("loopless receiver", output, StringComparison.Ordinal);
+        Assert.Contains("do NOT start your own", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_WakeResponsibilities_CoverStateChecksAndRepairEscalate()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "codex"]);
+
+        Assert.Contains("### Each orchestrator wake", output, StringComparison.Ordinal);
+        // State-check coverage.
+        Assert.Contains("design-side progress", output, StringComparison.Ordinal);
+        Assert.Contains("worker next-action", output, StringComparison.Ordinal);
+        Assert.Contains("host-review-preflight", output, StringComparison.Ordinal);
+        Assert.Contains("CI conclusion, approvals, merge state", output, StringComparison.Ordinal);
+        Assert.Contains("stale blockers and no-reply receivers", output, StringComparison.Ordinal);
+        // Repair vs escalate split.
+        Assert.Contains("**repair**", output, StringComparison.Ordinal);
+        Assert.Contains("**escalate**", output, StringComparison.Ordinal);
+        Assert.Contains("credentials or security", output, StringComparison.Ordinal);
+        Assert.Contains("destructive local action", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasSchedulingShape()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var scheduling = doc.RootElement.GetProperty("scheduling");
+
+        Assert.Equal("orchestrator", scheduling.GetProperty("scheduled_thread").GetString());
+        Assert.True(scheduling.TryGetProperty("codex_setup_prompt", out _));
+        Assert.True(scheduling.TryGetProperty("claude_loop_setup_prompt", out _));
+        Assert.True(scheduling.TryGetProperty("receiver_note", out _));
+        Assert.NotEmpty(scheduling.GetProperty("wake_responsibilities").EnumerateArray());
+
+        var repairEscalate = scheduling.GetProperty("repair_vs_escalate");
+        Assert.True(repairEscalate.TryGetProperty("repair", out _));
+        Assert.True(repairEscalate.TryGetProperty("escalate", out _));
+
+        // Receiver thread prompts stay explicitly loopless.
+        var prompts = doc.RootElement.GetProperty("threads").EnumerateArray()
+            .ToDictionary(t => t.GetProperty("role").GetString()!, t => t.GetProperty("prompt").GetString()!);
+        Assert.Contains("LOOPLESS receiver", prompts["implementation"], StringComparison.Ordinal);
+        Assert.Contains("LOOPLESS receiver", prompts["review"], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();

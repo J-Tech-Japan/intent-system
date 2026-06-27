@@ -33,6 +33,52 @@ Do **not** run both modes for the same domain/repo. In orchestrator-message
 mode, do not also launch the implementation/review recurring timer loops — two
 drivers would race on the same GitHub state.
 
+## Scheduled orchestrator cadence
+
+In orchestrator-message mode the orchestrator thread is the **single recurring
+driver**. Schedule **only** the orchestrator; the implementation and review
+threads are long-lived but **loopless receivers** — they act only when the
+orchestrator delegates and never start their own recurring timer for the same
+domain/repo. This keeps a periodic driver (so design progress, agmsg replies,
+completed CI, and approved PRs are noticed without the operator poking stalled
+work) while avoiding the mixed-mode timer race.
+
+Schedule the orchestrator one of two ways:
+
+- **Codex automation (every 5m)** — run one orchestrator wake per fire: check
+  design progress and replies, ask intent-cli for state, verify the GitHub
+  facts, then send at most one message and exit.
+- **Claude same-thread `/loop 5m`** — in the orchestrator thread run
+  `/loop 5m` so the same thread re-wakes every 5 minutes for one pass each.
+
+Do **not** also run `/loop` or a Codex automation in the implementation or
+review threads — those are loopless receivers.
+
+### Each orchestrator wake
+
+Generate the authoritative wake prompt from intent-cli; each wake should:
+
+- Check design-side progress (new packets/issues, intent status changes).
+- Read pending agmsg replies (signals only — re-verify against intent-cli /
+  GitHub).
+- Ask intent-cli for worker state (`worker next-action --github-only`).
+- Check host review readiness (`automation host-review-preflight`).
+- Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge
+  state, closeout/label state.
+- Detect stale blockers and no-reply receivers.
+- Decide the single action this wake: delegate the next slice/PR, send one
+  repair message, or escalate one operator decision.
+
+### Repair vs escalate
+
+- **Repair** routine off-rail states yourself by messaging the appropriate
+  thread back onto the official intent-cli workflow — a receiver that stalled,
+  skipped `worker complete`, applied a label by hand, or has not replied.
+  Routine recovery is a repair message, not an escalation.
+- **Escalate** to the operator only for: product/design judgment, credentials
+  or security, a destructive local action, or an unresolved canonical ambiguity
+  (intent-cli/GitHub facts genuinely conflict or are missing).
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for
