@@ -58,6 +58,28 @@
 - テスト通過は **必要だが十分ではない** — approve には packet/intent への適合証跡が必要（`guide review` 参照）
 - 現在 PR の受け入れ基準ブロッカーは、request-update/clarification として完了する前に永続的な PR コメントを残す（[復旧](07-recovery.md) 参照）
 
+## 自動レビュアーコメントの triage
+
+一部のリポジトリは自動レビュアー（例: Copilot）を有効化しています。それらのコメントは
+**シグナルであり、権威ある要件ではありません** — review agent は各コメントを実装作業に
+する前に triage し、すべての自動提案を盲目的に適用 **しません**。`intent-cli guide review`
+がこのポリシーを surface し、これは **timer-loop review flow と orchestrator-message
+review flow の両方** に適用されます。各自動コメントは次のいずれかに分類されます:
+
+- **accepted-actionable** — 有効な実装上の指摘。packet 条項や受け入れ基準に紐づけて
+  request-update / repair 指示に含める。実装者が PR ブランチで修正する。
+- **rejected-not-applicable** — 当てはまらない（誤ったコンテキスト、false positive、
+  スコープ外）。簡潔な理由を記録し、対応していればスレッドを resolve/close する。
+  黙って破棄しない。
+- **duplicate** — 既存の指摘の再掲。canonical な指摘へリンクし、重複を resolve し、
+  2 つ目の request-update 項目を作らない。
+- **informational** — 変更不要の nit / FYI。確認し、request-update を起こさず resolve する。
+- **needs-human-judgment** — review agent が決められないプロダクト/設計・セキュリティ・
+  canonical 曖昧さの判断。オペレーターにエスカレーションし、解決済みのように実装へ
+  ルーティングしない。
+
+request-update / repair 指示に入るのは accepted-actionable のコメントのみです。
+
 ## コマンドリファレンス（agent・メンテナ・トラブルシューティング向け）
 
 > **注意:** 以下のコマンドは AI agent が内部で実行します。ループの詳細条件は
