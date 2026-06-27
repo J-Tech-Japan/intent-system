@@ -196,6 +196,7 @@ internal static class GuideOrchestratorThreadCommand
                     Apply("Ask intent-cli for worker state: `intent-cli worker next-action --repo <owner/repo> --github-only --format json`."),
                     Apply("Check host review readiness: `intent-cli automation host-review-preflight --repo <owner/repo> --format json`."),
                     "Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.",
+                    "Classify each open PR's CI: pending = wait-and-recheck next wake (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate. Pending CI is normal progress, not a reason to message the operator.",
                     "Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.",
                     "Decide the single action for this wake: delegate the next slice/PR, send one repair message, or escalate one operator decision.",
                 },
@@ -210,6 +211,51 @@ internal static class GuideOrchestratorThreadCommand
                         "ESCALATE to the operator ONLY for: product/design judgment, credentials or security, a "
                         + "destructive local action, or an unresolved canonical ambiguity (intent-cli/GitHub facts "
                         + "genuinely conflict or are missing). Do not escalate states you can repair by message.",
+                },
+            },
+            CiWaitState = new OrchestratorCiWaitState
+            {
+                Summary =
+                    "A PR with pending/running CI is an ACTIVE WAIT STATE, not a blocker. GitHub checks are "
+                    + "authoritative for CI state. Re-check the required checks on each scheduled wake; pending CI is "
+                    + "normal progress and by itself NEVER triggers a request-update label, a repair message, or an "
+                    + "operator question. Always re-verify the required checks immediately before delegating review, "
+                    + "merge, or closeout — a green status read on an earlier wake can go stale.",
+                States = new[]
+                {
+                    new OrchestratorCiState
+                    {
+                        State = "pending",
+                        Routing =
+                            "PENDING / RUNNING — wait and re-check on the next wake. Do not send a message, do not apply "
+                            + "request-update, and do not ask the operator. Track the PR as in-flight and move on; the "
+                            + "scheduled cadence re-evaluates it.",
+                    },
+                    new OrchestratorCiState
+                    {
+                        State = "green",
+                        Routing =
+                            "GREEN — all required checks passed. Route to review/closeout: delegate the PR to the review "
+                            + "thread (or orchestrate merge/closeout of an already-approved PR) through intent-cli review "
+                            + "surfaces. Re-verify the checks are still green at delegation time.",
+                    },
+                    new OrchestratorCiState
+                    {
+                        State = "red",
+                        Routing =
+                            "RED — a required check failed. Route by ownership: if the implementation thread can fix it "
+                            + "(test/build/lint failure on the PR branch), send ONE repair message to that thread; if it "
+                            + "needs product/design or canonical judgment, escalate. Never delegate merge/closeout while "
+                            + "a required check is red.",
+                    },
+                    new OrchestratorCiState
+                    {
+                        State = "stuck",
+                        Routing =
+                            "STUCK / AMBIGUOUS — checks never started, hung well past a reasonable window, or report a "
+                            + "conflicting/unknown status that intent-cli and GitHub cannot resolve. Escalate one operator "
+                            + "decision (fail closed); do not guess green or force a merge.",
+                    },
                 },
             },
             Threads = new[]
@@ -228,7 +274,10 @@ internal static class GuideOrchestratorThreadCommand
                         + "replies, ask intent-cli for the real state (`intent-cli intent status --domain <domain> "
                         + "--format json`, `intent-cli worker next-action --repo <owner/repo> --github-only --format "
                         + "json`, `intent-cli automation host-review-preflight --repo <owner/repo> --format json`), "
-                        + "verify the GitHub facts that an agmsg reply claims (merged PR, CI, labels), then send AT MOST "
+                        + "verify the GitHub facts that an agmsg reply claims (merged PR, CI, labels). Treat pending/"
+                        + "running CI as an active wait state — re-check it on a later wake rather than asking the "
+                        + "operator; delegate review/closeout only after required checks are green, route red checks to "
+                        + "repair or escalation by ownership, and escalate only stuck/ambiguous CI. Then send AT MOST "
                         + "ONE message: a delegation (assign the next slice/PR), a repair request (point a stalled "
                         + "thread back to the official intent-cli workflow), or an escalation to the operator. Do NOT "
                         + "launch recurring implement/review timers for this domain/repo while orchestrating. Fail "
@@ -468,6 +517,16 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **escalate** — {guide.Scheduling.RepairVsEscalate.Escalate}");
         writer.WriteLine();
 
+        writer.WriteLine("## CI wait state");
+        writer.WriteLine();
+        writer.WriteLine(guide.CiWaitState.Summary);
+        writer.WriteLine();
+        foreach (var state in guide.CiWaitState.States)
+        {
+            writer.WriteLine($"- **{state.State}** — {state.Routing}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Thread prompts");
         foreach (var thread in guide.Threads)
         {
@@ -549,6 +608,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("scheduling")]
     public required OrchestratorScheduling Scheduling { get; init; }
 
+    [JsonPropertyName("ci_wait_state")]
+    public required OrchestratorCiWaitState CiWaitState { get; init; }
+
     [JsonPropertyName("threads")]
     public required IReadOnlyList<OrchestratorThreadPrompt> Threads { get; init; }
 
@@ -629,6 +691,24 @@ internal sealed record OrchestratorRepairEscalate
 
     [JsonPropertyName("escalate")]
     public required string Escalate { get; init; }
+}
+
+internal sealed record OrchestratorCiWaitState
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("states")]
+    public required IReadOnlyList<OrchestratorCiState> States { get; init; }
+}
+
+internal sealed record OrchestratorCiState
+{
+    [JsonPropertyName("state")]
+    public required string State { get; init; }
+
+    [JsonPropertyName("routing")]
+    public required string Routing { get; init; }
 }
 
 internal sealed record OrchestratorThreadPrompt

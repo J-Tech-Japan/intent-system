@@ -79,6 +79,26 @@ Generate the authoritative wake prompt from intent-cli; each wake should:
   or security, a destructive local action, or an unresolved canonical ambiguity
   (intent-cli/GitHub facts genuinely conflict or are missing).
 
+### CI wait state
+
+A PR with pending/running CI is an **active wait state**, not a blocker.
+GitHub checks are authoritative. Re-check the required checks on each wake;
+pending CI by itself never triggers a request-update label, a repair message,
+or an operator question. Always re-verify required checks immediately before
+delegating review, merge, or closeout — an earlier green read can go stale.
+
+- **pending / running** — wait and re-check next wake. No message, no
+  request-update, no operator question; track the PR as in-flight and move on.
+- **green** — all required checks passed. Delegate review/closeout through
+  intent-cli review surfaces; re-verify green at delegation time.
+- **red** — a required check failed. Route by ownership: a test/build/lint
+  failure the implementation thread can fix gets one repair message; anything
+  needing product/design or canonical judgment escalates. Never delegate
+  merge/closeout while a required check is red.
+- **stuck / ambiguous** — checks never started, hung well past a reasonable
+  window, or report conflicting/unknown status. Escalate one operator decision
+  (fail closed); do not guess green.
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for

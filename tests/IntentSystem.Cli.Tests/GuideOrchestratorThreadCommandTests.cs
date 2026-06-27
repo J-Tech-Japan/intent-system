@@ -248,6 +248,53 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_CiWaitState_RoutesPendingGreenRedStuck()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## CI wait state", output, StringComparison.Ordinal);
+        // Pending is wait-and-recheck and does not trigger request-update/operator question.
+        Assert.Contains("active wait state", output, StringComparison.Ordinal);
+        Assert.Contains("- **pending**", output, StringComparison.Ordinal);
+        Assert.Contains("do not apply request-update", output, StringComparison.Ordinal);
+        // Green routes to review/closeout.
+        Assert.Contains("- **green**", output, StringComparison.Ordinal);
+        Assert.Contains("Route to review/closeout", output, StringComparison.Ordinal);
+        // Red routes to repair/escalate by ownership.
+        Assert.Contains("- **red**", output, StringComparison.Ordinal);
+        Assert.Contains("Route by ownership", output, StringComparison.Ordinal);
+        // Stuck escalates.
+        Assert.Contains("- **stuck**", output, StringComparison.Ordinal);
+        Assert.Contains("Escalate one operator decision", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasCiWaitStateShape_WithFourStates()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var ci = doc.RootElement.GetProperty("ci_wait_state");
+
+        Assert.True(ci.TryGetProperty("summary", out _));
+        var states = ci.GetProperty("states").EnumerateArray()
+            .Select(s => s.GetProperty("state").GetString())
+            .ToArray();
+        Assert.Equal(new[] { "pending", "green", "red", "stuck" }, states);
+
+        // The recurring-wake list references CI classification.
+        var wake = doc.RootElement.GetProperty("scheduling").GetProperty("wake_responsibilities").EnumerateArray()
+            .Select(w => w.GetString()!)
+            .ToArray();
+        Assert.Contains(wake, w => w.Contains("pending = wait-and-recheck", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();
