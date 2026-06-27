@@ -358,6 +358,52 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_Setup_HasConcreteChecklist_PingTest_Cleanup_AndDbWarning_G494()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Setup (starting orchestrator mode)", output, StringComparison.Ordinal);
+        // Decisions displayed: paths, base branch policy, agents, team, delivery.
+        Assert.Contains("base branch policy", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg team name", output, StringComparison.Ordinal);
+        Assert.Contains("delivery mode", output, StringComparison.Ordinal);
+        Assert.Contains("implementation / review paths", output, StringComparison.Ordinal);
+        // Role registration + delivery commands.
+        Assert.Contains("### agmsg commands", output, StringComparison.Ordinal);
+        Assert.Contains("join.sh", output, StringComparison.Ordinal);
+        Assert.Contains("delivery.sh", output, StringComparison.Ordinal);
+        // First read-only wake + ping test.
+        Assert.Contains("read-only first wake", output, StringComparison.Ordinal);
+        Assert.Contains("ping test", output, StringComparison.Ordinal);
+        // Cleanup via agmsg scripts.
+        Assert.Contains("### Cleanup", output, StringComparison.Ordinal);
+        Assert.Contains("leave.sh", output, StringComparison.Ordinal);
+        // Warn not to edit agmsg DB/team files directly.
+        Assert.Contains("Never edit the agmsg database or team files directly", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasSetupShape_G494()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var setup = doc.RootElement.GetProperty("setup");
+
+        Assert.NotEmpty(setup.GetProperty("decisions").EnumerateArray());
+        Assert.NotEmpty(setup.GetProperty("checklist").EnumerateArray());
+        Assert.NotEmpty(setup.GetProperty("agmsg_commands").EnumerateArray());
+        Assert.NotEmpty(setup.GetProperty("cleanup").EnumerateArray());
+        Assert.True(setup.TryGetProperty("ping_test", out _));
+        Assert.Contains("agmsg scripts", setup.GetProperty("warning").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();

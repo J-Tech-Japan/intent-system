@@ -18,6 +18,9 @@ public sealed class GuideWorkflowSuggestCommandTests
     [InlineData("issue 605 を実装してほしい", "child-implementation")]
     [InlineData("source-of-truth が曖昧な部分がある", "clarification")]
     [InlineData("we have a clarification blocker", "clarification")]
+    [InlineData("I want to start agmsg orchestrator mode", "orchestrator-setup")]
+    [InlineData("set up an orchestrator to run orchestration", "orchestrator-setup")]
+    [InlineData("オーケストレーターを立ち上げたい", "orchestrator-setup")]
     [InlineData("xyzzy mumble", "unknown")]
     public void Execute_ClassifiesGoalIntoExpectedWorkflow(string goal, string expectedWorkflow)
     {
@@ -30,6 +33,30 @@ public sealed class GuideWorkflowSuggestCommandTests
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         Assert.Equal(expectedWorkflow, document.RootElement.GetProperty("workflow").GetString());
+    }
+
+    [Fact]
+    public void Execute_OrchestratorSetup_RoutesToOrchestratorThreadGuide_G494()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkflowSuggestCommand.Execute(
+            CreateContext(),
+            ["--goal", "I want to run agmsg orchestration", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("orchestrator-setup", document.RootElement.GetProperty("workflow").GetString());
+
+        // Routes to the orchestrator-thread guide (not generic feature intake).
+        var commands = document.RootElement.GetProperty("recommended_commands").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(commands, c => c!.StartsWith("intent-cli guide orchestrator-thread", StringComparison.Ordinal));
+        Assert.DoesNotContain(commands, c => c!.StartsWith("intent-cli guide collaborate", StringComparison.Ordinal));
+
+        // Summary names the loopless-receiver / signal-only invariants.
+        var summary = document.RootElement.GetProperty("summary").GetString()!;
+        Assert.Contains("loopless", summary, StringComparison.Ordinal);
+        Assert.Contains("signal layer only", summary, StringComparison.Ordinal);
     }
 
     [Fact]

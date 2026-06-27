@@ -12,6 +12,34 @@
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## orchestrator モードの開始（設計スレッドのセットアップ）
+
+オーケストレーションを動かしたい設計スレッドは intent-cli に直接尋ねられます —
+`intent-cli guide workflow suggest --goal "I want to start agmsg orchestrator mode"`
+が orchestrator setup ガイダンスへルーティングし、`guide orchestrator-thread` が
+具体的なセットアップチェックリストを返します。流れ:
+
+1. **決定 / 記録** — domain と target repo、host / orchestrator / implementation /
+   review のパス（各ロールは自分のフォルダー・クローン・worktree から実行）、base branch
+   policy、ロールごとの agent、agmsg team 名、delivery mode。
+2. **ロール登録** — orchestrator・implementation・review を 1 つの agmsg team に登録
+   （`join.sh`）。
+3. **delivery 設定** — 各ロールがメッセージを受け取れるようにする。例: ストリーミングの
+   inbox watch（`delivery.sh` / `watch.sh`）。
+4. **ロールプロンプトを貼る** — `guide orchestrator-thread` の orchestrator /
+   implementation / review プロンプトを対応するスレッドへコピーする。
+5. **最初の read-only wake** — 確認のみの orchestrator wake を 1 回実行し、何も送らない。
+6. **ping テスト** — agmsg メッセージを 1 通送り、実際の委譲の前に対象ロールの inbox に
+   届くことを確認する。
+7. **orchestrator のみスケジュール** — Codex automation 5m または Claude `/loop 5m`。
+   receiver は loopless のまま。
+8. **クリーンアップ** — 終了時は agmsg スクリプト（`leave.sh` / `despawn.sh`）でロールを
+   leave/despawn し、inbox watcher を停止する。
+
+> **警告:** agmsg のデータベースや team ファイルを直接編集しないでください — 登録・送信・
+> クリーンアップはすべて agmsg スクリプト経由で行います。agmsg state の手編集は delivery を
+> 壊します。
+
 ## agmsg とは（そして何ではないか）
 
 agmsg は **メッセージ / 進捗 / 完了 / ブロッカーのシグナル層のみ** です。スレッド間で

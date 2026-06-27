@@ -21,6 +21,7 @@ internal static class GuideWorkflowSuggestCommand
     private const string WorkflowReview = "review";
     private const string WorkflowChildImplementation = "child-implementation";
     private const string WorkflowClarification = "clarification";
+    private const string WorkflowOrchestratorSetup = "orchestrator-setup";
     private const string WorkflowUnknown = "unknown";
 
     private const string UsageLine =
@@ -115,6 +116,15 @@ internal static class GuideWorkflowSuggestCommand
             return hit;
         }
 
+        // G494: orchestrator-setup is high-signal and checked first — a setup
+        // request like "I want to run orchestration" must not fall through to
+        // feature-intake (matches "want to") or review (a goal mentioning
+        // reviewing PRs via the orchestrator).
+        if (ContainsAny(new[] { "orchestrator", "orchestration", "agmsg", "オーケストレーター", "オーケストレーション" }))
+        {
+            return (WorkflowOrchestratorSetup, matched);
+        }
+
         if (ContainsAny(new[] { "clarif", "ambiguous", "blocker", "曖昧", "未決" }))
         {
             return (WorkflowClarification, matched);
@@ -202,6 +212,16 @@ internal static class GuideWorkflowSuggestCommand
                 new[] { "clarification", "child-issue-contract" },
                 "Clarification — surface open blockers and stop with a clarification-required summary; do not guess past ambiguous source-of-truth."),
 
+            WorkflowOrchestratorSetup => (
+                new[]
+                {
+                    $"intent-cli guide orchestrator-thread --domain {domain} --target-repo <owner/repo> --agent <agent> --format markdown",
+                    $"intent-cli guide orchestrator-thread --domain {domain} --target-repo <owner/repo> --agent <agent> --mode multi-domain --format markdown",
+                    $"intent-cli guide prompt-matrix --mode host-loop --domain {domain} --target-repo <owner/repo> --agent <agent> --format markdown"
+                },
+                new[] { "label-ownership", "clarification" },
+                "Orchestrator setup — the operator wants to start agmsg orchestrator-message mode. `guide orchestrator-thread` returns the full setup checklist (paths/roles/team/delivery, agmsg registration, paste-ready role prompts, first read-only wake, ping test, and cleanup). The orchestrator is the single scheduled driver; implementation/review stay loopless receivers. agmsg is a signal layer only — intent-cli and GitHub stay authoritative — and agmsg state is changed only through the agmsg scripts, never by editing its DB/team files."),
+
             _ => (
                 new[]
                 {
@@ -255,7 +275,8 @@ internal static class GuideWorkflowSuggestCommand
             {
                 "intent-cli run rereview --pr <n> — replay-mode rereview integration smoke; not the default review path."
             },
-            WorkflowFeatureIntake or WorkflowNextSlicePlanning or WorkflowClarification or WorkflowUnknown => Array.Empty<string>(),
+            WorkflowFeatureIntake or WorkflowNextSlicePlanning or WorkflowClarification
+                or WorkflowOrchestratorSetup or WorkflowUnknown => Array.Empty<string>(),
             _ => Array.Empty<string>()
         };
     }
