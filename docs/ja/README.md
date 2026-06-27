@@ -25,6 +25,7 @@ agent が内部で `intent-cli` を実行し、質問や結果を返します。
 7. [ループがおかしいときの復旧](07-recovery.md)
 8. [コマンドリファレンス](08-command-reference.md) — agent 向け・パワーユーザー向けコマンド一覧
 9. [開発者リファレンス](09-developer-reference.md) — パッケージ化された実行、preview チャンネル、バージョンフロー
+12. [agent メッセージオーケストレーション](12-agent-message-orchestration.md) — オプションの agmsg orchestrator スレッド、single-domain と multi-domain のルーティング
 
 ## Intent Storming とは
 
