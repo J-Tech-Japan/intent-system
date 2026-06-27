@@ -99,6 +99,36 @@ delegating review, merge, or closeout — an earlier green read can go stale.
   window, or report conflicting/unknown status. Escalate one operator decision
   (fail closed); do not guess green.
 
+## Next-slice publication
+
+Routine next-slice issue publication is an **orchestrator responsibility**, not
+an operator question. When intent-cli reports a candidate as `issue-cut-ready`
+and all safety gates pass, the orchestrator publishes it itself through
+canonical intent-cli commands rather than stopping to ask the operator to create
+the GitHub issue. **At most one issue per wake.**
+
+Publish only when **all** of these hold:
+
+- same-domain context, or an explicitly routed multi-domain delegation (never
+  publish a cross-domain candidate without explicit routing);
+- the packet contract is complete (no missing required sections);
+- no open clarification or contract ambiguity;
+- dependencies are satisfied — never publish ahead of an uncut dependency;
+- under the WIP cap;
+- clean host-sync / preflight and an unambiguous target repo/domain.
+
+Otherwise **hold or escalate** — missing contract sections, open clarification,
+dependency mismatch, WIP cap reached, host-sync blocker, or ambiguous target
+repo/domain are all blockers.
+
+Publish through the canonical surfaces only — `intent-cli issue publish-flow`
+and `intent-cli automation issue-publish` — never raw `gh issue create` or
+`gh ... --add-label`. After publishing, verify via intent-cli / GitHub (not
+chat) that the issue exists with the expected body and the `intent-target`
+label and that durable state reflects it, then delegate implementation over
+agmsg. The implementation receiver still derives its target from
+`intent-cli worker next-action`, not the agmsg text.
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for

@@ -198,7 +198,8 @@ internal static class GuideOrchestratorThreadCommand
                     "Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.",
                     "Classify each open PR's CI: pending = wait-and-recheck next wake (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate. Pending CI is normal progress, not a reason to message the operator.",
                     "Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.",
-                    "Decide the single action for this wake: delegate the next slice/PR, send one repair message, or escalate one operator decision.",
+                    "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), publish ONE issue this wake via canonical publish-flow / issue-publish, then verify — do not ask the operator to create it.",
+                    "Decide the single action for this wake: publish one ready next-slice issue, delegate the next slice/PR, send one repair message, or escalate one operator decision.",
                 },
                 RepairVsEscalate = new OrchestratorRepairEscalate
                 {
@@ -258,6 +259,46 @@ internal static class GuideOrchestratorThreadCommand
                     },
                 },
             },
+            NextSlicePublication = new OrchestratorNextSlicePublication
+            {
+                Summary =
+                    "Routine next-slice issue publication is an ORCHESTRATOR responsibility, not an operator question. "
+                    + "When intent-cli reports a candidate as `issue-cut-ready` and ALL safety gates pass, the "
+                    + "orchestrator publishes it itself through canonical intent-cli commands instead of stopping to ask "
+                    + "the operator to create the GitHub issue. Publish AT MOST ONE issue per wake, then verify before "
+                    + "delegating implementation.",
+                OnePerWake = true,
+                Preconditions = new[]
+                {
+                    Apply("Same-domain context (`<domain>`), or an explicitly routed multi-domain delegation (domain, target repo, destination thread) — never publish a cross-domain candidate without explicit routing."),
+                    "The packet contract is complete: no missing required sections (goal, in/out of scope, acceptance criteria, base-branch policy).",
+                    "No open clarification or contract ambiguity on the candidate.",
+                    "Dependencies are satisfied — every dependency execution unit is completed or already cut; never publish ahead of an uncut dependency.",
+                    "Under the WIP cap — no in-progress blocker that should pace the queue first.",
+                    Apply("Clean host-sync / preflight: `intent-cli automation host-review-preflight --repo <owner/repo> --format json` and the publish preflight report no blocker, and the target repo/domain is unambiguous."),
+                },
+                Blockers = new[]
+                {
+                    "Missing contract sections — hold, do not publish.",
+                    "Open clarification / ambiguous contract — hold or escalate one operator decision.",
+                    "Dependency mismatch — an uncut or incomplete dependency; hold (publishing ahead would violate the dependency contract).",
+                    "WIP cap reached — let the in-progress work drain first.",
+                    "Host-sync blocker or failed preflight — fix the sync via intent-cli, do not force the publish.",
+                    "Ambiguous target repo or domain (no explicit routing in multi-domain) — escalate rather than guess.",
+                },
+                CanonicalCommands = new[]
+                {
+                    Apply("intent-cli issue publish-flow <execution-unit> --repo <owner/repo> --write --format json"),
+                    "intent-cli automation issue-publish --write --format json",
+                    "Never raw `gh issue create` or `gh ... --add-label`; publication and the `intent-target` label go through the canonical intent-cli surfaces only.",
+                },
+                PostPublishVerification = new[]
+                {
+                    "Confirm via intent-cli / GitHub (not chat) that the issue exists with the expected execution-unit body and the `intent-target` label.",
+                    "Confirm the durable workflow state (queue-state / linkage / label) reflects the publish through intent-cli surfaces.",
+                    "Only after verification, delegate implementation over agmsg — and the implementation receiver still derives its target from `intent-cli worker next-action`, not the agmsg text.",
+                },
+            },
             Threads = new[]
             {
                 new OrchestratorThreadPrompt
@@ -277,9 +318,12 @@ internal static class GuideOrchestratorThreadCommand
                         + "verify the GitHub facts that an agmsg reply claims (merged PR, CI, labels). Treat pending/"
                         + "running CI as an active wait state — re-check it on a later wake rather than asking the "
                         + "operator; delegate review/closeout only after required checks are green, route red checks to "
-                        + "repair or escalation by ownership, and escalate only stuck/ambiguous CI. Then send AT MOST "
-                        + "ONE message: a delegation (assign the next slice/PR), a repair request (point a stalled "
-                        + "thread back to the official intent-cli workflow), or an escalation to the operator. Do NOT "
+                        + "repair or escalation by ownership, and escalate only stuck/ambiguous CI. Then take AT MOST "
+                        + "ONE forward action: publish one ready next-slice issue (when intent-cli reports it "
+                        + "`issue-cut-ready` and all gates pass — via canonical `intent-cli issue publish-flow` / "
+                        + "`automation issue-publish`, then verify), send one delegation (assign the next slice/PR), send "
+                        + "one repair request (point a stalled thread back to the official intent-cli workflow), or "
+                        + "escalate one operator decision. Do NOT "
                         + "launch recurring implement/review timers for this domain/repo while orchestrating. Fail "
                         + "closed: if you detect a second orchestrator for this domain/repo, or agmsg replies conflict "
                         + "with GitHub/intent-cli facts, STOP and escalate rather than guessing. In "
@@ -527,6 +571,41 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Next-slice publication");
+        writer.WriteLine();
+        writer.WriteLine(guide.NextSlicePublication.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- one_per_wake: {(guide.NextSlicePublication.OnePerWake ? "yes" : "no")}");
+        writer.WriteLine();
+        writer.WriteLine("### Publish only when ALL hold");
+        writer.WriteLine();
+        foreach (var precondition in guide.NextSlicePublication.Preconditions)
+        {
+            writer.WriteLine($"- {precondition}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Blocked by (hold or escalate)");
+        writer.WriteLine();
+        foreach (var blocker in guide.NextSlicePublication.Blockers)
+        {
+            writer.WriteLine($"- {blocker}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Canonical publish commands");
+        writer.WriteLine();
+        foreach (var command in guide.NextSlicePublication.CanonicalCommands)
+        {
+            writer.WriteLine($"- {command}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Post-publish verification");
+        writer.WriteLine();
+        foreach (var step in guide.NextSlicePublication.PostPublishVerification)
+        {
+            writer.WriteLine($"- {step}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Thread prompts");
         foreach (var thread in guide.Threads)
         {
@@ -610,6 +689,9 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("ci_wait_state")]
     public required OrchestratorCiWaitState CiWaitState { get; init; }
+
+    [JsonPropertyName("next_slice_publication")]
+    public required OrchestratorNextSlicePublication NextSlicePublication { get; init; }
 
     [JsonPropertyName("threads")]
     public required IReadOnlyList<OrchestratorThreadPrompt> Threads { get; init; }
@@ -709,6 +791,27 @@ internal sealed record OrchestratorCiState
 
     [JsonPropertyName("routing")]
     public required string Routing { get; init; }
+}
+
+internal sealed record OrchestratorNextSlicePublication
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("one_per_wake")]
+    public required bool OnePerWake { get; init; }
+
+    [JsonPropertyName("preconditions")]
+    public required IReadOnlyList<string> Preconditions { get; init; }
+
+    [JsonPropertyName("blockers")]
+    public required IReadOnlyList<string> Blockers { get; init; }
+
+    [JsonPropertyName("canonical_commands")]
+    public required IReadOnlyList<string> CanonicalCommands { get; init; }
+
+    [JsonPropertyName("post_publish_verification")]
+    public required IReadOnlyList<string> PostPublishVerification { get; init; }
 }
 
 internal sealed record OrchestratorThreadPrompt
