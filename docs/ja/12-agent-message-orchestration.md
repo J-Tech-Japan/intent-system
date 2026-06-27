@@ -33,6 +33,49 @@ orchestrator はそれに従って行動する前に、すべての主張を int
 orchestrator-message モードでは、実装/レビューの定期タイマーループも起動しないでください。
 2 つのドライバーが同じ GitHub 状態を奪い合ってしまいます。
 
+## スケジュールされた orchestrator のケイデンス
+
+orchestrator-message モードでは、orchestrator スレッドが **唯一の定期ドライバー** です。
+**orchestrator のみ** をスケジュールしてください。実装/レビュースレッドは長命ですが
+**ループを持たない受信側（loopless receiver）** であり、orchestrator が委譲したときだけ
+動作し、同じ domain/repo に対して自分の定期タイマーを起動しません。これにより定期ドライバー
+を保ちつつ（設計進捗、agmsg 返信、完了した CI、承認済み PR を、オペレーターが停滞作業を
+突く必要なく検知できる）、mixed-mode のタイマー競合を回避します。
+
+orchestrator のスケジュール方法は次の 2 通り:
+
+- **Codex automation（5 分ごと）** — 起動ごとに 1 回の orchestrator wake を実行: 設計進捗
+  と返信を確認し、intent-cli に状態を問い合わせ、GitHub の事実を検証し、最大 1 通だけ
+  メッセージを送って終了する。
+- **Claude 同一スレッド `/loop 5m`** — orchestrator スレッドで `/loop 5m` を実行し、同じ
+  スレッドが 5 分ごとに 1 パスずつ再起動する。
+
+実装/レビュースレッドでは `/loop` や Codex automation を **同時に実行しないでください** —
+これらは loopless receiver です。
+
+### 各 orchestrator wake
+
+権威ある wake プロンプトは intent-cli から生成します。各 wake は次を行うべきです:
+
+- 設計側の進捗を確認（新しい packet/issue、intent status の変化）。
+- 保留中の agmsg 返信を読む（シグナルのみ — intent-cli / GitHub に対して再検証）。
+- intent-cli に worker 状態を問い合わせる（`worker next-action --github-only`）。
+- host レビュー準備状況を確認（`automation host-review-preflight`）。
+- GitHub の事実を直接検証: open PR、CI 結論、承認、マージ状態、closeout/label 状態。
+- 停滞ブロッカーと無返信の receiver を検知する。
+- この wake の単一アクションを決定する: 次の slice/PR を委譲、1 通の repair メッセージ送信、
+  または 1 件のオペレーター判断にエスカレーション。
+
+### repair と escalate
+
+- **repair**: ルーチンな脱線状態は、適切なスレッドへメッセージを送って公式の intent-cli
+  ワークフローに戻すことで自分で修復する — 停滞した receiver、`worker complete` を飛ばした、
+  label を手動適用した、返信がない、など。ルーチンな復旧は repair メッセージであり
+  エスカレーションではない。
+- **escalate**: オペレーターへのエスカレーションは次の場合のみ — プロダクト/設計判断、
+  認証情報やセキュリティ、破壊的なローカル操作、または解決不能な canonical な曖昧さ
+  （intent-cli/GitHub の事実が本当に矛盾するか欠落している）。
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:
