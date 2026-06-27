@@ -12,6 +12,36 @@ current prompts with:
 intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> --agent <agent> --mode single-domain|multi-domain --format markdown
 ```
 
+## Starting orchestrator mode (design-thread setup)
+
+A design thread that wants to run orchestration can ask intent-cli directly —
+`intent-cli guide workflow suggest --goal "I want to start agmsg orchestrator
+mode"` routes to the orchestrator setup guidance, and `guide orchestrator-thread`
+returns the concrete setup checklist. The shape:
+
+1. **Decide / record** — domain and target repo; host / orchestrator /
+   implementation / review paths (each role runs from its own folder, clone, or
+   worktree); base branch policy; per-role agents; agmsg team name; delivery
+   mode.
+2. **Register roles** — register orchestrator, implementation, and review under
+   one agmsg team (`join.sh`).
+3. **Set delivery** — give each role a way to receive messages, e.g. a streamed
+   inbox watch (`delivery.sh` / `watch.sh`).
+4. **Paste role prompts** — copy the orchestrator / implementation / review
+   prompts from `guide orchestrator-thread` into the matching threads.
+5. **First read-only wake** — run one confirm-only orchestrator wake; send
+   nothing.
+6. **Ping test** — send one agmsg message and confirm it lands in the target
+   role's inbox before any real delegation.
+7. **Schedule only the orchestrator** — Codex automation 5m or Claude
+   `/loop 5m`; receivers stay loopless.
+8. **Cleanup** — on teardown, leave/despawn the roles through the agmsg scripts
+   (`leave.sh` / `despawn.sh`) and stop any inbox watchers.
+
+> **Warning:** never edit the agmsg database or team files directly — register,
+> message, and clean up only through the agmsg scripts. Hand-editing agmsg state
+> corrupts delivery.
+
 ## What agmsg is (and is not)
 
 agmsg is a **message / progress / completion / blocker signal layer only**. It

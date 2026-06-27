@@ -299,6 +299,56 @@ internal static class GuideOrchestratorThreadCommand
                     "Only after verification, delegate implementation over agmsg — and the implementation receiver still derives its target from `intent-cli worker next-action`, not the agmsg text.",
                 },
             },
+            Setup = new OrchestratorSetup
+            {
+                Summary =
+                    "Design-thread setup for starting orchestrator-message mode. The orchestrator is the single "
+                    + "scheduled driver; the implementation and review threads are loopless receivers. Decide the "
+                    + "inputs, register the agmsg roles under one team, paste the role prompts, run one read-only first "
+                    + "wake, ping-test the inbox, then schedule only the orchestrator. agmsg is a signal layer only; "
+                    + "intent-cli and GitHub stay authoritative.",
+                Decisions = new[]
+                {
+                    Apply("domain (`<domain>`) and target repo (`<owner/repo>`)"),
+                    "host / orchestrator / implementation / review paths — each role runs from its own folder, clone, or worktree",
+                    "base branch policy (e.g. direct-main)",
+                    Apply("per-role agents (e.g. orchestrator=`<agent>`, implementation=claude, review=codex)"),
+                    "agmsg team name",
+                    "delivery mode — how each role receives messages (e.g. a streamed inbox watch per role)",
+                },
+                Checklist = new[]
+                {
+                    "Record the decisions above (domain, repo, paths, base branch policy, agents, team, delivery mode).",
+                    "Register each role with agmsg under ONE team: orchestrator, implementation, review (agmsg `join.sh`).",
+                    "Set the delivery mode so each role receives messages — e.g. a streamed inbox watch per role (agmsg `delivery.sh` / `watch.sh`).",
+                    "Paste the role prompts from the `Thread prompts` section into the matching thread (orchestrator / implementation / review).",
+                    "Run ONE read-only first wake in the orchestrator (see `Orchestrator first wake`) — confirm only, send nothing.",
+                    "Ping-test the inbox before real delegation (see ping_test).",
+                    "Schedule ONLY the orchestrator (Codex automation 5m, or Claude same-thread `/loop 5m`); leave the receivers loopless.",
+                    "On teardown, clean up the agmsg roles through the agmsg scripts (see cleanup).",
+                },
+                AgmsgCommands = new[]
+                {
+                    "register a role / join the team — agmsg `join.sh`",
+                    "set the delivery mode — agmsg `delivery.sh`",
+                    "watch a role's inbox (receiver delivery) — agmsg `watch.sh`",
+                    "send a message / ping — agmsg `send.sh`",
+                    "list the team / identities — agmsg `team.sh`",
+                    "leave / clean up a role — agmsg `leave.sh` / `despawn.sh`",
+                },
+                PingTest =
+                    "Send one agmsg message from the orchestrator to each receiver and confirm it appears in that "
+                    + "receiver's inbox/stream before any real delegation. If the ping does not arrive, fix "
+                    + "delivery/registration first — do not start delegating against a broken channel.",
+                Cleanup = new[]
+                {
+                    "Leave the team / despawn each role through the agmsg scripts (`leave.sh` / `despawn.sh`).",
+                    "Stop any inbox watchers started for the roles.",
+                },
+                Warning =
+                    "Never edit the agmsg database or team files directly — register, message, and clean up ONLY through "
+                    + "the agmsg scripts. Hand-editing agmsg state corrupts delivery.",
+            },
             Threads = new[]
             {
                 new OrchestratorThreadPrompt
@@ -512,6 +562,43 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **mixed-mode warning** — {guide.ModeSeparation.MixedModeWarning}");
         writer.WriteLine();
 
+        writer.WriteLine("## Setup (starting orchestrator mode)");
+        writer.WriteLine();
+        writer.WriteLine(guide.Setup.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Decide / record");
+        writer.WriteLine();
+        foreach (var decision in guide.Setup.Decisions)
+        {
+            writer.WriteLine($"- {decision}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Setup checklist");
+        writer.WriteLine();
+        for (var i = 0; i < guide.Setup.Checklist.Count; i++)
+        {
+            writer.WriteLine($"{i + 1}. {guide.Setup.Checklist[i]}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### agmsg commands");
+        writer.WriteLine();
+        foreach (var command in guide.Setup.AgmsgCommands)
+        {
+            writer.WriteLine($"- {command}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **ping test** — {guide.Setup.PingTest}");
+        writer.WriteLine();
+        writer.WriteLine("### Cleanup");
+        writer.WriteLine();
+        foreach (var step in guide.Setup.Cleanup)
+        {
+            writer.WriteLine($"- {step}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Warning:** {guide.Setup.Warning}");
+        writer.WriteLine();
+
         writer.WriteLine("## Domain routing — single-domain vs multi-domain");
         writer.WriteLine();
         writer.WriteLine($"- selected mode: `{guide.DomainRouting.Mode}`");
@@ -693,6 +780,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("next_slice_publication")]
     public required OrchestratorNextSlicePublication NextSlicePublication { get; init; }
 
+    [JsonPropertyName("setup")]
+    public required OrchestratorSetup Setup { get; init; }
+
     [JsonPropertyName("threads")]
     public required IReadOnlyList<OrchestratorThreadPrompt> Threads { get; init; }
 
@@ -791,6 +881,30 @@ internal sealed record OrchestratorCiState
 
     [JsonPropertyName("routing")]
     public required string Routing { get; init; }
+}
+
+internal sealed record OrchestratorSetup
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("decisions")]
+    public required IReadOnlyList<string> Decisions { get; init; }
+
+    [JsonPropertyName("checklist")]
+    public required IReadOnlyList<string> Checklist { get; init; }
+
+    [JsonPropertyName("agmsg_commands")]
+    public required IReadOnlyList<string> AgmsgCommands { get; init; }
+
+    [JsonPropertyName("ping_test")]
+    public required string PingTest { get; init; }
+
+    [JsonPropertyName("cleanup")]
+    public required IReadOnlyList<string> Cleanup { get; init; }
+
+    [JsonPropertyName("warning")]
+    public required string Warning { get; init; }
 }
 
 internal sealed record OrchestratorNextSlicePublication
