@@ -459,6 +459,65 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_StaleThreadHealthCheck_AsksBeforeActing_AndProtectsPermission_G496()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Stale-thread health check", output, StringComparison.Ordinal);
+        // Configurable 30-minute threshold.
+        Assert.Contains("30 minutes", output, StringComparison.Ordinal);
+        Assert.Contains("configurable", output, StringComparison.Ordinal);
+        // Non-destructive status-request before any retry/escalate (ask-first).
+        Assert.Contains("non-destructive status-request", output, StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"status-request\"", output, StringComparison.Ordinal);
+        // Required receiver statuses.
+        Assert.Contains("- **working**", output, StringComparison.Ordinal);
+        Assert.Contains("- **waiting-ci**", output, StringComparison.Ordinal);
+        Assert.Contains("- **waiting-permission**", output, StringComparison.Ordinal);
+        Assert.Contains("- **blocked**", output, StringComparison.Ordinal);
+        Assert.Contains("- **completed**", output, StringComparison.Ordinal);
+        Assert.Contains("- **idle**", output, StringComparison.Ordinal);
+        // Permission-waiting cannot trigger automatic retry/clear.
+        Assert.Contains("never auto-clear", output, StringComparison.OrdinalIgnoreCase);
+        // Progress-detected => keep watching; repeated-no-progress => one idempotent re-entry.
+        Assert.Contains("keep watching", output, StringComparison.Ordinal);
+        Assert.Contains("idempotent re-entry", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasStaleThreadHealthCheckShape_WithSixReceiverStatuses_G496()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var health = doc.RootElement.GetProperty("stale_thread_health_check");
+
+        Assert.True(health.TryGetProperty("no_reply_threshold", out _));
+        Assert.True(health.TryGetProperty("status_request_template", out _));
+        Assert.NotEmpty(health.GetProperty("procedure").EnumerateArray());
+        Assert.NotEmpty(health.GetProperty("safety").EnumerateArray());
+
+        var statuses = health.GetProperty("receiver_statuses").EnumerateArray()
+            .Select(s => s.GetProperty("status").GetString())
+            .ToArray();
+        Assert.Equal(
+            new[] { "working", "waiting-ci", "waiting-permission", "blocked", "completed", "idle" },
+            statuses);
+
+        // The orchestrator prompt references the safe health check + no-auto-clear.
+        var orchestrator = doc.RootElement.GetProperty("threads").EnumerateArray()
+            .First(t => t.GetProperty("role").GetString() == "orchestrator")
+            .GetProperty("prompt").GetString()!;
+        Assert.Contains("stale-thread health check", orchestrator, StringComparison.Ordinal);
+        Assert.Contains("never auto-clear a permission prompt", orchestrator, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();

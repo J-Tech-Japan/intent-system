@@ -198,6 +198,7 @@ internal static class GuideOrchestratorThreadCommand
                     "Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge state, and closeout/label state.",
                     "Classify each open PR's CI: pending = wait-and-recheck next wake (no message); green = delegate review/closeout; red = repair or escalate by ownership; stuck = escalate. Pending CI is normal progress, not a reason to message the operator.",
                     "Detect stale blockers and no-reply receivers: a delegation with no accepted/progress reply within the expected window, or a thread stuck off the official workflow.",
+                    "On a no-reply receiver past the threshold (default 30m), run the SAFE stale-thread health check: send one non-destructive status-request, check read-only intent-cli/GitHub facts, keep watching if there is progress, treat waiting-permission as an operator notice (never auto-clear), and only after repeated no-reply with no progress send one idempotent re-entry or escalate.",
                     "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), publish ONE issue this wake via canonical publish-flow / issue-publish, then verify — do not ask the operator to create it.",
                     "If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.",
                     "Decide the single action for this wake: publish one ready next-slice issue, delegate the next slice/PR, send one repair message, or escalate one operator decision.",
@@ -366,6 +367,48 @@ internal static class GuideOrchestratorThreadCommand
                     "A human product/design judgment is required.",
                 },
             },
+            StaleThreadHealthCheck = new OrchestratorStaleThreadHealthCheck
+            {
+                Summary =
+                    "The implementation/review receivers are loopless, so silence is ambiguous — a receiver may be "
+                    + "working, waiting for CI, waiting for a permission prompt, blocked, completed-without-reply, or "
+                    + "truly stale. When a receiver has had no reply past the threshold, run a SAFE liveness check: ask "
+                    + "before acting, verify authoritative facts, and never auto-cancel work, auto-clear a permission "
+                    + "prompt, or duplicate a task.",
+                NoReplyThreshold =
+                    "Default 30 minutes since the receiver's last reply (configurable). Below the threshold, treat "
+                    + "silence as normal in-progress work — do not poke.",
+                Procedure = new[]
+                {
+                    "On no reply for >= the threshold, send ONE non-destructive status-request (see status_request_template) — ask, do not retry, cancel, or reset yet.",
+                    "Check read-only intent-cli / GitHub facts: `worker next-action`, the issue/PR state, CI conclusion, and labels. Silence plus visible progress means the thread is working.",
+                    "If authoritative facts show progress (new commits, PR opened/updated, CI running), keep watching — do not re-send the work.",
+                    "If the receiver replies `waiting-permission`, treat it as an OPERATOR NOTICE — surface it; never auto-clear the permission/credential prompt.",
+                    "Only after repeated no-reply AND no observable progress, send AT MOST ONE idempotent re-entry prompt that references the same issue/PR so it cannot duplicate work.",
+                    "Escalate to the operator after repeated silence with no progress, or any unsafe case (would require cancel/reset, destructive git, or credentials).",
+                },
+                StatusRequestTemplate =
+                    "{\"type\":\"status-request\",\"to\":\"<thread>\",\"ref\":\"issue#<n>|pr#<n>\",\"ask\":"
+                    + "\"non-destructive liveness check: reply with one of working / waiting-ci / waiting-permission / "
+                    + "blocked / completed / idle; do not start new work\"}",
+                ReceiverStatuses = new[]
+                {
+                    new OrchestratorReceiverStatus { Status = "working", Meaning = "actively implementing/reviewing — keep watching, take no action." },
+                    new OrchestratorReceiverStatus { Status = "waiting-ci", Meaning = "waiting on CI to conclude — wait and re-check; pending CI is normal progress." },
+                    new OrchestratorReceiverStatus { Status = "waiting-permission", Meaning = "blocked on a permission/credential prompt — OPERATOR NOTICE; never auto-clear, surface it to the operator." },
+                    new OrchestratorReceiverStatus { Status = "blocked", Meaning = "blocked on a clarification or external dependency — read the structured blocker and route repair or escalate." },
+                    new OrchestratorReceiverStatus { Status = "completed", Meaning = "work finished — verify against intent-cli / GitHub; a completed-without-reply thread may just need its reply confirmed." },
+                    new OrchestratorReceiverStatus { Status = "idle", Meaning = "no current task — safe to delegate the next item." },
+                },
+                Safety = new[]
+                {
+                    "Never auto-clear a permission/credential prompt — `waiting-permission` is an operator notice only.",
+                    "Never auto-cancel or reset a receiver's work as part of a health check.",
+                    "No destructive git operations and no raw label mutation in a health check.",
+                    "Re-entry is idempotent: reference the existing issue/PR so a re-sent prompt cannot duplicate work.",
+                    "Ask (status-request) and verify authoritative facts before any retry or escalation.",
+                },
+            },
             Setup = new OrchestratorSetup
             {
                 Summary =
@@ -442,7 +485,10 @@ internal static class GuideOrchestratorThreadCommand
                         + "one repair request (point a stalled thread back to the official intent-cli workflow), or "
                         + "escalate one operator decision. Unmet dependencies are normal work, not a stop: if the next "
                         + "candidate depends on incomplete work, act on the EARLIEST unmet resolvable dependency "
-                        + "(publish or route it) and keep the dependent held, rather than pausing for the operator. Do "
+                        + "(publish or route it) and keep the dependent held, rather than pausing for the operator. For a "
+                        + "no-reply receiver past the threshold (default 30m), run the SAFE stale-thread health check — "
+                        + "send one non-destructive status-request and verify read-only intent-cli/GitHub facts before any "
+                        + "retry; never auto-clear a permission prompt, auto-cancel work, or duplicate a task. Do "
                         + "NOT "
                         + "launch recurring implement/review timers for this domain/repo while orchestrating. Fail "
                         + "closed: if you detect a second orchestrator for this domain/repo, or agmsg replies conflict "
@@ -785,6 +831,40 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Stale-thread health check");
+        writer.WriteLine();
+        writer.WriteLine(guide.StaleThreadHealthCheck.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **no-reply threshold** — {guide.StaleThreadHealthCheck.NoReplyThreshold}");
+        writer.WriteLine();
+        writer.WriteLine("### Procedure");
+        writer.WriteLine();
+        for (var i = 0; i < guide.StaleThreadHealthCheck.Procedure.Count; i++)
+        {
+            writer.WriteLine($"{i + 1}. {guide.StaleThreadHealthCheck.Procedure[i]}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Status-request message");
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(guide.StaleThreadHealthCheck.StatusRequestTemplate);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine("### Receiver statuses");
+        writer.WriteLine();
+        foreach (var status in guide.StaleThreadHealthCheck.ReceiverStatuses)
+        {
+            writer.WriteLine($"- **{status.Status}** — {status.Meaning}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Health-check safety");
+        writer.WriteLine();
+        foreach (var rule in guide.StaleThreadHealthCheck.Safety)
+        {
+            writer.WriteLine($"- {rule}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Thread prompts");
         foreach (var thread in guide.Threads)
         {
@@ -874,6 +954,9 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("dependency_planning")]
     public required OrchestratorDependencyPlanning DependencyPlanning { get; init; }
+
+    [JsonPropertyName("stale_thread_health_check")]
+    public required OrchestratorStaleThreadHealthCheck StaleThreadHealthCheck { get; init; }
 
     [JsonPropertyName("setup")]
     public required OrchestratorSetup Setup { get; init; }
@@ -976,6 +1059,36 @@ internal sealed record OrchestratorCiState
 
     [JsonPropertyName("routing")]
     public required string Routing { get; init; }
+}
+
+internal sealed record OrchestratorStaleThreadHealthCheck
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("no_reply_threshold")]
+    public required string NoReplyThreshold { get; init; }
+
+    [JsonPropertyName("procedure")]
+    public required IReadOnlyList<string> Procedure { get; init; }
+
+    [JsonPropertyName("status_request_template")]
+    public required string StatusRequestTemplate { get; init; }
+
+    [JsonPropertyName("receiver_statuses")]
+    public required IReadOnlyList<OrchestratorReceiverStatus> ReceiverStatuses { get; init; }
+
+    [JsonPropertyName("safety")]
+    public required IReadOnlyList<string> Safety { get; init; }
+}
+
+internal sealed record OrchestratorReceiverStatus
+{
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("meaning")]
+    public required string Meaning { get; init; }
 }
 
 internal sealed record OrchestratorDependencyPlanning

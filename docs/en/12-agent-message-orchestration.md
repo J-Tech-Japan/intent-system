@@ -188,6 +188,35 @@ The dependent candidate stays held until every dependency is completed/cut.
 cross-domain dependency without route mapping, conflicting GitHub linkage,
 destructive recovery, credentials/security, or a human product/design judgment.
 
+## Stale-thread health check
+
+Receivers are loopless, so **silence is ambiguous** — a receiver may be working,
+waiting for CI, waiting for a permission prompt, blocked, completed without a
+reply, or truly stale. When a receiver has had no reply past the threshold
+(default **30 minutes**, configurable), the orchestrator runs a **safe**
+liveness check: ask before acting, verify authoritative facts, and never
+auto-cancel work, auto-clear a permission prompt, or duplicate a task.
+
+Procedure:
+
+1. Send **one non-destructive status-request** — ask, do not retry/cancel/reset.
+2. Check read-only intent-cli / GitHub facts (`worker next-action`, issue/PR
+   state, CI, labels).
+3. If facts show progress (new commits, PR updated, CI running), **keep
+   watching** — do not re-send the work.
+4. If the receiver replies `waiting-permission`, it is an **operator notice** —
+   surface it; never auto-clear the prompt.
+5. Only after repeated no-reply **and** no progress, send **at most one
+   idempotent re-entry** referencing the same issue/PR.
+6. Escalate after repeated silence with no progress, or any unsafe case
+   (cancel/reset, destructive git, credentials).
+
+The status-request asks the receiver to reply with one of: `working`,
+`waiting-ci`, `waiting-permission`, `blocked`, `completed`, `idle`. A health
+check never clears a permission prompt, cancels/resets work, mutates labels, or
+runs destructive git. (Timer-loop mode is unaffected — this applies only to
+orchestrator-message receivers.)
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for
