@@ -194,81 +194,84 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.3.9",
-  "nextVersion": "0.3.10"
-}
-```
-
-| Stage | Version form | How it is derived |
-| --- | --- | --- |
-| Local pack / install | `0.3.10-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.3.10-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.3.10-rc.N` | Tag `v0.3.10-rc.N` triggers release workflow |
-| Stable release | `0.3.10` | Tag `v0.3.10` triggers release workflow (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.3.11-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.11` |
-
-**After releasing `v0.3.10`**, bump both fields in `eng/version.json`:
-
-```json
-{
   "stableVersion": "0.3.10",
   "nextVersion": "0.3.11"
 }
 ```
 
+| Stage | Version form | How it is derived |
+| --- | --- | --- |
+| Local pack / install | `0.3.11-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `0.3.11-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.3.11-rc.N` | Tag `v0.3.11-rc.N` triggers release workflow |
+| Stable release | `0.3.11` | Tag `v0.3.11` triggers release workflow (`-p:Version=<tag>` wins) |
+| Post-release main builds | `0.3.12-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.12` |
+
+**After releasing `v0.3.11`**, bump both fields in `eng/version.json`:
+
+```json
+{
+  "stableVersion": "0.3.11",
+  "nextVersion": "0.3.12"
+}
+```
+
 This ensures the next main-branch CI build (and local pack) immediately produces
-`0.3.11-preview.<run>.<attempt>` / `0.3.11-<sha>-<G-unit>` rather than continuing to
-emit `0.3.10` (which would collide with the stable release version).
+`0.3.12-preview.<run>.<attempt>` / `0.3.12-<sha>-<G-unit>` rather than continuing to
+emit `0.3.11` (which would collide with the stable release version).
 
-### Next release readiness (v0.3.10)
+### Next release readiness (v0.3.11)
 
-**`v0.3.9` shipped** (GitHub Release + NuGet) and the version policy was bumped
-to the `0.3.10` development line. The repository is now on the in-development
-**`0.3.10`** `nextVersion`; G486 (this packet) prepares the `v0.3.10` release — the
-next release is published by tagging `v0.3.10` once the
-[release-readiness gate](release-notes-v0.3.10.md#release-readiness-gate-g486)
+**`v0.3.10` shipped** (GitHub Release + NuGet) and the version policy was bumped
+to the `0.3.11` development line. The repository is now on the in-development
+**`0.3.11`** `nextVersion`; G497 (this packet) prepares the `v0.3.11` release — the
+next release is published by tagging `v0.3.11` once the
+[release-readiness gate](release-notes-v0.3.11.md#release-readiness-gate-g497)
 passes. Preparing the release does not cut it. Full changelog and operator
-checklist: [release-notes-v0.3.10.md](release-notes-v0.3.10.md).
+checklist: [release-notes-v0.3.11.md](release-notes-v0.3.11.md).
 
-**To ship in `v0.3.10` (changes since `v0.3.9`) — a dogfooding-stability release:**
+**To ship in `v0.3.11` (changes since `v0.3.10`) — the agmsg orchestrator-mode
+preview:**
 
-- **Windows Japanese `gh` JSON decoding** (G484) — every `gh` subprocess pins
-  UTF-8 stream decoding, so Japanese issue/PR titles and bodies stay valid JSON
-  on a Japanese Windows console (cp932). `worker next-action` / preflight no
-  longer break on non-ASCII payloads, with no `chcp 65001` or manual output
-  encoding required; macOS/Linux behavior is unchanged.
-- **Same-repo metadata publish-flow reliability** (G485) — `queue-seed-from-packet`
-  resolves the domain `execution_unit_regex` through the same shared resolver
-  `automation summary` uses, so a valid same-repo packet (code branch `main`,
-  metadata branch `main-metadata`) seeds and publishes through the regular
-  `queue-seed-from-packet` → `issue publish-flow` → `automation issue-publish`
-  path instead of being rejected as `missing-domain-binding-regex`. The
-  supported `[project]` same-repo config keys are now documented.
+- **Agent-message (agmsg) orchestrator mode — preview/experimental** (G487–G496)
+  — an optional fourth orchestrator thread can coordinate the implementation and
+  review threads over a local message bus (agmsg) instead of independent timers.
+  `intent-cli guide orchestrator-thread` renders the paste-ready prompts, the
+  single/multi-domain routing rules, the scheduled-wake cadence, the CI wait
+  state, bounded next-slice publication, dependency-aware planning, the
+  stale-thread health check, and a design-thread setup checklist. agmsg is a
+  signal layer only; intent-cli and GitHub stay authoritative, and the existing
+  timer-loop mode is fully supported and unchanged. This mode is **preview**:
+  opt-in, still being hardened, and not yet the default workflow.
+- **Review guidance** also gains automated-reviewer-comment triage (G493) so a
+  review agent classifies automated reviewer comments (e.g. Copilot) instead of
+  forwarding every comment to implementation. See
+  [Agent-message orchestration](12-agent-message-orchestration.md).
 
-**Release-readiness verification (run before tagging the next `v0.3.10`):**
+**Release-readiness verification (run before tagging the next `v0.3.11`):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.3.9 (published), nextVersion 0.3.10 (to release)
+cat eng/version.json   # stableVersion 0.3.10 (published), nextVersion 0.3.11 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.3.10-<sha>-G48x   (NOT a stale literal)
+#   expected shape: intent-cli 0.3.11-<sha>-G49x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.10.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.11.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-The official release is then cut by publishing a GitHub Release tagged `v0.3.10`;
-the release workflow passes `-p:Version=0.3.10` (which wins over the local
+The official release is then cut by publishing a GitHub Release tagged `v0.3.11`;
+the release workflow passes `-p:Version=0.3.11` (which wins over the local
 default). After the release publishes, apply the post-release `eng/version.json`
-bump above (`stableVersion → 0.3.10`, `nextVersion → 0.3.11`).
+bump above (`stableVersion → 0.3.11`, `nextVersion → 0.3.12`).
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
