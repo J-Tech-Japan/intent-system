@@ -115,6 +115,79 @@ public sealed class AutomationReconcileCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_DryRun_DetectsApprovedPrStillCarryingRereviewReady_G503()
+    {
+        using var workspace = new ReconcileWorkspace();
+        var lister = new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(543, "approved but still rereview-ready",
+                    "https://github.com/J-Tech-Japan/intent-system/pull/543",
+                    body: "Closes #561",
+                    labels: ["intent-target", "intent-pr-approved", "intent-pr-rereview-ready"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(561, "G229", "https://github.com/J-Tech-Japan/intent-system/issues/561",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+        AutomationReconcileCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+
+        Assert.Contains(result.SafeRepairs, repair =>
+            string.Equals(repair.Type, AutomationReconcileRepairTypes.ApprovedPrStaleReviewLabel, StringComparison.Ordinal)
+            && repair.TargetNumber == 543
+            && repair.RemoveLabels.Contains("intent-pr-rereview-ready", StringComparer.Ordinal)
+            && !repair.AddLabels.Any()
+            && string.Equals(repair.Confidence, AutomationReconcileConfidence.High, StringComparison.Ordinal)
+            && !repair.Applied);
+    }
+
+    [Fact]
+    public void Execute_DryRun_ApprovedPrWithoutStaleReviewLabel_NoApprovedStaleRepair_G503()
+    {
+        using var workspace = new ReconcileWorkspace();
+        var lister = new FakeLister
+        {
+            AllPrs =
+            [
+                BuildPr(544, "cleanly approved",
+                    "https://github.com/J-Tech-Japan/intent-system/pull/544",
+                    body: "Closes #562",
+                    labels: ["intent-target", "intent-pr-approved"]),
+            ],
+            PublishedIssues =
+            [
+                BuildIssue(562, "G230", "https://github.com/J-Tech-Japan/intent-system/issues/562",
+                    labels: ["intent-target", "intent-pr-created"]),
+            ],
+        };
+        AutomationReconcileCommand.CandidateListerFactory = () => lister;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationReconcileCommand.Execute(
+            workspace.Context,
+            ["--lane", "host-review", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationReconcileResult>(writer.ToString())!;
+
+        Assert.DoesNotContain(result.SafeRepairs, repair =>
+            string.Equals(repair.Type, AutomationReconcileRepairTypes.ApprovedPrStaleReviewLabel, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_NoDriftReturnsCleanPlanWithSummaryAndZeroExit()
     {
         using var workspace = new ReconcileWorkspace();

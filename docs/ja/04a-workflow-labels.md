@@ -41,6 +41,14 @@ intent-target + intent-pr-approved（PR 側）
 → PR が承認済みで、マージを待っています。
 ```
 
+`intent-pr-approved` は **review の terminal state** です: `intent-pr-rereview-ready`
+（「再レビュー待ち」）を supersede し、他の active な review ラベルと排他です。PR が approved に
+遷移するとき、intent-cli は stale な `intent-pr-rereview-ready`・`intent-pr-request-update`・
+`intent-pr-update-in-progress` を除去するため、approved の PR が in-flight な review ラベルを
+同時に可視に持つことはありません。両方を持つ PR が見つかった場合（例: 再レビュー承認後）、
+`intent-cli automation reconcile` がそれを安全な high-confidence な repair として検出し、stale な
+ラベルを intent-cli 所有の振る舞いで除去します — 生の `gh label` 編集ではありません。
+
 ## ラベルについての注意
 
 - **手でラベルを付け外ししない**: 通常の運用では、workflow label は intent-cli/automation が管理します。手動で変更すると、ループが誤った状態に入る可能性があります。

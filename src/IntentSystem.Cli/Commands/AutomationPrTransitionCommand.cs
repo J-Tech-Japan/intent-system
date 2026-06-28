@@ -164,6 +164,12 @@ internal static class AutomationPrTransitionCommand
                     WorkerNextActionConstants.Labels.IntentPrRereviewReady,
                     "rereview-ready",
                 ]),
+            // G503: approved is the terminal review state — it supersedes
+            // rereview-ready ("waiting for another review pass") and clears the
+            // other active review-state labels so a merged/approved PR never
+            // visibly carries both intent-pr-approved and a stale in-flight
+            // review label. Removing an absent label is a no-op (the write path
+            // filters to present labels), so the transition stays idempotent.
             TransitionApproved => new TransitionPlan(
                 AddLabels:
                 [
@@ -172,6 +178,10 @@ internal static class AutomationPrTransitionCommand
                 RemoveLabels:
                 [
                     WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing,
+                    WorkerNextActionConstants.Labels.IntentPrRereviewReady,
+                    "rereview-ready",
+                    WorkerPrReviewPreflightConstants.Labels.IntentPrRequestUpdate,
+                    WorkerPrReviewPreflightConstants.Labels.IntentPrUpdateInProgress,
                 ]),
             TransitionRequestUpdate => new TransitionPlan(
                 AddLabels:
@@ -205,9 +215,13 @@ internal static class AutomationPrTransitionCommand
         // G292: review-release is also defensive about stale labels — only
         // remove labels that are actually present, so the dry-run plan
         // matches what gh will actually mutate.
+        // G503: approved joins this set so clearing rereview-ready /
+        // request-update / update-in-progress stays idempotent when those
+        // labels are absent.
         if (string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
             && (string.Equals(transition, TransitionReviewStart, StringComparison.Ordinal)
-                || string.Equals(transition, TransitionReviewRelease, StringComparison.Ordinal)))
+                || string.Equals(transition, TransitionReviewRelease, StringComparison.Ordinal)
+                || string.Equals(transition, TransitionApproved, StringComparison.Ordinal)))
         {
             var currentLabelSet = new HashSet<string>(currentLabels, StringComparer.Ordinal);
             return plannedRemoveLabels

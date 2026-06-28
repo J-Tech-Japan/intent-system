@@ -189,6 +189,11 @@ internal static class AutomationReconcileRepairTypes
     public const string MissingPrClosesKeyword = "missing-pr-closes-keyword";
     public const string MissingLinkedPrMetadata = "missing-linked-pr-metadata";
     public const string StaleNextSliceCandidateCache = "stale-next-slice-candidate-cache";
+
+    // G503: an approved PR still carries a stale in-flight review label
+    // (rereview-ready / request-update / update-in-progress). approved is the
+    // terminal review state and supersedes them.
+    public const string ApprovedPrStaleReviewLabel = "approved-pr-stale-review-label";
 }
 
 internal static class AutomationReconcileUnsafeStopKinds
