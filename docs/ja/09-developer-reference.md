@@ -184,72 +184,71 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 
 ```json
 {
-  "stableVersion": "0.3.10",
-  "nextVersion": "0.3.11"
-}
-```
-
-| ステージ | バージョン形式 | 導出方法 |
-| --- | --- | --- |
-| ローカル pack / install | `0.3.11-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
-| Main CI preview | `0.3.11-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
-| リリース候補（任意） | `0.3.11-rc.N` | タグ `v0.3.11-rc.N` がリリースワークフローをトリガー |
-| 安定版リリース | `0.3.11` | タグ `v0.3.11` がリリースワークフローをトリガー（`-p:Version=<tag>` が優先） |
-| リリース後の main ビルド | `0.3.12-preview.<run>.<attempt>` | `nextVersion` を `0.3.12` にバンプ後 |
-
-**`v0.3.11` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
-
-```json
-{
   "stableVersion": "0.3.11",
   "nextVersion": "0.3.12"
 }
 ```
 
+| ステージ | バージョン形式 | 導出方法 |
+| --- | --- | --- |
+| ローカル pack / install | `0.3.12-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
+| Main CI preview | `0.3.12-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
+| リリース候補（任意） | `0.3.12-rc.N` | タグ `v0.3.12-rc.N` がリリースワークフローをトリガー |
+| 安定版リリース | `0.3.12` | タグ `v0.3.12` がリリースワークフローをトリガー（`-p:Version=<tag>` が優先） |
+| リリース後の main ビルド | `0.3.13-preview.<run>.<attempt>` | `nextVersion` を `0.3.13` にバンプ後 |
+
+**`v0.3.12` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
+
+```json
+{
+  "stableVersion": "0.3.12",
+  "nextVersion": "0.3.13"
+}
+```
+
 これにより次の main ブランチ CI ビルド（およびローカル pack）が
-`0.3.12-preview.<run>.<attempt>` / `0.3.12-<sha>-<G-unit>` を生成し、`0.3.11`（安定版
+`0.3.13-preview.<run>.<attempt>` / `0.3.13-<sha>-<G-unit>` を生成し、`0.3.12`（安定版
 リリースバージョンと衝突）の出力が継続されなくなります。
 
-### 次リリース準備（v0.3.11）
+### 次リリース準備（v0.3.12）
 
-**`v0.3.10` は publish 済み**（GitHub Release + NuGet）で、バージョンポリシーは
-`0.3.11` 開発ラインにバンプされました。リポジトリは現在 in-development の **`0.3.11`**
-`nextVersion` 上にあり、G497（本パケット）が `v0.3.11` リリースを準備します。次のリリースは
-[リリース準備ゲート](release-notes-v0.3.11.md#リリース準備ゲート-g497)を通過後に `v0.3.11`
+**`v0.3.11` は publish 済み**（GitHub Release + NuGet）で、バージョンポリシーは
+`0.3.12` 開発ラインにバンプされました。リポジトリは現在 in-development の **`0.3.12`**
+`nextVersion` 上にあり、G504（本パケット）が `v0.3.12` パッチリリースを準備します。次のリリースは
+[リリース準備ゲート](release-notes-v0.3.12.md#リリース準備ゲート-g504)を通過後に `v0.3.12`
 タグ付けで publish されます。準備はリリースを cut しません。完全な changelog と operator
-チェックリスト: [release-notes-v0.3.11.md](release-notes-v0.3.11.md)。
+チェックリスト: [release-notes-v0.3.12.md](release-notes-v0.3.12.md)。
 
-**`v0.3.11` で出荷予定（`v0.3.10` 以降の変更）— agmsg orchestrator モードのプレビュー:**
+**`v0.3.12` で出荷予定（`v0.3.11` 以降の変更）— orchestrator モードプレビューのパッチ修正:**
 
-- **エージェントメッセージ（agmsg）orchestrator モード — preview / experimental**（G487–G496）
-  — 任意の 4 つ目の orchestrator スレッドが、独立タイマーの代わりにローカルメッセージバス
-  （agmsg）経由で実装・レビュースレッドを調整できます。`intent-cli guide orchestrator-thread`
-  が貼り付け可能なプロンプト、single/multi-domain ルーティング、スケジュール wake のケイデンス、
-  CI 待ち状態、bounded な next-slice publish、依存を考慮した計画、stale-thread ヘルスチェック、
-  設計スレッド向けセットアップチェックリストをレンダリングします。agmsg はシグナル層のみで、
-  intent-cli と GitHub が権威であり続け、既存の timer-loop モードは完全サポート・不変です。
-  このモードは **preview** です: オプトインで、まだ hardening 中であり、デフォルトの workflow
-  ではありません。
-- **レビューガイダンス** にも自動レビュアーコメント triage（G493）が加わり、review agent が
-  自動レビュアー（例: Copilot）のコメントを分類してから実装に回します。
+- **agmsg receiver の起動順序**（G502）— orchestrator setup ガイダンスが、実際の委譲前に厳密な
+  起動順序と ping/ack ハンドシェイクを要求するようになり、receiver セッションの起動/再起動・
+  monitor/bridge のアタッチ・ack 成功の前に作業が送られないようにします。initial 送信後に launch
+  された receiver 向けの貼り付け可能な復旧メッセージを含みます。
+- **approved PR の label クリーンアップ**（G503）— `approved` PR 遷移が stale な
+  `intent-pr-rereview-ready`（および他の in-flight review ラベル）を除去し、`automation reconcile`
+  が両方を持つ PR を修復するため、approved の PR が `intent-pr-approved` と `intent-pr-rereview-ready`
+  を同時に可視に持つことがなくなります。
+- orchestrator モードは引き続き **preview/experimental** です: オプトインで、まだ hardening 中であり、
+  timer-loop モードは完全サポート・不変です。
   [エージェントメッセージオーケストレーション](12-agent-message-orchestration.md) を参照。
 
-**リリース準備の検証（次の `v0.3.11` タグ付け前に実行）:**
+**リリース準備の検証（次の `v0.3.12` タグ付け前に実行）:**
 
 ```bash
-cat eng/version.json   # stableVersion 0.3.10（公開済み）, nextVersion 0.3.11（リリース対象）
+cat eng/version.json   # stableVersion 0.3.11（公開済み）, nextVersion 0.3.12（リリース対象）
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待形: intent-cli 0.3.11-<sha>-G49x （stale なリテラルではない）
+#   期待形: intent-cli 0.3.12-<sha>-G50x （stale なリテラルではない）
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.11.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.12.nupkg
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-公式リリースは `v0.3.11` タグの GitHub Release publish で cut され、リリースワークフローが
-`-p:Version=0.3.11` を渡します（ローカルデフォルトより優先）。publish 後、上記のリリース後
-`eng/version.json` バンプ（`stableVersion → 0.3.11`, `nextVersion → 0.3.12`）を適用します。
+公式リリースは `v0.3.12` タグの GitHub Release publish で cut され、リリースワークフローが
+`-p:Version=0.3.12` を渡します（ローカルデフォルトより優先）。publish 後、上記のリリース後
+`eng/version.json` バンプ（`stableVersion → 0.3.12`, `nextVersion → 0.3.13`）を適用します。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
