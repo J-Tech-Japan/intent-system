@@ -287,6 +287,40 @@ state**、それを裏付ける evidence、必要なときだけの options、�
   **代替ではありません**。最小権限の承認をデフォルトに保ちます。目標は破壊的な `rm -rf` プロンプトを
   抑制することではなく、そもそも必要としないことです。
 
+## receiver の準備状態（readiness）
+
+monitor の設定だけでは **不十分** です。team 登録 + delivery mode 設定があっても、receiver が
+メッセージを見られるとは **限りません** — 新しく起動/再起動したセッションは、その monitor/watch
+パスがアクティブになる前に送られたメッセージを拾わないことがあります。実際の作業を送る前に、
+各 receiver が ping/ack で **ready** であることを確認してください。
+
+readiness 状態:
+
+- **registered** — ロールが team に参加した（`team.sh` に表示される）。
+- **delivery-configured** — delivery mode が設定済み（`delivery.sh status`）。
+- **watcher-alive** — そのロールの monitor/watch プロセスが動いている。
+- **receiver-session-active** — 起動/再起動した receiver セッションが実際に monitor パスに
+  アタッチされている（delivery がアクティブになる前に開始したセッションは earlier なメッセージを
+  受け取らないことがある）。
+- **ping-acknowledged** — receiver が ping に返信した。チャネルが end-to-end で動く唯一の証拠。
+
+実際の委譲の前に orchestrator・implementer・reviewer に対して **ping/ack が必須** であり、
+起動/再起動のたびに再実行します。ack がなければ **not-ready** — 実際の作業を送らない。receiver が
+ready でなかった場合、earlier に送ったメッセージは missed の可能性があります: ack 後に resend するか、
+`inbox.sh` で queue を読む。先に `team.sh` と `delivery.sh status` を再確認します。
+
+境界:
+
+- **`watch.sh`** はロールの inbox をライブにストリームしますが **ターミナルを占有** します —
+  debug/fallback オプションであり、デフォルトのセットアップ要件ではありません。通常は monitor
+  delivery hook が標準パスです。
+- **Codex Desktop app のスレッドはデフォルトで agmsg monitor receiver ではありません** — CLI
+  セッションとは別の実行 surface です。receiver には CLI セッションを使う（または `inbox.sh` で
+  読む）。
+
+診断は agmsg スクリプトのみ: `team.sh`（登録）、`delivery.sh status`（delivery）、`inbox.sh`
+（queue 済みメッセージ）、`send.sh`（ping → ack）。
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:

@@ -672,9 +672,9 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("#### orchestrator", output, StringComparison.Ordinal);
         Assert.Contains("#### implementation", output, StringComparison.Ordinal);
         Assert.Contains("#### review", output, StringComparison.Ordinal);
-        // First validation: read-only wake, ping test, existing-loop conflict check.
+        // First validation: read-only wake, receiver readiness (ping/ack), existing-loop conflict check.
         Assert.Contains("First read-only wake", output, StringComparison.Ordinal);
-        Assert.Contains("Ping/inbox test", output, StringComparison.Ordinal);
+        Assert.Contains("Receiver readiness: ping each receiver and require an ack", output, StringComparison.Ordinal);
         Assert.Contains("Existing-loop conflict check", output, StringComparison.Ordinal);
     }
 
@@ -740,6 +740,67 @@ public sealed class GuideOrchestratorThreadCommandTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("Unknown --existing-loop-policy", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_ReceiverReadiness_RequiresPingAck_AndExplainsBoundaries_G501()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Receiver readiness", output, StringComparison.Ordinal);
+        // Monitor config is not enough.
+        Assert.Contains("Monitor configuration is NOT enough", output, StringComparison.Ordinal);
+        // The five readiness states.
+        Assert.Contains("- **registered**", output, StringComparison.Ordinal);
+        Assert.Contains("- **delivery-configured**", output, StringComparison.Ordinal);
+        Assert.Contains("- **watcher-alive**", output, StringComparison.Ordinal);
+        Assert.Contains("- **receiver-session-active**", output, StringComparison.Ordinal);
+        Assert.Contains("- **ping-acknowledged**", output, StringComparison.Ordinal);
+        // Ping/ack required for each receiver before real delegation, re-done after restart.
+        Assert.Contains("ping/ack required", output, StringComparison.Ordinal);
+        Assert.Contains("Treat a missing ack as NOT-READY", output, StringComparison.Ordinal);
+        Assert.Contains("after any receiver launch or restart", output, StringComparison.Ordinal);
+        // Not-ready recovery via inbox.sh / resend.
+        Assert.Contains("resend", output, StringComparison.Ordinal);
+        Assert.Contains("`inbox.sh`", output, StringComparison.Ordinal);
+        // watch.sh is debug/fallback and occupies a terminal.
+        Assert.Contains("debug / fallback", output, StringComparison.Ordinal);
+        Assert.Contains("OCCUPIES a terminal", output, StringComparison.Ordinal);
+        // Codex Desktop app is not a monitor receiver by default.
+        Assert.Contains("Codex Desktop app threads are NOT agmsg monitor receivers", output, StringComparison.Ordinal);
+        // Diagnostic commands use agmsg scripts only.
+        Assert.Contains("agmsg team.sh", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg delivery.sh status", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg inbox.sh", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_ReceiverReadiness_HasFiveStatesAndRecovery_G501()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var readiness = doc.RootElement.GetProperty("receiver_readiness");
+
+        var states = readiness.GetProperty("states").EnumerateArray()
+            .Select(s => s.GetProperty("state").GetString())
+            .ToArray();
+        Assert.Equal(
+            new[] { "registered", "delivery-configured", "watcher-alive", "receiver-session-active", "ping-acknowledged" },
+            states);
+
+        Assert.True(readiness.TryGetProperty("ping_ack_required", out _));
+        Assert.NotEmpty(readiness.GetProperty("not_ready_recovery").EnumerateArray());
+        Assert.Contains("inbox.sh", readiness.GetProperty("codex_desktop_note").GetString()! + string.Join(" ", readiness.GetProperty("not_ready_recovery").EnumerateArray().Select(e => e.GetString())), StringComparison.Ordinal);
+
+        // Diagnostic commands use only agmsg scripts (no raw gh / db edits).
+        var diagnostics = readiness.GetProperty("diagnostic_commands").EnumerateArray().Select(d => d.GetString()!).ToArray();
+        Assert.All(diagnostics, d => Assert.StartsWith("agmsg ", d, StringComparison.Ordinal));
     }
 
     [Fact]

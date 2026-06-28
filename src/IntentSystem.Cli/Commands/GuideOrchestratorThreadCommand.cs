@@ -558,6 +558,47 @@ internal static class GuideOrchestratorThreadCommand
                     "Never edit the agmsg database or team files directly — register, message, and clean up ONLY through "
                     + "the agmsg scripts. Hand-editing agmsg state corrupts delivery.",
             },
+            ReceiverReadiness = new OrchestratorReceiverReadiness
+            {
+                Summary =
+                    "Monitor configuration is NOT enough. A registered team plus a configured delivery mode does NOT mean "
+                    + "a receiver will see your message — a newly launched or restarted session may not pick up messages "
+                    + "sent before its monitor/watch path was active. Confirm each receiver is READY with a ping/ack "
+                    + "before sending real work.",
+                States = new[]
+                {
+                    new OrchestratorReadinessState { State = "registered", Meaning = "the role joined the team (it appears in `team.sh`)." },
+                    new OrchestratorReadinessState { State = "delivery-configured", Meaning = "the delivery mode is set for the role (`delivery.sh status`)." },
+                    new OrchestratorReadinessState { State = "watcher-alive", Meaning = "the monitor / watch process is running for the role." },
+                    new OrchestratorReadinessState { State = "receiver-session-active", Meaning = "a launched/restarted receiver session is actually attached to the monitor path — a session started before delivery was active may not receive earlier messages." },
+                    new OrchestratorReadinessState { State = "ping-acknowledged", Meaning = "the receiver replied to a ping — the only proof the channel works end to end." },
+                },
+                PingAckRequired =
+                    "Before ANY real delegation, send a ping to the orchestrator, implementer, and reviewer and require "
+                    + "an ack from each. Treat a missing ack as NOT-READY and do not send real work until every receiver "
+                    + "has acked. Re-do the ping/ack after any receiver launch or restart.",
+                NotReadyRecovery = new[]
+                {
+                    "Messages sent before readiness may not have been received — resend them after the ack.",
+                    "Read what is already queued for a role with `inbox.sh` (a session can pull messages it missed).",
+                    "Re-confirm registration (`team.sh`) and delivery (`delivery.sh status`) before resending.",
+                },
+                WatchNote =
+                    "Manual `watch.sh` streams a role's inbox live but OCCUPIES a terminal — it is a debug / fallback "
+                    + "streaming option, not the default setup requirement. The normal path is the monitor delivery hook; "
+                    + "use `watch.sh` to diagnose, not as the standing receiver.",
+                CodexDesktopNote =
+                    "Codex Desktop app threads are NOT agmsg monitor receivers by default — they are a different "
+                    + "execution surface from a CLI session. Do not assume a Desktop-app thread will receive agmsg "
+                    + "messages; use a CLI session as the receiver (or read with `inbox.sh`).",
+                DiagnosticCommands = new[]
+                {
+                    "agmsg team.sh — confirm the role is registered in the team.",
+                    "agmsg delivery.sh status — confirm the delivery mode is configured/active for the role.",
+                    "agmsg inbox.sh — read what is queued for a role (catch messages sent before readiness).",
+                    "agmsg send.sh — send a ping; the receiver's ack proves the channel end to end.",
+                },
+            },
             Threads = new[]
             {
                 new OrchestratorThreadPrompt
@@ -818,7 +859,7 @@ internal static class GuideOrchestratorThreadCommand
             {
                 "Existing-loop conflict check: confirm no implementation/review recurring timer is running for this domain/repo (only the orchestrator is scheduled).",
                 "First read-only wake: run ONE confirm-only orchestrator wake — read state, send nothing.",
-                "Ping/inbox test: send one agmsg message from the orchestrator to each receiver and confirm it lands before any real delegation.",
+                "Receiver readiness: ping each receiver and require an ack BEFORE any real delegation — a registered+configured role is not ready until it acks (see the Receiver readiness section). A session launched before delivery was active may have missed earlier messages; resend or read with `inbox.sh`.",
             },
             LooplessReceiverNote = LooplessReceiverNote,
         };
@@ -1086,6 +1127,37 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
         writer.WriteLine($"> **Warning:** {guide.Setup.Warning}");
+        writer.WriteLine();
+
+        writer.WriteLine("## Receiver readiness");
+        writer.WriteLine();
+        writer.WriteLine(guide.ReceiverReadiness.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Readiness states");
+        writer.WriteLine();
+        foreach (var state in guide.ReceiverReadiness.States)
+        {
+            writer.WriteLine($"- **{state.State}** — {state.Meaning}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **ping/ack required** — {guide.ReceiverReadiness.PingAckRequired}");
+        writer.WriteLine();
+        writer.WriteLine("### If a receiver is not ready");
+        writer.WriteLine();
+        foreach (var item in guide.ReceiverReadiness.NotReadyRecovery)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **`watch.sh`** — {guide.ReceiverReadiness.WatchNote}");
+        writer.WriteLine($"- **Codex Desktop app** — {guide.ReceiverReadiness.CodexDesktopNote}");
+        writer.WriteLine();
+        writer.WriteLine("### Diagnostic commands (agmsg scripts only)");
+        writer.WriteLine();
+        foreach (var command in guide.ReceiverReadiness.DiagnosticCommands)
+        {
+            writer.WriteLine($"- {command}");
+        }
         writer.WriteLine();
 
         writer.WriteLine("## Domain routing — single-domain vs multi-domain");
@@ -1477,6 +1549,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("setup")]
     public required OrchestratorSetup Setup { get; init; }
 
+    [JsonPropertyName("receiver_readiness")]
+    public required OrchestratorReceiverReadiness ReceiverReadiness { get; init; }
+
     [JsonPropertyName("threads")]
     public required IReadOnlyList<OrchestratorThreadPrompt> Threads { get; init; }
 
@@ -1671,6 +1746,39 @@ internal sealed record OrchestratorDependencyStatus
 
     [JsonPropertyName("action")]
     public required string Action { get; init; }
+}
+
+internal sealed record OrchestratorReceiverReadiness
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("states")]
+    public required IReadOnlyList<OrchestratorReadinessState> States { get; init; }
+
+    [JsonPropertyName("ping_ack_required")]
+    public required string PingAckRequired { get; init; }
+
+    [JsonPropertyName("not_ready_recovery")]
+    public required IReadOnlyList<string> NotReadyRecovery { get; init; }
+
+    [JsonPropertyName("watch_note")]
+    public required string WatchNote { get; init; }
+
+    [JsonPropertyName("codex_desktop_note")]
+    public required string CodexDesktopNote { get; init; }
+
+    [JsonPropertyName("diagnostic_commands")]
+    public required IReadOnlyList<string> DiagnosticCommands { get; init; }
+}
+
+internal sealed record OrchestratorReadinessState
+{
+    [JsonPropertyName("state")]
+    public required string State { get; init; }
+
+    [JsonPropertyName("meaning")]
+    public required string Meaning { get; init; }
 }
 
 internal sealed record OrchestratorSetup
