@@ -16,8 +16,31 @@ intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> 
 
 A design thread that wants to run orchestration can ask intent-cli directly —
 `intent-cli guide workflow suggest --goal "I want to start agmsg orchestrator
-mode"` routes to the orchestrator setup guidance, and `guide orchestrator-thread`
-returns the concrete setup checklist. The shape:
+mode"` (and natural-language variants like `orchestrator を使いたい` /
+`新しい intent-cli オーケストレーションを使ってみたい`) routes to the orchestrator
+setup guidance.
+
+`guide orchestrator-thread` renders a **setup intake** first, whose visible
+outcome is one of `missing-inputs`, `setup-ready`, or `blocked`:
+
+- **missing-inputs** — supply only the missing fields among domain, target repo,
+  orchestrator/implementation/review folder, orchestrator/implementer/reviewer
+  agent, agmsg team name, delivery mode, and existing-loop stop policy.
+- **setup-ready** — the intake emits copy-paste agmsg `join.sh` / `delivery.sh`
+  commands and first prompts for all three roles, plus the first validation
+  (existing-loop conflict check, read-only first wake, ping/inbox test).
+- **blocked** — an existing implementation/review timer loop for this domain/repo
+  would race the orchestrator; stop it (or pass `--existing-loop-policy
+  will-stop`) before starting. Only the orchestrator is scheduled.
+
+```bash
+intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> \
+  --orchestrator-path <o> --implementation-path <i> --review-path <r> \
+  --orchestrator-agent <a> --implementer-agent <a> --reviewer-agent <a> \
+  --team <team> --delivery-mode <mode> --existing-loop-policy none --format markdown
+```
+
+The full reference checklist follows the intake:
 
 1. **Decide / record** — domain and target repo; host / orchestrator /
    implementation / review paths (each role runs from its own folder, clone, or

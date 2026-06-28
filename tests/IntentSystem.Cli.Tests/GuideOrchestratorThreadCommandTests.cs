@@ -631,6 +631,118 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_SetupIntake_NoInputs_IsMissingInputs_ListsOnlyMissingFields_G500()
+    {
+        var output = RunMarkdown([]);
+
+        // The intake is the first section (operational outcome before reference material).
+        var intakeIndex = output.IndexOf("## Setup intake", StringComparison.Ordinal);
+        var modeIndex = output.IndexOf("## Mode separation", StringComparison.Ordinal);
+        Assert.True(intakeIndex >= 0 && intakeIndex < modeIndex, "Setup intake must render before the reference material.");
+
+        Assert.Contains("status: `missing-inputs`", output, StringComparison.Ordinal);
+        // Lists the required fields among the eleven.
+        Assert.Contains("### Missing inputs", output, StringComparison.Ordinal);
+        Assert.Contains("- orchestrator folder", output, StringComparison.Ordinal);
+        Assert.Contains("- implementer agent", output, StringComparison.Ordinal);
+        Assert.Contains("- delivery mode", output, StringComparison.Ordinal);
+        Assert.Contains("- existing-loop stop policy", output, StringComparison.Ordinal);
+        // Only the orchestrator is scheduled.
+        Assert.Contains("Only the orchestrator is scheduled", output, StringComparison.Ordinal);
+        // No agmsg commands emitted while inputs are missing.
+        Assert.DoesNotContain("agmsg join.sh", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_SetupIntake_CompleteInputs_IsSetupReady_EmitsCommandsAndPrompts_G500()
+    {
+        var output = RunMarkdown([
+            "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system",
+            "--orchestrator-path", "/work/orch", "--implementation-path", "/work/impl", "--review-path", "/work/review",
+            "--orchestrator-agent", "claude", "--implementer-agent", "claude", "--reviewer-agent", "codex",
+            "--team", "intent-orch", "--delivery-mode", "streamed-inbox-watch", "--existing-loop-policy", "none",
+        ]);
+
+        Assert.Contains("status: `setup-ready`", output, StringComparison.Ordinal);
+        // Copy-paste agmsg join/delivery commands per role, using supplied folders + agents + team + delivery.
+        Assert.Contains("agmsg join.sh intent-orch orchestrator claude /work/orch", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg delivery.sh set streamed-inbox-watch claude /work/impl", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg join.sh intent-orch review codex /work/review", output, StringComparison.Ordinal);
+        // First role prompts for all three roles.
+        Assert.Contains("#### orchestrator", output, StringComparison.Ordinal);
+        Assert.Contains("#### implementation", output, StringComparison.Ordinal);
+        Assert.Contains("#### review", output, StringComparison.Ordinal);
+        // First validation: read-only wake, ping test, existing-loop conflict check.
+        Assert.Contains("First read-only wake", output, StringComparison.Ordinal);
+        Assert.Contains("Ping/inbox test", output, StringComparison.Ordinal);
+        Assert.Contains("Existing-loop conflict check", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_SetupIntake_KeptExistingLoop_IsBlocked_G500()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            [
+                "--domain", "intent-cli", "--target-repo", "owner/repo",
+                "--orchestrator-path", "/o", "--implementation-path", "/i", "--review-path", "/r",
+                "--orchestrator-agent", "claude", "--implementer-agent", "claude", "--reviewer-agent", "codex",
+                "--team", "t", "--delivery-mode", "watch", "--existing-loop-policy", "keep",
+                "--format", "json",
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var intake = doc.RootElement.GetProperty("setup_intake");
+
+        Assert.Equal("blocked", intake.GetProperty("status").GetString());
+        Assert.Empty(intake.GetProperty("missing_fields").EnumerateArray());
+        Assert.Contains("would race the orchestrator", intake.GetProperty("headline").GetString()!, StringComparison.Ordinal);
+        // No commands emitted while blocked.
+        Assert.False(intake.TryGetProperty("agmsg_commands", out _) && intake.GetProperty("agmsg_commands").ValueKind == JsonValueKind.Array && intake.GetProperty("agmsg_commands").GetArrayLength() > 0);
+    }
+
+    [Fact]
+    public void Execute_Json_SetupIntake_RoleAgentsDefaultToAgent_G500()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            [
+                "--domain", "intent-cli", "--target-repo", "owner/repo",
+                "--orchestrator-path", "/o", "--implementation-path", "/i", "--review-path", "/r",
+                "--agent", "claude",
+                "--team", "t", "--delivery-mode", "watch", "--existing-loop-policy", "none",
+                "--format", "json",
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var intake = doc.RootElement.GetProperty("setup_intake");
+
+        // With only --agent supplied, all three role agents resolve to it → setup-ready.
+        Assert.Equal("setup-ready", intake.GetProperty("status").GetString());
+        var inputs = intake.GetProperty("inputs");
+        Assert.Equal("claude", inputs.GetProperty("orchestrator_agent").GetString());
+        Assert.Equal("claude", inputs.GetProperty("implementer_agent").GetString());
+        Assert.Equal("claude", inputs.GetProperty("reviewer_agent").GetString());
+    }
+
+    [Fact]
+    public void Execute_UnknownExistingLoopPolicy_ExitsOne_G500()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(), ["--existing-loop-policy", "maybe", "--format", "markdown"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unknown --existing-loop-policy", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();

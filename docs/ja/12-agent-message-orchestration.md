@@ -16,8 +16,30 @@ intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> 
 
 オーケストレーションを動かしたい設計スレッドは intent-cli に直接尋ねられます —
 `intent-cli guide workflow suggest --goal "I want to start agmsg orchestrator mode"`
-が orchestrator setup ガイダンスへルーティングし、`guide orchestrator-thread` が
-具体的なセットアップチェックリストを返します。流れ:
+（および `orchestrator を使いたい` / `新しい intent-cli オーケストレーションを使ってみたい`
+のような自然言語の言い回し）が orchestrator setup ガイダンスへルーティングします。
+
+`guide orchestrator-thread` はまず **setup intake** をレンダリングし、その可視 outcome は
+`missing-inputs` / `setup-ready` / `blocked` のいずれかです:
+
+- **missing-inputs** — domain、target repo、orchestrator/implementation/review フォルダー、
+  orchestrator/implementer/reviewer agent、agmsg team 名、delivery mode、existing-loop stop
+  policy のうち、不足しているフィールドだけを補う。
+- **setup-ready** — intake が貼り付け可能な agmsg `join.sh` / `delivery.sh` コマンドと 3 ロール
+  分の最初のプロンプト、最初の検証（existing-loop 競合チェック、read-only first wake、ping/inbox
+  テスト）を emit する。
+- **blocked** — 同じ domain/repo の既存の実装/レビュー timer loop が orchestrator と競合する。
+  開始前に停止する（または `--existing-loop-policy will-stop` を渡す）。orchestrator のみが
+  スケジュールされる。
+
+```bash
+intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> \
+  --orchestrator-path <o> --implementation-path <i> --review-path <r> \
+  --orchestrator-agent <a> --implementer-agent <a> --reviewer-agent <a> \
+  --team <team> --delivery-mode <mode> --existing-loop-policy none --format markdown
+```
+
+intake の後に、完全なリファレンスチェックリストが続きます:
 
 1. **決定 / 記録** — domain と target repo、host / orchestrator / implementation /
    review のパス（各ロールは自分のフォルダー・クローン・worktree から実行）、base branch

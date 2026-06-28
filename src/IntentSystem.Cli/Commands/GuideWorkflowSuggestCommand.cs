@@ -220,7 +220,7 @@ internal static class GuideWorkflowSuggestCommand
                     $"intent-cli guide prompt-matrix --mode host-loop --domain {domain} --target-repo <owner/repo> --agent <agent> --format markdown"
                 },
                 new[] { "label-ownership", "clarification" },
-                "Orchestrator setup — the operator wants to start agmsg orchestrator-message mode. `guide orchestrator-thread` returns the full setup checklist (paths/roles/team/delivery, agmsg registration, paste-ready role prompts, first read-only wake, ping test, and cleanup). The orchestrator is the single scheduled driver; implementation/review stay loopless receivers. agmsg is a signal layer only — intent-cli and GitHub stay authoritative — and agmsg state is changed only through the agmsg scripts, never by editing its DB/team files."),
+                "Orchestrator setup — the operator wants to start agmsg orchestrator-message mode. `guide orchestrator-thread` returns a concrete setup INTAKE whose visible outcome is missing-inputs / setup-ready / blocked: pass --domain, --target-repo, --orchestrator-path, --implementation-path, --review-path, --orchestrator-agent, --implementer-agent, --reviewer-agent, --team, --delivery-mode, and --existing-loop-policy to get copy-paste agmsg registration/delivery commands and first role prompts; missing fields are listed instead. The orchestrator is the single scheduled driver; implementation/review stay loopless receivers. agmsg is a signal layer only — intent-cli and GitHub stay authoritative — and agmsg state is changed only through the agmsg scripts, never by editing its DB/team files."),
 
             _ => (
                 new[]

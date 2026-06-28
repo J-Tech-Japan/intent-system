@@ -34,8 +34,20 @@ internal static class GuideOrchestratorThreadCommand
     private const string ModeSingleDomain = "single-domain";
     private const string ModeMultiDomain = "multi-domain";
 
+    // G500: setup-intake outcomes and the existing-loop stop policy values.
+    private const string IntakeMissingInputs = "missing-inputs";
+    private const string IntakeSetupReady = "setup-ready";
+    private const string IntakeBlocked = "blocked";
+
+    private const string ExistingLoopNone = "none";
+    private const string ExistingLoopWillStop = "will-stop";
+    private const string ExistingLoopKeep = "keep";
+
     private const string UsageLine =
-        "Usage: intent-cli guide orchestrator-thread [--domain <name>] [--target-repo <owner/repo>] [--agent <agent>] [--mode single-domain|multi-domain] [--format markdown|json]";
+        "Usage: intent-cli guide orchestrator-thread [--domain <name>] [--target-repo <owner/repo>] [--agent <agent>] "
+        + "[--mode single-domain|multi-domain] [--orchestrator-path <p>] [--implementation-path <p>] [--review-path <p>] "
+        + "[--orchestrator-agent <a>] [--implementer-agent <a>] [--reviewer-agent <a>] [--team <name>] "
+        + "[--delivery-mode <mode>] [--existing-loop-policy none|will-stop|keep] [--format markdown|json]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -109,6 +121,7 @@ internal static class GuideOrchestratorThreadCommand
 
         return new OrchestratorThreadGuide
         {
+            SetupIntake = BuildSetupIntake(values),
             Summary =
                 "Optional agmsg-backed orchestrator thread (ADR-012 / spec-26). agmsg carries natural-language "
                 + "delegation / progress / completion / blocker signals between threads; it is NOT workflow state. "
@@ -672,6 +685,149 @@ internal static class GuideOrchestratorThreadCommand
         };
     }
 
+    // G500: turn an orchestrator setup request into a concrete, operational
+    // intake. The visible outcome is one of missing-inputs / setup-ready /
+    // blocked. When inputs are complete the intake emits copy-paste agmsg
+    // join/delivery commands and first role prompts per role; when a field is
+    // missing it lists ONLY the missing fields; when an existing loop would
+    // race it is blocked. The orchestrator is the only scheduled thread —
+    // implementation/review are loopless receivers.
+    private static OrchestratorSetupIntake BuildSetupIntake(IReadOnlyDictionary<string, string> values)
+    {
+        var domain = values["<domain>"];
+        var repo = values["<owner/repo>"];
+        var agent = values["<agent>"];
+        var orchestratorPath = values["<orchestrator-path>"];
+        var implementationPath = values["<implementation-path>"];
+        var reviewPath = values["<review-path>"];
+        var team = values["<team>"];
+        var deliveryMode = values["<delivery-mode>"];
+        var loopPolicy = values["<existing-loop-policy>"];
+
+        // The three role agents fall back to --agent when not explicitly set.
+        string ResolveAgent(string key) =>
+            values[key].Length > 0 ? values[key] : (string.Equals(agent, "<agent>", StringComparison.Ordinal) ? string.Empty : agent);
+
+        var orchestratorAgent = ResolveAgent("<orchestrator-agent>");
+        var implementerAgent = ResolveAgent("<implementer-agent>");
+        var reviewerAgent = ResolveAgent("<reviewer-agent>");
+
+        bool Supplied(string value, string placeholder) =>
+            value.Length > 0 && !string.Equals(value, placeholder, StringComparison.Ordinal);
+
+        // Required fields, in a stable order; a field is "missing" when unset.
+        var required = new (string Label, bool Present)[]
+        {
+            ("domain", Supplied(domain, "<domain>")),
+            ("target repo", Supplied(repo, "<owner/repo>")),
+            ("orchestrator folder", Supplied(orchestratorPath, "<orchestrator-path>")),
+            ("implementation folder", Supplied(implementationPath, "<implementation-path>")),
+            ("review folder", Supplied(reviewPath, "<review-path>")),
+            ("orchestrator agent", orchestratorAgent.Length > 0),
+            ("implementer agent", implementerAgent.Length > 0),
+            ("reviewer agent", reviewerAgent.Length > 0),
+            ("agmsg team name", Supplied(team, "<team>")),
+            ("delivery mode", Supplied(deliveryMode, "<delivery-mode>")),
+            ("existing-loop stop policy", loopPolicy.Length > 0),
+        };
+
+        var missing = required.Where(f => !f.Present).Select(f => f.Label).ToArray();
+
+        var inputs = new OrchestratorSetupInputs
+        {
+            Domain = domain,
+            TargetRepo = repo,
+            OrchestratorFolder = orchestratorPath,
+            ImplementationFolder = implementationPath,
+            ReviewFolder = reviewPath,
+            OrchestratorAgent = orchestratorAgent.Length > 0 ? orchestratorAgent : null,
+            ImplementerAgent = implementerAgent.Length > 0 ? implementerAgent : null,
+            ReviewerAgent = reviewerAgent.Length > 0 ? reviewerAgent : null,
+            Team = team,
+            DeliveryMode = deliveryMode,
+            ExistingLoopPolicy = loopPolicy.Length > 0 ? loopPolicy : null,
+        };
+
+        if (missing.Length > 0)
+        {
+            return new OrchestratorSetupIntake
+            {
+                Status = IntakeMissingInputs,
+                Headline = $"missing-inputs — supply the {missing.Length} missing field(s) below to get a setup-ready plan.",
+                MissingFields = missing,
+                Inputs = inputs,
+                LooplessReceiverNote = LooplessReceiverNote,
+            };
+        }
+
+        // All inputs present. A kept existing loop for the same route would race
+        // the orchestrator (mixed-mode timers) — block until the operator stops it.
+        if (string.Equals(loopPolicy, ExistingLoopKeep, StringComparison.Ordinal))
+        {
+            return new OrchestratorSetupIntake
+            {
+                Status = IntakeBlocked,
+                Headline =
+                    "blocked — existing implementation/review timer loops for this domain/repo would race the "
+                    + "orchestrator (mixed-mode). Stop the existing loops (or re-run with --existing-loop-policy "
+                    + "will-stop) before starting orchestrator mode; only the orchestrator is scheduled.",
+                MissingFields = Array.Empty<string>(),
+                Inputs = inputs,
+                LooplessReceiverNote = LooplessReceiverNote,
+            };
+        }
+
+        // setup-ready: emit copy-paste agmsg commands + first role prompts.
+        var agmsgCommands = new[]
+        {
+            $"agmsg join.sh {team} orchestrator {orchestratorAgent} {orchestratorPath}",
+            $"agmsg delivery.sh set {deliveryMode} {orchestratorAgent} {orchestratorPath}",
+            $"agmsg join.sh {team} implementation {implementerAgent} {implementationPath}",
+            $"agmsg delivery.sh set {deliveryMode} {implementerAgent} {implementationPath}",
+            $"agmsg join.sh {team} review {reviewerAgent} {reviewPath}",
+            $"agmsg delivery.sh set {deliveryMode} {reviewerAgent} {reviewPath}",
+        };
+
+        string RolePrompt(string role, string roleAgent, string folder) =>
+            $"You are the {role.ToUpperInvariant()} thread for domain `{domain}` against `{repo}` using `{roleAgent}`, "
+            + $"running from `{folder}` as part of agmsg team `{team}` (delivery: {deliveryMode}). "
+            + (string.Equals(role, "orchestrator", StringComparison.Ordinal)
+                ? "You are the ONLY scheduled thread (Codex automation 5m or Claude `/loop 5m`); you pace the "
+                  + "implementation/review receivers over agmsg and never run their timers. See the full orchestrator "
+                  + "prompt in the Thread prompts section."
+                : "You are a LOOPLESS receiver: do NOT start your own recurring timer/loop — wait for an orchestrator "
+                  + "delegation, act once, reply once, then wait. Your worker target comes from `intent-cli worker "
+                  + "next-action`, not the agmsg text. See the full prompt in the Thread prompts section.");
+
+        var rolePrompts = new[]
+        {
+            new OrchestratorThreadPrompt { Role = "orchestrator", Purpose = "First prompt — paste into the scheduled orchestrator thread.", Prompt = RolePrompt("orchestrator", orchestratorAgent, orchestratorPath) },
+            new OrchestratorThreadPrompt { Role = "implementation", Purpose = "First prompt — paste into the loopless implementation receiver.", Prompt = RolePrompt("implementation", implementerAgent, implementationPath) },
+            new OrchestratorThreadPrompt { Role = "review", Purpose = "First prompt — paste into the loopless review receiver.", Prompt = RolePrompt("review", reviewerAgent, reviewPath) },
+        };
+
+        return new OrchestratorSetupIntake
+        {
+            Status = IntakeSetupReady,
+            Headline = "setup-ready — register the three roles with the agmsg commands, paste the first prompts, then run the first validation.",
+            MissingFields = Array.Empty<string>(),
+            Inputs = inputs,
+            AgmsgCommands = agmsgCommands,
+            RolePrompts = rolePrompts,
+            FirstValidation = new[]
+            {
+                "Existing-loop conflict check: confirm no implementation/review recurring timer is running for this domain/repo (only the orchestrator is scheduled).",
+                "First read-only wake: run ONE confirm-only orchestrator wake — read state, send nothing.",
+                "Ping/inbox test: send one agmsg message from the orchestrator to each receiver and confirm it lands before any real delegation.",
+            },
+            LooplessReceiverNote = LooplessReceiverNote,
+        };
+    }
+
+    private const string LooplessReceiverNote =
+        "Only the orchestrator is scheduled (Codex 5m / Claude `/loop 5m`). The implementation and review threads are "
+        + "loopless agmsg receivers — they must NOT run their own `/loop` or recurring timer for the same domain/repo.";
+
     private static bool TryParseArguments(
         string[] args,
         out string format,
@@ -687,6 +843,18 @@ internal static class GuideOrchestratorThreadCommand
             ["<owner/repo>"] = "<owner/repo>",
             ["<agent>"] = "<agent>",
             ["<mode>"] = ModeSingleDomain,
+            // G500: setup-intake inputs. Unset = the placeholder token (treated
+            // as "missing" by the intake); the three role agents fall back to
+            // <agent> when not explicitly supplied.
+            ["<orchestrator-path>"] = "<orchestrator-path>",
+            ["<implementation-path>"] = "<implementation-path>",
+            ["<review-path>"] = "<review-path>",
+            ["<orchestrator-agent>"] = string.Empty,
+            ["<implementer-agent>"] = string.Empty,
+            ["<reviewer-agent>"] = string.Empty,
+            ["<team>"] = "<team>",
+            ["<delivery-mode>"] = "<delivery-mode>",
+            ["<existing-loop-policy>"] = string.Empty,
         };
 
         for (var i = 0; i < args.Length; i++)
@@ -724,6 +892,33 @@ internal static class GuideOrchestratorThreadCommand
                 case "--mode":
                     parsed["<mode>"] = value;
                     break;
+                case "--orchestrator-path":
+                    parsed["<orchestrator-path>"] = value;
+                    break;
+                case "--implementation-path":
+                    parsed["<implementation-path>"] = value;
+                    break;
+                case "--review-path":
+                    parsed["<review-path>"] = value;
+                    break;
+                case "--orchestrator-agent":
+                    parsed["<orchestrator-agent>"] = value;
+                    break;
+                case "--implementer-agent":
+                    parsed["<implementer-agent>"] = value;
+                    break;
+                case "--reviewer-agent":
+                    parsed["<reviewer-agent>"] = value;
+                    break;
+                case "--team":
+                    parsed["<team>"] = value;
+                    break;
+                case "--delivery-mode":
+                    parsed["<delivery-mode>"] = value;
+                    break;
+                case "--existing-loop-policy":
+                    parsed["<existing-loop-policy>"] = value;
+                    break;
             }
         }
 
@@ -744,6 +939,17 @@ internal static class GuideOrchestratorThreadCommand
             return false;
         }
 
+        var loopPolicy = parsed["<existing-loop-policy>"];
+        if (loopPolicy.Length > 0
+            && !string.Equals(loopPolicy, ExistingLoopNone, StringComparison.Ordinal)
+            && !string.Equals(loopPolicy, ExistingLoopWillStop, StringComparison.Ordinal)
+            && !string.Equals(loopPolicy, ExistingLoopKeep, StringComparison.Ordinal))
+        {
+            values = parsed;
+            error = $"Unknown --existing-loop-policy '{loopPolicy}'. Supported: none, will-stop, keep.";
+            return false;
+        }
+
         values = parsed;
         return true;
     }
@@ -753,12 +959,88 @@ internal static class GuideOrchestratorThreadCommand
         || string.Equals(arg, "--domain", StringComparison.Ordinal)
         || string.Equals(arg, "--target-repo", StringComparison.Ordinal)
         || string.Equals(arg, "--agent", StringComparison.Ordinal)
-        || string.Equals(arg, "--mode", StringComparison.Ordinal);
+        || string.Equals(arg, "--mode", StringComparison.Ordinal)
+        || string.Equals(arg, "--orchestrator-path", StringComparison.Ordinal)
+        || string.Equals(arg, "--implementation-path", StringComparison.Ordinal)
+        || string.Equals(arg, "--review-path", StringComparison.Ordinal)
+        || string.Equals(arg, "--orchestrator-agent", StringComparison.Ordinal)
+        || string.Equals(arg, "--implementer-agent", StringComparison.Ordinal)
+        || string.Equals(arg, "--reviewer-agent", StringComparison.Ordinal)
+        || string.Equals(arg, "--team", StringComparison.Ordinal)
+        || string.Equals(arg, "--delivery-mode", StringComparison.Ordinal)
+        || string.Equals(arg, "--existing-loop-policy", StringComparison.Ordinal);
+
+    // G500: render the operational setup intake at the top of the guide.
+    private static void WriteSetupIntake(TextWriter writer, OrchestratorSetupIntake intake)
+    {
+        writer.WriteLine("## Setup intake");
+        writer.WriteLine();
+        writer.WriteLine($"- **status: `{intake.Status}`**");
+        writer.WriteLine($"- {intake.Headline}");
+        writer.WriteLine($"- {intake.LooplessReceiverNote}");
+        writer.WriteLine();
+
+        if (intake.MissingFields.Count > 0)
+        {
+            writer.WriteLine("### Missing inputs (supply only these)");
+            writer.WriteLine();
+            foreach (var field in intake.MissingFields)
+            {
+                writer.WriteLine($"- {field}");
+            }
+            writer.WriteLine();
+        }
+
+        if (intake.AgmsgCommands is { Count: > 0 })
+        {
+            writer.WriteLine("### agmsg registration + delivery (copy-paste)");
+            writer.WriteLine();
+            writer.WriteLine("```bash");
+            foreach (var command in intake.AgmsgCommands)
+            {
+                writer.WriteLine(command);
+            }
+            writer.WriteLine("```");
+            writer.WriteLine();
+        }
+
+        if (intake.RolePrompts is { Count: > 0 })
+        {
+            writer.WriteLine("### First role prompts");
+            foreach (var prompt in intake.RolePrompts)
+            {
+                writer.WriteLine();
+                writer.WriteLine($"#### {prompt.Role}");
+                writer.WriteLine();
+                writer.WriteLine("```text");
+                writer.WriteLine(prompt.Prompt);
+                writer.WriteLine("```");
+            }
+            writer.WriteLine();
+        }
+
+        if (intake.FirstValidation is { Count: > 0 })
+        {
+            writer.WriteLine("### First validation");
+            writer.WriteLine();
+            foreach (var step in intake.FirstValidation)
+            {
+                writer.WriteLine($"- {step}");
+            }
+            writer.WriteLine();
+        }
+    }
 
     private static void WriteMarkdown(TextWriter writer, OrchestratorThreadGuide guide)
     {
         writer.WriteLine("# Guide — agmsg-backed orchestrator thread (G487)");
         writer.WriteLine();
+
+        // G500: the setup intake comes FIRST — a design-thread agent must land on
+        // an operational outcome (missing-inputs / setup-ready / blocked) before
+        // the long reference material below.
+        WriteSetupIntake(writer, guide.SetupIntake);
+
         writer.WriteLine(guide.Summary);
         writer.WriteLine();
 
@@ -1079,11 +1361,89 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("routing metadata (domain, execution unit, target repo, implementation + review cwd/worktree,");
         writer.WriteLine("base branch policy, destination thread) for each delegation, since one repo may serve several");
         writer.WriteLine("domains. An execution-unit prefix mismatch alone is not treated as a wrong-repo signal.");
+        writer.WriteLine();
+        writer.WriteLine("Setup intake (rendered first): supply --domain, --target-repo, --orchestrator-path,");
+        writer.WriteLine("--implementation-path, --review-path, --orchestrator-agent, --implementer-agent,");
+        writer.WriteLine("--reviewer-agent, --team, --delivery-mode, and --existing-loop-policy (none|will-stop|keep) to");
+        writer.WriteLine("get a setup-ready plan with copy-paste agmsg commands and first role prompts. Missing fields");
+        writer.WriteLine("yield status missing-inputs (only the missing fields are listed); a kept existing loop yields");
+        writer.WriteLine("status blocked. The role agents default to --agent when not set individually.");
     }
+}
+
+/// <summary>
+/// G500: operational orchestrator setup intake. Status is one of
+/// <c>missing-inputs</c> / <c>setup-ready</c> / <c>blocked</c>; setup-ready
+/// carries copy-paste agmsg commands and first role prompts.
+/// </summary>
+internal sealed record OrchestratorSetupIntake
+{
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("headline")]
+    public required string Headline { get; init; }
+
+    [JsonPropertyName("missing_fields")]
+    public required IReadOnlyList<string> MissingFields { get; init; }
+
+    [JsonPropertyName("inputs")]
+    public required OrchestratorSetupInputs Inputs { get; init; }
+
+    [JsonPropertyName("agmsg_commands")]
+    public IReadOnlyList<string>? AgmsgCommands { get; init; }
+
+    [JsonPropertyName("role_prompts")]
+    public IReadOnlyList<OrchestratorThreadPrompt>? RolePrompts { get; init; }
+
+    [JsonPropertyName("first_validation")]
+    public IReadOnlyList<string>? FirstValidation { get; init; }
+
+    [JsonPropertyName("loopless_receiver_note")]
+    public required string LooplessReceiverNote { get; init; }
+}
+
+internal sealed record OrchestratorSetupInputs
+{
+    [JsonPropertyName("domain")]
+    public required string Domain { get; init; }
+
+    [JsonPropertyName("target_repo")]
+    public required string TargetRepo { get; init; }
+
+    [JsonPropertyName("orchestrator_folder")]
+    public required string OrchestratorFolder { get; init; }
+
+    [JsonPropertyName("implementation_folder")]
+    public required string ImplementationFolder { get; init; }
+
+    [JsonPropertyName("review_folder")]
+    public required string ReviewFolder { get; init; }
+
+    [JsonPropertyName("orchestrator_agent")]
+    public string? OrchestratorAgent { get; init; }
+
+    [JsonPropertyName("implementer_agent")]
+    public string? ImplementerAgent { get; init; }
+
+    [JsonPropertyName("reviewer_agent")]
+    public string? ReviewerAgent { get; init; }
+
+    [JsonPropertyName("team")]
+    public required string Team { get; init; }
+
+    [JsonPropertyName("delivery_mode")]
+    public required string DeliveryMode { get; init; }
+
+    [JsonPropertyName("existing_loop_policy")]
+    public string? ExistingLoopPolicy { get; init; }
 }
 
 internal sealed record OrchestratorThreadGuide
 {
+    [JsonPropertyName("setup_intake")]
+    public required OrchestratorSetupIntake SetupIntake { get; init; }
+
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
 
