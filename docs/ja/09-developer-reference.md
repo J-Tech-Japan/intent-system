@@ -214,11 +214,13 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 
 **`v0.3.12` は publish 済み**（GitHub Release + NuGet）で、バージョンポリシーは
 `0.3.13` 開発ラインにバンプされました。リポジトリは現在 in-development の **`0.3.13`**
-`nextVersion` 上にあり、G506（本パケット）は **prepare-only** です — version メタデータと docs を
-バンプするだけで publish ステップを追加しません。version-bump マージが `main` に入り、
-[リリース準備ゲート](release-notes-v0.3.13.md#リリース準備ゲート-g506)が成り立つと、**既存の
-release automation が `v0.3.13` を自動的に cut・publish** します（バイナリ・`.nupkg`・GitHub
-Release・NuGet）。v0.3.11・v0.3.12 と同じ方式で、手動のタグ付けや GitHub Release 作成は不要です。
+`nextVersion` 上にあり、G506 は **prepare-only** です — version メタデータと docs をバンプするだけで
+publish ステップを追加しません。version-bump マージ自体は GitHub Release やタグを作成しません。
+マージされ
+[リリース準備ゲート](release-notes-v0.3.13.md#リリース準備ゲート-g506)が成り立った後、
+**メンテナ/オペレーター（または外部のリリース automation）が `v0.3.13` の GitHub Release を作成・
+publish** します。その Release の publish が `.github/workflows/release.yml`（`on: release: published`）を
+発火させ、NuGet package とプラットフォームごとのバイナリ成果物を build・publish します。
 完全な changelog と operator チェックリスト:
 [release-notes-v0.3.13.md](release-notes-v0.3.13.md)。
 
@@ -245,9 +247,11 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-version-bump マージが `main` に入ると、release automation が手動タグなしで `v0.3.13` を
-cut・publish します（バイナリ・`.nupkg`・GitHub Release・NuGet）。publish 後、上記のリリース後
-`eng/version.json` バンプ（`stableVersion → 0.3.13`, `nextVersion → 0.3.14`）を適用します。
+version-bump マージが `main` に入った後、メンテナ/オペレーター（または外部のリリース automation）が
+`v0.3.13` の GitHub Release を作成・publish します。その publish が `release.yml`
+（`on: release: published`）を発火させ、NuGet package とプラットフォームごとのバイナリ成果物を
+build・publish します。publish 後、上記のリリース後 `eng/version.json` バンプ
+（`stableVersion → 0.3.13`, `nextVersion → 0.3.14`）を適用します。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 

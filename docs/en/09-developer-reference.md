@@ -224,14 +224,15 @@ emit `0.3.13` (which would collide with the stable release version).
 
 **`v0.3.12` shipped** (GitHub Release + NuGet) and the version policy was bumped
 to the `0.3.13` development line. The repository is now on the in-development
-**`0.3.13`** `nextVersion`; G506 (this packet) is **prepare-only** — it bumps the
-version metadata and docs and adds no publish steps. Once the version-bump merge
-lands on `main` and the
+**`0.3.13`** `nextVersion`; G506 is **prepare-only** — it bumps the version
+metadata and docs and adds no publish steps. The version-bump merge does **not**
+create a GitHub Release or tag. After it merges and the
 [release-readiness gate](release-notes-v0.3.13.md#release-readiness-gate-g506)
-holds, the **existing release automation cuts and publishes `v0.3.13`
-automatically** (binaries, `.nupkg`, GitHub Release, and NuGet), exactly as
-v0.3.11 and v0.3.12 were published — no manual tag or GitHub Release creation is
-required. Full changelog and operator checklist:
+holds, a **maintainer/operator (or external release automation) creates and
+publishes the GitHub Release** for `v0.3.13`; publishing that Release fires
+`.github/workflows/release.yml` (`on: release: published`), which builds and
+publishes the NuGet package and the per-platform binary artifacts. Full
+changelog and operator checklist:
 [release-notes-v0.3.13.md](release-notes-v0.3.13.md).
 
 **To ship in `v0.3.13` (changes since `v0.3.12`) — orchestrator-mode preview
@@ -267,10 +268,12 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-After the version-bump merge lands on `main`, the release automation cuts and
-publishes `v0.3.13` (binaries, `.nupkg`, GitHub Release, and NuGet) without a
-manual tag. Once it has published, apply the post-release `eng/version.json`
-bump above (`stableVersion → 0.3.13`, `nextVersion → 0.3.14`).
+After the version-bump merge lands on `main`, a maintainer/operator (or external
+release automation) creates and publishes the GitHub Release for `v0.3.13`;
+publishing it triggers `release.yml` (`on: release: published`) to build and
+publish the NuGet package and the per-platform binary artifacts. Once it has
+published, apply the post-release `eng/version.json` bump above
+(`stableVersion → 0.3.13`, `nextVersion → 0.3.14`).
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
