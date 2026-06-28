@@ -565,6 +565,21 @@ internal static class GuideOrchestratorThreadCommand
                     + "a receiver will see your message — a newly launched or restarted session may not pick up messages "
                     + "sent before its monitor/watch path was active. Confirm each receiver is READY with a ping/ack "
                     + "before sending real work.",
+                StartupOrder = new[]
+                {
+                    "Join the three roles to the team (`join.sh`).",
+                    "Set the delivery mode for each role (`delivery.sh set`).",
+                    "Launch or restart the receiver CLI sessions (implementation, review, and the orchestrator).",
+                    "Wait for the monitor/bridge to attach in each receiver session before sending anything.",
+                    "Send a ping to each receiver only AFTER its session is active.",
+                    "Require an ack from each receiver — or confirm receipt manually with `inbox.sh` — before proceeding.",
+                    "Only then send the first real delegation.",
+                },
+                SendBeforeReadyWarning =
+                    "Messages sent BEFORE a receiver is ready may be stored in agmsg history but NOT visibly delivered "
+                    + "to a freshly launched/restarted session. A send is not a delivery: an unacked message is "
+                    + "receiver-NOT-READY, not a successful delegation. Recover by resending after the ack, or have the "
+                    + "receiver read its queue with `inbox.sh`.",
                 States = new[]
                 {
                     new OrchestratorReadinessState { State = "registered", Meaning = "the role joined the team (it appears in `team.sh`)." },
@@ -1132,6 +1147,15 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("## Receiver readiness");
         writer.WriteLine();
         writer.WriteLine(guide.ReceiverReadiness.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Startup order");
+        writer.WriteLine();
+        for (var i = 0; i < guide.ReceiverReadiness.StartupOrder.Count; i++)
+        {
+            writer.WriteLine($"{i + 1}. {guide.ReceiverReadiness.StartupOrder[i]}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Send-before-ready:** {guide.ReceiverReadiness.SendBeforeReadyWarning}");
         writer.WriteLine();
         writer.WriteLine("### Readiness states");
         writer.WriteLine();
@@ -1752,6 +1776,12 @@ internal sealed record OrchestratorReceiverReadiness
 {
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    [JsonPropertyName("startup_order")]
+    public required IReadOnlyList<string> StartupOrder { get; init; }
+
+    [JsonPropertyName("send_before_ready_warning")]
+    public required string SendBeforeReadyWarning { get; init; }
 
     [JsonPropertyName("states")]
     public required IReadOnlyList<OrchestratorReadinessState> States { get; init; }
