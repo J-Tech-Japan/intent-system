@@ -413,6 +413,42 @@ agmsg の inbox を確認してください。あなたは `<team>` の design �
 > should read its inbox with `inbox.sh` to catch earlier escalations, exactly
 > like the other receivers (see Receiver readiness / startup order).
 
+## Preflight (all three cwds)
+
+Before mutating anything, preflight **all three checkouts** (orchestrator,
+implementation, review cwds). A receiver acting in the wrong repo, on the wrong
+branch, or over dirty user work is the most common orchestration failure.
+
+- For each cwd, confirm `git status` is clean — no uncommitted/untracked work a
+  checkout/branch switch would clobber.
+- Confirm each cwd's git remote is the **expected repo** for its role (the
+  implementation/review receivers must point at the delegated target repo).
+- Confirm each cwd is on the **expected branch/base** — a receiver on a stale
+  branch implements against the wrong base.
+- If a checkout exposes multiple domains, the orchestrator must **filter by the
+  requested domain/target repo** before publishing or delegating (visibility is
+  not authorization).
+- **Existing-loop conflict check** — no timer-loop may be running for this
+  domain/repo; orchestrator-message mode and timer-loop mode must not run
+  together for the same route.
+
+## Troubleshooting
+
+- **Message not received by a receiver** — confirm registration (`team.sh`) and
+  delivery (`delivery.sh status`); the receiver may have missed it (monitor not
+  yet active) — read its queue with `inbox.sh`, or resend after a ping/ack.
+- **Monitor/delivery configured after the session started** — a session started
+  before its monitor/watch path was active will not pick up earlier messages
+  live; restart the receiver session (or read with `inbox.sh`), then re-confirm
+  with a ping/ack before delegating.
+- **Codex Desktop app thread is the receiver** — Codex Desktop app threads are
+  not agmsg monitor receivers by default; they receive manually only. Use a CLI
+  session, or have the Desktop thread read with `inbox.sh`.
+- **Receiver cwd sees a different repo/domain than delegated** — stop; do not
+  claim. The receiver's cwd/worktree, git remote, and delegated domain must
+  match the routing; reply blocked and re-route. An execution-unit prefix
+  mismatch alone is not the signal — compare packet/domain metadata.
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for

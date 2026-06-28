@@ -928,6 +928,79 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_Preflight_RequiresAllThreeCwdChecks_G508()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Preflight (all three cwds)", output, StringComparison.Ordinal);
+        // git status / dirty, expected repo, expected branch/base.
+        Assert.Contains("`git status` is clean", output, StringComparison.Ordinal);
+        Assert.Contains("git remote is the EXPECTED repo", output, StringComparison.Ordinal);
+        Assert.Contains("expected branch/base", output, StringComparison.Ordinal);
+        // Multi-domain filtering before publish/delegate.
+        Assert.Contains("filter by the requested domain/target repo", output, StringComparison.Ordinal);
+        // Existing timer-loop conflict check.
+        Assert.Contains("no timer-loop", output, StringComparison.Ordinal);
+        Assert.Contains("must not run together", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Troubleshooting_CoversTheFourFailureModes_G508()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("## Troubleshooting", output, StringComparison.Ordinal);
+        Assert.Contains("**Message not received by a receiver**", output, StringComparison.Ordinal);
+        Assert.Contains("**Monitor/delivery configured AFTER the session started**", output, StringComparison.Ordinal);
+        Assert.Contains("**Codex Desktop app thread is the receiver**", output, StringComparison.Ordinal);
+        Assert.Contains("**Receiver cwd sees a different repo/domain than delegated**", output, StringComparison.Ordinal);
+        // Each routes through agmsg scripts / blocked-and-reroute, no raw label/db edits.
+        Assert.Contains("`inbox.sh`", output, StringComparison.Ordinal);
+        Assert.Contains("reply blocked and re-route", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasPreflightAndTroubleshootingShape_G508()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+
+        var preflight = doc.RootElement.GetProperty("preflight");
+        Assert.True(preflight.TryGetProperty("summary", out _));
+        Assert.NotEmpty(preflight.GetProperty("checks").EnumerateArray());
+
+        var troubleshooting = doc.RootElement.GetProperty("troubleshooting").EnumerateArray()
+            .Select(t => t.GetProperty("symptom").GetString()!)
+            .ToArray();
+        Assert.Contains(troubleshooting, s => s.Contains("Message not received", StringComparison.Ordinal));
+        Assert.Contains(troubleshooting, s => s.Contains("different repo/domain", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_Markdown_SetupReady_FirstValidation_IncludesPreflightOfThreeCwds_G508()
+    {
+        var output = RunMarkdown([
+            "--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system",
+            "--orchestrator-path", "/work/orch", "--implementation-path", "/work/impl", "--review-path", "/work/review",
+            "--orchestrator-agent", "claude", "--implementer-agent", "claude", "--reviewer-agent", "codex",
+            "--team", "intent-orch", "--delivery-mode", "streamed-inbox-watch", "--existing-loop-policy", "none",
+        ]);
+
+        Assert.Contains("status: `setup-ready`", output, StringComparison.Ordinal);
+        // The first-validation references preflighting the three concrete cwds.
+        Assert.Contains("Preflight all three cwds BEFORE mutating", output, StringComparison.Ordinal);
+        Assert.Contains("/work/orch", output, StringComparison.Ordinal);
+        Assert.Contains("/work/impl", output, StringComparison.Ordinal);
+        Assert.Contains("/work/review", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();

@@ -589,6 +589,44 @@ internal static class GuideOrchestratorThreadCommand
                     "Never edit the agmsg database or team files directly — register, message, and clean up ONLY through "
                     + "the agmsg scripts. Hand-editing agmsg state corrupts delivery.",
             },
+            Preflight = new OrchestratorPreflight
+            {
+                Summary =
+                    "Before mutating anything, preflight ALL THREE checkouts (the orchestrator, implementation, and "
+                    + "review cwds). A receiver acting in the wrong repo, on the wrong branch, or over dirty user work is "
+                    + "the most common orchestration failure — catch it before the first delegation.",
+                Checks = new[]
+                {
+                    "For each cwd (orchestrator / implementation / review), confirm `git status` is clean — no uncommitted or untracked work that a checkout/branch switch would clobber.",
+                    "Confirm each cwd's git remote is the EXPECTED repo for its role — the implementation/review receivers must point at the delegated target repo, not a sibling clone.",
+                    "Confirm each cwd is on the expected branch/base (e.g. the base-branch policy's base, or a fresh work branch) — a receiver on a stale branch implements against the wrong base.",
+                    "Confirm the host repo / domain context: if a checkout exposes multiple domains, the orchestrator MUST filter by the requested domain/target repo before publishing or delegating (visibility is not authorization).",
+                    "Existing-loop conflict check: confirm no timer-loop (implement/review recurring timer) is already running for this domain/repo — orchestrator-message mode and timer-loop mode must not run together for the same route.",
+                },
+            },
+            Troubleshooting = new[]
+            {
+                new OrchestratorTroubleshooting
+                {
+                    Symptom = "Message not received by a receiver",
+                    Action = "Confirm the role is registered (`team.sh`) and delivery is set (`delivery.sh status`). The receiver may have missed it (monitor not yet active) — have it read its queue with `inbox.sh`, or resend after a ping/ack.",
+                },
+                new OrchestratorTroubleshooting
+                {
+                    Symptom = "Monitor/delivery configured AFTER the session started",
+                    Action = "A session started before its monitor/watch path was active will not pick up earlier messages live — restart the receiver session (or read with `inbox.sh`) so the monitor hook attaches, then re-confirm with a ping/ack before delegating.",
+                },
+                new OrchestratorTroubleshooting
+                {
+                    Symptom = "Codex Desktop app thread is the receiver",
+                    Action = "Codex Desktop app threads are NOT agmsg monitor receivers by default — they receive manually only. Use a CLI session as the receiver, or have the Desktop thread read its queue with `inbox.sh`.",
+                },
+                new OrchestratorTroubleshooting
+                {
+                    Symptom = "Receiver cwd sees a different repo/domain than delegated",
+                    Action = "STOP — do not claim. The receiver's cwd/worktree, git remote, and delegated domain must match the routing; reply blocked and re-route. An execution-unit ID prefix mismatch alone is NOT the signal — compare packet/domain metadata and the routing context.",
+                },
+            },
             ReceiverReadiness = new OrchestratorReceiverReadiness
             {
                 Summary =
@@ -908,6 +946,7 @@ internal static class GuideOrchestratorThreadCommand
             RolePrompts = rolePrompts,
             FirstValidation = new[]
             {
+                $"Preflight all three cwds BEFORE mutating: `{orchestratorPath}` (orchestrator), `{implementationPath}` (implementation), `{reviewPath}` (review) — clean `git status`, expected git remote/repo, expected branch/base, and no existing timer-loop for this domain/repo (see Preflight).",
                 "Existing-loop conflict check: confirm no implementation/review recurring timer is running for this domain/repo (only the orchestrator is scheduled).",
                 "First read-only wake: run ONE confirm-only orchestrator wake — read state, send nothing.",
                 "Receiver readiness: ping each receiver and require an ack BEFORE any real delegation — a registered+configured role is not ready until it acks (see the Receiver readiness section). A session launched before delivery was active may have missed earlier messages; resend or read with `inbox.sh`.",
@@ -1180,6 +1219,16 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"> **Warning:** {guide.Setup.Warning}");
         writer.WriteLine();
 
+        writer.WriteLine("## Preflight (all three cwds)");
+        writer.WriteLine();
+        writer.WriteLine(guide.Preflight.Summary);
+        writer.WriteLine();
+        foreach (var check in guide.Preflight.Checks)
+        {
+            writer.WriteLine($"- {check}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Receiver readiness");
         writer.WriteLine();
         writer.WriteLine(guide.ReceiverReadiness.Summary);
@@ -1223,6 +1272,14 @@ internal static class GuideOrchestratorThreadCommand
         foreach (var command in guide.ReceiverReadiness.DiagnosticCommands)
         {
             writer.WriteLine($"- {command}");
+        }
+        writer.WriteLine();
+
+        writer.WriteLine("## Troubleshooting");
+        writer.WriteLine();
+        foreach (var entry in guide.Troubleshooting)
+        {
+            writer.WriteLine($"- **{entry.Symptom}** — {entry.Action}");
         }
         writer.WriteLine();
 
@@ -1647,6 +1704,12 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("setup")]
     public required OrchestratorSetup Setup { get; init; }
 
+    [JsonPropertyName("preflight")]
+    public required OrchestratorPreflight Preflight { get; init; }
+
+    [JsonPropertyName("troubleshooting")]
+    public required IReadOnlyList<OrchestratorTroubleshooting> Troubleshooting { get; init; }
+
     [JsonPropertyName("receiver_readiness")]
     public required OrchestratorReceiverReadiness ReceiverReadiness { get; init; }
 
@@ -1862,6 +1925,24 @@ internal sealed record OrchestratorDependencyStatus
 {
     [JsonPropertyName("status")]
     public required string Status { get; init; }
+
+    [JsonPropertyName("action")]
+    public required string Action { get; init; }
+}
+
+internal sealed record OrchestratorPreflight
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("checks")]
+    public required IReadOnlyList<string> Checks { get; init; }
+}
+
+internal sealed record OrchestratorTroubleshooting
+{
+    [JsonPropertyName("symptom")]
+    public required string Symptom { get; init; }
 
     [JsonPropertyName("action")]
     public required string Action { get; init; }

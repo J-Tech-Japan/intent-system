@@ -381,6 +381,37 @@ agmsg の inbox を確認してください。あなたは `<team>` の design �
 > で inbox を読んで earlier なエスカレーションを拾うべきです。他の receiver と同様です
 > （Receiver readiness / startup order 参照）。
 
+## preflight（3 つの cwd すべて）
+
+何かを変更する前に、**3 つのチェックアウト全部**（orchestrator・implementation・review の cwd）を
+preflight します。receiver が誤った repo・誤ったブランチ・dirty なユーザー作業の上で動くのは、最も
+よくあるオーケストレーション失敗です。
+
+- 各 cwd で `git status` が clean であることを確認 — checkout/branch 切替で壊れる uncommitted/
+  untracked 作業がないこと。
+- 各 cwd の git remote がそのロールの **期待 repo** であることを確認（implementation/review receiver
+  は委譲された target repo を指す必要がある）。
+- 各 cwd が **期待ブランチ/base** にあることを確認 — stale なブランチ上の receiver は誤った base に
+  対して実装する。
+- チェックアウトが複数ドメインを露出している場合、orchestrator は publish/delegate の前に
+  **要求された domain/target repo でフィルター** しなければならない（可視であることは権限ではない）。
+- **既存ループ競合チェック** — この domain/repo に対して timer-loop が動いていないこと。
+  orchestrator-message モードと timer-loop モードは同じルートで同時に動かしてはいけない。
+
+## トラブルシューティング
+
+- **receiver がメッセージを受信しない** — 登録（`team.sh`）と delivery（`delivery.sh status`）を確認。
+  receiver が取りこぼした可能性がある（monitor 未アクティブ）— `inbox.sh` で queue を読むか、ping/ack 後に
+  resend する。
+- **monitor/delivery をセッション開始後に設定した** — monitor/watch パスがアクティブになる前に開始した
+  セッションは earlier なメッセージをライブで拾わない。receiver セッションを再起動する（または `inbox.sh`
+  で読む）。その後、委譲前に ping/ack で再確認する。
+- **Codex Desktop app スレッドが receiver** — Codex Desktop app スレッドはデフォルトで agmsg monitor
+  receiver ではない。手動でのみ受信する。CLI セッションを使うか、Desktop スレッドに `inbox.sh` で読ませる。
+- **receiver の cwd が委譲と異なる repo/domain を見る** — 停止。claim しない。receiver の cwd/worktree・
+  git remote・委譲された domain がルーティングと一致する必要がある。blocked を返して re-route する。
+  execution-unit prefix の不一致だけでは signal にならない — packet/domain メタデータを比較する。
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:
