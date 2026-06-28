@@ -375,6 +375,44 @@ Boundaries:
 Diagnose with agmsg scripts only: `team.sh` (registration), `delivery.sh status`
 (delivery), `inbox.sh` (queued messages), `send.sh` (ping → ack).
 
+## Design / human receiver (optional)
+
+When human-needed escalations should be deliverable over agmsg, add a **fourth
+logical role**: a **design / human receiver**. Routine progress stays internal
+to orchestrator / implementation / review; only human-needed decisions go to the
+design thread (see the design-thread escalation filter). The design receiver is
+**optional** for routine operation but **recommended** so escalations reach the
+human reliably, and it may receive manually by checking its inbox.
+
+Four logical roles when design receiving is enabled:
+
+- **orchestrator** — the single scheduled driver.
+- **implementation receiver** — loopless; acts on delegations only.
+- **review receiver** — loopless; acts on delegations only.
+- **design / human receiver** — optional; receives only human-needed escalations
+  and is also loopless (the human reads on demand, e.g. via `inbox.sh`).
+
+Setup:
+
+- Register the design role in the **same** agmsg team —
+  `agmsg join.sh <team> design <agent> <design-folder>` — or simply address
+  escalation messages to the existing design thread.
+- Optional streamed delivery: `agmsg delivery.sh set <mode> <agent> <design-folder>`;
+  otherwise the design thread reads on demand with `inbox.sh`.
+- The design receiver needs no recurring loop — like implementation/review it is
+  loopless; the human reads when prompted.
+
+Minimal manual inbox trigger prompt (paste into the design thread):
+
+```text
+agmsg の inbox を確認してください。あなたは `<team>` の design です。 (Check your agmsg inbox — you are the `design` role of team `<team>`. Read pending escalations with `inbox.sh`; routine progress is intentionally not sent here.)
+```
+
+> **Pre-start messages:** messages sent before the design receiver's monitor
+> started may be in agmsg history but not visibly delivered — the design thread
+> should read its inbox with `inbox.sh` to catch earlier escalations, exactly
+> like the other receivers (see Receiver readiness / startup order).
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for

@@ -469,6 +469,37 @@ internal static class GuideOrchestratorThreadCommand
                     "decision_needed — the exact decision or action requested from the human.",
                 },
             },
+            DesignReceiver = new OrchestratorDesignReceiver
+            {
+                Summary =
+                    "When human-needed escalations should be deliverable over agmsg, add a FOURTH logical role: a "
+                    + "DESIGN / human-facing receiver. Routine progress stays internal to orchestrator / implementation "
+                    + "/ review; only human-needed decisions go to the design thread (see the design-thread escalation "
+                    + "filter). The design receiver is OPTIONAL for routine operation but RECOMMENDED so escalations "
+                    + "reach the human reliably — and it may receive manually by checking its inbox.",
+                Optional = true,
+                Roles = new[]
+                {
+                    "orchestrator — the single scheduled driver.",
+                    "implementation receiver — LOOPLESS; acts on delegations only, never starts its own timer.",
+                    "review receiver — LOOPLESS; acts on delegations only, never starts its own timer.",
+                    "design / human receiver — OPTIONAL; receives ONLY human-needed escalations and is also loopless (the human reads on demand, e.g. via `inbox.sh`).",
+                },
+                Setup = new[]
+                {
+                    "Register the design role in the SAME agmsg team — `agmsg join.sh <team> design <agent> <design-folder>` — or simply address escalation messages to the existing design thread.",
+                    "Optional streamed delivery: `agmsg delivery.sh set <mode> <agent> <design-folder>`; otherwise the design thread reads on demand with `inbox.sh`.",
+                    "The design receiver does NOT need a recurring loop — like implementation/review it is loopless; the human reads when prompted.",
+                },
+                ManualInboxTriggerPrompt =
+                    "agmsg の inbox を確認してください。あなたは `<team>` の design です。 "
+                    + "(Check your agmsg inbox — you are the `design` role of team `<team>`. Read pending escalations "
+                    + "with `inbox.sh`; routine progress is intentionally not sent here.)",
+                PreStartNote =
+                    "Messages sent BEFORE the design receiver's monitor started may be in agmsg history but not visibly "
+                    + "delivered — the design thread should read its inbox with `inbox.sh` to catch earlier escalations, "
+                    + "exactly like the other receivers (see Receiver readiness / startup order).",
+            },
             WorktreeManagement = new OrchestratorWorktreeManagement
             {
                 Summary =
@@ -1375,6 +1406,35 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Design / human receiver (optional)");
+        writer.WriteLine();
+        writer.WriteLine(guide.DesignReceiver.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- optional for routine operation: {(guide.DesignReceiver.Optional ? "yes" : "no")} (recommended for escalation delivery)");
+        writer.WriteLine();
+        writer.WriteLine("### Four logical roles (when design receiving is enabled)");
+        writer.WriteLine();
+        foreach (var role in guide.DesignReceiver.Roles)
+        {
+            writer.WriteLine($"- {role}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Design receiver setup");
+        writer.WriteLine();
+        foreach (var step in guide.DesignReceiver.Setup)
+        {
+            writer.WriteLine($"- {step}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Minimal manual inbox trigger prompt (paste into the design thread)");
+        writer.WriteLine();
+        writer.WriteLine("```text");
+        writer.WriteLine(guide.DesignReceiver.ManualInboxTriggerPrompt);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"> **Pre-start messages:** {guide.DesignReceiver.PreStartNote}");
+        writer.WriteLine();
+
         writer.WriteLine("## Managed worktree cleanup");
         writer.WriteLine();
         writer.WriteLine(guide.WorktreeManagement.Summary);
@@ -1578,6 +1638,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("design_thread_escalation")]
     public required OrchestratorDesignThreadEscalation DesignThreadEscalation { get; init; }
 
+    [JsonPropertyName("design_receiver")]
+    public required OrchestratorDesignReceiver DesignReceiver { get; init; }
+
     [JsonPropertyName("worktree_management")]
     public required OrchestratorWorktreeManagement WorktreeManagement { get; init; }
 
@@ -1706,6 +1769,27 @@ internal sealed record OrchestratorWorktreeManagement
 
     [JsonPropertyName("approval_policy_note")]
     public required string ApprovalPolicyNote { get; init; }
+}
+
+internal sealed record OrchestratorDesignReceiver
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("optional")]
+    public required bool Optional { get; init; }
+
+    [JsonPropertyName("roles")]
+    public required IReadOnlyList<string> Roles { get; init; }
+
+    [JsonPropertyName("setup")]
+    public required IReadOnlyList<string> Setup { get; init; }
+
+    [JsonPropertyName("manual_inbox_trigger_prompt")]
+    public required string ManualInboxTriggerPrompt { get; init; }
+
+    [JsonPropertyName("pre_start_note")]
+    public required string PreStartNote { get; init; }
 }
 
 internal sealed record OrchestratorDesignThreadEscalation
