@@ -580,6 +580,11 @@ internal static class GuideOrchestratorThreadCommand
                     + "to a freshly launched/restarted session. A send is not a delivery: an unacked message is "
                     + "receiver-NOT-READY, not a successful delegation. Recover by resending after the ack, or have the "
                     + "receiver read its queue with `inbox.sh`.",
+                RecoveryMessageTemplate =
+                    "Heads up: your session started AFTER I sent earlier messages, so they may be in agmsg history but "
+                    + "not visibly delivered to you. Read your queue now with `inbox.sh` to catch anything you missed. "
+                    + "Any prior unacked message is receiver-not-ready (NOT a delegation you must act on) — reply `ack` "
+                    + "to this ping and I will (re)send the current delegation.",
                 States = new[]
                 {
                     new OrchestratorReadinessState { State = "registered", Meaning = "the role joined the team (it appears in `team.sh`)." },
@@ -1156,6 +1161,12 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
         writer.WriteLine($"> **Send-before-ready:** {guide.ReceiverReadiness.SendBeforeReadyWarning}");
+        writer.WriteLine();
+        writer.WriteLine("Copy-paste operator message when receivers were launched after the initial messages were sent:");
+        writer.WriteLine();
+        writer.WriteLine("```text");
+        writer.WriteLine(guide.ReceiverReadiness.RecoveryMessageTemplate);
+        writer.WriteLine("```");
         writer.WriteLine();
         writer.WriteLine("### Readiness states");
         writer.WriteLine();
@@ -1782,6 +1793,9 @@ internal sealed record OrchestratorReceiverReadiness
 
     [JsonPropertyName("send_before_ready_warning")]
     public required string SendBeforeReadyWarning { get; init; }
+
+    [JsonPropertyName("recovery_message_template")]
+    public required string RecoveryMessageTemplate { get; init; }
 
     [JsonPropertyName("states")]
     public required IReadOnlyList<OrchestratorReadinessState> States { get; init; }

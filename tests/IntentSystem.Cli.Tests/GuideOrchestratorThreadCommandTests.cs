@@ -846,6 +846,24 @@ public sealed class GuideOrchestratorThreadCommandTests
         var warning = readiness.GetProperty("send_before_ready_warning").GetString()!;
         Assert.Contains("not a successful delegation", warning, StringComparison.Ordinal);
         Assert.Contains("inbox.sh", warning, StringComparison.Ordinal);
+
+        // A short copy-paste operator message for receivers launched after the
+        // initial messages were sent (packet AC).
+        var template = readiness.GetProperty("recovery_message_template").GetString()!;
+        Assert.Contains("session started AFTER I sent earlier messages", template, StringComparison.Ordinal);
+        Assert.Contains("inbox.sh", template, StringComparison.Ordinal);
+        Assert.Contains("ack", template, StringComparison.Ordinal);
+        Assert.Contains("receiver-not-ready", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_HasCopyPasteRecoveryMessage_ForLateLaunchedReceivers_G502()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("Copy-paste operator message when receivers were launched after the initial messages were sent", output, StringComparison.Ordinal);
+        Assert.Contains("Heads up: your session started AFTER I sent earlier messages", output, StringComparison.Ordinal);
+        Assert.Contains("reply `ack`", output, StringComparison.Ordinal);
     }
 
     [Fact]

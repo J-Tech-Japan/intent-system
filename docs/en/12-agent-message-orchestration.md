@@ -339,6 +339,13 @@ Follow this order strictly — a send is not a delivery:
 > delegation. Recover by resending after the ack, or have the receiver read its
 > queue with `inbox.sh`.
 
+Copy-paste operator message when receivers were launched **after** the initial
+messages were sent:
+
+```text
+Heads up: your session started AFTER I sent earlier messages, so they may be in agmsg history but not visibly delivered to you. Read your queue now with `inbox.sh` to catch anything you missed. Any prior unacked message is receiver-not-ready (NOT a delegation you must act on) — reply `ack` to this ping and I will (re)send the current delegation.
+```
+
 Readiness states:
 
 - **registered** — the role joined the team (it appears in `team.sh`).

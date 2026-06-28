@@ -311,6 +311,13 @@ monitor の設定だけでは **不十分** です。team 登録 + delivery mode
 > ないメッセージは **receiver-not-ready** であり、成功した委譲ではありません。ack 後に resend するか、
 > receiver に `inbox.sh` で queue を読ませて復旧します。
 
+receiver が initial メッセージ送信 **後** に launch された場合に送る、貼り付け可能なオペレーター
+メッセージ:
+
+```text
+Heads up: your session started AFTER I sent earlier messages, so they may be in agmsg history but not visibly delivered to you. Read your queue now with `inbox.sh` to catch anything you missed. Any prior unacked message is receiver-not-ready (NOT a delegation you must act on) — reply `ack` to this ping and I will (re)send the current delegation.
+```
+
 readiness 状態:
 
 - **registered** — ロールが team に参加した（`team.sh` に表示される）。
