@@ -582,6 +582,55 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_ManagedWorktreeCleanup_RecommendsManagedRoot_ForbidsRawRm_G499()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Managed worktree cleanup", output, StringComparison.Ordinal);
+        // Recommend a managed root instead of arbitrary /tmp paths.
+        Assert.Contains(".intent-cli/worktrees", output, StringComparison.Ordinal);
+        Assert.Contains("git worktree add", output, StringComparison.Ordinal);
+        // Forbid raw rm -rf and use git worktree remove.
+        Assert.Contains("never raw `rm -rf`", output, StringComparison.Ordinal);
+        Assert.Contains("git worktree remove", output, StringComparison.Ordinal);
+        // approval_policy=never is not a substitute.
+        Assert.Contains("approval_policy=never", output, StringComparison.Ordinal);
+        Assert.Contains("not a substitute", output, StringComparison.Ordinal);
+        // Refuse unsafe paths and dirty user work.
+        Assert.Contains("### Refuse cleanup when", output, StringComparison.Ordinal);
+        Assert.Contains("OUTSIDE the allowlisted managed root", output, StringComparison.Ordinal);
+        Assert.Contains("uncommitted or untracked user work", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasWorktreeManagementShape_G499()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var worktree = doc.RootElement.GetProperty("worktree_management");
+
+        Assert.Contains(".intent-cli/worktrees", worktree.GetProperty("managed_root").GetString()!, StringComparison.Ordinal);
+        Assert.NotEmpty(worktree.GetProperty("allocation").EnumerateArray());
+        Assert.NotEmpty(worktree.GetProperty("safe_cleanup").EnumerateArray());
+        Assert.NotEmpty(worktree.GetProperty("refuse_when").EnumerateArray());
+        Assert.Contains("NOT a substitute", worktree.GetProperty("approval_policy_note").GetString()!, StringComparison.Ordinal);
+
+        // The guide does not instruct a raw rm -rf of arbitrary paths anywhere.
+        var safeCleanup = worktree.GetProperty("safe_cleanup").EnumerateArray().Select(s => s.GetString()!).ToArray();
+        Assert.Contains(safeCleanup, s => s.Contains("git worktree remove", StringComparison.Ordinal));
+
+        // A dedicated safety boundary reinforces the no-raw-rm rule.
+        var boundaries = doc.RootElement.GetProperty("safety_boundaries").EnumerateArray().Select(b => b.GetString()!).ToArray();
+        Assert.Contains(boundaries, b => b.Contains("never raw `rm -rf`", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();

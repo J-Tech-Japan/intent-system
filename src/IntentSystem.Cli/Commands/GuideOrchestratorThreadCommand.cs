@@ -456,6 +456,45 @@ internal static class GuideOrchestratorThreadCommand
                     "decision_needed — the exact decision or action requested from the human.",
                 },
             },
+            WorktreeManagement = new OrchestratorWorktreeManagement
+            {
+                Summary =
+                    "Orchestrated work creates temporary worktrees for implementation and review. Allocate them under a "
+                    + "managed, allowlisted root inside the workspace and clean them up with `git worktree remove` — "
+                    + "NEVER a raw `rm -rf` of an arbitrary `/tmp/intent-review-...` path. Safe cleanup design, not "
+                    + "disabling approvals, is the right default: a destructive `rm -rf` approval prompt is the symptom "
+                    + "of an unmanaged workspace.",
+                ManagedRoot =
+                    "Allocate temporary worktrees under a repo/workspace-scoped managed root — the `[project] "
+                    + "worktree_root` (default `.intent-cli/worktrees/`), git-ignored — not arbitrary `/tmp/"
+                    + "intent-review-...` paths. A managed root is allowlisted, predictable, and removable with `git "
+                    + "worktree remove`.",
+                Allocation = new[]
+                {
+                    "Create each worktree under the managed root: `git worktree add .intent-cli/worktrees/<role>-<unit> <branch>`.",
+                    "Keep the managed root git-ignored so it never pollutes the tree.",
+                    "One worktree per role/unit; do not reuse a dirty worktree across units.",
+                },
+                SafeCleanup = new[]
+                {
+                    "Remove a worktree only with `git worktree remove` (it refuses a dirty worktree) — never raw `rm -rf`.",
+                    "Validate the target path is INSIDE the allowlisted managed root before removal.",
+                    "Confirm the path is a registered git worktree (it appears in `git worktree list`).",
+                    "Confirm the worktree state is clean (no uncommitted or untracked user work) before removing.",
+                    "Prune stale registrations with `git worktree prune` after removal.",
+                },
+                RefuseWhen = new[]
+                {
+                    "The target is OUTSIDE the allowlisted managed root.",
+                    "The target is the repo root, `$HOME`, or a system path (`/`, `/tmp` root, etc.).",
+                    "The path is not a registered git worktree.",
+                    "The worktree has uncommitted or untracked user work — STOP and surface it; do not delete user work.",
+                },
+                ApprovalPolicyNote =
+                    "`approval_policy=never` / `danger-full-access` is NOT a substitute for safe cleanup design. Keep "
+                    + "least-privilege approvals as the default; the goal is to never need a destructive `rm -rf` prompt, "
+                    + "not to suppress the prompt.",
+            },
             Setup = new OrchestratorSetup
             {
                 Summary =
@@ -621,6 +660,7 @@ internal static class GuideOrchestratorThreadCommand
                 "Process at most one delegation/repair/escalation per orchestrator wake; one delegated item per implementation/review wake.",
                 "Domain isolation: a host repo can hold several domains and one repo can serve several domains, so visibility is not authorization. Single-domain orchestrators ignore/escalate other-domain items; multi-domain orchestrators require explicit per-delegation routing. An execution-unit prefix mismatch alone is not a wrong-repo signal.",
                 "Fail closed on duplicate orchestrators for the same domain/repo, or when an agmsg reply conflicts with intent-cli/GitHub facts — STOP and escalate, never guess.",
+                "Allocate temporary worktrees under an allowlisted managed root and remove them with `git worktree remove`; never raw `rm -rf` of arbitrary temp paths, and `approval_policy=never`/`danger-full-access` is not a substitute for safe cleanup.",
                 "Never ask intent-cli to launch Claude/Codex/Copilot or any AI provider; intent-cli only emits text the human agent acts on.",
             },
             DetailedGuideCommands = new[]
@@ -946,6 +986,35 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Managed worktree cleanup");
+        writer.WriteLine();
+        writer.WriteLine(guide.WorktreeManagement.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **managed root** — {guide.WorktreeManagement.ManagedRoot}");
+        writer.WriteLine($"- **approval policy** — {guide.WorktreeManagement.ApprovalPolicyNote}");
+        writer.WriteLine();
+        writer.WriteLine("### Allocation");
+        writer.WriteLine();
+        foreach (var item in guide.WorktreeManagement.Allocation)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Safe cleanup");
+        writer.WriteLine();
+        foreach (var item in guide.WorktreeManagement.SafeCleanup)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Refuse cleanup when");
+        writer.WriteLine();
+        foreach (var item in guide.WorktreeManagement.RefuseWhen)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Thread prompts");
         foreach (var thread in guide.Threads)
         {
@@ -1041,6 +1110,9 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("design_thread_escalation")]
     public required OrchestratorDesignThreadEscalation DesignThreadEscalation { get; init; }
+
+    [JsonPropertyName("worktree_management")]
+    public required OrchestratorWorktreeManagement WorktreeManagement { get; init; }
 
     [JsonPropertyName("setup")]
     public required OrchestratorSetup Setup { get; init; }
@@ -1143,6 +1215,27 @@ internal sealed record OrchestratorCiState
 
     [JsonPropertyName("routing")]
     public required string Routing { get; init; }
+}
+
+internal sealed record OrchestratorWorktreeManagement
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("managed_root")]
+    public required string ManagedRoot { get; init; }
+
+    [JsonPropertyName("allocation")]
+    public required IReadOnlyList<string> Allocation { get; init; }
+
+    [JsonPropertyName("safe_cleanup")]
+    public required IReadOnlyList<string> SafeCleanup { get; init; }
+
+    [JsonPropertyName("refuse_when")]
+    public required IReadOnlyList<string> RefuseWhen { get; init; }
+
+    [JsonPropertyName("approval_policy_note")]
+    public required string ApprovalPolicyNote { get; init; }
 }
 
 internal sealed record OrchestratorDesignThreadEscalation

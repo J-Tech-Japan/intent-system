@@ -263,6 +263,30 @@ re-deriving the state:
 - `options` — **optional** candidate choices, included only when they help.
 - `decision_needed` — the exact decision or action requested from the human.
 
+## Managed worktree cleanup
+
+Orchestrated work creates temporary worktrees for implementation and review.
+Allocate them under a **managed, allowlisted root** inside the workspace and
+clean them up with `git worktree remove` — **never** a raw `rm -rf` of an
+arbitrary `/tmp/intent-review-...` path. Safe cleanup design, not disabling
+approvals, is the right default: a destructive `rm -rf` approval prompt is the
+symptom of an unmanaged workspace.
+
+- **Managed root** — allocate under the `[project] worktree_root` (default
+  `.intent-cli/worktrees/`, git-ignored), not arbitrary `/tmp` paths. Create
+  each with `git worktree add .intent-cli/worktrees/<role>-<unit> <branch>`,
+  one per role/unit.
+- **Safe cleanup** — remove only with `git worktree remove` (it refuses a dirty
+  worktree); validate the target is inside the allowlisted root, is a registered
+  git worktree (`git worktree list`), and is clean; then `git worktree prune`.
+- **Refuse cleanup** when the target is outside the allowlisted root, is the
+  repo root / `$HOME` / a system path, is not a registered worktree, or has
+  uncommitted/untracked user work — stop and surface it; never delete user work.
+- **Approval policy** — `approval_policy=never` / `danger-full-access` is **not**
+  a substitute for safe cleanup design. Keep least-privilege approvals as the
+  default; the goal is to never need a destructive `rm -rf` prompt, not to
+  suppress it.
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for

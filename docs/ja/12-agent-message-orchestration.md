@@ -244,6 +244,27 @@ state**、それを裏付ける evidence、必要なときだけの options、�
 - `options` — **任意** の候補の選択肢。役立つときのみ含める。
 - `decision_needed` — 人間に求める正確な判断またはアクション。
 
+## managed worktree のクリーンアップ
+
+オーケストレーション作業は実装・レビュー用の一時 worktree を作成します。ワークスペース内の
+**管理された allowlist 済みルート** の下に割り当て、`git worktree remove` でクリーンアップします
+— 任意の `/tmp/intent-review-...` パスを生の `rm -rf` で削除しては **いけません**。承認を無効化
+するのではなく安全なクリーンアップ設計が正しいデフォルトです: 破壊的な `rm -rf` 承認プロンプトは
+管理されていないワークスペースの症状です。
+
+- **管理ルート** — `[project] worktree_root`（デフォルト `.intent-cli/worktrees/`、git-ignored）の
+  下に割り当てる。任意の `/tmp` パスではない。`git worktree add .intent-cli/worktrees/<role>-<unit>
+  <branch>` で role/unit ごとに 1 つ作成する。
+- **安全なクリーンアップ** — `git worktree remove` でのみ削除（dirty な worktree は拒否される）。
+  ターゲットが allowlist 済みルート内であること、登録済み git worktree（`git worktree list`）で
+  あること、clean であることを検証してから `git worktree prune`。
+- **クリーンアップを拒否する** — ターゲットが allowlist 済みルートの外、repo root / `$HOME` /
+  システムパス、登録されていない worktree、または uncommitted/untracked のユーザー作業がある
+  場合は停止して surface する。ユーザー作業を決して削除しない。
+- **承認ポリシー** — `approval_policy=never` / `danger-full-access` は安全なクリーンアップ設計の
+  **代替ではありません**。最小権限の承認をデフォルトに保ちます。目標は破壊的な `rm -rf` プロンプトを
+  抑制することではなく、そもそも必要としないことです。
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:
