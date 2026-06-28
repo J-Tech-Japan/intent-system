@@ -112,6 +112,45 @@ internal static class AutomationReconcileAnalyzer
                 });
             }
 
+            // Repair 3 (G503): approved is the terminal review state and must not
+            // coexist with an in-flight review label. If a PR carries
+            // intent-pr-approved AND any of rereview-ready / request-update /
+            // update-in-progress, the stale review labels are mechanically
+            // removable (approved supersedes them).
+            if (prLabels.Contains(WorkerPrReviewPreflightConstants.Labels.IntentPrApproved, StringComparer.Ordinal))
+            {
+                var staleReviewLabels = new[]
+                {
+                    WorkerNextActionConstants.Labels.IntentPrRereviewReady,
+                    WorkerPrReviewPreflightConstants.Labels.IntentPrRequestUpdate,
+                    WorkerPrReviewPreflightConstants.Labels.IntentPrUpdateInProgress,
+                }
+                    .Where(label => prLabels.Contains(label, StringComparer.Ordinal))
+                    .ToArray();
+
+                if (staleReviewLabels.Length > 0)
+                {
+                    safeRepairs.Add(new AutomationReconcileRepair
+                    {
+                        Type = AutomationReconcileRepairTypes.ApprovedPrStaleReviewLabel,
+                        TargetKind = GhCliGitHubLabelMutator.Kinds.Pr,
+                        TargetNumber = pr.Number,
+                        TargetUrl = pr.Url,
+                        AddLabels = Array.Empty<string>(),
+                        RemoveLabels = staleReviewLabels,
+                        Evidence =
+                        [
+                            $"PR #{pr.Number} carries 'intent-pr-approved' (terminal review state)",
+                            $"PR #{pr.Number} also carries stale in-flight review label(s): {string.Join(", ", staleReviewLabels)}"
+                        ],
+                        Confidence = AutomationReconcileConfidence.High,
+                        Applied = false,
+                        Summary = $"Remove stale {string.Join(", ", staleReviewLabels)} from approved PR #{pr.Number} (approved supersedes rereview/in-flight review state).",
+                        RequiresFollowupCommand = null,
+                    });
+                }
+            }
+
             // Advisory: PR is intent-target but body has no Closes/Fixes/Resolves keyword
             // and no closing-issue reference. Cannot be repaired without operator input.
             if (prLabels.Contains(WorkerNextActionConstants.Labels.IntentTarget, StringComparer.Ordinal)

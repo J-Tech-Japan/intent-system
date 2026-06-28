@@ -42,6 +42,16 @@ intent-target + intent-pr-approved (on the PR)
 → The PR is approved and waiting for merge.
 ```
 
+`intent-pr-approved` is the **terminal review state**: it supersedes
+`intent-pr-rereview-ready` ("waiting for another review pass") and is mutually
+exclusive with the other active review labels. When a PR transitions to approved,
+intent-cli removes any stale `intent-pr-rereview-ready`, `intent-pr-request-update`,
+and `intent-pr-update-in-progress` so an approved PR never visibly carries both
+approved and an in-flight review label. If a PR is found with both (e.g. after a
+re-review approval), `intent-cli automation reconcile` flags it as a safe,
+high-confidence repair and clears the stale label through intent-cli-owned
+behavior — never a raw `gh label` edit.
+
 ## Important notes about labels
 
 - **Do not manually add or remove workflow labels**: in normal operation, workflow labels are managed by intent-cli/automation. Manual changes can cause loops to enter incorrect states.

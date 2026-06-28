@@ -230,6 +230,106 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_Approved_DryRunPlansClearingAllActiveReviewLabels_G503()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-rereview-ready" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "approved",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.False(result.Applied);
+        Assert.Contains("intent-pr-approved", result.AddLabels);
+        // The dry-run plan supersedes rereview-ready and the other in-flight review labels.
+        Assert.Contains("intent-pr-rereview-ready", result.RemoveLabels);
+        Assert.Contains("intent-pr-reviewing", result.RemoveLabels);
+        Assert.Contains("intent-pr-request-update", result.RemoveLabels);
+        Assert.Contains("intent-pr-update-in-progress", result.RemoveLabels);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_Approved_WriteRemovesRereviewReady_WhenPresent_G503()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-rereview-ready" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "approved",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Contains("intent-pr-approved", transition.AddLabels);
+        Assert.Contains("intent-pr-rereview-ready", transition.RemoveLabels);
+        // Only present labels are removed: reviewing/request-update/update-in-progress were absent.
+        Assert.DoesNotContain("intent-pr-reviewing", transition.RemoveLabels);
+        Assert.DoesNotContain("intent-pr-request-update", transition.RemoveLabels);
+    }
+
+    [Fact]
+    public void Execute_Approved_WriteIsIdempotent_WhenRereviewReadyAbsent_G503()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            // Already approved with no in-flight review labels left.
+            Labels = new[] { "intent-target", "intent-pr-approved" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "approved",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.True(result.Applied);
+        Assert.Contains("intent-pr-approved", result.AddLabels);
+        // Idempotent: nothing to remove when no in-flight review label is present.
+        Assert.Empty(result.RemoveLabels);
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Empty(transition.RemoveLabels);
+    }
+
+    [Fact]
     public void Execute_RequestUpdate_DryRunPlansRepairRequestLabelsWithoutApplying()
     {
         using var workspace = new AutomationPrTransitionWorkspace();
