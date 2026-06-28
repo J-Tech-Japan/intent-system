@@ -21,6 +21,12 @@ public sealed class GuideWorkflowSuggestCommandTests
     [InlineData("I want to start agmsg orchestrator mode", "orchestrator-setup")]
     [InlineData("set up an orchestrator to run orchestration", "orchestrator-setup")]
     [InlineData("オーケストレーターを立ち上げたい", "orchestrator-setup")]
+    // G500: the natural-language setup requests named in the packet must route
+    // to orchestrator setup intake, not generic explanation or feature intake.
+    [InlineData("orchestrator を使いたい", "orchestrator-setup")]
+    [InlineData("新しい intent-cli オーケストレーションを使ってみたい", "orchestrator-setup")]
+    [InlineData("agmsg orchestrator を試したい", "orchestrator-setup")]
+    [InlineData("オーケストレーションスレッドを使いたい", "orchestrator-setup")]
     [InlineData("xyzzy mumble", "unknown")]
     public void Execute_ClassifiesGoalIntoExpectedWorkflow(string goal, string expectedWorkflow)
     {
