@@ -518,6 +518,70 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_DesignThreadEscalation_KeepsRoutineInternal_EscalatesHumanNeeded_G498()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Design-thread escalation filter", output, StringComparison.Ordinal);
+        // Design thread is the primary human surface; this is a noise filter, not a failure filter.
+        Assert.Contains("PRIMARY human communication surface", output, StringComparison.Ordinal);
+        Assert.Contains("never hide a failure that needs a human", output, StringComparison.Ordinal);
+        // Quiet normal path: routine success/idle/progress kept internal.
+        Assert.Contains("### Kept internal", output, StringComparison.Ordinal);
+        Assert.Contains("Successful implementation", output, StringComparison.Ordinal);
+        Assert.Contains("Idle wakes", output, StringComparison.Ordinal);
+        Assert.Contains("CI waiting", output, StringComparison.Ordinal);
+        // Human-needed escalation path.
+        Assert.Contains("### Escalate to the design thread when", output, StringComparison.Ordinal);
+        Assert.Contains("Clarification required", output, StringComparison.Ordinal);
+        Assert.Contains("Permission / credentials / security", output, StringComparison.Ordinal);
+        Assert.Contains("Release / public publish decision", output, StringComparison.Ordinal);
+        // Structured escalation message with current authoritative state + evidence + decision needed.
+        Assert.Contains("\"to\":\"design\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"current_state\"", output, StringComparison.Ordinal);
+        Assert.Contains("AUTHORITATIVE state", output, StringComparison.Ordinal);
+        Assert.Contains("\"decision_needed\"", output, StringComparison.Ordinal);
+        // Field semantics make the current-state requirement explicit and options optional.
+        Assert.Contains("current_state — the current AUTHORITATIVE state", output, StringComparison.Ordinal);
+        Assert.Contains("options — OPTIONAL", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasDesignThreadEscalationShape_G498()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var escalation = doc.RootElement.GetProperty("design_thread_escalation");
+
+        Assert.NotEmpty(escalation.GetProperty("kept_internal").EnumerateArray());
+        Assert.NotEmpty(escalation.GetProperty("escalate_when").EnumerateArray());
+        var template = escalation.GetProperty("escalation_message_template").GetString()!;
+        Assert.Contains("current_state", template, StringComparison.Ordinal);
+        Assert.Contains("evidence", template, StringComparison.Ordinal);
+        Assert.Contains("decision_needed", template, StringComparison.Ordinal);
+
+        // The required AC field — current authoritative state — is explicitly documented.
+        var fields = escalation.GetProperty("message_fields").EnumerateArray()
+            .Select(f => f.GetString()!)
+            .ToArray();
+        Assert.Contains(fields, f => f.StartsWith("current_state", StringComparison.Ordinal) && f.Contains("AUTHORITATIVE", StringComparison.Ordinal));
+        Assert.Contains(fields, f => f.StartsWith("options", StringComparison.Ordinal) && f.Contains("OPTIONAL", StringComparison.Ordinal));
+
+        // The orchestrator prompt applies the filter and never hides failures.
+        var orchestrator = doc.RootElement.GetProperty("threads").EnumerateArray()
+            .First(t => t.GetProperty("role").GetString() == "orchestrator")
+            .GetProperty("prompt").GetString()!;
+        Assert.Contains("human-facing DESIGN thread ONLY human-needed decisions", orchestrator, StringComparison.Ordinal);
+        Assert.Contains("never hide a failure that needs a human", orchestrator, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();

@@ -202,6 +202,7 @@ internal static class GuideOrchestratorThreadCommand
                     "If intent-cli reports an `issue-cut-ready` candidate and all gates pass (same-domain or routed, complete contract, no open clarification, dependencies satisfied, under WIP, clean host-sync/preflight), publish ONE issue this wake via canonical publish-flow / issue-publish, then verify — do not ask the operator to create it.",
                     "If the candidate has unmet dependencies, plan the chain instead of pausing: act on the EARLIEST unmet resolvable dependency (publish or route it), keep the dependent held, and escalate only ambiguous/cycle/cross-domain-unrouted cases.",
                     "Decide the single action for this wake: publish one ready next-slice issue, delegate the next slice/PR, send one repair message, or escalate one operator decision.",
+                    "Apply the design-thread escalation filter: keep routine progress / CI-wait / success / closeout / idle internal; surface to the design thread ONLY human-needed decisions, with structured evidence and the exact decision needed. Never hide a failure that needs a human.",
                 },
                 RepairVsEscalate = new OrchestratorRepairEscalate
                 {
@@ -409,6 +410,52 @@ internal static class GuideOrchestratorThreadCommand
                     "Ask (status-request) and verify authoritative facts before any retry or escalation.",
                 },
             },
+            DesignThreadEscalation = new OrchestratorDesignThreadEscalation
+            {
+                Summary =
+                    "The design thread is the PRIMARY human communication surface. Humans mainly talk to the design "
+                    + "thread; implementation and review run through the orchestrator, and only human-needed decisions "
+                    + "return to the design thread. Keep routine orchestration internal — this is a NOISE filter, not a "
+                    + "failure filter: never hide a failure that needs a human. A design escalation carries a concise "
+                    + "reason, the current AUTHORITATIVE state read from intent-cli/GitHub, the supporting evidence, "
+                    + "options only when useful, and the exact decision needed — so the human can decide without "
+                    + "re-deriving the state.",
+                KeptInternal = new[]
+                {
+                    "Normal progress, accepted, and in-flight delegations.",
+                    "CI waiting — pending checks are an active wait state, not a design-thread event.",
+                    "Successful implementation (PR opened, CI green).",
+                    "Successful review / approval.",
+                    "Closeout of an already-approved PR.",
+                    "Idle wakes with no actionable change.",
+                },
+                EscalateWhen = new[]
+                {
+                    "Clarification required — the issue/packet contract is ambiguous.",
+                    "Product intent ambiguity or a design decision the orchestrator cannot make.",
+                    "Permission / credentials / security.",
+                    "A destructive action would be required to proceed.",
+                    "Repeated no-reply / no-progress after the safe stale-thread health check.",
+                    "Unresolved canonical state — intent-cli / GitHub facts conflict or are missing.",
+                    "Release / public publish decision.",
+                    "An explicit policy decision the operator owns.",
+                },
+                EscalationMessageTemplate =
+                    "{\"to\":\"design\",\"type\":\"escalation\",\"ref\":\"issue#<n>|pr#<n>\",\"reason\":\"<clarification|"
+                    + "product-ambiguity|permission|destructive|no-progress|canonical-conflict|release|policy>\","
+                    + "\"current_state\":\"<the current AUTHORITATIVE state read from intent-cli/GitHub: labels, PR/CI/"
+                    + "review/merge state, queue position>\",\"evidence\":\"<the intent-cli/GitHub facts that establish "
+                    + "that state>\",\"options\":\"<OPTIONAL: candidate choices, only when useful>\",\"decision_needed\":"
+                    + "\"<the exact decision or action requested from the human>\"}",
+                MessageFields = new[]
+                {
+                    "reason — which human-needed category triggered the escalation.",
+                    "current_state — the current AUTHORITATIVE state, read from intent-cli / GitHub (labels, PR/CI/review/merge state, queue position). REQUIRED: the receiver must not have to re-derive it.",
+                    "evidence — the intent-cli / GitHub facts that establish the current state (do not pass generic wording as a substitute for the explicit state).",
+                    "options — OPTIONAL candidate choices, included only when they help the human decide.",
+                    "decision_needed — the exact decision or action requested from the human.",
+                },
+            },
             Setup = new OrchestratorSetup
             {
                 Summary =
@@ -488,7 +535,11 @@ internal static class GuideOrchestratorThreadCommand
                         + "(publish or route it) and keep the dependent held, rather than pausing for the operator. For a "
                         + "no-reply receiver past the threshold (default 30m), run the SAFE stale-thread health check — "
                         + "send one non-destructive status-request and verify read-only intent-cli/GitHub facts before any "
-                        + "retry; never auto-clear a permission prompt, auto-cancel work, or duplicate a task. Do "
+                        + "retry; never auto-clear a permission prompt, auto-cancel work, or duplicate a task. Report to "
+                        + "the human-facing DESIGN thread ONLY human-needed decisions (clarification, product ambiguity, "
+                        + "permission/credentials, destructive action, repeated no-progress, unresolved canonical state, "
+                        + "release/publish, explicit policy); keep routine progress / CI-wait / success / closeout / idle "
+                        + "internal — but never hide a failure that needs a human. Do "
                         + "NOT "
                         + "launch recurring implement/review timers for this domain/repo while orchestrating. Fail "
                         + "closed: if you detect a second orchestrator for this domain/repo, or agmsg replies conflict "
@@ -865,6 +916,36 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Design-thread escalation filter");
+        writer.WriteLine();
+        writer.WriteLine(guide.DesignThreadEscalation.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Kept internal (no design-thread message by default)");
+        writer.WriteLine();
+        foreach (var item in guide.DesignThreadEscalation.KeptInternal)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Escalate to the design thread when");
+        writer.WriteLine();
+        foreach (var item in guide.DesignThreadEscalation.EscalateWhen)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Design escalation message");
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(guide.DesignThreadEscalation.EscalationMessageTemplate);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        foreach (var field in guide.DesignThreadEscalation.MessageFields)
+        {
+            writer.WriteLine($"- {field}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Thread prompts");
         foreach (var thread in guide.Threads)
         {
@@ -957,6 +1038,9 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("stale_thread_health_check")]
     public required OrchestratorStaleThreadHealthCheck StaleThreadHealthCheck { get; init; }
+
+    [JsonPropertyName("design_thread_escalation")]
+    public required OrchestratorDesignThreadEscalation DesignThreadEscalation { get; init; }
 
     [JsonPropertyName("setup")]
     public required OrchestratorSetup Setup { get; init; }
@@ -1059,6 +1143,24 @@ internal sealed record OrchestratorCiState
 
     [JsonPropertyName("routing")]
     public required string Routing { get; init; }
+}
+
+internal sealed record OrchestratorDesignThreadEscalation
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("kept_internal")]
+    public required IReadOnlyList<string> KeptInternal { get; init; }
+
+    [JsonPropertyName("escalate_when")]
+    public required IReadOnlyList<string> EscalateWhen { get; init; }
+
+    [JsonPropertyName("escalation_message_template")]
+    public required string EscalationMessageTemplate { get; init; }
+
+    [JsonPropertyName("message_fields")]
+    public required IReadOnlyList<string> MessageFields { get; init; }
 }
 
 internal sealed record OrchestratorStaleThreadHealthCheck
