@@ -1001,6 +1001,67 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_DesignHandoff_HasFirstMessage_AutonomousPublish_AndBoundary_G509()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Design handoff (start / resume)", output, StringComparison.Ordinal);
+        // First message pattern design → orchestrator with domain, target repo, requested action,
+        // one-action-per-wake, escalation boundary.
+        Assert.Contains("\"to\":\"orchestrator\",\"type\":\"start\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"domain\":\"intent-cli\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"target_repo\":\"J-Tech-Japan/intent-system\"", output, StringComparison.Ordinal);
+        Assert.Contains("one action per wake", output, StringComparison.Ordinal);
+        // Autonomous publish: orchestrator publishes one issue-cut-ready issue itself.
+        Assert.Contains("**autonomous publish**", output, StringComparison.Ordinal);
+        Assert.Contains("creates/publishes ONE GitHub issue ITSELF", output, StringComparison.Ordinal);
+        Assert.Contains("does NOT ask design to do each step", output, StringComparison.Ordinal);
+        // Human-decision escalation vs routine delegation.
+        Assert.Contains("**escalation boundary**", output, StringComparison.Ordinal);
+        Assert.Contains("Return to DESIGN only for human decisions", output, StringComparison.Ordinal);
+        // Design-thread manual inbox workflow.
+        Assert.Contains("**design inbox workflow**", output, StringComparison.Ordinal);
+        Assert.Contains("`inbox.sh`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_MonitorRecovery_CoversTheFourRecoveryCases_G509()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("## Monitor recovery", output, StringComparison.Ordinal);
+        Assert.Contains("**Monitor did not start**", output, StringComparison.Ordinal);
+        Assert.Contains("**Message not visible**", output, StringComparison.Ordinal);
+        Assert.Contains("**Receiver started after the message was sent**", output, StringComparison.Ordinal);
+        Assert.Contains("**Orchestrator idle despite a packet existing**", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasDesignHandoffAndMonitorRecoveryShape_G509()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+
+        var handoff = doc.RootElement.GetProperty("design_handoff");
+        Assert.True(handoff.TryGetProperty("first_message_template", out _));
+        Assert.Contains("issue-cut-ready", handoff.GetProperty("autonomous_publish_rule").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("human decisions", handoff.GetProperty("escalation_boundary").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("inbox.sh", handoff.GetProperty("design_inbox_workflow").GetString()!, StringComparison.Ordinal);
+
+        var recovery = doc.RootElement.GetProperty("monitor_recovery").EnumerateArray()
+            .Select(r => r.GetProperty("symptom").GetString()!)
+            .ToArray();
+        Assert.Contains(recovery, s => s.Contains("Monitor did not start", StringComparison.Ordinal));
+        Assert.Contains(recovery, s => s.Contains("Orchestrator idle despite a packet", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();

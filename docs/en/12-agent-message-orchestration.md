@@ -413,6 +413,51 @@ agmsg の inbox を確認してください。あなたは `<team>` の design �
 > should read its inbox with `inbox.sh` to catch earlier escalations, exactly
 > like the other receivers (see Receiver readiness / startup order).
 
+## Design handoff (start / resume)
+
+Setup does not stop at role registration. After the agmsg roles are registered
+and ready, the **design thread** starts (or resumes) orchestration by sending
+**one** message to the orchestrator; the orchestrator then drives the loop
+autonomously and returns to design only for human decisions.
+
+First message — design → orchestrator (paste into the design thread):
+
+```json
+{"to":"orchestrator","type":"start","domain":"<domain>","target_repo":"<owner/repo>","requested_action":"<e.g. publish the next ready slice and drive it to a PR>","constraints":"one action per wake; escalate to design ONLY for human decisions (product/clarification, release/credentials/security, destructive actions, unresolved blockers)"}
+```
+
+- **Autonomous publish** — if `intent-cli` reports the next slice
+  `issue-cut-ready` and all publish gates pass, the orchestrator creates/
+  publishes **one** GitHub issue itself via canonical intent-cli commands
+  (`issue publish-flow` / `automation issue-publish`) — it does **not** ask
+  design to do each step. At most one issue per wake; verify before delegating.
+- **Escalation boundary** — routine delegation (publish, delegate, CI wait,
+  review, closeout) stays orchestrator↔receivers. Return to **design** only for
+  human decisions (product/design clarification, release/credentials/security,
+  destructive actions, an unresolved blocker) using the structured escalation
+  message.
+- **Design inbox workflow** — the design thread is a loopless receiver and reads
+  on demand; check the design inbox with `inbox.sh` to pick up escalations,
+  especially when monitor delivery did not appear live or the design session
+  started after the orchestrator sent.
+
+## Monitor recovery
+
+- **Monitor did not start** — restart the receiver session so the monitor/watch
+  hook attaches on a fresh turn; verify with `delivery.sh status` and a
+  ping/ack. Until then, read with `inbox.sh`.
+- **Message not visible** — it may be queued but not delivered live; read the
+  role's queue with `inbox.sh`, re-confirm `team.sh` / `delivery.sh status`, then
+  resend after an ack.
+- **Receiver started after the message was sent** — earlier messages are in
+  history but not delivered live; read them with `inbox.sh`, or resend after the
+  receiver acks.
+- **Orchestrator idle despite a packet existing** — confirm the orchestrator
+  received the design start/resume message (`inbox.sh`) and that `worker
+  next-action` / `intent status` report an actionable item for **this**
+  domain/repo (not another visible domain). If issue-cut-ready and safe, the
+  orchestrator should publish one issue itself rather than wait.
+
 ## Preflight (all three cwds)
 
 Before mutating anything, preflight **all three checkouts** (orchestrator,
