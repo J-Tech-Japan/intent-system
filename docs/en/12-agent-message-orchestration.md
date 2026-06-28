@@ -245,11 +245,23 @@ Escalate to the design thread only when:
 - a release / public publish decision;
 - an explicit policy decision the operator owns.
 
-A design escalation carries structured evidence and the exact decision needed:
+A design escalation carries a concise reason, the **current authoritative
+state** read from intent-cli/GitHub, the supporting evidence, options only when
+useful, and the exact decision needed — so the human can decide without
+re-deriving the state:
 
 ```json
-{"to":"design","type":"escalation","ref":"issue#<n>|pr#<n>","reason":"<clarification|product-ambiguity|permission|destructive|no-progress|canonical-conflict|release|policy>","evidence":"<intent-cli/GitHub facts>","decision_needed":"<the exact decision or action requested>"}
+{"to":"design","type":"escalation","ref":"issue#<n>|pr#<n>","reason":"<clarification|product-ambiguity|permission|destructive|no-progress|canonical-conflict|release|policy>","current_state":"<the current AUTHORITATIVE state read from intent-cli/GitHub: labels, PR/CI/review/merge state, queue position>","evidence":"<the intent-cli/GitHub facts that establish that state>","options":"<OPTIONAL: candidate choices, only when useful>","decision_needed":"<the exact decision or action requested from the human>"}
 ```
+
+- `reason` — which human-needed category triggered the escalation.
+- `current_state` — the current **authoritative** state, read from intent-cli /
+  GitHub (labels, PR/CI/review/merge state, queue position). **Required** — the
+  receiver must not have to re-derive it; generic evidence wording does not
+  substitute for the explicit state.
+- `evidence` — the intent-cli / GitHub facts that establish the current state.
+- `options` — **optional** candidate choices, included only when they help.
+- `decision_needed` — the exact decision or action requested from the human.
 
 ## Single-domain vs multi-domain orchestration
 

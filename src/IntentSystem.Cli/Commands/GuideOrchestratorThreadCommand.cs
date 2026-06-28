@@ -416,7 +416,10 @@ internal static class GuideOrchestratorThreadCommand
                     "The design thread is the PRIMARY human communication surface. Humans mainly talk to the design "
                     + "thread; implementation and review run through the orchestrator, and only human-needed decisions "
                     + "return to the design thread. Keep routine orchestration internal — this is a NOISE filter, not a "
-                    + "failure filter: never hide a failure that needs a human.",
+                    + "failure filter: never hide a failure that needs a human. A design escalation carries a concise "
+                    + "reason, the current AUTHORITATIVE state read from intent-cli/GitHub, the supporting evidence, "
+                    + "options only when useful, and the exact decision needed — so the human can decide without "
+                    + "re-deriving the state.",
                 KeptInternal = new[]
                 {
                     "Normal progress, accepted, and in-flight delegations.",
@@ -440,8 +443,18 @@ internal static class GuideOrchestratorThreadCommand
                 EscalationMessageTemplate =
                     "{\"to\":\"design\",\"type\":\"escalation\",\"ref\":\"issue#<n>|pr#<n>\",\"reason\":\"<clarification|"
                     + "product-ambiguity|permission|destructive|no-progress|canonical-conflict|release|policy>\","
-                    + "\"evidence\":\"<intent-cli/GitHub facts>\",\"decision_needed\":\"<the exact decision or action "
-                    + "requested>\"}",
+                    + "\"current_state\":\"<the current AUTHORITATIVE state read from intent-cli/GitHub: labels, PR/CI/"
+                    + "review/merge state, queue position>\",\"evidence\":\"<the intent-cli/GitHub facts that establish "
+                    + "that state>\",\"options\":\"<OPTIONAL: candidate choices, only when useful>\",\"decision_needed\":"
+                    + "\"<the exact decision or action requested from the human>\"}",
+                MessageFields = new[]
+                {
+                    "reason — which human-needed category triggered the escalation.",
+                    "current_state — the current AUTHORITATIVE state, read from intent-cli / GitHub (labels, PR/CI/review/merge state, queue position). REQUIRED: the receiver must not have to re-derive it.",
+                    "evidence — the intent-cli / GitHub facts that establish the current state (do not pass generic wording as a substitute for the explicit state).",
+                    "options — OPTIONAL candidate choices, included only when they help the human decide.",
+                    "decision_needed — the exact decision or action requested from the human.",
+                },
             },
             Setup = new OrchestratorSetup
             {
@@ -927,6 +940,11 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine(guide.DesignThreadEscalation.EscalationMessageTemplate);
         writer.WriteLine("```");
         writer.WriteLine();
+        foreach (var field in guide.DesignThreadEscalation.MessageFields)
+        {
+            writer.WriteLine($"- {field}");
+        }
+        writer.WriteLine();
 
         writer.WriteLine("## Thread prompts");
         foreach (var thread in guide.Threads)
@@ -1140,6 +1158,9 @@ internal sealed record OrchestratorDesignThreadEscalation
 
     [JsonPropertyName("escalation_message_template")]
     public required string EscalationMessageTemplate { get; init; }
+
+    [JsonPropertyName("message_fields")]
+    public required IReadOnlyList<string> MessageFields { get; init; }
 }
 
 internal sealed record OrchestratorStaleThreadHealthCheck

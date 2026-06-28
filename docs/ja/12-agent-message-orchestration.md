@@ -228,11 +228,21 @@ status-request は receiver に次のいずれかで返信するよう求めま�
 - リリース / 公開 publish の判断;
 - オペレーターが所有する明示的なポリシー判断。
 
-設計エスカレーションは構造化された evidence と必要な判断を運びます:
+設計エスカレーションは、簡潔な reason、intent-cli/GitHub から読んだ **現在の authoritative
+state**、それを裏付ける evidence、必要なときだけの options、そして必要な正確な判断を運びます —
+人間が state を再導出せずに判断できるようにします:
 
 ```json
-{"to":"design","type":"escalation","ref":"issue#<n>|pr#<n>","reason":"<clarification|product-ambiguity|permission|destructive|no-progress|canonical-conflict|release|policy>","evidence":"<intent-cli/GitHub facts>","decision_needed":"<the exact decision or action requested>"}
+{"to":"design","type":"escalation","ref":"issue#<n>|pr#<n>","reason":"<clarification|product-ambiguity|permission|destructive|no-progress|canonical-conflict|release|policy>","current_state":"<intent-cli/GitHub から読んだ現在の AUTHORITATIVE state: labels, PR/CI/review/merge 状態, queue 位置>","evidence":"<その state を establish する intent-cli/GitHub の事実>","options":"<任意: 候補の選択肢。役立つときのみ>","decision_needed":"<人間に求める正確な判断またはアクション>"}
 ```
+
+- `reason` — どの人間が必要なカテゴリがエスカレーションを引き起こしたか。
+- `current_state` — 現在の **authoritative** state。intent-cli / GitHub から読む（labels、
+  PR/CI/review/merge 状態、queue 位置）。**必須** — 受信側が再導出する必要がないようにする。
+  汎用的な evidence の文言は明示的な state の代替にならない。
+- `evidence` — 現在の state を establish する intent-cli / GitHub の事実。
+- `options` — **任意** の候補の選択肢。役立つときのみ含める。
+- `decision_needed` — 人間に求める正確な判断またはアクション。
 
 ## single-domain と multi-domain のオーケストレーション
 
