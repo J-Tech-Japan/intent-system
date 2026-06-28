@@ -500,6 +500,56 @@ internal static class GuideOrchestratorThreadCommand
                     + "delivered — the design thread should read its inbox with `inbox.sh` to catch earlier escalations, "
                     + "exactly like the other receivers (see Receiver readiness / startup order).",
             },
+            DesignHandoff = new OrchestratorDesignHandoff
+            {
+                Summary =
+                    "Setup does not stop at role registration. After the agmsg roles are registered and ready, the "
+                    + "DESIGN thread starts (or resumes) orchestration by sending ONE message to the orchestrator; the "
+                    + "orchestrator then drives the loop autonomously and returns to design only for human decisions.",
+                FirstMessageTemplate = Apply(
+                    "{\"to\":\"orchestrator\",\"type\":\"start\",\"domain\":\"<domain>\",\"target_repo\":"
+                    + "\"<owner/repo>\",\"requested_action\":\"<e.g. publish the next ready slice and drive it to a PR>\","
+                    + "\"constraints\":\"one action per wake; escalate to design ONLY for human decisions (product/"
+                    + "clarification, release/credentials/security, destructive actions, unresolved blockers)\"}"),
+                AutonomousPublishRule =
+                    "If `intent-cli` reports the next slice `issue-cut-ready` and all publish gates pass (see Next-slice "
+                    + "publication), the orchestrator creates/publishes ONE GitHub issue ITSELF via canonical intent-cli "
+                    + "commands (`issue publish-flow` / `automation issue-publish`) — it does NOT ask design to do each "
+                    + "step. At most one issue per wake; verify after publishing before delegating implementation.",
+                EscalationBoundary =
+                    "Routine delegation (publish, delegate, CI wait, review, closeout) stays orchestrator↔receivers and "
+                    + "does NOT go to design. Return to DESIGN only for human decisions — product/design clarification, "
+                    + "release/credentials/security, destructive actions, or an unresolved blocker — using the structured "
+                    + "escalation message (reason / current_state / evidence / decision_needed).",
+                DesignInboxWorkflow =
+                    "The design thread is a loopless receiver and reads on demand. To pick up escalations, the human (or "
+                    + "the design thread) checks the design inbox with `inbox.sh` — especially when monitor delivery did "
+                    + "not appear live or the design session started after the orchestrator sent. Read, decide/reply, "
+                    + "then the orchestrator continues.",
+            },
+            MonitorRecovery = new[]
+            {
+                new OrchestratorTroubleshooting
+                {
+                    Symptom = "Monitor did not start",
+                    Action = "Restart the receiver session so the monitor/watch hook attaches on a fresh turn; verify with `delivery.sh status` and a ping/ack. Until then, read with `inbox.sh`.",
+                },
+                new OrchestratorTroubleshooting
+                {
+                    Symptom = "Message not visible",
+                    Action = "It may be queued but not delivered live — read the role's queue with `inbox.sh`; if still missing, re-confirm registration (`team.sh`) and delivery, then resend after an ack.",
+                },
+                new OrchestratorTroubleshooting
+                {
+                    Symptom = "Receiver started after the message was sent",
+                    Action = "Earlier messages are in history but not delivered live to the new session — read them with `inbox.sh`, or have the sender resend after the receiver acks.",
+                },
+                new OrchestratorTroubleshooting
+                {
+                    Symptom = "Orchestrator idle despite a packet existing",
+                    Action = "Confirm the orchestrator received the design start/resume message (`inbox.sh` on the orchestrator) and that `worker next-action` / `intent status` report an actionable item for THIS domain/repo (not another domain visible in the host repo). If issue-cut-ready and safe, the orchestrator should publish one issue itself rather than wait.",
+                },
+            },
             WorktreeManagement = new OrchestratorWorktreeManagement
             {
                 Summary =
@@ -1283,6 +1333,14 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Monitor recovery");
+        writer.WriteLine();
+        foreach (var entry in guide.MonitorRecovery)
+        {
+            writer.WriteLine($"- **{entry.Symptom}** — {entry.Action}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Domain routing — single-domain vs multi-domain");
         writer.WriteLine();
         writer.WriteLine($"- selected mode: `{guide.DomainRouting.Mode}`");
@@ -1492,6 +1550,21 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"> **Pre-start messages:** {guide.DesignReceiver.PreStartNote}");
         writer.WriteLine();
 
+        writer.WriteLine("## Design handoff (start / resume)");
+        writer.WriteLine();
+        writer.WriteLine(guide.DesignHandoff.Summary);
+        writer.WriteLine();
+        writer.WriteLine("First message — design → orchestrator (paste into the design thread):");
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(guide.DesignHandoff.FirstMessageTemplate);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"- **autonomous publish** — {guide.DesignHandoff.AutonomousPublishRule}");
+        writer.WriteLine($"- **escalation boundary** — {guide.DesignHandoff.EscalationBoundary}");
+        writer.WriteLine($"- **design inbox workflow** — {guide.DesignHandoff.DesignInboxWorkflow}");
+        writer.WriteLine();
+
         writer.WriteLine("## Managed worktree cleanup");
         writer.WriteLine();
         writer.WriteLine(guide.WorktreeManagement.Summary);
@@ -1698,6 +1771,12 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("design_receiver")]
     public required OrchestratorDesignReceiver DesignReceiver { get; init; }
 
+    [JsonPropertyName("design_handoff")]
+    public required OrchestratorDesignHandoff DesignHandoff { get; init; }
+
+    [JsonPropertyName("monitor_recovery")]
+    public required IReadOnlyList<OrchestratorTroubleshooting> MonitorRecovery { get; init; }
+
     [JsonPropertyName("worktree_management")]
     public required OrchestratorWorktreeManagement WorktreeManagement { get; init; }
 
@@ -1832,6 +1911,24 @@ internal sealed record OrchestratorWorktreeManagement
 
     [JsonPropertyName("approval_policy_note")]
     public required string ApprovalPolicyNote { get; init; }
+}
+
+internal sealed record OrchestratorDesignHandoff
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("first_message_template")]
+    public required string FirstMessageTemplate { get; init; }
+
+    [JsonPropertyName("autonomous_publish_rule")]
+    public required string AutonomousPublishRule { get; init; }
+
+    [JsonPropertyName("escalation_boundary")]
+    public required string EscalationBoundary { get; init; }
+
+    [JsonPropertyName("design_inbox_workflow")]
+    public required string DesignInboxWorkflow { get; init; }
 }
 
 internal sealed record OrchestratorDesignReceiver

@@ -381,6 +381,44 @@ agmsg の inbox を確認してください。あなたは `<team>` の design �
 > で inbox を読んで earlier なエスカレーションを拾うべきです。他の receiver と同様です
 > （Receiver readiness / startup order 参照）。
 
+## design ハンドオフ（start / resume）
+
+セットアップはロール登録で終わりません。agmsg ロールが登録されて ready になった後、**design
+スレッド** が orchestrator に **1 通** メッセージを送ってオーケストレーションを start（または
+resume）します。その後 orchestrator がループを自律的に駆動し、人間が必要な判断のときだけ design に
+戻ります。
+
+最初のメッセージ — design → orchestrator（design スレッドに貼り付け）:
+
+```json
+{"to":"orchestrator","type":"start","domain":"<domain>","target_repo":"<owner/repo>","requested_action":"<例: 次の ready なスライスを publish して PR まで進める>","constraints":"one action per wake; escalate to design ONLY for human decisions (product/clarification, release/credentials/security, destructive actions, unresolved blockers)"}
+```
+
+- **autonomous publish** — `intent-cli` が次のスライスを `issue-cut-ready` と報告し、すべての
+  publish ゲートが通れば、orchestrator は canonical な intent-cli コマンド（`issue publish-flow` /
+  `automation issue-publish`）で **1 つ** の GitHub issue を自分で作成・publish します — 各ステップを
+  design に頼みません。1 wake につき最大 1 件。委譲前に検証します。
+- **escalation boundary** — ルーチンな委譲（publish、delegate、CI 待ち、review、closeout）は
+  orchestrator↔receivers に留まります。**design** に戻すのは人間が必要な判断のときだけ（product/設計
+  clarification、release/認証情報/セキュリティ、破壊的操作、未解決ブロッカー）。構造化された
+  エスカレーションメッセージを使います。
+- **design inbox workflow** — design スレッドは loopless receiver でオンデマンドに読みます。
+  エスカレーションを拾うには `inbox.sh` で design inbox を確認します — 特に monitor delivery が
+  ライブで現れなかった場合や、design セッションが orchestrator の送信後に開始した場合。
+
+## monitor リカバリ
+
+- **monitor が起動しなかった** — receiver セッションを再起動して monitor/watch hook を新しい turn で
+  アタッチさせる。`delivery.sh status` と ping/ack で検証。それまでは `inbox.sh` で読む。
+- **メッセージが可視でない** — queue 済みだがライブ delivery されていない可能性。ロールの queue を
+  `inbox.sh` で読み、`team.sh` / `delivery.sh status` を再確認し、ack 後に resend する。
+- **メッセージ送信後に receiver が開始した** — earlier なメッセージは history にあるがライブ delivery
+  されない。`inbox.sh` で読むか、receiver の ack 後に resend する。
+- **packet があるのに orchestrator が idle** — orchestrator が design の start/resume メッセージを
+  受信したか（`inbox.sh`）、`worker next-action` / `intent status` が **この** domain/repo に対して
+  実行可能項目を報告しているか（host repo に見える別ドメインではない）を確認する。issue-cut-ready で
+  安全なら、orchestrator は待たずに自分で 1 つ issue を publish すべき。
+
 ## preflight（3 つの cwd すべて）
 
 何かを変更する前に、**3 つのチェックアウト全部**（orchestrator・implementation・review の cwd）を
