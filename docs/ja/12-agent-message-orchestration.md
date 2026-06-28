@@ -345,6 +345,42 @@ ready でなかった場合、earlier に送ったメッセージは missed の�
 診断は agmsg スクリプトのみ: `team.sh`（登録）、`delivery.sh status`（delivery）、`inbox.sh`
 （queue 済みメッセージ）、`send.sh`（ping → ack）。
 
+## design / human receiver（任意）
+
+人間が必要なエスカレーションを agmsg で配信したい場合、**4 つ目の論理ロール** として
+**design / human receiver** を追加します。ルーチンな進捗は orchestrator / implementation /
+review の内部に留まり、人間が必要な判断のみが design スレッドに行きます（design-thread
+エスカレーションフィルター参照）。design receiver はルーチン運用には **任意** ですが、
+エスカレーションが確実に人間に届くよう **推奨** され、inbox を確認して手動で受け取れます。
+
+design receiving を有効にしたときの 4 つの論理ロール:
+
+- **orchestrator** — 唯一のスケジュールドライバー。
+- **implementation receiver** — loopless。委譲にのみ反応する。
+- **review receiver** — loopless。委譲にのみ反応する。
+- **design / human receiver** — 任意。人間が必要なエスカレーションのみを受け取り、これも
+  loopless（人間がオンデマンドで、例えば `inbox.sh` で読む）。
+
+セットアップ:
+
+- design ロールを **同じ** agmsg team に登録する —
+  `agmsg join.sh <team> design <agent> <design-folder>` — または既存の design スレッドへ
+  エスカレーションメッセージを宛先指定する。
+- 任意のストリーミング delivery: `agmsg delivery.sh set <mode> <agent> <design-folder>`。
+  そうでなければ design スレッドは `inbox.sh` でオンデマンドに読む。
+- design receiver は定期ループ不要 — implementation/review と同様 loopless で、人間が促されたときに読む。
+
+最小の手動 inbox トリガープロンプト（design スレッドに貼り付け）:
+
+```text
+agmsg の inbox を確認してください。あなたは `<team>` の design です。 (Check your agmsg inbox — you are the `design` role of team `<team>`. Read pending escalations with `inbox.sh`; routine progress is intentionally not sent here.)
+```
+
+> **pre-start メッセージ:** design receiver の monitor が起動する前に送られたメッセージは
+> agmsg history にあっても可視に delivery されないことがあります — design スレッドは `inbox.sh`
+> で inbox を読んで earlier なエスカレーションを拾うべきです。他の receiver と同様です
+> （Receiver readiness / startup order 参照）。
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:

@@ -649,8 +649,10 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("- existing-loop stop policy", output, StringComparison.Ordinal);
         // Only the orchestrator is scheduled.
         Assert.Contains("Only the orchestrator is scheduled", output, StringComparison.Ordinal);
-        // No agmsg commands emitted while inputs are missing.
-        Assert.DoesNotContain("agmsg join.sh", output, StringComparison.Ordinal);
+        // No setup-intake agmsg registration block emitted while inputs are missing
+        // (the setup-ready path adds this header; reference sections may mention
+        // agmsg commands generically).
+        Assert.DoesNotContain("### agmsg registration + delivery (copy-paste)", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -864,6 +866,65 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("Copy-paste operator message when receivers were launched after the initial messages were sent", output, StringComparison.Ordinal);
         Assert.Contains("Heads up: your session started AFTER I sent earlier messages", output, StringComparison.Ordinal);
         Assert.Contains("reply `ack`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_DesignReceiver_DescribesFourRoles_OptionalAndLoopless_G505()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Design / human receiver (optional)", output, StringComparison.Ordinal);
+        // Optional for routine, recommended for escalation delivery.
+        Assert.Contains("optional for routine operation: yes", output, StringComparison.Ordinal);
+        Assert.Contains("RECOMMENDED", output, StringComparison.Ordinal);
+        // Four logical roles, including the design/human receiver.
+        Assert.Contains("### Four logical roles", output, StringComparison.Ordinal);
+        Assert.Contains("orchestrator — the single scheduled driver", output, StringComparison.Ordinal);
+        Assert.Contains("implementation receiver — LOOPLESS", output, StringComparison.Ordinal);
+        Assert.Contains("review receiver — LOOPLESS", output, StringComparison.Ordinal);
+        Assert.Contains("design / human receiver — OPTIONAL", output, StringComparison.Ordinal);
+        // Paste-ready registration/addressing setup.
+        Assert.Contains("### Design receiver setup", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg join.sh <team> design", output, StringComparison.Ordinal);
+        // Minimal manual inbox trigger prompt (the packet's example wording).
+        Assert.Contains("agmsg の inbox を確認してください。あなたは `<team>` の design です。", output, StringComparison.Ordinal);
+        // Pre-start manual inbox inspection.
+        Assert.Contains("Pre-start messages:", output, StringComparison.Ordinal);
+        Assert.Contains("read its inbox with `inbox.sh`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_DesignReceiver_IsOptional_AndRoutineStaysInternal_G505()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var design = doc.RootElement.GetProperty("design_receiver");
+
+        Assert.True(design.GetProperty("optional").GetBoolean());
+        Assert.Equal(4, design.GetProperty("roles").GetArrayLength());
+        Assert.True(design.TryGetProperty("manual_inbox_trigger_prompt", out _));
+        Assert.True(design.TryGetProperty("pre_start_note", out _));
+
+        // Routine progress stays internal; only human-needed reaches design.
+        var summary = design.GetProperty("summary").GetString()!;
+        Assert.Contains("Routine progress stays internal", summary, StringComparison.Ordinal);
+        Assert.Contains("only human-needed decisions go to the design thread", summary, StringComparison.Ordinal);
+
+        // The escalation filter (G498) keeps the design routing rule intact.
+        var escalation = doc.RootElement.GetProperty("design_thread_escalation");
+        Assert.NotEmpty(escalation.GetProperty("kept_internal").EnumerateArray());
+
+        // No guidance tells implementation/review to start loops: prompts stay loopless.
+        var prompts = doc.RootElement.GetProperty("threads").EnumerateArray()
+            .ToDictionary(t => t.GetProperty("role").GetString()!, t => t.GetProperty("prompt").GetString()!);
+        Assert.Contains("LOOPLESS receiver", prompts["implementation"], StringComparison.Ordinal);
+        Assert.Contains("LOOPLESS receiver", prompts["review"], StringComparison.Ordinal);
     }
 
     [Fact]
