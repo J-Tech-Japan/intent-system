@@ -310,6 +310,43 @@ symptom of an unmanaged workspace.
   default; the goal is to never need a destructive `rm -rf` prompt, not to
   suppress it.
 
+## Receiver readiness
+
+Monitor configuration is **not enough**. A registered team plus a configured
+delivery mode does **not** mean a receiver will see your message — a newly
+launched or restarted session may not pick up messages sent before its
+monitor/watch path was active. Confirm each receiver is **ready** with a
+ping/ack before sending real work.
+
+Readiness states:
+
+- **registered** — the role joined the team (it appears in `team.sh`).
+- **delivery-configured** — the delivery mode is set (`delivery.sh status`).
+- **watcher-alive** — the monitor/watch process is running for the role.
+- **receiver-session-active** — a launched/restarted receiver session is
+  actually attached to the monitor path (a session started before delivery was
+  active may not receive earlier messages).
+- **ping-acknowledged** — the receiver replied to a ping; the only end-to-end
+  proof the channel works.
+
+**Ping/ack is required** for the orchestrator, implementer, and reviewer before
+any real delegation, and must be re-done after any launch/restart. A missing ack
+is **not-ready** — do not send real work. If a receiver was not ready, messages
+sent earlier may have been missed: resend after the ack, or read what is queued
+with `inbox.sh`; re-confirm `team.sh` and `delivery.sh status` first.
+
+Boundaries:
+
+- **`watch.sh`** streams a role's inbox live but **occupies a terminal** — it is
+  a debug/fallback option, not the default setup requirement. The normal path is
+  the monitor delivery hook.
+- **Codex Desktop app threads are not agmsg monitor receivers by default** — a
+  different execution surface from a CLI session. Use a CLI session as the
+  receiver (or read with `inbox.sh`).
+
+Diagnose with agmsg scripts only: `team.sh` (registration), `delivery.sh status`
+(delivery), `inbox.sh` (queued messages), `send.sh` (ping → ack).
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for
