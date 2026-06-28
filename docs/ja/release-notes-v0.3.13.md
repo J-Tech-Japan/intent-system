@@ -1,10 +1,12 @@
 # リリースノート — intent-cli v0.3.13
 
-> **リリースモデル:** v0.3.13 は、version-bump マージが `main` に入ったときに release automation が
-> **自動的に** cut・publish します（v0.3.11・v0.3.12 と同じ方式）。本パケットは **prepare-only** で、
-> version メタデータと docs をバンプするだけで publish ステップを **追加しません**。
+> **リリースモデル:** メンテナ/オペレーター（または外部のリリース automation）が `v0.3.13` の
+> **GitHub Release を作成・publish** します — version-bump マージ自体は Release やタグを作成しません。
+> GitHub Release の publish が `.github/workflows/release.yml`（`on: release: published`）を発火させ、
+> NuGet package とプラットフォームバイナリ成果物を build・publish します。本パケットは
+> **prepare-only** で、version メタデータと docs をバンプするだけで publish ステップを **追加しません**。
 > [マージ前 リリース準備ゲート](#リリース準備ゲート-g506) と
-> [マージ後の v0.3.13 自動リリース](#マージ後の-v0313-自動リリース) を参照。
+> [v0.3.13 の publish](#v0313-の-publish) を参照。
 
 ## v0.3.13 の内容
 
@@ -58,18 +60,17 @@ v0.3.12 からの破壊的変更はありません。orchestrator モードは�
 
 ## リリース準備ゲート (G506)
 
-次の項目は **version-bump マージが `main` に入る前** に成り立っている必要があります。そのマージが
-自動リリースをトリガーするためです。このゲートは fail closed です — 1 つでも未充足なら、まだ
-version bump をマージしないでください。
+次の項目は **`v0.3.13` の GitHub Release が publish される前** に成り立っている必要があります。
+このゲートは fail closed です — 1 つでも未充足なら、まだ Release を publish しないでください。
 
 - [ ] リリース対象の各パケットが **完了し PR が `main` にマージ済み**: G505
-      （および本準備の G506）。host queue-state / GitHub PR 状態で host/review 側から確認する
-      （child 実装ループは parent queue-state を読まないため、これは host 所有の前提条件）。
+      （および本準備の G506、本修正の G507）。host queue-state / GitHub PR 状態で host/review 側から
+      確認する（child 実装ループは parent queue-state を読まないため、これは host 所有の前提条件）。
 - [ ] 本リリース対象の open な intent-system PR や WIP パケットが誤ってスキップされていない
-      （マージ前に host queue / open PR リストを確認）。
-- [ ] `eng/version.json` の `nextVersion` が `0.3.13`（意図したリリースバージョン）。release
-      automation はこの version bump から cut の package バージョンを導出し、
-      `src/IntentSystem.Cli/IntentSystem.Cli.csproj` も同じポリシーからデフォルトを導出する。
+      （publish 前に host queue / open PR リストを確認）。
+- [ ] `eng/version.json` の `nextVersion` が `0.3.13`（意図したリリースバージョン）。`release.yml`
+      は publish された Release/タグから package バージョンをビルドし、
+      `src/IntentSystem.Cli/IntentSystem.Cli.csproj` も同じポリシーからローカルデフォルトを導出する。
 - [ ] package メタデータが正しい: `PackageId = JTechJapan.IntentSystem.Cli`、
       `RepositoryUrl` / `PackageProjectUrl` が `https://github.com/J-Tech-Japan/intent-system` を指す、
       `PackageLicenseExpression = Apache-2.0`、README/docs リンクが解決し、公式サービスサイト
@@ -79,15 +80,19 @@ version bump をマージしないでください。
 - [ ] リリースコミットで **Main CI が green**（`Build and test (source contract)`）であり、
       **preview-pack** workflow も green。
 
-## マージ後の v0.3.13 自動リリース
+## v0.3.13 の publish
 
-本パケットはリリースを publish せず、publish ステップを **追加しません**。version-bump マージが
-`main` に入り、上記の準備ゲートが成り立つと、**既存の release automation が `v0.3.13` を自動的に
-cut・publish** します — バイナリ・`.nupkg`・チェックサムをビルドし、GitHub Release と NuGet
-package を publish します。v0.3.11・v0.3.12 と同じ方式で、手動のタグ付けや GitHub Release 作成は
-不要です。
+本パケットはリリースを publish せず、publish ステップを **追加しません**。version-bump マージ自体は
+GitHub Release やタグを作成しません。
 
-リリース後の検証（automation が publish した後）:
+1. この version bump がマージされ上記の準備ゲートが成り立った後、**メンテナ/オペレーター（または
+   外部のリリース automation）が `v0.3.13` の GitHub Release を作成・publish** します
+   （リリースコミットにタグ付け）。これはマージ後の host/operator/外部リリースアクションです。
+2. その GitHub Release の publish が `.github/workflows/release.yml`（`on: release: published`）を
+   発火させ、NuGet package とプラットフォームごとのバイナリアーカイブ（`.sha256` チェックサム付き）を
+   build・publish し、トリガーとなった Release に添付します。
+
+リリース後の検証（GitHub Release が publish され `release.yml` が実行された後）:
 
 - [ ] NuGet.org の package ページのリンクがすべて正しく解決する。
 - [ ] GitHub release アセットリンク（`.tar.gz`, `.zip`, `.exe`, `.nupkg`）にアクセスできる。

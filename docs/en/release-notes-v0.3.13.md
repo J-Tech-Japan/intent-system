@@ -1,11 +1,14 @@
 # Release Notes — intent-cli v0.3.13
 
-> **Release model:** v0.3.13 is cut and published **automatically** by the
-> release automation when the version-bump merge lands on `main` (the same way
-> v0.3.11 and v0.3.12 were published). This packet is **prepare-only**: it bumps
-> version metadata and docs and adds **no** publish steps. See the
-> [pre-merge release-readiness gate](#release-readiness-gate-g506) and the
-> [post-merge automated release](#post-merge-automated-release-of-v0313).
+> **Release model:** a maintainer/operator (or external release automation)
+> **creates and publishes the GitHub Release** for `v0.3.13` — the version-bump
+> merge does **not** create a Release or tag on its own. Publishing the GitHub
+> Release fires `.github/workflows/release.yml` (`on: release: published`), which
+> then builds and publishes the NuGet package and platform binary artifacts.
+> This packet is **prepare-only**: it bumps version metadata and docs and adds
+> **no** publish steps. See the
+> [pre-merge release-readiness gate](#release-readiness-gate-g506) and
+> [publishing v0.3.13](#publishing-v0313).
 
 ## What's in v0.3.13
 
@@ -66,20 +69,20 @@ existing timer-loop setups are unaffected.
 
 ## Release-readiness gate (G506)
 
-These items must hold **before the version-bump merge lands on `main`**, because
-that merge triggers the automated release. This gate fails closed — if any item
-is unmet, do not merge the version bump yet.
+These items must hold **before the GitHub Release for `v0.3.13` is published**.
+This gate fails closed — if any item is unmet, do not publish the Release yet.
 
 - [ ] Every release-bound packet is **complete and its PR merged to `main`**:
-      G505 (and G506 this prep). Confirm on the host/review side via the host
-      queue-state / GitHub PR state — the child implementation loop must not read
-      parent queue-state, so this is a host-owned precondition.
+      G505 (and G506 this prep, plus G507 this correction). Confirm on the
+      host/review side via the host queue-state / GitHub PR state — the child
+      implementation loop must not read parent queue-state, so this is a
+      host-owned precondition.
 - [ ] No open intent-system PR or WIP packet intended for this release is
-      accidentally skipped (check the host queue / open PR list before merge).
+      accidentally skipped (check the host queue / open PR list before publishing).
 - [ ] `eng/version.json` `nextVersion` is `0.3.13` (the intended release
-      version). The release automation derives the package version for the cut
-      from this version bump; `src/IntentSystem.Cli/IntentSystem.Cli.csproj`
-      derives its default from the same policy.
+      version). `release.yml` builds the package version from the published
+      Release/tag; `src/IntentSystem.Cli/IntentSystem.Cli.csproj` derives its
+      local default from the same policy.
 - [ ] Package metadata is correct: `PackageId = JTechJapan.IntentSystem.Cli`,
       `RepositoryUrl` / `PackageProjectUrl` point to
       `https://github.com/J-Tech-Japan/intent-system`,
@@ -91,16 +94,22 @@ is unmet, do not merge the version bump yet.
 - [ ] **Main CI is green** (`Build and test (source contract)`) on the release
       commit, and the **preview-pack** workflow is green.
 
-## Post-merge automated release of v0.3.13
+## Publishing v0.3.13
 
-This packet does **not** publish the release and adds **no** publish steps. Once
-the version-bump merge lands on `main` and the readiness gate above holds, the
-**existing release automation cuts and publishes `v0.3.13` automatically** —
-building the binaries, `.nupkg`, and checksums and publishing the GitHub Release
-and NuGet package — exactly as v0.3.11 and v0.3.12 were published. No manual
-tagging or GitHub Release creation is required.
+This packet does **not** publish the release and adds **no** publish steps. The
+version-bump merge does **not** create a GitHub Release or tag on its own.
 
-Post-release verification (after the automation has published):
+1. After this version bump is merged and the readiness gate above holds, a
+   **maintainer/operator (or external release automation) creates and publishes
+   the GitHub Release** for `v0.3.13` (tagging the release commit). This is a
+   post-merge host/operator/external action.
+2. Publishing that GitHub Release fires `.github/workflows/release.yml`
+   (`on: release: published`), which builds and publishes the NuGet package and
+   the per-platform binary archives (with `.sha256` checksums) and attaches them
+   to the triggering Release.
+
+Post-release verification (after the GitHub Release is published and
+`release.yml` has run):
 
 - [ ] NuGet.org package page links all resolve correctly.
 - [ ] GitHub release asset links (`.tar.gz`, `.zip`, `.exe`, `.nupkg`) are
