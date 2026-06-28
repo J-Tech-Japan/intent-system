@@ -194,83 +194,83 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.3.11",
-  "nextVersion": "0.3.12"
-}
-```
-
-| Stage | Version form | How it is derived |
-| --- | --- | --- |
-| Local pack / install | `0.3.12-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.3.12-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.3.12-rc.N` | Tag `v0.3.12-rc.N` triggers release workflow |
-| Stable release | `0.3.12` | Tag `v0.3.12` triggers release workflow (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.3.13-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.13` |
-
-**After releasing `v0.3.12`**, bump both fields in `eng/version.json`:
-
-```json
-{
   "stableVersion": "0.3.12",
   "nextVersion": "0.3.13"
 }
 ```
 
+| Stage | Version form | How it is derived |
+| --- | --- | --- |
+| Local pack / install | `0.3.13-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `0.3.13-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.3.13-rc.N` | Tag `v0.3.13-rc.N` triggers release workflow |
+| Stable release | `0.3.13` | Tag `v0.3.13` triggers release workflow (`-p:Version=<tag>` wins) |
+| Post-release main builds | `0.3.14-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.14` |
+
+**After releasing `v0.3.13`**, bump both fields in `eng/version.json`:
+
+```json
+{
+  "stableVersion": "0.3.13",
+  "nextVersion": "0.3.14"
+}
+```
+
 This ensures the next main-branch CI build (and local pack) immediately produces
-`0.3.13-preview.<run>.<attempt>` / `0.3.13-<sha>-<G-unit>` rather than continuing to
-emit `0.3.12` (which would collide with the stable release version).
+`0.3.14-preview.<run>.<attempt>` / `0.3.14-<sha>-<G-unit>` rather than continuing to
+emit `0.3.13` (which would collide with the stable release version).
 
-### Next release readiness (v0.3.12)
+### Next release readiness (v0.3.13)
 
-**`v0.3.11` shipped** (GitHub Release + NuGet) and the version policy was bumped
-to the `0.3.12` development line. The repository is now on the in-development
-**`0.3.12`** `nextVersion`; G504 (this packet) prepares the `v0.3.12` patch
-release — the next release is published by tagging `v0.3.12` once the
-[release-readiness gate](release-notes-v0.3.12.md#release-readiness-gate-g504)
-passes. Preparing the release does not cut it. Full changelog and operator
-checklist: [release-notes-v0.3.12.md](release-notes-v0.3.12.md).
+**`v0.3.12` shipped** (GitHub Release + NuGet) and the version policy was bumped
+to the `0.3.13` development line. The repository is now on the in-development
+**`0.3.13`** `nextVersion`; G506 (this packet) is **prepare-only** — it bumps the
+version metadata and docs and adds no publish steps. Once the version-bump merge
+lands on `main` and the
+[release-readiness gate](release-notes-v0.3.13.md#release-readiness-gate-g506)
+holds, the **existing release automation cuts and publishes `v0.3.13`
+automatically** (binaries, `.nupkg`, GitHub Release, and NuGet), exactly as
+v0.3.11 and v0.3.12 were published — no manual tag or GitHub Release creation is
+required. Full changelog and operator checklist:
+[release-notes-v0.3.13.md](release-notes-v0.3.13.md).
 
-**To ship in `v0.3.12` (changes since `v0.3.11`) — orchestrator-mode preview
-patch fixes:**
+**To ship in `v0.3.13` (changes since `v0.3.12`) — orchestrator-mode preview
+patch fix:**
 
-- **agmsg receiver startup ordering** (G502) — the orchestrator setup guidance
-  now requires a strict startup order and a ping/ack handshake before real
-  delegation, so work is not sent before receiver sessions are launched/
-  restarted, the monitor/bridge is attached, and the ack succeeds. Includes a
-  copy-paste recovery message for receivers launched after the initial sends.
-- **approved PR label cleanup** (G503) — the `approved` PR transition now removes
-  a stale `intent-pr-rereview-ready` (and other in-flight review labels), and
-  `automation reconcile` repairs a PR that carries both, so an approved PR no
-  longer visibly shows `intent-pr-approved` and `intent-pr-rereview-ready`
-  together.
+- **design-thread agmsg receiver guidance** (G505) — the orchestrator-thread
+  guide now documents an optional fourth role, a design/human receiver, so
+  human-needed escalations can be delivered over agmsg (including manual inbox
+  checks) while routine progress stays internal to orchestrator/implementation/
+  review. Implementation/review stay loopless.
 - Orchestrator mode remains **preview/experimental**: opt-in, still being
   hardened, with the timer-loop mode fully supported and unchanged. See
   [Agent-message orchestration](12-agent-message-orchestration.md).
 
-**Release-readiness verification (run before tagging the next `v0.3.12`):**
+**Release-readiness verification (run before merging the `v0.3.13` version
+bump):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.3.11 (published), nextVersion 0.3.12 (to release)
+cat eng/version.json   # stableVersion 0.3.12 (published), nextVersion 0.3.13 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.3.12-<sha>-G50x   (NOT a stale literal)
+#   expected shape: intent-cli 0.3.13-<sha>-G50x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.12.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.13.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-The official release is then cut by publishing a GitHub Release tagged `v0.3.12`;
-the release workflow passes `-p:Version=0.3.12` (which wins over the local
-default). After the release publishes, apply the post-release `eng/version.json`
-bump above (`stableVersion → 0.3.12`, `nextVersion → 0.3.13`).
+After the version-bump merge lands on `main`, the release automation cuts and
+publishes `v0.3.13` (binaries, `.nupkg`, GitHub Release, and NuGet) without a
+manual tag. Once it has published, apply the post-release `eng/version.json`
+bump above (`stableVersion → 0.3.13`, `nextVersion → 0.3.14`).
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
