@@ -1482,7 +1482,13 @@ Hard rules:
     {
         writer.WriteLine("# Guide prompt matrix");
         writer.WriteLine();
-        writer.WriteLine("Canonical matrix of the four operational modes.");
+        writer.WriteLine("Canonical matrix of the four operational modes (timer-loop based).");
+        writer.WriteLine();
+        writer.WriteLine("> There is also an OPTIONAL, preview agmsg **orchestrator-message mode** where a single");
+        writer.WriteLine("> scheduled orchestrator paces loopless implementation/review receivers over agmsg instead of");
+        writer.WriteLine("> independent timers. It does not replace these timer-loop modes; the two must not run for the");
+        writer.WriteLine("> same domain/repo at once. Generate its setup/startup/troubleshooting guidance with");
+        writer.WriteLine("> `intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> --agent <a> --format markdown`.");
         writer.WriteLine();
 
         foreach (var entry in entries)

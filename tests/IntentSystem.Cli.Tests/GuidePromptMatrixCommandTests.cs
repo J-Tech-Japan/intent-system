@@ -25,6 +25,10 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("host-loop", output, StringComparison.Ordinal);
         Assert.Contains("child-oneshot", output, StringComparison.Ordinal);
         Assert.Contains("host-oneshot", output, StringComparison.Ordinal);
+        // G508: the optional agmsg orchestrator-message mode is discoverable from
+        // the prompt matrix, and the timer-loop modes are not removed.
+        Assert.Contains("orchestrator-message mode", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli guide orchestrator-thread", output, StringComparison.Ordinal);
     }
 
     [Fact]
