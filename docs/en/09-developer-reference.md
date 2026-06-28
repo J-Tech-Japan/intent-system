@@ -224,11 +224,15 @@ emit `0.3.13` (which would collide with the stable release version).
 
 **`v0.3.12` shipped** (GitHub Release + NuGet) and the version policy was bumped
 to the `0.3.13` development line. The repository is now on the in-development
-**`0.3.13`** `nextVersion`; G506 (this packet) prepares the `v0.3.13` patch
-release — the next release is published by tagging `v0.3.13` once the
+**`0.3.13`** `nextVersion`; G506 (this packet) is **prepare-only** — it bumps the
+version metadata and docs and adds no publish steps. Once the version-bump merge
+lands on `main` and the
 [release-readiness gate](release-notes-v0.3.13.md#release-readiness-gate-g506)
-passes. Preparing the release does not cut it. Full changelog and operator
-checklist: [release-notes-v0.3.13.md](release-notes-v0.3.13.md).
+holds, the **existing release automation cuts and publishes `v0.3.13`
+automatically** (binaries, `.nupkg`, GitHub Release, and NuGet), exactly as
+v0.3.11 and v0.3.12 were published — no manual tag or GitHub Release creation is
+required. Full changelog and operator checklist:
+[release-notes-v0.3.13.md](release-notes-v0.3.13.md).
 
 **To ship in `v0.3.13` (changes since `v0.3.12`) — orchestrator-mode preview
 patch fix:**
@@ -242,7 +246,8 @@ patch fix:**
   hardened, with the timer-loop mode fully supported and unchanged. See
   [Agent-message orchestration](12-agent-message-orchestration.md).
 
-**Release-readiness verification (run before tagging the next `v0.3.13`):**
+**Release-readiness verification (run before merging the `v0.3.13` version
+bump):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
@@ -262,9 +267,9 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-The official release is then cut by publishing a GitHub Release tagged `v0.3.13`;
-the release workflow passes `-p:Version=0.3.13` (which wins over the local
-default). After the release publishes, apply the post-release `eng/version.json`
+After the version-bump merge lands on `main`, the release automation cuts and
+publishes `v0.3.13` (binaries, `.nupkg`, GitHub Release, and NuGet) without a
+manual tag. Once it has published, apply the post-release `eng/version.json`
 bump above (`stableVersion → 0.3.13`, `nextVersion → 0.3.14`).
 
 ### Re-creating a deleted release tag (`v0.3.3`)

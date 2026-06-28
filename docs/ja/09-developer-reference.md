@@ -214,10 +214,13 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 
 **`v0.3.12` は publish 済み**（GitHub Release + NuGet）で、バージョンポリシーは
 `0.3.13` 開発ラインにバンプされました。リポジトリは現在 in-development の **`0.3.13`**
-`nextVersion` 上にあり、G506（本パケット）が `v0.3.13` パッチリリースを準備します。次のリリースは
-[リリース準備ゲート](release-notes-v0.3.13.md#リリース準備ゲート-g506)を通過後に `v0.3.13`
-タグ付けで publish されます。準備はリリースを cut しません。完全な changelog と operator
-チェックリスト: [release-notes-v0.3.13.md](release-notes-v0.3.13.md)。
+`nextVersion` 上にあり、G506（本パケット）は **prepare-only** です — version メタデータと docs を
+バンプするだけで publish ステップを追加しません。version-bump マージが `main` に入り、
+[リリース準備ゲート](release-notes-v0.3.13.md#リリース準備ゲート-g506)が成り立つと、**既存の
+release automation が `v0.3.13` を自動的に cut・publish** します（バイナリ・`.nupkg`・GitHub
+Release・NuGet）。v0.3.11・v0.3.12 と同じ方式で、手動のタグ付けや GitHub Release 作成は不要です。
+完全な changelog と operator チェックリスト:
+[release-notes-v0.3.13.md](release-notes-v0.3.13.md)。
 
 **`v0.3.13` で出荷予定（`v0.3.12` 以降の変更）— orchestrator モードプレビューのパッチ修正:**
 
@@ -229,7 +232,7 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
   timer-loop モードは完全サポート・不変です。
   [エージェントメッセージオーケストレーション](12-agent-message-orchestration.md) を参照。
 
-**リリース準備の検証（次の `v0.3.13` タグ付け前に実行）:**
+**リリース準備の検証（`v0.3.13` version bump のマージ前に実行）:**
 
 ```bash
 cat eng/version.json   # stableVersion 0.3.12（公開済み）, nextVersion 0.3.13（リリース対象）
@@ -242,8 +245,8 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
-公式リリースは `v0.3.13` タグの GitHub Release publish で cut され、リリースワークフローが
-`-p:Version=0.3.13` を渡します（ローカルデフォルトより優先）。publish 後、上記のリリース後
+version-bump マージが `main` に入ると、release automation が手動タグなしで `v0.3.13` を
+cut・publish します（バイナリ・`.nupkg`・GitHub Release・NuGet）。publish 後、上記のリリース後
 `eng/version.json` バンプ（`stableVersion → 0.3.13`, `nextVersion → 0.3.14`）を適用します。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成

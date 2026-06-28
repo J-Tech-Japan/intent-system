@@ -1,7 +1,11 @@
 # Release Notes — intent-cli v0.3.13
 
-> **Release checklist for maintainers:** see [Creating the v0.3.13 GitHub Release](#creating-the-v0313-github-release).
-> **Do NOT tag until the [release-readiness gate](#release-readiness-gate-g506) passes.**
+> **Release model:** v0.3.13 is cut and published **automatically** by the
+> release automation when the version-bump merge lands on `main` (the same way
+> v0.3.11 and v0.3.12 were published). This packet is **prepare-only**: it bumps
+> version metadata and docs and adds **no** publish steps. See the
+> [pre-merge release-readiness gate](#release-readiness-gate-g506) and the
+> [post-merge automated release](#post-merge-automated-release-of-v0313).
 
 ## What's in v0.3.13
 
@@ -62,19 +66,20 @@ existing timer-loop setups are unaffected.
 
 ## Release-readiness gate (G506)
 
-Do not create the `v0.3.13` tag/release until ALL of the following hold
-(this gate fails closed — if any item is unmet, stop and do not tag):
+These items must hold **before the version-bump merge lands on `main`**, because
+that merge triggers the automated release. This gate fails closed — if any item
+is unmet, do not merge the version bump yet.
 
 - [ ] Every release-bound packet is **complete and its PR merged to `main`**:
       G505 (and G506 this prep). Confirm on the host/review side via the host
       queue-state / GitHub PR state — the child implementation loop must not read
       parent queue-state, so this is a host-owned precondition.
 - [ ] No open intent-system PR or WIP packet intended for this release is
-      accidentally skipped (check the host queue / open PR list before tagging).
-- [ ] `eng/version.json` `nextVersion` is `0.3.13` (the intended release version)
-      and matches the tag to be created (`v0.3.13`). The release workflow derives
-      the package version from the tag; `-p:Version=` overrides the policy-derived
-      default in `src/IntentSystem.Cli/IntentSystem.Cli.csproj`.
+      accidentally skipped (check the host queue / open PR list before merge).
+- [ ] `eng/version.json` `nextVersion` is `0.3.13` (the intended release
+      version). The release automation derives the package version for the cut
+      from this version bump; `src/IntentSystem.Cli/IntentSystem.Cli.csproj`
+      derives its default from the same policy.
 - [ ] Package metadata is correct: `PackageId = JTechJapan.IntentSystem.Cli`,
       `RepositoryUrl` / `PackageProjectUrl` point to
       `https://github.com/J-Tech-Japan/intent-system`,
@@ -86,34 +91,34 @@ Do not create the `v0.3.13` tag/release until ALL of the following hold
 - [ ] **Main CI is green** (`Build and test (source contract)`) on the release
       commit, and the **preview-pack** workflow is green.
 
-## Creating the v0.3.13 GitHub Release
+## Post-merge automated release of v0.3.13
 
-1. Confirm the [release-readiness gate](#release-readiness-gate-g506) — do not
-   proceed if any item is unmet.
-2. Tag the release commit: `git tag v0.3.13 && git push origin v0.3.13`.
-3. The `release.yml` workflow fires and builds binaries, `.nupkg`, and
-   checksums (version derived from the tag). Wait for it to complete green.
-4. The workflow creates the GitHub Release draft. Review it, paste the content
-   of this file as the release body, and publish.
-5. Confirm the NuGet publish step pushed `JTechJapan.IntentSystem.Cli 0.3.13`.
-6. Post-release verification checklist:
-   - [ ] NuGet.org package page links all resolve correctly.
-   - [ ] GitHub release asset links (`.tar.gz`, `.zip`, `.exe`, `.nupkg`) are
-         accessible.
-   - [ ] `.sha256` checksums match the downloaded artifacts.
-   - [ ] `dotnet tool update -g JTechJapan.IntentSystem.Cli` (or
-         `dotnet tool install -g JTechJapan.IntentSystem.Cli --version 0.3.13`)
-         then `intent-cli --version` reports `0.3.13`.
-   - [ ] Binary artifact smoke check: download the platform archive, verify its
-         `.sha256`, extract, and run `./intent-cli --version` → `0.3.13`.
-   - [ ] **Orchestrator guide smoke** (G505): `intent-cli guide
-         orchestrator-thread --domain <d> --target-repo <repo> --agent <agent>
-         --format markdown` renders the four logical roles and the optional
-         design/human receiver section.
-   - [ ] **Design receiver inbox smoke** (G505): the rendered guide includes the
-         minimal manual inbox trigger prompt and the pre-start `inbox.sh` note for
-         the design thread.
-   - [ ] Local preview/dry-run version metadata uses the next development line
-         after `0.3.13` (bump `eng/version.json` per the post-release step in
-         [Version flow](09-developer-reference.md#version-flow)):
-         `stableVersion → 0.3.13`, `nextVersion → 0.3.14`.
+This packet does **not** publish the release and adds **no** publish steps. Once
+the version-bump merge lands on `main` and the readiness gate above holds, the
+**existing release automation cuts and publishes `v0.3.13` automatically** —
+building the binaries, `.nupkg`, and checksums and publishing the GitHub Release
+and NuGet package — exactly as v0.3.11 and v0.3.12 were published. No manual
+tagging or GitHub Release creation is required.
+
+Post-release verification (after the automation has published):
+
+- [ ] NuGet.org package page links all resolve correctly.
+- [ ] GitHub release asset links (`.tar.gz`, `.zip`, `.exe`, `.nupkg`) are
+      accessible.
+- [ ] `.sha256` checksums match the downloaded artifacts.
+- [ ] `dotnet tool update -g JTechJapan.IntentSystem.Cli` (or
+      `dotnet tool install -g JTechJapan.IntentSystem.Cli --version 0.3.13`)
+      then `intent-cli --version` reports `0.3.13`.
+- [ ] Binary artifact smoke check: download the platform archive, verify its
+      `.sha256`, extract, and run `./intent-cli --version` → `0.3.13`.
+- [ ] **Orchestrator guide smoke** (G505): `intent-cli guide
+      orchestrator-thread --domain <d> --target-repo <repo> --agent <agent>
+      --format markdown` renders the four logical roles and the optional
+      design/human receiver section.
+- [ ] **Design receiver inbox smoke** (G505): the rendered guide includes the
+      minimal manual inbox trigger prompt and the pre-start `inbox.sh` note for
+      the design thread.
+- [ ] Local preview/dry-run version metadata uses the next development line
+      after `0.3.13` (bump `eng/version.json` per the post-release step in
+      [Version flow](09-developer-reference.md#version-flow)):
+      `stableVersion → 0.3.13`, `nextVersion → 0.3.14`.
