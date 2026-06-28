@@ -217,6 +217,40 @@ check never clears a permission prompt, cancels/resets work, mutates labels, or
 runs destructive git. (Timer-loop mode is unaffected — this applies only to
 orchestrator-message receivers.)
 
+## Design-thread escalation filter
+
+The **design thread** is the primary human communication surface. Humans mainly
+talk to the design thread; implementation and review run through the
+orchestrator, and only **human-needed** decisions return to the design thread.
+This is a **noise filter, not a failure filter** — never hide a failure that
+needs a human.
+
+Kept internal by default (no design-thread message):
+
+- normal progress / accepted / in-flight delegations;
+- CI waiting (pending checks are an active wait state);
+- successful implementation (PR opened, CI green);
+- successful review / approval;
+- closeout of an already-approved PR;
+- idle wakes with no actionable change.
+
+Escalate to the design thread only when:
+
+- clarification is required (ambiguous issue/packet contract);
+- product intent ambiguity or a design decision;
+- permission / credentials / security;
+- a destructive action would be required;
+- repeated no-reply / no-progress after the safe stale-thread health check;
+- unresolved canonical state (intent-cli / GitHub facts conflict or are missing);
+- a release / public publish decision;
+- an explicit policy decision the operator owns.
+
+A design escalation carries structured evidence and the exact decision needed:
+
+```json
+{"to":"design","type":"escalation","ref":"issue#<n>|pr#<n>","reason":"<clarification|product-ambiguity|permission|destructive|no-progress|canonical-conflict|release|policy>","evidence":"<intent-cli/GitHub facts>","decision_needed":"<the exact decision or action requested>"}
+```
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for

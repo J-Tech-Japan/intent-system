@@ -201,6 +201,39 @@ status-request は receiver に次のいずれかで返信するよう求めま�
 クリア、作業の cancel/reset、label の変更、破壊的 git を決して行いません。（timer-loop モードは
 影響を受けません — これは orchestrator-message の receiver にのみ適用されます。）
 
+## 設計スレッドへのエスカレーションフィルター
+
+**設計スレッド** が人間との主なコミュニケーション surface です。人間は主に設計スレッドと
+やり取りし、実装とレビューは orchestrator 経由で動きます。設計スレッドに戻すのは
+**人間が必要な** 判断のみです。これは **ノイズフィルターであり、失敗フィルターではありません** —
+人間が必要な失敗を決して隠しません。
+
+デフォルトで内部に留める（設計スレッドへ送らない）:
+
+- 通常の進捗 / accepted / in-flight な委譲;
+- CI 待ち（pending チェックはアクティブな待ち状態）;
+- 成功した実装（PR open、CI green）;
+- 成功したレビュー / 承認;
+- 承認済み PR の closeout;
+- 実行可能な変化のない idle wake。
+
+設計スレッドへエスカレーションするのは次の場合のみ:
+
+- clarification が必要（issue/packet contract が曖昧）;
+- プロダクト intent の曖昧さ、または設計判断;
+- permission / 認証情報 / セキュリティ;
+- 破壊的な操作が必要;
+- 安全な stale-thread ヘルスチェック後の繰り返し no-reply / 無進捗;
+- 未解決の canonical state（intent-cli / GitHub の事実が矛盾または欠落）;
+- リリース / 公開 publish の判断;
+- オペレーターが所有する明示的なポリシー判断。
+
+設計エスカレーションは構造化された evidence と必要な判断を運びます:
+
+```json
+{"to":"design","type":"escalation","ref":"issue#<n>|pr#<n>","reason":"<clarification|product-ambiguity|permission|destructive|no-progress|canonical-conflict|release|policy>","evidence":"<intent-cli/GitHub facts>","decision_needed":"<the exact decision or action requested>"}
+```
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:
