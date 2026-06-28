@@ -294,6 +294,30 @@ monitor の設定だけでは **不十分** です。team 登録 + delivery mode
 パスがアクティブになる前に送られたメッセージを拾わないことがあります。実際の作業を送る前に、
 各 receiver が ping/ack で **ready** であることを確認してください。
 
+### 起動順序（startup order）
+
+次の順序を厳密に守ってください — send は delivery ではありません:
+
+1. 3 つのロールを team に join する（`join.sh`）。
+2. 各ロールの delivery mode を設定する（`delivery.sh set`）。
+3. receiver の CLI セッション（implementation・review・orchestrator）を起動/再起動する。
+4. 何かを送る前に、各 receiver セッションで monitor/bridge がアタッチされるのを待つ。
+5. セッションがアクティブになった **後** にのみ各 receiver へ ping を送る。
+6. 進む前に ack を要求する — または `inbox.sh` で受信を手動確認する。
+7. その後にのみ最初の実際の委譲を送る。
+
+> **send-before-ready:** receiver が ready になる前に送ったメッセージは agmsg history に保存されて
+> いても、新しく起動/再起動したセッションには **可視に delivery されない** ことがあります。ack の
+> ないメッセージは **receiver-not-ready** であり、成功した委譲ではありません。ack 後に resend するか、
+> receiver に `inbox.sh` で queue を読ませて復旧します。
+
+receiver が initial メッセージ送信 **後** に launch された場合に送る、貼り付け可能なオペレーター
+メッセージ:
+
+```text
+Heads up: your session started AFTER I sent earlier messages, so they may be in agmsg history but not visibly delivered to you. Read your queue now with `inbox.sh` to catch anything you missed. Any prior unacked message is receiver-not-ready (NOT a delegation you must act on) — reply `ack` to this ping and I will (re)send the current delegation.
+```
+
 readiness 状態:
 
 - **registered** — ロールが team に参加した（`team.sh` に表示される）。

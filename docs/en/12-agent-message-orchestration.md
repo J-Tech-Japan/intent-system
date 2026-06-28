@@ -318,6 +318,34 @@ launched or restarted session may not pick up messages sent before its
 monitor/watch path was active. Confirm each receiver is **ready** with a
 ping/ack before sending real work.
 
+### Startup order
+
+Follow this order strictly — a send is not a delivery:
+
+1. Join the three roles to the team (`join.sh`).
+2. Set the delivery mode for each role (`delivery.sh set`).
+3. Launch or restart the receiver CLI sessions (implementation, review, and the
+   orchestrator).
+4. Wait for the monitor/bridge to attach in each receiver session before
+   sending anything.
+5. Send a ping to each receiver only **after** its session is active.
+6. Require an ack — or confirm receipt manually with `inbox.sh` — before
+   proceeding.
+7. Only then send the first real delegation.
+
+> **Send-before-ready:** messages sent before a receiver is ready may be stored
+> in agmsg history but **not** visibly delivered to a freshly launched/restarted
+> session. An unacked message is **receiver-not-ready**, not a successful
+> delegation. Recover by resending after the ack, or have the receiver read its
+> queue with `inbox.sh`.
+
+Copy-paste operator message when receivers were launched **after** the initial
+messages were sent:
+
+```text
+Heads up: your session started AFTER I sent earlier messages, so they may be in agmsg history but not visibly delivered to you. Read your queue now with `inbox.sh` to catch anything you missed. Any prior unacked message is receiver-not-ready (NOT a delegation you must act on) — reply `ack` to this ping and I will (re)send the current delegation.
+```
+
 Readiness states:
 
 - **registered** — the role joined the team (it appears in `team.sh`).

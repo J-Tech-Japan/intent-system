@@ -804,6 +804,69 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_ReceiverStartupOrder_IsNumbered_AndWarnsSendBeforeReady_G502()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("### Startup order", output, StringComparison.Ordinal);
+        // The numbered order: join → delivery → launch/restart → wait attach → ping → ack/inbox → delegate.
+        Assert.Contains("1. Join the three roles to the team", output, StringComparison.Ordinal);
+        Assert.Contains("2. Set the delivery mode", output, StringComparison.Ordinal);
+        Assert.Contains("3. Launch or restart the receiver CLI sessions", output, StringComparison.Ordinal);
+        Assert.Contains("4. Wait for the monitor/bridge to attach", output, StringComparison.Ordinal);
+        Assert.Contains("5. Send a ping to each receiver only AFTER its session is active", output, StringComparison.Ordinal);
+        Assert.Contains("6. Require an ack from each receiver", output, StringComparison.Ordinal);
+        Assert.Contains("7. Only then send the first real delegation", output, StringComparison.Ordinal);
+        // Send-before-ready failure mode + recovery.
+        Assert.Contains("Send-before-ready:", output, StringComparison.Ordinal);
+        Assert.Contains("stored in agmsg history but NOT visibly delivered", output, StringComparison.Ordinal);
+        Assert.Contains("receiver-NOT-READY, not a successful delegation", output, StringComparison.Ordinal);
+        Assert.Contains("`inbox.sh`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_ReceiverStartupOrder_HasSevenStepsAndWarning_G502()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var readiness = doc.RootElement.GetProperty("receiver_readiness");
+
+        var order = readiness.GetProperty("startup_order").EnumerateArray().Select(s => s.GetString()!).ToArray();
+        Assert.Equal(7, order.Length);
+        // First step joins; last step delegates — ordering is meaningful.
+        Assert.StartsWith("Join the three roles", order[0], StringComparison.Ordinal);
+        Assert.Contains("real delegation", order[^1], StringComparison.Ordinal);
+
+        var warning = readiness.GetProperty("send_before_ready_warning").GetString()!;
+        Assert.Contains("not a successful delegation", warning, StringComparison.Ordinal);
+        Assert.Contains("inbox.sh", warning, StringComparison.Ordinal);
+
+        // A short copy-paste operator message for receivers launched after the
+        // initial messages were sent (packet AC).
+        var template = readiness.GetProperty("recovery_message_template").GetString()!;
+        Assert.Contains("session started AFTER I sent earlier messages", template, StringComparison.Ordinal);
+        Assert.Contains("inbox.sh", template, StringComparison.Ordinal);
+        Assert.Contains("ack", template, StringComparison.Ordinal);
+        Assert.Contains("receiver-not-ready", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_HasCopyPasteRecoveryMessage_ForLateLaunchedReceivers_G502()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("Copy-paste operator message when receivers were launched after the initial messages were sent", output, StringComparison.Ordinal);
+        Assert.Contains("Heads up: your session started AFTER I sent earlier messages", output, StringComparison.Ordinal);
+        Assert.Contains("reply `ack`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();
