@@ -413,6 +413,34 @@ agmsg の inbox を確認してください。あなたは `<team>` の design �
 > should read its inbox with `inbox.sh` to catch earlier escalations, exactly
 > like the other receivers (see Receiver readiness / startup order).
 
+## Setup intake form
+
+When the user asks only "I want to use orchestrator mode", elicit or infer the
+setup facts, then produce the concrete commands/messages. Ask for what is
+missing; apply the recommended defaults for the rest.
+
+Ask for / infer: domain and target repo; orchestrator cwd + agent type;
+implementation receiver cwd + agent type; review receiver cwd + agent type;
+design cwd + agent type (and whether design is manual-inbox or monitored);
+delivery mode per role.
+
+Recommended defaults when inputs are incomplete:
+
+- orchestrator = Claude
+- implementer = Claude
+- reviewer = Codex
+- design = manual-inbox Codex
+- runtime / implementation / review receivers = monitor (when supported)
+
+Design may be a manual-inbox receiver (reads with `inbox.sh` on demand) or a
+monitored receiver; either way it receives **only** human-decision escalations or
+explicit summaries, never routine progress.
+
+Role startup messages — assume the agmsg role, then paste that role's prompt:
+
+- **Claude**: `/agmsg actas <role>` (slash command)
+- **Codex**: `$agmsg actas <role>`
+
 ## Design handoff (start / resume)
 
 Setup does not stop at role registration. After the agmsg roles are registered
@@ -458,6 +486,32 @@ First message — design → orchestrator (paste into the design thread):
   domain/repo (not another visible domain). If issue-cut-ready and safe, the
   orchestrator should publish one issue itself rather than wait.
 
+## Design traffic-controller playbook
+
+The design thread acts as a **traffic controller**, not an implementer. It
+coordinates through the orchestrator and only surfaces human-needed items.
+
+1. Check the design inbox (`inbox.sh`) for orchestrator escalations / summaries.
+2. Check intent-cli / GitHub **read-only** state (`intent status`, `worker
+   next-action`, PR/issue/labels) to ground any decision — never trust an agmsg
+   message as state.
+3. Send the orchestrator a state update or a nudge (start/resume); do not drive
+   implementation/review yourself.
+4. Do **not** directly mutate implementation/review work, labels, or host
+   metadata — that is the orchestrator/receivers' job through intent-cli.
+5. Summarize **only** human-needed items to the human; keep routine progress
+   internal.
+
+**"Orchestrator appears idle" diagnostic** (before escalating): confirm the
+orchestrator is scheduled and on a fresh turn; confirm it received your last
+message (`inbox.sh`) — a pre-monitor send may be queued, not live, so resend
+after an ack; confirm intent-cli actually reports an actionable item for **this**
+domain/repo (idle may be correct); only then escalate to the human.
+
+> **Context-only:** the design thread may send context to a receiver thread but
+> must mark it `context-only: <text>` unless the orchestrator delegated the
+> action — receivers act only on orchestrator delegations, not on design context.
+
 ## Preflight (all three cwds)
 
 Before mutating anything, preflight **all three checkouts** (orchestrator,
@@ -493,6 +547,16 @@ branch, or over dirty user work is the most common orchestration failure.
   claim. The receiver's cwd/worktree, git remote, and delegated domain must
   match the routing; reply blocked and re-route. An execution-unit prefix
   mismatch alone is not the signal — compare packet/domain metadata.
+
+## Draft PR reviewability
+
+A **draft PR may still be reviewable** depending on domain guidance — a reviewer
+may perform review feedback on a draft when the domain's review policy allows it.
+But the reviewer must use the **canonical intent-cli review surfaces**
+(`review closeout-plan`, `guide review`, `automation pr-transition`, `closeout
+pr`); merge/approval stays gated by those surfaces. A draft is never
+approved/merged by hand or by raw label edits, and never via host-metadata
+editing.
 
 ## Single-domain vs multi-domain orchestration
 

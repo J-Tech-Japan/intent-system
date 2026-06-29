@@ -381,6 +381,32 @@ agmsg の inbox を確認してください。あなたは `<team>` の design �
 > で inbox を読んで earlier なエスカレーションを拾うべきです。他の receiver と同様です
 > （Receiver readiness / startup order 参照）。
 
+## セットアップ intake フォーム
+
+ユーザーが「orchestrator モードを使いたい」とだけ言った場合、セットアップ事実を引き出すか推論し、
+その後に具体的なコマンド/メッセージを生成します。不足分を尋ね、残りは推奨デフォルトを適用します。
+
+尋ねる / 推論する: domain と target repo、orchestrator の cwd + agent type、implementation
+receiver の cwd + agent type、review receiver の cwd + agent type、design の cwd + agent type
+（design が manual-inbox か monitored か）、ロールごとの delivery mode。
+
+入力が不完全なときの推奨デフォルト:
+
+- orchestrator = Claude
+- implementer = Claude
+- reviewer = Codex
+- design = manual-inbox Codex
+- runtime / implementation / review receivers = monitor（サポートされる場合）
+
+design は manual-inbox receiver（オンデマンドに `inbox.sh` で読む）でも monitored receiver でも
+構いませんが、いずれにせよ受け取るのは **人間が必要な** エスカレーションか明示的なサマリーのみで、
+ルーチンな進捗は受け取りません。
+
+ロール起動メッセージ — agmsg ロールを引き受け、その後そのロールのプロンプトを貼り付ける:
+
+- **Claude**: `/agmsg actas <role>`（スラッシュコマンド）
+- **Codex**: `$agmsg actas <role>`
+
 ## design ハンドオフ（start / resume）
 
 セットアップはロール登録で終わりません。agmsg ロールが登録されて ready になった後、**design
@@ -419,6 +445,29 @@ resume）します。その後 orchestrator がループを自律的に駆動し
   実行可能項目を報告しているか（host repo に見える別ドメインではない）を確認する。issue-cut-ready で
   安全なら、orchestrator は待たずに自分で 1 つ issue を publish すべき。
 
+## design traffic-controller プレイブック
+
+design スレッドは実装者ではなく **traffic controller**（交通整理役）として振る舞います。
+orchestrator を通じて調整し、人間が必要な項目だけを surface します。
+
+1. design inbox（`inbox.sh`）を確認し、orchestrator のエスカレーション/サマリーを読む。
+2. intent-cli / GitHub の **read-only** state（`intent status`、`worker next-action`、PR/issue/
+   labels）を確認して判断の根拠にする — agmsg メッセージを state として信用しない。
+3. orchestrator に state 更新や nudge（start/resume）を送る。implementation/review を自分で
+   駆動しない。
+4. implementation/review の作業・labels・host メタデータを直接 **変更しない** — それは
+   orchestrator/receivers が intent-cli 経由で行う仕事。
+5. 人間が必要な項目 **だけ** を人間に要約する。ルーチンな進捗は内部に留める。
+
+**「orchestrator が idle に見える」診断**（エスカレーション前）: orchestrator がスケジュールされ
+新しい turn にあるか確認。最後のメッセージを受信したか確認（`inbox.sh`）— pre-monitor の送信は
+queue 済みでライブでない可能性があるので ack 後に resend。intent-cli が **この** domain/repo に
+実行可能項目を報告しているか確認（idle が正しい場合もある）。その後にのみ人間にエスカレーション。
+
+> **context-only:** design スレッドは receiver スレッドに context を送ってよいが、orchestrator が
+> アクションを委譲していない限り `context-only: <text>` とマークしなければならない — receiver は
+> design の context ではなく orchestrator の委譲にのみ反応する。
+
 ## preflight（3 つの cwd すべて）
 
 何かを変更する前に、**3 つのチェックアウト全部**（orchestrator・implementation・review の cwd）を
@@ -449,6 +498,15 @@ preflight します。receiver が誤った repo・誤ったブランチ・dirty
 - **receiver の cwd が委譲と異なる repo/domain を見る** — 停止。claim しない。receiver の cwd/worktree・
   git remote・委譲された domain がルーティングと一致する必要がある。blocked を返して re-route する。
   execution-unit prefix の不一致だけでは signal にならない — packet/domain メタデータを比較する。
+
+## draft PR のレビュー可否
+
+**draft PR は domain guidance によってはレビュー可能** です — domain の review policy が許す場合、
+reviewer は draft に対してレビューフィードバックを行ってよいです。ただし reviewer は **canonical な
+intent-cli review surface**（`review closeout-plan`、`guide review`、`automation pr-transition`、
+`closeout pr`）を使わなければなりません。merge/approval はそれらの surface で gate され続けます。
+draft が手作業や生の label 編集で approve/merge されることはなく、host メタデータ編集を経ることも
+ありません。
 
 ## single-domain と multi-domain のオーケストレーション
 

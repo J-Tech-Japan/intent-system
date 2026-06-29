@@ -275,6 +275,12 @@ internal static class GuideOrchestratorThreadCommand
                     },
                 },
             },
+            DraftPrReviewability =
+                "A DRAFT PR may still be reviewable depending on domain guidance — a reviewer MAY perform review "
+                + "feedback on a draft when the domain's review policy allows it. But the reviewer must use the canonical "
+                + "intent-cli review surfaces (`review closeout-plan`, `guide review`, `automation pr-transition`, "
+                + "`closeout pr`); merge/approval stays gated by those surfaces. A draft is never approved/merged by hand "
+                + "or by raw label edits, and never via host-metadata editing.",
             NextSlicePublication = new OrchestratorNextSlicePublication
             {
                 Summary =
@@ -549,6 +555,75 @@ internal static class GuideOrchestratorThreadCommand
                     Symptom = "Orchestrator idle despite a packet existing",
                     Action = "Confirm the orchestrator received the design start/resume message (`inbox.sh` on the orchestrator) and that `worker next-action` / `intent status` report an actionable item for THIS domain/repo (not another domain visible in the host repo). If issue-cut-ready and safe, the orchestrator should publish one issue itself rather than wait.",
                 },
+            },
+            IntakeForm = new OrchestratorIntakeForm
+            {
+                Summary =
+                    "When the user asks only \"I want to use orchestrator mode\", elicit or infer the setup facts, then "
+                    + "produce the concrete commands/messages (see Setup intake / Setup). Ask for what is missing; apply "
+                    + "the recommended defaults for the rest.",
+                Questions = new[]
+                {
+                    "domain and target repo",
+                    "orchestrator cwd + agent type",
+                    "implementation receiver cwd + agent type",
+                    "review receiver cwd + agent type",
+                    "design cwd + agent type, and whether design is manual-inbox or monitored",
+                    "delivery mode per role (monitored / streamed inbox watch, or manual inbox)",
+                },
+                Defaults = new[]
+                {
+                    "orchestrator = Claude",
+                    "implementer = Claude",
+                    "reviewer = Codex",
+                    "design = manual-inbox Codex",
+                    "runtime / implementation / review receivers = monitor (when supported)",
+                },
+                DesignDeliveryNote =
+                    "Design may be a manual-inbox receiver (reads with `inbox.sh` on demand) or a monitored receiver; "
+                    + "either way it receives ONLY human-decision escalations or explicit summaries, never routine "
+                    + "progress.",
+                RoleStartupMessages = new[]
+                {
+                    new OrchestratorRoleStartup
+                    {
+                        AgentType = "claude",
+                        ActasInvocation = "/agmsg actas <role>",
+                        Note = "In a Claude session, paste the slash-command form to assume the agmsg role, then paste that role's prompt from the Thread prompts section.",
+                    },
+                    new OrchestratorRoleStartup
+                    {
+                        AgentType = "codex",
+                        ActasInvocation = "$agmsg actas <role>",
+                        Note = "In a Codex session, paste the `$agmsg actas <role>` form to assume the agmsg role, then paste that role's prompt from the Thread prompts section.",
+                    },
+                },
+            },
+            DesignTrafficController = new OrchestratorDesignTrafficController
+            {
+                Summary =
+                    "The design thread acts as a TRAFFIC CONTROLLER, not an implementer. It coordinates through the "
+                    + "orchestrator and only surfaces human-needed items — it does not drive implementation/review or "
+                    + "mutate workflow state itself.",
+                Playbook = new[]
+                {
+                    "Check the design inbox (`inbox.sh`) for orchestrator escalations / summaries.",
+                    "Check intent-cli / GitHub READ-ONLY state (`intent status`, `worker next-action`, PR/issue/labels) to ground any decision — never trust an agmsg message as state.",
+                    "Send the orchestrator a state update or a nudge (start/resume); do not drive implementation/review yourself.",
+                    "Do NOT directly mutate implementation/review work, labels, or host metadata — that is the orchestrator/receivers' job through intent-cli.",
+                    "Summarize ONLY human-needed items to the human; keep routine progress internal.",
+                },
+                IdleDiagnostic = new[]
+                {
+                    "Confirm the orchestrator is actually scheduled and on a fresh turn (its `/loop` or Codex automation is running).",
+                    "Confirm it received your last message (`inbox.sh` on the orchestrator) — a pre-monitor send may be queued, not delivered live; resend after an ack.",
+                    "Confirm intent-cli actually reports an actionable item for THIS domain/repo (`worker next-action` / `intent status`) — idle may be correct (nothing to do).",
+                    "Only after these, escalate to the human as a structured decision.",
+                },
+                ContextOnlyRule =
+                    "The design thread MAY send context to a receiver thread, but MUST mark it context-only (e.g. "
+                    + "`context-only: <text>`) unless the orchestrator delegated the action — receivers act only on "
+                    + "orchestrator delegations, not on design context.",
             },
             WorktreeManagement = new OrchestratorWorktreeManagement
             {
@@ -1269,6 +1344,34 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"> **Warning:** {guide.Setup.Warning}");
         writer.WriteLine();
 
+        writer.WriteLine("## Setup intake form");
+        writer.WriteLine();
+        writer.WriteLine(guide.IntakeForm.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Ask for / infer");
+        writer.WriteLine();
+        foreach (var question in guide.IntakeForm.Questions)
+        {
+            writer.WriteLine($"- {question}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Recommended defaults (when inputs are incomplete)");
+        writer.WriteLine();
+        foreach (var fallback in guide.IntakeForm.Defaults)
+        {
+            writer.WriteLine($"- {fallback}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **design delivery** — {guide.IntakeForm.DesignDeliveryNote}");
+        writer.WriteLine();
+        writer.WriteLine("### Role startup messages (assume the agmsg role)");
+        writer.WriteLine();
+        foreach (var startup in guide.IntakeForm.RoleStartupMessages)
+        {
+            writer.WriteLine($"- **{startup.AgentType}** — `{startup.ActasInvocation}` — {startup.Note}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Preflight (all three cwds)");
         writer.WriteLine();
         writer.WriteLine(guide.Preflight.Summary);
@@ -1398,6 +1501,11 @@ internal static class GuideOrchestratorThreadCommand
         {
             writer.WriteLine($"- **{state.State}** — {state.Routing}");
         }
+        writer.WriteLine();
+
+        writer.WriteLine("## Draft PR reviewability");
+        writer.WriteLine();
+        writer.WriteLine(guide.DraftPrReviewability);
         writer.WriteLine();
 
         writer.WriteLine("## Next-slice publication");
@@ -1563,6 +1671,27 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **autonomous publish** — {guide.DesignHandoff.AutonomousPublishRule}");
         writer.WriteLine($"- **escalation boundary** — {guide.DesignHandoff.EscalationBoundary}");
         writer.WriteLine($"- **design inbox workflow** — {guide.DesignHandoff.DesignInboxWorkflow}");
+        writer.WriteLine();
+
+        writer.WriteLine("## Design traffic-controller playbook");
+        writer.WriteLine();
+        writer.WriteLine(guide.DesignTrafficController.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Playbook");
+        writer.WriteLine();
+        for (var i = 0; i < guide.DesignTrafficController.Playbook.Count; i++)
+        {
+            writer.WriteLine($"{i + 1}. {guide.DesignTrafficController.Playbook[i]}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### \"Orchestrator appears idle\" diagnostic (before escalating)");
+        writer.WriteLine();
+        for (var i = 0; i < guide.DesignTrafficController.IdleDiagnostic.Count; i++)
+        {
+            writer.WriteLine($"{i + 1}. {guide.DesignTrafficController.IdleDiagnostic[i]}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"> **Context-only:** {guide.DesignTrafficController.ContextOnlyRule}");
         writer.WriteLine();
 
         writer.WriteLine("## Managed worktree cleanup");
@@ -1756,6 +1885,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("ci_wait_state")]
     public required OrchestratorCiWaitState CiWaitState { get; init; }
 
+    [JsonPropertyName("draft_pr_reviewability")]
+    public required string DraftPrReviewability { get; init; }
+
     [JsonPropertyName("next_slice_publication")]
     public required OrchestratorNextSlicePublication NextSlicePublication { get; init; }
 
@@ -1776,6 +1908,12 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("monitor_recovery")]
     public required IReadOnlyList<OrchestratorTroubleshooting> MonitorRecovery { get; init; }
+
+    [JsonPropertyName("intake_form")]
+    public required OrchestratorIntakeForm IntakeForm { get; init; }
+
+    [JsonPropertyName("design_traffic_controller")]
+    public required OrchestratorDesignTrafficController DesignTrafficController { get; init; }
 
     [JsonPropertyName("worktree_management")]
     public required OrchestratorWorktreeManagement WorktreeManagement { get; init; }
@@ -1911,6 +2049,51 @@ internal sealed record OrchestratorWorktreeManagement
 
     [JsonPropertyName("approval_policy_note")]
     public required string ApprovalPolicyNote { get; init; }
+}
+
+internal sealed record OrchestratorIntakeForm
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("questions")]
+    public required IReadOnlyList<string> Questions { get; init; }
+
+    [JsonPropertyName("defaults")]
+    public required IReadOnlyList<string> Defaults { get; init; }
+
+    [JsonPropertyName("design_delivery_note")]
+    public required string DesignDeliveryNote { get; init; }
+
+    [JsonPropertyName("role_startup_messages")]
+    public required IReadOnlyList<OrchestratorRoleStartup> RoleStartupMessages { get; init; }
+}
+
+internal sealed record OrchestratorRoleStartup
+{
+    [JsonPropertyName("agent_type")]
+    public required string AgentType { get; init; }
+
+    [JsonPropertyName("actas_invocation")]
+    public required string ActasInvocation { get; init; }
+
+    [JsonPropertyName("note")]
+    public required string Note { get; init; }
+}
+
+internal sealed record OrchestratorDesignTrafficController
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("playbook")]
+    public required IReadOnlyList<string> Playbook { get; init; }
+
+    [JsonPropertyName("idle_diagnostic")]
+    public required IReadOnlyList<string> IdleDiagnostic { get; init; }
+
+    [JsonPropertyName("context_only_rule")]
+    public required string ContextOnlyRule { get; init; }
 }
 
 internal sealed record OrchestratorDesignHandoff
