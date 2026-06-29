@@ -499,6 +499,15 @@ preflight します。receiver が誤った repo・誤ったブランチ・dirty
   git remote・委譲された domain がルーティングと一致する必要がある。blocked を返して re-route する。
   execution-unit prefix の不一致だけでは signal にならない — packet/domain メタデータを比較する。
 
+## draft PR のレビュー可否
+
+**draft PR は domain guidance によってはレビュー可能** です — domain の review policy が許す場合、
+reviewer は draft に対してレビューフィードバックを行ってよいです。ただし reviewer は **canonical な
+intent-cli review surface**（`review closeout-plan`、`guide review`、`automation pr-transition`、
+`closeout pr`）を使わなければなりません。merge/approval はそれらの surface で gate され続けます。
+draft が手作業や生の label 編集で approve/merge されることはなく、host メタデータ編集を経ることも
+ありません。
+
 ## single-domain と multi-domain のオーケストレーション
 
 host チェックアウトは正当に **複数** の intent ドメインを含み得ます（例:

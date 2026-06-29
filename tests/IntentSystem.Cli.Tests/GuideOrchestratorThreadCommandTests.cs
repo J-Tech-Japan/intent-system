@@ -1129,6 +1129,32 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_DraftPrReviewability_DocumentsDomainGatedReviewViaCanonicalSurfaces_G510()
+    {
+        var markdown = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Draft PR reviewability", markdown, StringComparison.Ordinal);
+        // A draft may still be reviewable depending on domain guidance.
+        Assert.Contains("DRAFT PR may still be reviewable depending on domain guidance", markdown, StringComparison.Ordinal);
+        // But review/merge/approval go through canonical intent-cli review surfaces.
+        Assert.Contains("canonical", markdown, StringComparison.Ordinal);
+        Assert.Contains("review closeout-plan", markdown, StringComparison.Ordinal);
+        Assert.Contains("closeout pr", markdown, StringComparison.Ordinal);
+        // No raw label / host-metadata editing.
+        Assert.Contains("never approved/merged by hand or by raw label edits", markdown, StringComparison.Ordinal);
+
+        using var writer = new StringWriter();
+        GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var note = doc.RootElement.GetProperty("draft_pr_reviewability").GetString()!;
+        Assert.Contains("reviewable depending on domain guidance", note, StringComparison.Ordinal);
+        Assert.Contains("review closeout-plan", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();

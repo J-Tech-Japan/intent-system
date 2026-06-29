@@ -275,6 +275,12 @@ internal static class GuideOrchestratorThreadCommand
                     },
                 },
             },
+            DraftPrReviewability =
+                "A DRAFT PR may still be reviewable depending on domain guidance — a reviewer MAY perform review "
+                + "feedback on a draft when the domain's review policy allows it. But the reviewer must use the canonical "
+                + "intent-cli review surfaces (`review closeout-plan`, `guide review`, `automation pr-transition`, "
+                + "`closeout pr`); merge/approval stays gated by those surfaces. A draft is never approved/merged by hand "
+                + "or by raw label edits, and never via host-metadata editing.",
             NextSlicePublication = new OrchestratorNextSlicePublication
             {
                 Summary =
@@ -1497,6 +1503,11 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Draft PR reviewability");
+        writer.WriteLine();
+        writer.WriteLine(guide.DraftPrReviewability);
+        writer.WriteLine();
+
         writer.WriteLine("## Next-slice publication");
         writer.WriteLine();
         writer.WriteLine(guide.NextSlicePublication.Summary);
@@ -1873,6 +1884,9 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("ci_wait_state")]
     public required OrchestratorCiWaitState CiWaitState { get; init; }
+
+    [JsonPropertyName("draft_pr_reviewability")]
+    public required string DraftPrReviewability { get; init; }
 
     [JsonPropertyName("next_slice_publication")]
     public required OrchestratorNextSlicePublication NextSlicePublication { get; init; }

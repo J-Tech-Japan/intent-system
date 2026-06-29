@@ -548,6 +548,16 @@ branch, or over dirty user work is the most common orchestration failure.
   match the routing; reply blocked and re-route. An execution-unit prefix
   mismatch alone is not the signal — compare packet/domain metadata.
 
+## Draft PR reviewability
+
+A **draft PR may still be reviewable** depending on domain guidance — a reviewer
+may perform review feedback on a draft when the domain's review policy allows it.
+But the reviewer must use the **canonical intent-cli review surfaces**
+(`review closeout-plan`, `guide review`, `automation pr-transition`, `closeout
+pr`); merge/approval stays gated by those surfaces. A draft is never
+approved/merged by hand or by raw label edits, and never via host-metadata
+editing.
+
 ## Single-domain vs multi-domain orchestration
 
 A host checkout can legitimately contain **several** intent domains (for
