@@ -1062,6 +1062,73 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_IntakeForm_HasQuestionsDefaultsAndActasMessages_G510()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Setup intake form", output, StringComparison.Ordinal);
+        // Questions elicited/inferred include design cwd/type + manual-inbox-vs-monitored.
+        Assert.Contains("### Ask for / infer", output, StringComparison.Ordinal);
+        Assert.Contains("orchestrator cwd + agent type", output, StringComparison.Ordinal);
+        Assert.Contains("design cwd + agent type, and whether design is manual-inbox or monitored", output, StringComparison.Ordinal);
+        Assert.Contains("delivery mode per role", output, StringComparison.Ordinal);
+        // Recommended defaults: orchestrator=Claude, implementer=Claude, reviewer=Codex, design=manual Codex, receivers=monitor.
+        Assert.Contains("orchestrator = Claude", output, StringComparison.Ordinal);
+        Assert.Contains("reviewer = Codex", output, StringComparison.Ordinal);
+        Assert.Contains("design = manual-inbox Codex", output, StringComparison.Ordinal);
+        Assert.Contains("receivers = monitor", output, StringComparison.Ordinal);
+        // Role startup messages: Claude /agmsg actas vs Codex $agmsg actas.
+        Assert.Contains("`/agmsg actas <role>`", output, StringComparison.Ordinal);
+        Assert.Contains("`$agmsg actas <role>`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_DesignTrafficController_HasPlaybookIdleDiagnosticAndContextOnly_G510()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
+
+        Assert.Contains("## Design traffic-controller playbook", output, StringComparison.Ordinal);
+        Assert.Contains("TRAFFIC CONTROLLER, not an implementer", output, StringComparison.Ordinal);
+        // Playbook: inbox, read-only state, nudge, no direct mutation, summarize only human-needed.
+        Assert.Contains("Check the design inbox", output, StringComparison.Ordinal);
+        Assert.Contains("READ-ONLY state", output, StringComparison.Ordinal);
+        Assert.Contains("Do NOT directly mutate", output, StringComparison.Ordinal);
+        Assert.Contains("Summarize ONLY human-needed", output, StringComparison.Ordinal);
+        // Idle diagnostic before escalating.
+        Assert.Contains("\"Orchestrator appears idle\" diagnostic", output, StringComparison.Ordinal);
+        // Context-only rule for design -> receiver.
+        Assert.Contains("Context-only:", output, StringComparison.Ordinal);
+        Assert.Contains("mark it context-only", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasIntakeFormAndTrafficControllerShape_G510()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+
+        var intake = doc.RootElement.GetProperty("intake_form");
+        Assert.NotEmpty(intake.GetProperty("questions").EnumerateArray());
+        Assert.NotEmpty(intake.GetProperty("defaults").EnumerateArray());
+        var startupTypes = intake.GetProperty("role_startup_messages").EnumerateArray()
+            .Select(s => s.GetProperty("agent_type").GetString())
+            .ToArray();
+        Assert.Contains("claude", startupTypes);
+        Assert.Contains("codex", startupTypes);
+
+        var controller = doc.RootElement.GetProperty("design_traffic_controller");
+        Assert.NotEmpty(controller.GetProperty("playbook").EnumerateArray());
+        Assert.NotEmpty(controller.GetProperty("idle_diagnostic").EnumerateArray());
+        Assert.Contains("context-only", controller.GetProperty("context_only_rule").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();
