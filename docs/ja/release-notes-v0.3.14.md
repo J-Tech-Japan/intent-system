@@ -11,7 +11,8 @@
 ## v0.3.14 の内容
 
 v0.3.14 は **パッチリリース** で、`v0.3.13` 以降に完了した orchestrator モードガイダンス作業
-（G508–G511）を出荷します。package id・ライセンス・workflow セマンティクスの変更はなく、
+（G508–G511）、orchestrator モードのロール境界（G513）、same-repo bootstrap config ロード修正
+（G514）を出荷します。package id・ライセンス・workflow セマンティクスの変更はなく、
 既存の timer-loop モードは完全サポート・不変です。package id は `JTechJapan.IntentSystem.Cli`
 のままです。
 
@@ -52,6 +53,30 @@ v0.3.14 は **パッチリリース** で、`v0.3.13` 以降に完了した orch
   `hasTrustDialogAccepted=false` が Monitor を抑制 → Claude project trust を修復して再起動し、
   再検証）を追加しました。
 
+### orchestrator モードのロール境界（G513）
+
+- orchestrator-thread ガイドが **ロール境界** を encode しました: **design スレッドが packet
+  authoring を所有** します — intent shaping、clarification、ADR/設計判断、リリーススコープと
+  バージョン選択、packet 内容/受け入れ基準。**orchestrator は ready な packet を coordinate**
+  します — canonical な intent-cli/GitHub state を検査し、1 wake につき既に authoring 済みの
+  `issue-cut-ready` packet を 1 件だけ publish、implementation/review へ委譲、CI/review を待ち、
+  closeout し、durable な設計/リリース成果物を自分で合成せず **blocker と不足 packet を design に
+  報告** します。
+- 必要な packet が不在、またはプロダクト/リリース/設計判断を要する場合（release-prep を含む:
+  design がバージョン/スコープを決め release-prep packet を author する）、orchestrator は packet を
+  でっち上げず、構造化された `packet-needed` メッセージを design に送って待ちます。
+
+### same-repo bootstrap config ロード（G514）
+
+- host 側の bootstrap 経由 automation コマンドが、host の `.intent-cli/config.toml` を存在時に
+  ロードするようになり、`automation summary`、`automation same-repo-metadata-preflight`、
+  `automation queue-seed-from-packet` が effective な same-repo トポロジと metadata/base ブランチ
+  設定（`same_repo_topology`、`metadata_source_branch`、`metadata_write_branch`、
+  `implementation_base_branch`、`base_branch_policy`）で一致します。以前は bootstrap context が常に
+  default config を使っていたため、キーが設定されていても `same-repo-metadata-preflight` が
+  `not-configured` を返すことがありました。`.intent-cli/config.toml` を持たない repo は安全な
+  default の child/standalone metadata-free bootstrap を保ちます。
+
 > バージョンメタデータ注記: `eng/version.json` は `stableVersion: 0.3.13`,
 > `nextVersion: 0.3.14` を記録します。G512（本パケット）はリリース準備のメタデータバンプです。
 > v0.3.14 リリース後のメタデータ前進（`stableVersion → 0.3.14`, `nextVersion → 0.3.15`）は
@@ -80,9 +105,10 @@ v0.3.13 からの破壊的変更はありません。orchestrator モードは�
 次の項目は **`v0.3.14` の GitHub Release が publish される前** に成り立っている必要があります。
 このゲートは fail closed です — 1 つでも未充足なら、まだ Release を publish しないでください。
 
-- [ ] リリース対象の各パケットが **完了し PR が `main` にマージ済み**: G508、G509、G510、G511
-      （および本準備の G512）。host queue-state / GitHub PR 状態で host/review 側から確認する
-      （child 実装ループは parent queue-state を読まないため、これは host 所有の前提条件）。
+- [ ] リリース対象の各パケットが **完了し PR が `main` にマージ済み**: G508、G509、G510、G511、
+      G513、G514（および release-notes 準備の G512/G515）。host queue-state / GitHub PR 状態で
+      host/review 側から確認する（child 実装ループは parent queue-state を読まないため、これは
+      host 所有の前提条件）。
 - [ ] 本リリース対象の open な intent-system PR や WIP パケットが誤ってスキップされていない
       （publish 前に host queue / open PR リストを確認）。
 - [ ] `eng/version.json` の `nextVersion` が `0.3.14`（意図したリリースバージョン）。`release.yml`
@@ -119,11 +145,16 @@ GitHub Release やタグを作成しません。
       `intent-cli --version` が `0.3.14` を報告する。
 - [ ] バイナリ成果物スモーク: プラットフォームアーカイブをダウンロードし `.sha256` を検証、
       展開して `./intent-cli --version` → `0.3.14`。
-- [ ] **orchestrator ガイドスモーク**（G508–G511）: `intent-cli guide orchestrator-thread
+- [ ] **orchestrator ガイドスモーク**（G508–G511, G513）: `intent-cli guide orchestrator-thread
       --domain <d> --target-repo <repo> --agent <agent> --format markdown` が、具体的な agmsg
       起動手順、design-thread ハンドオフ / monitor recovery、セットアップ intake フォームと
-      traffic-controller プレイブック、そして success/failure marker と trust 修復 runbook を含む
-      **Monitor tool vs delivery-mode** セクションをレンダリングする。
+      traffic-controller プレイブック、success/failure marker と trust 修復 runbook を含む
+      **Monitor tool vs delivery-mode** セクション、そして **ロール境界**（design が packet を author、
+      orchestrator は coordinate）をレンダリングする。
+- [ ] **same-repo bootstrap スモーク**（G514）: same-repo host repo で
+      `intent-cli automation same-repo-metadata-preflight` が設定済みの `[project]` metadata ブランチを
+      尊重する（`not-configured` ではない）。`automation summary` / `automation queue-seed-from-packet`
+      が同じ effective config で一致する。
 - [ ] ローカル preview/dry-run のバージョンメタデータが `0.3.14` の次の開発ラインを使う
       （[バージョンフロー](09-developer-reference.md#バージョンフロー) のリリース後ステップに従い
       `eng/version.json` をバンプ）: `stableVersion → 0.3.14`, `nextVersion → 0.3.15`。

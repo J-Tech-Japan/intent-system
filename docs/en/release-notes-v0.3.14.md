@@ -13,9 +13,11 @@
 ## What's in v0.3.14
 
 v0.3.14 is a **patch release** that ships the orchestrator-mode guidance work
-completed after `v0.3.13` (G508–G511). No package id, license, or
-workflow-semantics changes, and the existing timer-loop mode is fully supported
-and unchanged. The package id remains `JTechJapan.IntentSystem.Cli`.
+completed after `v0.3.13` (G508–G511), the orchestrator-mode role boundary
+(G513), and a same-repo bootstrap config-loading fix (G514). No package id,
+license, or workflow-semantics changes, and the existing timer-loop mode is
+fully supported and unchanged. The package id remains
+`JTechJapan.IntentSystem.Cli`.
 
 > **Orchestrator mode is still preview/experimental.** It is opt-in, still being
 > hardened, and not the default workflow. intent-cli and GitHub remain the
@@ -59,6 +61,34 @@ and unchanged. The package id remains `JTechJapan.IntentSystem.Cli`.
   repair runbook** (exact-cwd `~/.claude.json` `hasTrustDialogAccepted=false`
   suppresses Monitor → repair Claude project trust and restart, then re-verify).
 
+### Orchestrator-mode role boundary (G513)
+
+- The orchestrator-thread guide now encodes the **role boundary**: the **design
+  thread owns packet authoring** — intent shaping, clarifications, ADRs/design
+  decisions, release scope and version selection, and packet content/acceptance
+  criteria. The **orchestrator coordinates already-ready packets** — it inspects
+  canonical intent-cli/GitHub state, publishes exactly one already-authored
+  `issue-cut-ready` packet per wake, delegates implementation/review, waits for
+  CI/review, closes out, and **reports blockers and missing packets back to
+  design** instead of synthesizing durable design/release artifacts itself.
+- When a needed packet is absent or would require product/release/design
+  judgment (including release-prep: design decides the version/scope and authors
+  the release-prep packet), the orchestrator sends a structured `packet-needed`
+  message to design and waits, rather than drafting the packet.
+
+### Same-repo bootstrap config loading (G514)
+
+- Host-side bootstrap-routed automation commands now load the host
+  `.intent-cli/config.toml` when present, so `automation summary`,
+  `automation same-repo-metadata-preflight`, and
+  `automation queue-seed-from-packet` agree on the effective same-repo topology
+  and metadata/base-branch config (`same_repo_topology`,
+  `metadata_source_branch`, `metadata_write_branch`, `implementation_base_branch`,
+  `base_branch_policy`). Previously the bootstrap context always used a default
+  config, so `same-repo-metadata-preflight` could report `not-configured` even
+  when the keys were set. Repos without `.intent-cli/config.toml` keep the safe
+  default child/standalone metadata-free bootstrap.
+
 > Version metadata note: `eng/version.json` records `stableVersion: 0.3.13`,
 > `nextVersion: 0.3.14`; G512 (this packet) is the release-prep metadata bump.
 > The post-v0.3.14 metadata advancement (`stableVersion → 0.3.14`,
@@ -90,9 +120,10 @@ These items must hold **before the GitHub Release for `v0.3.14` is published**.
 This gate fails closed — if any item is unmet, do not publish the Release yet.
 
 - [ ] Every release-bound packet is **complete and its PR merged to `main`**:
-      G508, G509, G510, G511 (and G512 this prep). Confirm on the host/review
-      side via the host queue-state / GitHub PR state — the child implementation
-      loop must not read parent queue-state, so this is a host-owned precondition.
+      G508, G509, G510, G511, G513, G514 (and the G512/G515 release-notes prep).
+      Confirm on the host/review side via the host queue-state / GitHub PR
+      state — the child implementation loop must not read parent queue-state, so
+      this is a host-owned precondition.
 - [ ] No open intent-system PR or WIP packet intended for this release is
       accidentally skipped (check the host queue / open PR list before publishing).
 - [ ] `eng/version.json` `nextVersion` is `0.3.14` (the intended release
@@ -136,12 +167,18 @@ Post-release verification (after the GitHub Release is published and
       then `intent-cli --version` reports `0.3.14`.
 - [ ] Binary artifact smoke check: download the platform archive, verify its
       `.sha256`, extract, and run `./intent-cli --version` → `0.3.14`.
-- [ ] **Orchestrator guide smoke** (G508–G511): `intent-cli guide
+- [ ] **Orchestrator guide smoke** (G508–G511, G513): `intent-cli guide
       orchestrator-thread --domain <d> --target-repo <repo> --agent <agent>
       --format markdown` renders the concrete agmsg startup steps, the
       design-thread handoff / monitor recovery, the setup intake form and
-      traffic-controller playbook, and the **Monitor tool vs delivery-mode**
-      section with the success/failure markers and trust-repair runbook.
+      traffic-controller playbook, the **Monitor tool vs delivery-mode**
+      section with the success/failure markers and trust-repair runbook, and the
+      **role boundary** (design authors packets; orchestrator coordinates).
+- [ ] **Same-repo bootstrap smoke** (G514): in a same-repo host repo,
+      `intent-cli automation same-repo-metadata-preflight` honors the configured
+      `[project]` metadata branches (not `not-configured`), and `automation
+      summary` / `automation queue-seed-from-packet` agree on the same effective
+      config.
 - [ ] Local preview/dry-run version metadata uses the next development line
       after `0.3.14` (bump `eng/version.json` per the post-release step in
       [Version flow](09-developer-reference.md#version-flow)):
