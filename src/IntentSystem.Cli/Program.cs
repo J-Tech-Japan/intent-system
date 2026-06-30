@@ -321,8 +321,33 @@ internal static class Program
         return false;
     }
 
-    private static CliContext CreateBootstrapContext(string currentDirectory, string[] args)
+    internal static CliContext CreateBootstrapContext(string currentDirectory, string[] args)
     {
+        // G514: when a host repo with `.intent-cli/config.toml` is present,
+        // bootstrap-routed automation commands (`automation summary`,
+        // `automation same-repo-metadata-preflight`,
+        // `automation queue-seed-from-packet`, …) must use the SAME effective
+        // project config as the normal path. Previously this always built a
+        // default config, so same-repo topology / metadata-branch /
+        // base-branch settings were silently replaced by defaults and
+        // `same-repo-metadata-preflight` reported `not-configured`. Resolve the
+        // host repo root with the normal resolver and load the config when it
+        // exists; otherwise keep the safe default bootstrap behavior for
+        // child/standalone repos that carry no host metadata.
+        var repoRoot = RepoRootResolver.Resolve(currentDirectory);
+        if (repoRoot is not null)
+        {
+            var configPath = CliRuntimeContracts.GetConfigPath(repoRoot);
+            if (File.Exists(configPath))
+            {
+                return new CliContext
+                {
+                    RepoRoot = repoRoot,
+                    Config = CliConfigLoader.LoadFromFile(configPath)
+                };
+            }
+        }
+
         var domain = args.Length >= 3 && !string.IsNullOrWhiteSpace(args[2])
             ? args[2].Trim()
             : "bootstrap";
