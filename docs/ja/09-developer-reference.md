@@ -184,74 +184,81 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 
 ```json
 {
-  "stableVersion": "0.3.12",
-  "nextVersion": "0.3.13"
-}
-```
-
-| ステージ | バージョン形式 | 導出方法 |
-| --- | --- | --- |
-| ローカル pack / install | `0.3.13-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
-| Main CI preview | `0.3.13-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
-| リリース候補（任意） | `0.3.13-rc.N` | タグ `v0.3.13-rc.N` がリリースワークフローをトリガー |
-| 安定版リリース | `0.3.13` | タグ `v0.3.13` がリリースワークフローをトリガー（`-p:Version=<tag>` が優先） |
-| リリース後の main ビルド | `0.3.14-preview.<run>.<attempt>` | `nextVersion` を `0.3.14` にバンプ後 |
-
-**`v0.3.13` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
-
-```json
-{
   "stableVersion": "0.3.13",
   "nextVersion": "0.3.14"
 }
 ```
 
+| ステージ | バージョン形式 | 導出方法 |
+| --- | --- | --- |
+| ローカル pack / install | `0.3.14-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
+| Main CI preview | `0.3.14-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
+| リリース候補（任意） | `0.3.14-rc.N` | タグ `v0.3.14-rc.N` がリリースワークフローをトリガー |
+| 安定版リリース | `0.3.14` | タグ `v0.3.14` がリリースワークフローをトリガー（`-p:Version=<tag>` が優先） |
+| リリース後の main ビルド | `0.3.15-preview.<run>.<attempt>` | `nextVersion` を `0.3.15` にバンプ後 |
+
+**`v0.3.14` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
+
+```json
+{
+  "stableVersion": "0.3.14",
+  "nextVersion": "0.3.15"
+}
+```
+
 これにより次の main ブランチ CI ビルド（およびローカル pack）が
-`0.3.14-preview.<run>.<attempt>` / `0.3.14-<sha>-<G-unit>` を生成し、`0.3.13`（安定版
+`0.3.15-preview.<run>.<attempt>` / `0.3.15-<sha>-<G-unit>` を生成し、`0.3.14`（安定版
 リリースバージョンと衝突）の出力が継続されなくなります。
 
-### 次リリース準備（v0.3.13）
+### 次リリース準備（v0.3.14）
 
-**`v0.3.12` は publish 済み**（GitHub Release + NuGet）で、バージョンポリシーは
-`0.3.13` 開発ラインにバンプされました。リポジトリは現在 in-development の **`0.3.13`**
-`nextVersion` 上にあり、G506 は **prepare-only** です — version メタデータと docs をバンプするだけで
+**`v0.3.13` は publish 済み**（GitHub Release + NuGet）で、バージョンポリシーは
+`0.3.14` 開発ラインにバンプされました。リポジトリは現在 in-development の **`0.3.14`**
+`nextVersion` 上にあり、G512 は **prepare-only** です — version メタデータと docs をバンプするだけで
 publish ステップを追加しません。version-bump マージ自体は GitHub Release やタグを作成しません。
 マージされ
-[リリース準備ゲート](release-notes-v0.3.13.md#リリース準備ゲート-g506)が成り立った後、
-**メンテナ/オペレーター（または外部のリリース automation）が `v0.3.13` の GitHub Release を作成・
+[リリース準備ゲート](release-notes-v0.3.14.md#リリース準備ゲート-g512)が成り立った後、
+**メンテナ/オペレーター（または外部のリリース automation）が `v0.3.14` の GitHub Release を作成・
 publish** します。その Release の publish が `.github/workflows/release.yml`（`on: release: published`）を
 発火させ、NuGet package とプラットフォームごとのバイナリ成果物を build・publish します。
 完全な changelog と operator チェックリスト:
-[release-notes-v0.3.13.md](release-notes-v0.3.13.md)。
+[release-notes-v0.3.14.md](release-notes-v0.3.14.md)。
 
-**`v0.3.13` で出荷予定（`v0.3.12` 以降の変更）— orchestrator モードプレビューのパッチ修正:**
+**`v0.3.14` で出荷予定（`v0.3.13` 以降の変更）— orchestrator モードプレビューのガイダンスパッチ:**
 
-- **design-thread agmsg receiver ガイダンス**（G505）— orchestrator-thread ガイドが、任意の
-  4 つ目のロールである design/human receiver を文書化し、人間が必要なエスカレーションを agmsg で
-  配信できる（手動の inbox 確認を含む）ようにしました。ルーチンな進捗は orchestrator/implementation/
-  review の内部に留まります。implementation/review は loopless のままです。
+- **具体的な agmsg 起動ステップ**（G508）— orchestrator setup ガイドが、3 フォルダーの要求から
+  実行可能で順序付き・貼り付け可能な agmsg setup/startup/troubleshooting ステップと、3 つの cwd の
+  preflight を生成します。
+- **design-thread ハンドオフ + monitor リカバリ**（G509）— 最初の design→orchestrator start/resume
+  メッセージ、wake ごとの自律的な 1 issue publish、monitor リカバリチェックリスト。
+- **setup intake フォーム + traffic-controller プレイブック**（G510）— セットアップ事実の引き出し/推論と
+  推奨デフォルト、ロール起動メッセージ、design traffic-controller プレイブック。draft-PR レビュー可否
+  （canonical review surface 経由）も含む。
+- **Claude Code Monitor vs agmsg delivery-mode**（G511）— Claude Code の `Monitor` ツール（実際の
+  inbox-stream の仕組み）と agmsg `delivery.sh mode=monitor` 設定を区別。live-attachment の
+  success/failure マーカーと project-trust 修復 runbook 付き。
 - orchestrator モードは引き続き **preview/experimental** です: オプトインで、まだ hardening 中であり、
   timer-loop モードは完全サポート・不変です。
   [エージェントメッセージオーケストレーション](12-agent-message-orchestration.md) を参照。
 
-**リリース準備の検証（`v0.3.13` version bump のマージ前に実行）:**
+**リリース準備の検証（`v0.3.14` version bump のマージ前に実行）:**
 
 ```bash
-cat eng/version.json   # stableVersion 0.3.12（公開済み）, nextVersion 0.3.13（リリース対象）
+cat eng/version.json   # stableVersion 0.3.13（公開済み）, nextVersion 0.3.14（リリース対象）
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待形: intent-cli 0.3.13-<sha>-G50x （stale なリテラルではない）
+#   期待形: intent-cli 0.3.14-<sha>-G51x （stale なリテラルではない）
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.13.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.14.nupkg
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
 version-bump マージが `main` に入った後、メンテナ/オペレーター（または外部のリリース automation）が
-`v0.3.13` の GitHub Release を作成・publish します。その publish が `release.yml`
+`v0.3.14` の GitHub Release を作成・publish します。その publish が `release.yml`
 （`on: release: published`）を発火させ、NuGet package とプラットフォームごとのバイナリ成果物を
 build・publish します。publish 後、上記のリリース後 `eng/version.json` バンプ
-（`stableVersion → 0.3.13`, `nextVersion → 0.3.14`）を適用します。
+（`stableVersion → 0.3.14`, `nextVersion → 0.3.15`）を適用します。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
