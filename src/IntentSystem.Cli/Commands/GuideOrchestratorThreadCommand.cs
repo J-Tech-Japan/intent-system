@@ -556,6 +556,38 @@ internal static class GuideOrchestratorThreadCommand
                     Action = "Confirm the orchestrator received the design start/resume message (`inbox.sh` on the orchestrator) and that `worker next-action` / `intent status` report an actionable item for THIS domain/repo (not another domain visible in the host repo). If issue-cut-ready and safe, the orchestrator should publish one issue itself rather than wait.",
                 },
             },
+            MonitorToolDistinction = new OrchestratorMonitorDistinction
+            {
+                Summary =
+                    "Claude Code's `Monitor` is a generic Claude Code tool — the real mechanism that streams the agmsg "
+                    + "inbox into a receiver. agmsg attaches it by launching `watch.sh` from the Claude Code SessionStart "
+                    + "directive; the running Monitor task is what turns incoming agmsg lines into live transcript events. "
+                    + "The word \"monitor\" is overloaded — do NOT confuse this Claude Code `Monitor` tool with agmsg's "
+                    + "delivery-mode config or with unrelated `Azure Monitor` / other MCP `monitor` tools.",
+                DeliveryModeNote =
+                    "agmsg `delivery.sh status` `mode=monitor` is configuration only and is NOT proof that a Monitor tool "
+                    + "is attached and streaming — a receiver can report `mode=monitor` while no Claude Code `Monitor` is "
+                    + "running and nothing is delivered live. Confirm live attachment with the success markers below, not "
+                    + "with the delivery mode alone.",
+                SuccessMarkers = new[]
+                {
+                    "`ToolSearch select:Monitor` resolves Monitor in the receiver session (the tool is available).",
+                    "the transcript shows `Monitor(agmsg inbox stream)` — the Monitor tool attached to the inbox stream.",
+                    "the Claude Code footer shows `1 monitor` (a live Monitor task is attached).",
+                    "the transcript shows `Monitor event` lines as inbox messages arrive (the stream is live).",
+                },
+                FailureMarkers = new[]
+                {
+                    "delivery falls back to a plain `Bash` / background `watch.sh` task instead of an attached Monitor — no live stream.",
+                    "the footer shows `1 shell` instead of `1 monitor` (a background shell is running, not a Monitor).",
+                    "confusion with `Azure Monitor` / other MCP `monitor` tools — those are unrelated to agmsg inbox streaming and never prove attachment.",
+                },
+                TrustRepair = new[]
+                {
+                    "Root cause: the exact-cwd project key in `~/.claude.json` with `hasTrustDialogAccepted=false` suppresses the SessionStart directive that launches Monitor, so no Monitor attaches and the inbox never streams (the receiver still reports `mode=monitor`).",
+                    "Repair (operator action only): repair Claude project trust for that exact cwd, restart the receiver session, then re-verify the success markers above. intent-cli never auto-detects or edits `~/.claude.json`.",
+                },
+            },
             IntakeForm = new OrchestratorIntakeForm
             {
                 Summary =
@@ -1444,6 +1476,34 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Monitor tool vs delivery-mode (G511)");
+        writer.WriteLine();
+        writer.WriteLine(guide.MonitorToolDistinction.Summary);
+        writer.WriteLine();
+        writer.WriteLine(guide.MonitorToolDistinction.DeliveryModeNote);
+        writer.WriteLine();
+        writer.WriteLine("Live-attachment success markers — verify all four to confirm the inbox stream is live:");
+        writer.WriteLine();
+        foreach (var marker in guide.MonitorToolDistinction.SuccessMarkers)
+        {
+            writer.WriteLine($"- {marker}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("Failure markers — a receiver reporting `mode=monitor` may still be silently broken:");
+        writer.WriteLine();
+        foreach (var marker in guide.MonitorToolDistinction.FailureMarkers)
+        {
+            writer.WriteLine($"- {marker}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("Trust-repair runbook (when the success markers are missing):");
+        writer.WriteLine();
+        foreach (var step in guide.MonitorToolDistinction.TrustRepair)
+        {
+            writer.WriteLine($"- {step}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Domain routing — single-domain vs multi-domain");
         writer.WriteLine();
         writer.WriteLine($"- selected mode: `{guide.DomainRouting.Mode}`");
@@ -1909,6 +1969,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("monitor_recovery")]
     public required IReadOnlyList<OrchestratorTroubleshooting> MonitorRecovery { get; init; }
 
+    [JsonPropertyName("monitor_tool_distinction")]
+    public required OrchestratorMonitorDistinction MonitorToolDistinction { get; init; }
+
     [JsonPropertyName("intake_form")]
     public required OrchestratorIntakeForm IntakeForm { get; init; }
 
@@ -2226,6 +2289,24 @@ internal sealed record OrchestratorTroubleshooting
 
     [JsonPropertyName("action")]
     public required string Action { get; init; }
+}
+
+internal sealed record OrchestratorMonitorDistinction
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("delivery_mode_note")]
+    public required string DeliveryModeNote { get; init; }
+
+    [JsonPropertyName("success_markers")]
+    public required IReadOnlyList<string> SuccessMarkers { get; init; }
+
+    [JsonPropertyName("failure_markers")]
+    public required IReadOnlyList<string> FailureMarkers { get; init; }
+
+    [JsonPropertyName("trust_repair")]
+    public required IReadOnlyList<string> TrustRepair { get; init; }
 }
 
 internal sealed record OrchestratorReceiverReadiness

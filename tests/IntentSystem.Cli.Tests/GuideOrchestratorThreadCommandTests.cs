@@ -142,6 +142,59 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_DistinguishesMonitorToolFromDeliveryMode_WithVerificationAndRepairMarkers()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // G511 section is present.
+        Assert.Contains("## Monitor tool vs delivery-mode (G511)", output, StringComparison.Ordinal);
+
+        // The distinction: Monitor is a generic Claude Code tool fed by agmsg via watch.sh from SessionStart.
+        Assert.Contains("`Monitor` is a generic Claude Code tool", output, StringComparison.Ordinal);
+        Assert.Contains("`watch.sh` from the Claude Code SessionStart", output, StringComparison.Ordinal);
+
+        // delivery-mode config is not proof of attachment.
+        Assert.Contains("`delivery.sh status` `mode=monitor` is configuration only", output, StringComparison.Ordinal);
+        Assert.Contains("NOT proof that a Monitor tool is attached and streaming", output, StringComparison.Ordinal);
+
+        // The four live-attachment success markers, in checkable form.
+        Assert.Contains("`ToolSearch select:Monitor` resolves Monitor", output, StringComparison.Ordinal);
+        Assert.Contains("`Monitor(agmsg inbox stream)`", output, StringComparison.Ordinal);
+        Assert.Contains("footer shows `1 monitor`", output, StringComparison.Ordinal);
+        Assert.Contains("`Monitor event`", output, StringComparison.Ordinal);
+
+        // The failure markers.
+        Assert.Contains("falls back to a plain `Bash` / background `watch.sh`", output, StringComparison.Ordinal);
+        Assert.Contains("footer shows `1 shell`", output, StringComparison.Ordinal);
+        Assert.Contains("`Azure Monitor` / other MCP `monitor` tools", output, StringComparison.Ordinal);
+
+        // The trust-repair runbook root cause and repair.
+        Assert.Contains("`~/.claude.json` with `hasTrustDialogAccepted=false` suppresses", output, StringComparison.Ordinal);
+        Assert.Contains("repair Claude project trust for that exact cwd, restart", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli never auto-detects or edits `~/.claude.json`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_CarriesMonitorToolDistinction_WithMarkerArrays()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var distinction = doc.RootElement.GetProperty("monitor_tool_distinction");
+
+        Assert.True(distinction.TryGetProperty("summary", out _));
+        Assert.True(distinction.TryGetProperty("delivery_mode_note", out _));
+        Assert.Equal(4, distinction.GetProperty("success_markers").GetArrayLength());
+        Assert.NotEmpty(distinction.GetProperty("failure_markers").EnumerateArray());
+        Assert.NotEmpty(distinction.GetProperty("trust_repair").EnumerateArray());
+    }
+
+    [Fact]
     public void Execute_Markdown_ImplementationThread_VerifiesLocalCheckoutBeforeClaiming()
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude"]);
