@@ -1208,6 +1208,53 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_RoleBoundary_DesignAuthorsOrchestratorCoordinates_G513()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Role boundary (design authors; orchestrator coordinates)", output, StringComparison.Ordinal);
+        // Design owns packet authoring; orchestrator must not become the author.
+        Assert.Contains("DESIGN creates packets", output, StringComparison.Ordinal);
+        Assert.Contains("must NOT silently become the product/release/design author", output, StringComparison.Ordinal);
+        Assert.Contains("### Design owns", output, StringComparison.Ordinal);
+        Assert.Contains("Packet content and acceptance criteria", output, StringComparison.Ordinal);
+        // Orchestrator may publish exactly one already-authored issue-cut-ready packet per wake.
+        Assert.Contains("### Orchestrator owns", output, StringComparison.Ordinal);
+        Assert.Contains("Publish exactly ONE already-authored, `issue-cut-ready` packet per wake", output, StringComparison.Ordinal);
+        // Missing-packet behavior: request to design + wait, do not author.
+        Assert.Contains("**missing packet**", output, StringComparison.Ordinal);
+        Assert.Contains("does NOT invent the packet", output, StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"packet-needed\"", output, StringComparison.Ordinal);
+        // Release-prep is design-owned.
+        Assert.Contains("**release-prep**", output, StringComparison.Ordinal);
+        Assert.Contains("Release-prep is design-owned", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasRoleBoundaryShape_G513()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var boundary = doc.RootElement.GetProperty("role_boundary");
+
+        Assert.NotEmpty(boundary.GetProperty("design_owns").EnumerateArray());
+        Assert.NotEmpty(boundary.GetProperty("orchestrator_owns").EnumerateArray());
+        Assert.Contains("packet-needed", boundary.GetProperty("missing_packet_message_template").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("design-owned", boundary.GetProperty("release_prep_rule").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("does NOT invent the packet", boundary.GetProperty("missing_packet_response").GetString()!, StringComparison.Ordinal);
+
+        // Existing orchestrator publish ability is preserved (not removed).
+        var publication = doc.RootElement.GetProperty("next_slice_publication");
+        Assert.True(publication.GetProperty("one_per_wake").GetBoolean());
+    }
+
+    [Fact]
     public void Execute_UnknownMode_ExitsOne()
     {
         using var writer = new StringWriter();
