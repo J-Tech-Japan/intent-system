@@ -143,6 +143,46 @@ internal static class GuideOrchestratorThreadCommand
                     + "orchestrator) would race on the same GitHub state. The orchestrator paces those threads; they do "
                     + "not also self-schedule.",
             },
+            RoleBoundary = new OrchestratorRoleBoundary
+            {
+                Summary =
+                    "ROLE BOUNDARY: DESIGN creates packets; the ORCHESTRATOR moves READY packets through the workflow. "
+                    + "The orchestrator must NOT silently become the product/release/design author. When a needed packet "
+                    + "is absent, incomplete, or would require product/release/design judgment, ask design to create or "
+                    + "update it — do NOT draft it yourself.",
+                DesignOwns = new[]
+                {
+                    "Intent shaping and clarifications.",
+                    "ADRs and design decisions.",
+                    "Release scope and version selection.",
+                    "Packet content and acceptance criteria (the durable packet files).",
+                },
+                OrchestratorOwns = new[]
+                {
+                    "Inspect canonical intent-cli / GitHub state.",
+                    "Publish exactly ONE already-authored, `issue-cut-ready` packet per wake (via canonical publish surfaces — see Next-slice publication).",
+                    "Delegate implementation/review to the loopless receivers.",
+                    "Wait for CI / review and track review state.",
+                    "Close out approved PRs through the canonical review surfaces.",
+                    "Report blockers and missing packets back to design.",
+                },
+                MissingPacketResponse =
+                    "When a needed packet is absent or incomplete, or a vague goal would require authoring intent / "
+                    + "acceptance criteria / release scope, the orchestrator does NOT invent the packet. It sends a "
+                    + "structured request to DESIGN describing what is needed and WAITS for design to author/update the "
+                    + "packet (or give an explicit instruction). The orchestrator only publishes/coordinates a packet "
+                    + "that already exists and is `issue-cut-ready`.",
+                MissingPacketMessageTemplate = Apply(
+                    "{\"to\":\"design\",\"type\":\"packet-needed\",\"domain\":\"<domain>\",\"need\":\"<what is needed: "
+                    + "e.g. a release-prep packet for vX.Y.Z, or acceptance criteria for <topic>>\",\"reason\":\"<why the "
+                    + "orchestrator cannot proceed: requires product/release/design judgment, or the packet is absent/"
+                    + "incomplete>\",\"blocking\":\"<the work that is waiting on it>\"}"),
+                ReleasePrepRule =
+                    "Release-prep is design-owned: DESIGN decides the release version and scope and AUTHORS the "
+                    + "release-prep packet. The orchestrator may publish and coordinate that release-prep packet ONLY "
+                    + "after it exists and is `issue-cut-ready` — it must not pick the version, decide scope, or author "
+                    + "the release notes/packet itself from a vague \"prepare a release\" instruction.",
+            },
             DomainRouting = new OrchestratorDomainRouting
             {
                 Mode = mode,
@@ -1339,6 +1379,34 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **mixed-mode warning** — {guide.ModeSeparation.MixedModeWarning}");
         writer.WriteLine();
 
+        writer.WriteLine("## Role boundary (design authors; orchestrator coordinates)");
+        writer.WriteLine();
+        writer.WriteLine(guide.RoleBoundary.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Design owns");
+        writer.WriteLine();
+        foreach (var item in guide.RoleBoundary.DesignOwns)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("### Orchestrator owns");
+        writer.WriteLine();
+        foreach (var item in guide.RoleBoundary.OrchestratorOwns)
+        {
+            writer.WriteLine($"- {item}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **missing packet** — {guide.RoleBoundary.MissingPacketResponse}");
+        writer.WriteLine($"- **release-prep** — {guide.RoleBoundary.ReleasePrepRule}");
+        writer.WriteLine();
+        writer.WriteLine("Structured packet-needed message (orchestrator → design):");
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(guide.RoleBoundary.MissingPacketMessageTemplate);
+        writer.WriteLine("```");
+        writer.WriteLine();
+
         writer.WriteLine("## Setup (starting orchestrator mode)");
         writer.WriteLine();
         writer.WriteLine(guide.Setup.Summary);
@@ -1936,6 +2004,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("mode_separation")]
     public required OrchestratorModeSeparation ModeSeparation { get; init; }
 
+    [JsonPropertyName("role_boundary")]
+    public required OrchestratorRoleBoundary RoleBoundary { get; init; }
+
     [JsonPropertyName("domain_routing")]
     public required OrchestratorDomainRouting DomainRouting { get; init; }
 
@@ -2007,6 +2078,27 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("detailed_guide_commands")]
     public required IReadOnlyList<string> DetailedGuideCommands { get; init; }
+}
+
+internal sealed record OrchestratorRoleBoundary
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("design_owns")]
+    public required IReadOnlyList<string> DesignOwns { get; init; }
+
+    [JsonPropertyName("orchestrator_owns")]
+    public required IReadOnlyList<string> OrchestratorOwns { get; init; }
+
+    [JsonPropertyName("missing_packet_response")]
+    public required string MissingPacketResponse { get; init; }
+
+    [JsonPropertyName("missing_packet_message_template")]
+    public required string MissingPacketMessageTemplate { get; init; }
+
+    [JsonPropertyName("release_prep_rule")]
+    public required string ReleasePrepRule { get; init; }
 }
 
 internal sealed record OrchestratorModeSeparation

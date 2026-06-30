@@ -65,6 +65,35 @@ The full reference checklist follows the intake:
 > message, and clean up only through the agmsg scripts. Hand-editing agmsg state
 > corrupts delivery.
 
+## Role boundary — design authors, orchestrator coordinates
+
+**Design creates packets; the orchestrator moves ready packets through the
+workflow.** The orchestrator must **not** silently become the product/release/
+design author.
+
+- **Design owns** — intent shaping and clarifications; ADRs and design
+  decisions; release scope and version selection; packet content and acceptance
+  criteria (the durable packet files).
+- **Orchestrator owns** — inspect canonical intent-cli/GitHub state; publish
+  exactly **one already-authored, `issue-cut-ready` packet per wake**; delegate
+  implementation/review; wait for CI/review; close out approved PRs through the
+  canonical review surfaces; report blockers and missing packets back to design.
+
+When a needed packet is absent, incomplete, or would require product/release/
+design judgment, the orchestrator does **not** invent it — it sends a structured
+`packet-needed` message to design and **waits** for design to author/update the
+packet (or give an explicit instruction):
+
+```json
+{"to":"design","type":"packet-needed","domain":"<domain>","need":"<what is needed>","reason":"<why the orchestrator cannot proceed>","blocking":"<the work that is waiting>"}
+```
+
+**Release-prep is design-owned:** design decides the release version and scope
+and authors the release-prep packet; the orchestrator may publish and coordinate
+it only **after** it exists and is `issue-cut-ready` — it must not pick the
+version, decide scope, or author the release notes/packet from a vague "prepare a
+release" instruction.
+
 ## What agmsg is (and is not)
 
 agmsg is a **message / progress / completion / blocker signal layer only**. It

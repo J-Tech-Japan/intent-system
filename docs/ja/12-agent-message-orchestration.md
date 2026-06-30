@@ -62,6 +62,31 @@ intake の後に、完全なリファレンスチェックリストが続きま�
 > クリーンアップはすべて agmsg スクリプト経由で行います。agmsg state の手編集は delivery を
 > 壊します。
 
+## ロール境界 — design が authoring、orchestrator は coordinate
+
+**design が packet を作成し、orchestrator は ready な packet を workflow に通します。**
+orchestrator は黙ってプロダクト/リリース/設計の author になっては **いけません**。
+
+- **design が所有** — intent shaping と clarification; ADR と設計判断; リリーススコープと
+  バージョン選択; packet 内容と受け入れ基準（durable な packet ファイル）。
+- **orchestrator が所有** — canonical な intent-cli/GitHub state の検査; **1 wake につき
+  既に authoring 済みの `issue-cut-ready` packet を 1 件だけ** publish; implementation/review
+  への委譲; CI/review の待機; canonical review surface 経由の approved PR の closeout;
+  blocker と不足 packet を design に報告。
+
+必要な packet が不在・不完全、またはプロダクト/リリース/設計判断を要する場合、orchestrator は
+それを **でっち上げません** — 構造化された `packet-needed` メッセージを design に送り、design が
+packet を author/更新する（または明示的に指示する）のを **待ちます**:
+
+```json
+{"to":"design","type":"packet-needed","domain":"<domain>","need":"<what is needed>","reason":"<why the orchestrator cannot proceed>","blocking":"<the work that is waiting>"}
+```
+
+**release-prep は design 所有:** design がリリースバージョンとスコープを決め、release-prep
+packet を author します。orchestrator はそれが存在し `issue-cut-ready` になった **後** にのみ
+publish・coordinate できます — 曖昧な「リリースを準備して」という指示からバージョンを選んだり、
+スコープを決めたり、リリースノート/packet を自分で author してはいけません。
+
 ## agmsg とは（そして何ではないか）
 
 agmsg は **メッセージ / 進捗 / 完了 / ブロッカーのシグナル層のみ** です。スレッド間で
