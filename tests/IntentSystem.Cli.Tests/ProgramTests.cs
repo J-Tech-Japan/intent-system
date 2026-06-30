@@ -45,6 +45,66 @@ public sealed class ProgramTests
     }
 
     [Fact]
+    public void CreateBootstrapContext_GivenHostRepoWithSameRepoConfig_LoadsConfiguredValues_G514()
+    {
+        // G514: bootstrap-routed automation commands (summary /
+        // same-repo-metadata-preflight / queue-seed-from-packet) must use the
+        // SAME effective project config as the normal path — non-default
+        // same-repo topology values must NOT be silently replaced by default
+        // bootstrap config. The config uses deliberately non-default values so a
+        // default config cannot accidentally pass.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli"));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "config.toml"),
+            """
+            [project]
+            domain = "estivo"
+            artifact_root = ".intent-cli"
+            same_repo_topology = true
+            metadata_source_branch = "main-metadata"
+            metadata_write_branch = "main-metadata"
+            implementation_base_branch = "main"
+            base_branch_policy = "main-ai"
+            """);
+        // Invoke from a nested cwd so the resolver must walk up to the repo root.
+        var workingDirectory = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+
+        var context = Program.CreateBootstrapContext(
+            workingDirectory,
+            ["automation", "summary", "--domain", "estivo"]);
+
+        Assert.Equal(repoRoot, context.RepoRoot);
+        Assert.Equal("estivo", context.Config.Project.Domain);
+        Assert.True(context.Config.Project.SameRepoTopology);
+        Assert.Equal("main-metadata", context.Config.Project.MetadataSourceBranch);
+        Assert.Equal("main-metadata", context.Config.Project.MetadataWriteBranch);
+        Assert.Equal("main", context.Config.Project.ImplementationBaseBranch);
+        Assert.Equal("main-ai", context.Config.Project.BaseBranchPolicy);
+    }
+
+    [Fact]
+    public void CreateBootstrapContext_GivenNoIntentCliConfig_KeepsSafeDefaultBootstrap_G514()
+    {
+        // G514: a child/standalone repo with no `.intent-cli/config.toml` must
+        // keep the safe default bootstrap behavior — no parent metadata
+        // required, default same-repo topology (false), and the cwd as RepoRoot.
+        using var tempDirectory = new TemporaryDirectory();
+        var childCwd = tempDirectory.CreateDirectory("child-impl");
+
+        var context = Program.CreateBootstrapContext(
+            childCwd,
+            ["automation", "summary", "mydomain"]);
+
+        Assert.Equal(childCwd, context.RepoRoot);
+        Assert.Equal("mydomain", context.Config.Project.Domain);
+        Assert.False(context.Config.Project.SameRepoTopology);
+        Assert.Equal(string.Empty, context.Config.Project.MetadataSourceBranch);
+        Assert.Equal(".intent-cli", context.Config.Project.ArtifactRoot);
+    }
+
+    [Fact]
     public void Main_GivenDirectoryWithoutIntentCliRoot_ReturnsExitCodeOne_AndEmitsStructuredFailClosed()
     {
         // G299: a non-bootstrap command (e.g. `project status`) invoked from a

@@ -172,6 +172,17 @@ reports `not-configured`, the keys above are not being resolved — check they a
 under `[project]` (not a different table) and spelled exactly
 `metadata_source_branch` / `metadata_write_branch`.
 
+Host vs child bootstrap (G514): the host-side automation commands
+(`automation summary`, `automation same-repo-metadata-preflight`,
+`automation queue-seed-from-packet`) load `.intent-cli/config.toml` from the
+resolved repo root, so they see the same effective `[project]` config — and the
+same configured same-repo topology — as every other host command. A
+child/standalone implementation repo that carries **no** `.intent-cli/config.toml`
+keeps the safe default bootstrap behavior (no parent metadata required). If you
+run a host command from a same-repo host repo and still see default behavior,
+confirm the command is run from within the repo (the resolver walks up to the
+`.intent-cli/` directory) and that the config file exists.
+
 The supported publish path for a packet is **`automation queue-seed-from-packet`
 → `issue publish-flow` → `automation issue-publish`**, with no manual
 queue-state edits or raw `gh issue create`. The domain's `execution_unit_regex`

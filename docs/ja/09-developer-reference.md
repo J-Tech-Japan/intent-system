@@ -163,6 +163,15 @@ metadata_write_branch  = "main-metadata"   # host loop がメタデータを WRI
 配下にあること、`metadata_source_branch` / `metadata_write_branch` の綴りが正確であることを
 確認してください。
 
+host と child の bootstrap（G514）: host 側 automation コマンド（`automation summary`、
+`automation same-repo-metadata-preflight`、`automation queue-seed-from-packet`）は解決された
+repo root の `.intent-cli/config.toml` をロードするため、他の host コマンドと同じ effective な
+`[project]` 設定（同じ same-repo トポロジ設定）を参照します。`.intent-cli/config.toml` を **持たない**
+child/standalone 実装 repo は安全なデフォルト bootstrap 挙動を保ちます（parent metadata 不要）。
+same-repo host repo で host コマンドを実行してもデフォルト挙動になる場合、コマンドが repo 内から
+実行されている（resolver は `.intent-cli/` ディレクトリまで上に辿る）こと、config ファイルが
+存在することを確認してください。
+
 packet の正規の publish 経路は **`automation queue-seed-from-packet` →
 `issue publish-flow` → `automation issue-publish`** で、手動の queue-state 編集や raw
 `gh issue create` は不要です。ドメインの `execution_unit_regex`（
