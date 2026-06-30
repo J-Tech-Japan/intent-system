@@ -193,8 +193,8 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 | --- | --- | --- |
 | ローカル pack / install | `0.3.14-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
 | Main CI preview | `0.3.14-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
-| リリース候補（任意） | `0.3.14-rc.N` | タグ `v0.3.14-rc.N` がリリースワークフローをトリガー |
-| 安定版リリース | `0.3.14` | タグ `v0.3.14` がリリースワークフローをトリガー（`-p:Version=<tag>` が優先） |
+| リリース候補（任意） | `0.3.14-rc.N` | タグ `v0.3.14-rc.N` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する |
+| 安定版リリース | `0.3.14` | タグ `v0.3.14` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する（`-p:Version=<tag>` が優先） |
 | リリース後の main ビルド | `0.3.15-preview.<run>.<attempt>` | `nextVersion` を `0.3.15` にバンプ後 |
 
 **`v0.3.14` リリース後**、`eng/version.json` の両フィールドをバンプしてください:

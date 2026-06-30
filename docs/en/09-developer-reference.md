@@ -203,8 +203,8 @@ literal:
 | --- | --- | --- |
 | Local pack / install | `0.3.14-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
 | Main CI preview | `0.3.14-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.3.14-rc.N` | Tag `v0.3.14-rc.N` triggers release workflow |
-| Stable release | `0.3.14` | Tag `v0.3.14` triggers release workflow (`-p:Version=<tag>` wins) |
+| Release candidate (optional) | `0.3.14-rc.N` | Publishing the GitHub Release for tag `v0.3.14-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
+| Stable release | `0.3.14` | Publishing the GitHub Release for tag `v0.3.14` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
 | Post-release main builds | `0.3.15-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.15` |
 
 **After releasing `v0.3.14`**, bump both fields in `eng/version.json`:
