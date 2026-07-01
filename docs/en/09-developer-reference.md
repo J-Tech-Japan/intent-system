@@ -205,83 +205,79 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.3.13",
-  "nextVersion": "0.3.14"
-}
-```
-
-| Stage | Version form | How it is derived |
-| --- | --- | --- |
-| Local pack / install | `0.3.14-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.3.14-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.3.14-rc.N` | Publishing the GitHub Release for tag `v0.3.14-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
-| Stable release | `0.3.14` | Publishing the GitHub Release for tag `v0.3.14` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.3.15-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.15` |
-
-**After releasing `v0.3.14`**, bump both fields in `eng/version.json`:
-
-```json
-{
   "stableVersion": "0.3.14",
   "nextVersion": "0.3.15"
 }
 ```
 
+| Stage | Version form | How it is derived |
+| --- | --- | --- |
+| Local pack / install | `0.3.15-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `0.3.15-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.3.15-rc.N` | Publishing the GitHub Release for tag `v0.3.15-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
+| Stable release | `0.3.15` | Publishing the GitHub Release for tag `v0.3.15` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
+| Post-release main builds | `0.3.16-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.3.16` |
+
+**After releasing `v0.3.15`**, bump both fields in `eng/version.json`:
+
+```json
+{
+  "stableVersion": "0.3.15",
+  "nextVersion": "0.3.16"
+}
+```
+
 This ensures the next main-branch CI build (and local pack) immediately produces
-`0.3.15-preview.<run>.<attempt>` / `0.3.15-<sha>-<G-unit>` rather than continuing to
-emit `0.3.14` (which would collide with the stable release version).
+`0.3.16-preview.<run>.<attempt>` / `0.3.16-<sha>-<G-unit>` rather than continuing to
+emit `0.3.15` (which would collide with the stable release version).
 
-### Next release readiness (v0.3.14)
+### Next release readiness (v0.3.15)
 
-**`v0.3.13` shipped** (GitHub Release + NuGet) and the version policy was bumped
-to the `0.3.14` development line. The repository is now on the in-development
-**`0.3.14`** `nextVersion`; G512 is **prepare-only** — it bumps the version
+**`v0.3.14` shipped** (GitHub Release + NuGet) and the version policy was bumped
+to the `0.3.15` development line. The repository is now on the in-development
+**`0.3.15`** `nextVersion`; G519 is **prepare-only** — it bumps the version
 metadata and docs and adds no publish steps. The version-bump merge does **not**
 create a GitHub Release or tag. After it merges and the
-[release-readiness gate](release-notes-v0.3.14.md#release-readiness-gate-g512)
+[release-readiness gate](release-notes-v0.3.15.md#release-readiness-gate-g519)
 holds, a **maintainer/operator (or external release automation) creates and
-publishes the GitHub Release** for `v0.3.14`; publishing that Release fires
+publishes the GitHub Release** for `v0.3.15`; publishing that Release fires
 `.github/workflows/release.yml` (`on: release: published`), which builds and
 publishes the NuGet package and the per-platform binary artifacts. Full
 changelog and operator checklist:
-[release-notes-v0.3.14.md](release-notes-v0.3.14.md).
+[release-notes-v0.3.15.md](release-notes-v0.3.15.md).
 
-**To ship in `v0.3.14` (changes since `v0.3.13`) — orchestrator-mode preview
-guidance patch:**
+**To ship in `v0.3.15` (changes since `v0.3.14`) — orchestrator/agmsg
+operational fixes:**
 
-- **concrete agmsg startup steps** (G508) — the orchestrator setup guide
-  produces actionable, ordered, copy-paste agmsg setup/startup/troubleshooting
-  steps from a three-folder request, plus a preflight of all three cwds.
-- **design-thread handoff + monitor recovery** (G509) — the first design→
-  orchestrator start/resume message, autonomous one-issue-per-wake publish, and
-  a monitor-recovery checklist.
-- **setup intake form + traffic-controller playbook** (G510) — eliciting/inferring
-  the setup facts with recommended defaults, role startup messages, and a design
-  traffic-controller playbook; plus the draft-PR reviewability rule via canonical
-  review surfaces.
-- **Claude Code Monitor vs agmsg delivery-mode** (G511) — distinguishes Claude
-  Code's `Monitor` tool (the real inbox-stream mechanism) from agmsg
-  `delivery.sh mode=monitor` config, with live-attachment success/failure markers
-  and a project-trust repair runbook.
+- **Claude project-settings diagnosis for a missing agmsg Monitor** (G517) —
+  when `ToolSearch select:Monitor` finds no Claude Code `Monitor` tool at all
+  (a tool-surface problem, not the `1 shell` vs `1 monitor` delivery-mode
+  confusion), the guide adds a known-good comparison checklist, names suspect
+  project-level `env` overrides, and documents safe operator remediation.
+- **orchestrator-mode timers shift to a design-side watchdog** (G518) — the
+  normal steady state is now message-driven (implementation/review replies
+  wake the orchestrator), with an explicit orchestrator timer supported only
+  as a fallback/legacy polling option, and a new optional, low-frequency
+  design-side watchdog as the recommended safety net.
 - Orchestrator mode remains **preview/experimental**: opt-in, still being
   hardened, with the timer-loop mode fully supported and unchanged. See
   [Agent-message orchestration](12-agent-message-orchestration.md).
 
-**Release-readiness verification (run before merging the `v0.3.14` version
+**Release-readiness verification (run before merging the `v0.3.15` version
 bump):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.3.13 (published), nextVersion 0.3.14 (to release)
+cat eng/version.json   # stableVersion 0.3.14 (published), nextVersion 0.3.15 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.3.14-<sha>-G51x   (NOT a stale literal)
+#   expected shape: intent-cli 0.3.15-<sha>-G51x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.14.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.3.15.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -289,11 +285,11 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
 ```
 
 After the version-bump merge lands on `main`, a maintainer/operator (or external
-release automation) creates and publishes the GitHub Release for `v0.3.14`;
+release automation) creates and publishes the GitHub Release for `v0.3.15`;
 publishing it triggers `release.yml` (`on: release: published`) to build and
 publish the NuGet package and the per-platform binary artifacts. Once it has
 published, apply the post-release `eng/version.json` bump above
-(`stableVersion → 0.3.14`, `nextVersion → 0.3.15`).
+(`stableVersion → 0.3.15`, `nextVersion → 0.3.16`).
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
