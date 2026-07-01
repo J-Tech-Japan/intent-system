@@ -56,8 +56,12 @@ The full reference checklist follows the intake:
    nothing.
 6. **Ping test** — send one agmsg message and confirm it lands in the target
    role's inbox before any real delegation.
-7. **Schedule only the orchestrator** — Codex automation 5m or Claude
-   `/loop 5m`; receivers stay loopless.
+7. **Message-driven steady state by default** — implementation/review replies
+   over agmsg wake the orchestrator, so routine fast polling is not required;
+   receivers stay loopless. Only schedule an orchestrator timer (Codex
+   automation 5m or Claude `/loop 5m`) as an explicit fallback/legacy option
+   (see [Design-side watchdog](#design-side-watchdog-optional-safety-net) for
+   the recommended low-frequency safety net instead).
 8. **Cleanup** — on teardown, leave/despawn the roles through the agmsg scripts
    (`leave.sh` / `despawn.sh`) and stop any inbox watchers.
 
@@ -109,7 +113,7 @@ before acting on it. intent-cli never launches Claude/Codex or any AI provider.
 | Mode | Driver | Notes |
 |---|---|---|
 | **timer-loop mode** | recurring timers | Existing, fully supported. Implementation/review threads self-schedule and read `worker next-action` / host review-next-slice. No orchestrator required. |
-| **orchestrator-message mode** | a fourth orchestrator thread | Opt-in. The orchestrator paces the implementation/review threads over agmsg instead of timers. |
+| **orchestrator-message mode** | a fourth orchestrator thread | Opt-in. The orchestrator paces the implementation/review threads over agmsg; at steady state this is message-driven, with an optional low-frequency design-side watchdog as the safety net. An explicit orchestrator timer remains supported as a fallback/legacy option. |
 
 Do **not** run both modes for the same domain/repo. In orchestrator-message
 mode, do not also launch the implementation/review recurring timer loops — two
@@ -117,28 +121,38 @@ drivers would race on the same GitHub state.
 
 ## Scheduled orchestrator cadence
 
-In orchestrator-message mode the orchestrator thread is the **single recurring
-driver**. Schedule **only** the orchestrator; the implementation and review
-threads are long-lived but **loopless receivers** — they act only when the
-orchestrator delegates and never start their own recurring timer for the same
-domain/repo. This keeps a periodic driver (so design progress, agmsg replies,
-completed CI, and approved PRs are noticed without the operator poking stalled
-work) while avoiding the mixed-mode timer race.
+In orchestrator-message mode the normal steady state is **message-driven**:
+implementation/review receivers already send accepted/progress/completed/
+blocked replies to the orchestrator, and those replies wake the orchestrator
+path — routine fast polling is **not** required. An orchestrator timer remains
+**supported** but only as an explicit **fallback/legacy** polling option for an
+operator who intentionally wants scheduled polling instead of message-driven
+wakes. Either way, the implementation and review threads are long-lived but
+**loopless receivers** — they act only when the orchestrator delegates and
+never start their own recurring timer for the same domain/repo. The
+recommended safety net for the message-driven steady state is a low-frequency
+[design-side watchdog](#design-side-watchdog-optional-safety-net), not a fast
+orchestrator loop.
 
-Schedule the orchestrator one of two ways:
+If an explicit fallback/legacy timer is used, schedule the orchestrator one of
+two ways:
 
-- **Codex automation (every 5m)** — run one orchestrator wake per fire: check
-  design progress and replies, ask intent-cli for state, verify the GitHub
-  facts, then send at most one message and exit.
-- **Claude same-thread `/loop 5m`** — in the orchestrator thread run
+- **Codex automation (every 5m, optional)** — run one orchestrator wake per
+  fire: check design progress and replies, ask intent-cli for state, verify
+  the GitHub facts, then send at most one message and exit.
+- **Claude same-thread `/loop 5m` (optional)** — in the orchestrator thread run
   `/loop 5m` so the same thread re-wakes every 5 minutes for one pass each.
 
 Do **not** also run `/loop` or a Codex automation in the implementation or
-review threads — those are loopless receivers.
+review threads — those are loopless receivers regardless of whether the
+orchestrator runs message-driven or on a fallback/legacy timer.
 
 ### Each orchestrator wake
 
-Generate the authoritative wake prompt from intent-cli; each wake should:
+Generate the authoritative wake prompt from intent-cli. A wake is triggered
+either by an incoming agmsg reply from implementation/review (the
+message-driven steady state) or by the optional fallback/legacy timer firing —
+either trigger runs exactly one pass:
 
 - Check design-side progress (new packets/issues, intent status changes).
 - Read pending agmsg replies (signals only — re-verify against intent-cli /
@@ -497,6 +511,50 @@ First message — design → orchestrator (paste into the design thread):
   on demand; check the design inbox with `inbox.sh` to pick up escalations,
   especially when monitor delivery did not appear live or the design session
   started after the orchestrator sent.
+
+## Design-side watchdog (optional safety net)
+
+In the message-driven steady state, implementation/review replies already wake
+the orchestrator, so a fast orchestrator loop is redundant. The recommended
+safety net instead is an **optional**, **low-frequency** watchdog run from the
+**design** thread: it checks whether HITL (human-in-the-loop) messages arrived
+and whether the orchestrator looks stalled, then sends **at most one**
+canonical repair/status request — it never drives routine orchestration
+itself.
+
+- **Frequency** — low only (e.g. tens of minutes to hours, not every 5m); a
+  fast watchdog loop recreates the same churn the message-driven model
+  removes.
+- **Checks** — the design/HITL inbox for unread human-facing escalations
+  (`inbox.sh` on the design role), and orchestrator staleness via read-only
+  intent-cli/GitHub facts (`worker next-action --github-only`, open PR/CI/
+  label state) compared against the last known orchestrator activity.
+- **Action** — when staleness or an unanswered HITL message is detected, send
+  at most one canonical repair/status request to the orchestrator:
+
+  ```json
+  {"type":"status-request","to":"orchestrator","from":"design-watchdog","ask":"non-destructive liveness check: reply with current state and next action, or confirm idle"}
+  ```
+
+- **Stop condition** — stop or archive the watchdog once both the backlog and
+  the human-decision (HITL) queues are drained.
+
+Watchdog safety rules **prohibit**:
+
+- duplicate delegation — the watchdog never re-sends or re-creates a
+  delegation itself; only the orchestrator delegates;
+- clearing a permission prompt — `waiting-permission` stays an operator
+  notice; the watchdog never auto-clears it;
+- cancelling or resetting in-flight work;
+- force-closing an issue/PR or any other terminal action;
+- speculative durable-state surgery — no hand-editing labels, queue-state, or
+  any host metadata.
+
+An explicit orchestrator timer (Codex automation every 5m, or Claude
+same-thread `/loop 5m`) remains supported as fallback/legacy polling when an
+operator intentionally wants scheduled polling instead of the message-driven
+steady state — the design-side watchdog and the orchestrator fallback timer
+are alternative safety nets, not both required together.
 
 ## Monitor recovery
 
