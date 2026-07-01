@@ -219,31 +219,41 @@ internal static class GuideOrchestratorThreadCommand
             Scheduling = new OrchestratorScheduling
             {
                 Summary =
-                    "In orchestrator-message mode the orchestrator thread is the SINGLE recurring driver. Schedule ONLY "
-                    + "the orchestrator (Codex automation every 5m, or Claude same-thread `/loop 5m`); the implementation "
-                    + "and review threads are long-lived but LOOPLESS receivers. This keeps a periodic driver — so "
-                    + "design progress, agmsg replies, completed CI, and approved PRs are noticed without the operator "
-                    + "poking stalled work — while avoiding the mixed-mode timer race.",
+                    "In orchestrator-message mode the normal steady state is MESSAGE-DRIVEN: implementation/review "
+                    + "receivers already send accepted/progress/completed/blocked replies to the orchestrator, and those "
+                    + "replies wake the orchestrator path — routine fast polling is NOT required. An orchestrator timer "
+                    + "(Codex automation every 5m, or Claude same-thread `/loop 5m`) remains SUPPORTED but only as an "
+                    + "explicit FALLBACK/LEGACY polling option for an operator who intentionally wants scheduled "
+                    + "polling instead of message-driven wakes. Either way the implementation and review threads stay "
+                    + "long-lived LOOPLESS receivers. The recommended safety net for message-driven steady state is a "
+                    + "LOW-frequency design-side watchdog (see Design-side watchdog), not a fast orchestrator loop.",
                 ScheduledThread = "orchestrator",
                 ReceiverNote =
                     "Implementation and review threads are loopless receivers: do NOT start a recurring timer/loop in a "
                     + "receiver thread for this domain/repo. A receiver waits for an agmsg delegation, acts once, replies "
                     + "once, and waits again. Only the orchestrator is scheduled.",
                 CodexSetupPrompt = Apply(
-                    "Codex automation (run every 5 minutes) for the ORCHESTRATOR thread, domain `<domain>` against "
-                    + "`<owner/repo>` using `<agent>`: on each run perform exactly ONE orchestrator wake — check "
-                    + "design-side progress and agmsg replies, ask intent-cli for state (`intent status`, `worker "
-                    + "next-action --github-only`, `automation host-review-preflight`), verify the GitHub facts "
-                    + "(CI/approval/merge/closeout), then send AT MOST ONE message (one delegation, one repair, or one "
-                    + "escalation) and exit. Do not run implementation/review loops; they are loopless receivers."),
+                    "OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the ORCHESTRATOR "
+                    + "thread, domain `<domain>` against `<owner/repo>` using `<agent>`: on each run perform exactly "
+                    + "ONE orchestrator wake — check design-side progress and agmsg replies, ask intent-cli for state "
+                    + "(`intent status`, `worker next-action --github-only`, `automation host-review-preflight`), "
+                    + "verify the GitHub facts (CI/approval/merge/closeout), then send AT MOST ONE message (one "
+                    + "delegation, one repair, or one escalation) and exit. Prefer the message-driven steady state "
+                    + "(implementation/review agmsg replies already wake the orchestrator); use this timer only when "
+                    + "the operator explicitly wants scheduled fallback/legacy polling. Do not run implementation/"
+                    + "review loops; they are loopless receivers."),
                 ClaudeLoopSetupPrompt = Apply(
-                    "Claude same-thread setup for the ORCHESTRATOR thread, domain `<domain>` against `<owner/repo>`: in "
-                    + "the orchestrator thread run `/loop 5m` with the orchestrator prompt so the same thread re-wakes "
-                    + "every 5 minutes. Each wake does exactly one orchestrator pass (read replies, check intent-cli / "
-                    + "GitHub state, send AT MOST ONE message). Do NOT also launch `/loop` in the implementation or "
-                    + "review threads — those are loopless receivers driven only by your delegations."),
+                    "OPTIONAL fallback/legacy polling — Claude same-thread setup for the ORCHESTRATOR thread, domain "
+                    + "`<domain>` against `<owner/repo>`: in the orchestrator thread run `/loop 5m` with the "
+                    + "orchestrator prompt so the same thread re-wakes every 5 minutes. Each wake does exactly one "
+                    + "orchestrator pass (read replies, check intent-cli / GitHub state, send AT MOST ONE message). "
+                    + "Prefer the message-driven steady state (implementation/review agmsg replies already wake the "
+                    + "orchestrator); use this timer only when the operator explicitly wants scheduled fallback/legacy "
+                    + "polling. Do NOT also launch `/loop` in the implementation or review threads — those are "
+                    + "loopless receivers driven only by your delegations."),
                 WakeResponsibilities = new[]
                 {
+                    "A wake is triggered either by an incoming agmsg reply from implementation/review (the message-driven steady state) or by the optional fallback/legacy timer firing — either trigger runs exactly one orchestrator pass below.",
                     Apply("Check design-side progress: newly published packets/issues and intent status changes via `intent-cli intent status --domain <domain> --format json`."),
                     "Read pending agmsg replies from the implementation/review receivers (signals only — re-verify against intent-cli / GitHub).",
                     Apply("Ask intent-cli for worker state: `intent-cli worker next-action --repo <owner/repo> --github-only --format json`."),
@@ -526,7 +536,7 @@ internal static class GuideOrchestratorThreadCommand
                 Optional = true,
                 Roles = new[]
                 {
-                    "orchestrator — the single scheduled driver.",
+                    "orchestrator — paces the other roles over agmsg; message-driven by default, with an explicit timer only as a fallback/legacy option.",
                     "implementation receiver — LOOPLESS; acts on delegations only, never starts its own timer.",
                     "review receiver — LOOPLESS; acts on delegations only, never starts its own timer.",
                     "design / human receiver — OPTIONAL; receives ONLY human-needed escalations and is also loopless (the human reads on demand, e.g. via `inbox.sh`).",
@@ -572,6 +582,49 @@ internal static class GuideOrchestratorThreadCommand
                     + "the design thread) checks the design inbox with `inbox.sh` — especially when monitor delivery did "
                     + "not appear live or the design session started after the orchestrator sent. Read, decide/reply, "
                     + "then the orchestrator continues.",
+            },
+            DesignWatchdog = new OrchestratorDesignWatchdog
+            {
+                Summary =
+                    "In the message-driven steady state, implementation/review replies already wake the orchestrator, "
+                    + "so a fast orchestrator loop is redundant. The recommended safety net instead is an OPTIONAL, "
+                    + "LOW-frequency watchdog run from the DESIGN thread: it checks whether HITL (human-in-the-loop) "
+                    + "messages arrived and whether the orchestrator looks stalled, then sends AT MOST ONE canonical "
+                    + "repair/status request — it never drives routine orchestration itself.",
+                Optional = true,
+                Frequency =
+                    "LOW frequency only (e.g. tens of minutes to hours, not every 5m) — the watchdog is a safety net "
+                    + "for the message-driven steady state, not a replacement driver. A fast watchdog loop recreates "
+                    + "the same churn the message-driven model removes.",
+                Checks = new[]
+                {
+                    "Check the design/HITL inbox for unread human-facing escalations or unanswered questions (`inbox.sh` on the design role).",
+                    Apply("Check orchestrator staleness: read-only intent-cli / GitHub facts (`worker next-action --repo <owner/repo> --github-only --format json`, open PR/CI/label state) compared against the last known orchestrator activity."),
+                },
+                Action =
+                    "When staleness or an unanswered HITL message is detected, send AT MOST ONE canonical repair/status "
+                    + "request to the orchestrator (the same non-destructive status-request shape as the stale-thread "
+                    + "health check) — never more than one per watchdog wake, and never a batch of repairs.",
+                RepairStatusRequestTemplate =
+                    "{\"type\":\"status-request\",\"to\":\"orchestrator\",\"from\":\"design-watchdog\",\"ask\":"
+                    + "\"non-destructive liveness check: reply with current state and next action, or confirm idle\"}",
+                StopCondition =
+                    "Stop or archive the watchdog once both the backlog and the human-decision (HITL) queues are "
+                    + "drained — an idle orchestrator with nothing queued and no pending human decisions needs no "
+                    + "further watchdog wakes until new work appears.",
+                SafetyRules = new[]
+                {
+                    "PROHIBITED: duplicate delegation — the watchdog never re-sends or re-creates a delegation itself; only the orchestrator delegates.",
+                    "PROHIBITED: clearing a permission prompt — `waiting-permission` stays an operator notice; the watchdog never auto-clears it.",
+                    "PROHIBITED: cancelling or resetting in-flight work.",
+                    "PROHIBITED: force-closing an issue/PR or any other terminal action.",
+                    "PROHIBITED: speculative durable-state surgery — no hand-editing labels, queue-state, or any host metadata; the watchdog only sends a message and reads read-only facts.",
+                },
+                FallbackTimerNote =
+                    "An explicit orchestrator timer (Codex automation every 5m, or Claude same-thread `/loop 5m`) "
+                    + "remains SUPPORTED as fallback/legacy polling when an operator intentionally wants scheduled "
+                    + "polling instead of the message-driven steady state — the design-side watchdog and the "
+                    + "orchestrator fallback timer are alternative safety nets, not both required together.",
             },
             MonitorRecovery = new[]
             {
@@ -762,11 +815,14 @@ internal static class GuideOrchestratorThreadCommand
             Setup = new OrchestratorSetup
             {
                 Summary =
-                    "Design-thread setup for starting orchestrator-message mode. The orchestrator is the single "
-                    + "scheduled driver; the implementation and review threads are loopless receivers. Decide the "
-                    + "inputs, register the agmsg roles under one team, paste the role prompts, run one read-only first "
-                    + "wake, ping-test the inbox, then schedule only the orchestrator. agmsg is a signal layer only; "
-                    + "intent-cli and GitHub stay authoritative.",
+                    "Design-thread setup for starting orchestrator-message mode. The steady state is MESSAGE-DRIVEN: "
+                    + "implementation/review receivers reply over agmsg and those replies wake the orchestrator, so no "
+                    + "fast recurring driver is required by default; the implementation and review threads are always "
+                    + "loopless receivers. Decide the inputs, register the agmsg roles under one team, paste the role "
+                    + "prompts, run one read-only first wake, ping-test the inbox, then either rely on message-driven "
+                    + "wakes or schedule the orchestrator only as an explicit fallback/legacy timer (see Design-side "
+                    + "watchdog for the recommended low-frequency safety net). agmsg is a signal layer only; intent-cli "
+                    + "and GitHub stay authoritative.",
                 Decisions = new[]
                 {
                     Apply("domain (`<domain>`) and target repo (`<owner/repo>`)"),
@@ -784,7 +840,7 @@ internal static class GuideOrchestratorThreadCommand
                     "Paste the role prompts from the `Thread prompts` section into the matching thread (orchestrator / implementation / review).",
                     "Run ONE read-only first wake in the orchestrator (see `Orchestrator first wake`) — confirm only, send nothing.",
                     "Ping-test the inbox before real delegation (see ping_test).",
-                    "Schedule ONLY the orchestrator (Codex automation 5m, or Claude same-thread `/loop 5m`); leave the receivers loopless.",
+                    "Message-driven steady state is the default — implementation/review replies wake the orchestrator; schedule an orchestrator timer (Codex automation 5m, or Claude same-thread `/loop 5m`) only as an explicit fallback/legacy option, and leave the receivers loopless either way.",
                     "On teardown, clean up the agmsg roles through the agmsg scripts (see cleanup).",
                 },
                 AgmsgCommands = new[]
@@ -945,10 +1001,12 @@ internal static class GuideOrchestratorThreadCommand
                         + "NOT "
                         + "launch recurring implement/review timers for this domain/repo while orchestrating. Fail "
                         + "closed: if you detect a second orchestrator for this domain/repo, or agmsg replies conflict "
-                        + "with GitHub/intent-cli facts, STOP and escalate rather than guessing. In "
-                        + "orchestrator-message mode YOU are the single recurring driver: schedule only this "
-                        + "orchestrator thread (Codex automation every 5m, or Claude same-thread `/loop 5m`); the "
-                        + "implementation/review receivers stay loopless and act only on your delegations."
+                        + "with GitHub/intent-cli facts, STOP and escalate rather than guessing. Your normal steady "
+                        + "state is MESSAGE-DRIVEN: implementation/review agmsg replies wake you, so you do NOT need a "
+                        + "fast recurring timer. An orchestrator timer (Codex automation every 5m, or Claude "
+                        + "same-thread `/loop 5m`) remains SUPPORTED only as an explicit FALLBACK/LEGACY polling "
+                        + "option; the implementation/review receivers stay loopless and act only on your delegations "
+                        + "either way."
                         + routingClause),
                 },
                 new OrchestratorThreadPrompt
@@ -1142,9 +1200,10 @@ internal static class GuideOrchestratorThreadCommand
             $"You are the {role.ToUpperInvariant()} thread for domain `{domain}` against `{repo}` using `{roleAgent}`, "
             + $"running from `{folder}` as part of agmsg team `{team}` (delivery: {deliveryMode}). "
             + (string.Equals(role, "orchestrator", StringComparison.Ordinal)
-                ? "You are the ONLY scheduled thread (Codex automation 5m or Claude `/loop 5m`); you pace the "
-                  + "implementation/review receivers over agmsg and never run their timers. See the full orchestrator "
-                  + "prompt in the Thread prompts section."
+                ? "Your steady state is MESSAGE-DRIVEN — implementation/review agmsg replies wake you; an orchestrator "
+                  + "timer (Codex automation 5m or Claude `/loop 5m`) is an OPTIONAL fallback/legacy polling mode, not "
+                  + "the default. You pace the implementation/review receivers over agmsg and never run their timers. "
+                  + "See the full orchestrator prompt in the Thread prompts section."
                 : "You are a LOOPLESS receiver: do NOT start your own recurring timer/loop — wait for an orchestrator "
                   + "delegation, act once, reply once, then wait. Your worker target comes from `intent-cli worker "
                   + "next-action`, not the agmsg text. See the full prompt in the Thread prompts section.");
@@ -1167,7 +1226,7 @@ internal static class GuideOrchestratorThreadCommand
             FirstValidation = new[]
             {
                 $"Preflight all three cwds BEFORE mutating: `{orchestratorPath}` (orchestrator), `{implementationPath}` (implementation), `{reviewPath}` (review) — clean `git status`, expected git remote/repo, expected branch/base, and no existing timer-loop for this domain/repo (see Preflight).",
-                "Existing-loop conflict check: confirm no implementation/review recurring timer is running for this domain/repo (only the orchestrator is scheduled).",
+                "Existing-loop conflict check: confirm no implementation/review recurring timer is running for this domain/repo (implementation/review stay loopless whether the orchestrator runs message-driven or on an explicit fallback/legacy timer).",
                 "First read-only wake: run ONE confirm-only orchestrator wake — read state, send nothing.",
                 "Receiver readiness: ping each receiver and require an ack BEFORE any real delegation — a registered+configured role is not ready until it acks (see the Receiver readiness section). A session launched before delivery was active may have missed earlier messages; resend or read with `inbox.sh`.",
             },
@@ -1176,8 +1235,9 @@ internal static class GuideOrchestratorThreadCommand
     }
 
     private const string LooplessReceiverNote =
-        "Only the orchestrator is scheduled (Codex 5m / Claude `/loop 5m`). The implementation and review threads are "
-        + "loopless agmsg receivers — they must NOT run their own `/loop` or recurring timer for the same domain/repo.";
+        "The implementation and review threads are loopless agmsg receivers — they must NOT run their own `/loop` or "
+        + "recurring timer for the same domain/repo, whether the orchestrator runs message-driven (the default, woken "
+        + "by agmsg replies) or on an explicit fallback/legacy timer (Codex 5m / Claude `/loop 5m`).";
 
     private static bool TryParseArguments(
         string[] args,
@@ -1639,16 +1699,16 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
         writer.WriteLine(guide.Scheduling.Summary);
         writer.WriteLine();
-        writer.WriteLine($"- scheduled thread: `{guide.Scheduling.ScheduledThread}` (the only scheduled thread)");
+        writer.WriteLine($"- scheduled thread when an explicit timer is used: `{guide.Scheduling.ScheduledThread}` (the only thread ever scheduled)");
         writer.WriteLine($"- **receivers are loopless** — {guide.Scheduling.ReceiverNote}");
         writer.WriteLine();
-        writer.WriteLine("### Codex automation (5m) — orchestrator");
+        writer.WriteLine("### Codex automation (5m) — orchestrator (fallback/legacy, optional)");
         writer.WriteLine();
         writer.WriteLine("```text");
         writer.WriteLine(guide.Scheduling.CodexSetupPrompt);
         writer.WriteLine("```");
         writer.WriteLine();
-        writer.WriteLine("### Claude `/loop 5m` — orchestrator");
+        writer.WriteLine("### Claude `/loop 5m` — orchestrator (fallback/legacy, optional)");
         writer.WriteLine();
         writer.WriteLine("```text");
         writer.WriteLine(guide.Scheduling.ClaudeLoopSetupPrompt);
@@ -1843,6 +1903,40 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **autonomous publish** — {guide.DesignHandoff.AutonomousPublishRule}");
         writer.WriteLine($"- **escalation boundary** — {guide.DesignHandoff.EscalationBoundary}");
         writer.WriteLine($"- **design inbox workflow** — {guide.DesignHandoff.DesignInboxWorkflow}");
+        writer.WriteLine();
+
+        writer.WriteLine("## Design-side watchdog (optional safety net)");
+        writer.WriteLine();
+        writer.WriteLine(guide.DesignWatchdog.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- optional: {(guide.DesignWatchdog.Optional ? "yes" : "no")}");
+        writer.WriteLine($"- **frequency** — {guide.DesignWatchdog.Frequency}");
+        writer.WriteLine();
+        writer.WriteLine("### Watchdog checks");
+        writer.WriteLine();
+        foreach (var check in guide.DesignWatchdog.Checks)
+        {
+            writer.WriteLine($"- {check}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **action** — {guide.DesignWatchdog.Action}");
+        writer.WriteLine();
+        writer.WriteLine("Repair/status-request template:");
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(guide.DesignWatchdog.RepairStatusRequestTemplate);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"- **stop condition** — {guide.DesignWatchdog.StopCondition}");
+        writer.WriteLine();
+        writer.WriteLine("### Watchdog safety rules");
+        writer.WriteLine();
+        foreach (var rule in guide.DesignWatchdog.SafetyRules)
+        {
+            writer.WriteLine($"- {rule}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **fallback timer** — {guide.DesignWatchdog.FallbackTimerNote}");
         writer.WriteLine();
 
         writer.WriteLine("## Design traffic-controller playbook");
@@ -2081,6 +2175,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("design_handoff")]
     public required OrchestratorDesignHandoff DesignHandoff { get; init; }
 
+    [JsonPropertyName("design_watchdog")]
+    public required OrchestratorDesignWatchdog DesignWatchdog { get; init; }
+
     [JsonPropertyName("monitor_recovery")]
     public required IReadOnlyList<OrchestratorTroubleshooting> MonitorRecovery { get; init; }
 
@@ -2311,6 +2408,36 @@ internal sealed record OrchestratorDesignHandoff
 
     [JsonPropertyName("design_inbox_workflow")]
     public required string DesignInboxWorkflow { get; init; }
+}
+
+internal sealed record OrchestratorDesignWatchdog
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("optional")]
+    public required bool Optional { get; init; }
+
+    [JsonPropertyName("frequency")]
+    public required string Frequency { get; init; }
+
+    [JsonPropertyName("checks")]
+    public required IReadOnlyList<string> Checks { get; init; }
+
+    [JsonPropertyName("action")]
+    public required string Action { get; init; }
+
+    [JsonPropertyName("repair_status_request_template")]
+    public required string RepairStatusRequestTemplate { get; init; }
+
+    [JsonPropertyName("stop_condition")]
+    public required string StopCondition { get; init; }
+
+    [JsonPropertyName("safety_rules")]
+    public required IReadOnlyList<string> SafetyRules { get; init; }
+
+    [JsonPropertyName("fallback_timer_note")]
+    public required string FallbackTimerNote { get; init; }
 }
 
 internal sealed record OrchestratorDesignReceiver

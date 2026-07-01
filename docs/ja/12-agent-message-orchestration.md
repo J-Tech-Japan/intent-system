@@ -53,8 +53,11 @@ intake の後に、完全なリファレンスチェックリストが続きま�
 5. **最初の read-only wake** — 確認のみの orchestrator wake を 1 回実行し、何も送らない。
 6. **ping テスト** — agmsg メッセージを 1 通送り、実際の委譲の前に対象ロールの inbox に
    届くことを確認する。
-7. **orchestrator のみスケジュール** — Codex automation 5m または Claude `/loop 5m`。
-   receiver は loopless のまま。
+7. **既定はメッセージ駆動の定常状態** — implementation/review が agmsg で返信し、
+   orchestrator を起こすため、通常は高頻度のポーリングは不要。receiver は loopless の
+   まま。orchestrator タイマー（Codex automation 5m または Claude `/loop 5m`）は
+   明示的な fallback/legacy オプションとしてのみスケジュールする
+   （推奨される低頻度のセーフティネットは [design-side watchdog](#design-side-watchdog任意のセーフティネット) を参照）。
 8. **クリーンアップ** — 終了時は agmsg スクリプト（`leave.sh` / `despawn.sh`）でロールを
    leave/despawn し、inbox watcher を停止する。
 
@@ -102,7 +105,7 @@ orchestrator はそれに従って行動する前に、すべての主張を int
 | モード | ドライバー | 備考 |
 |---|---|---|
 | **timer-loop モード** | 定期タイマー | 既存・完全サポート。実装/レビュースレッドが自己スケジュールし、`worker next-action` / host review-next-slice を読む。orchestrator は不要。 |
-| **orchestrator-message モード** | 4 つ目の orchestrator スレッド | オプトイン。orchestrator がタイマーの代わりに agmsg 経由で実装/レビュースレッドをペース配分する。 |
+| **orchestrator-message モード** | 4 つ目の orchestrator スレッド | オプトイン。orchestrator が agmsg 経由で実装/レビュースレッドをペース配分する。定常状態はメッセージ駆動で、任意の低頻度 design-side watchdog をセーフティネットとする。明示的な orchestrator タイマーは fallback/legacy オプションとして引き続きサポートされる。 |
 
 同じ domain/repo に対して両モードを同時に実行しては **いけません**。
 orchestrator-message モードでは、実装/レビューの定期タイマーループも起動しないでください。
@@ -110,27 +113,36 @@ orchestrator-message モードでは、実装/レビューの定期タイマー�
 
 ## スケジュールされた orchestrator のケイデンス
 
-orchestrator-message モードでは、orchestrator スレッドが **唯一の定期ドライバー** です。
-**orchestrator のみ** をスケジュールしてください。実装/レビュースレッドは長命ですが
-**ループを持たない受信側（loopless receiver）** であり、orchestrator が委譲したときだけ
-動作し、同じ domain/repo に対して自分の定期タイマーを起動しません。これにより定期ドライバー
-を保ちつつ（設計進捗、agmsg 返信、完了した CI、承認済み PR を、オペレーターが停滞作業を
-突く必要なく検知できる）、mixed-mode のタイマー競合を回避します。
+orchestrator-message モードの通常の定常状態は **メッセージ駆動** です:
+implementation/review receiver はすでに accepted/progress/completed/blocked の
+返信を orchestrator に送っており、その返信が orchestrator を起こすため、高頻度の
+ポーリングは **不要** です。orchestrator タイマーは引き続き **サポート** されますが、
+メッセージ駆動の wake の代わりにスケジュールされたポーリングを明示的に望むオペレーター
+向けの **fallback/legacy** ポーリングオプションとしてのみです。いずれの場合も、
+実装/レビュースレッドは長命ですが **ループを持たない受信側（loopless receiver）** であり、
+orchestrator が委譲したときだけ動作し、同じ domain/repo に対して自分の定期タイマーを
+起動しません。メッセージ駆動の定常状態に推奨されるセーフティネットは、高速な
+orchestrator ループではなく、低頻度の
+[design-side watchdog](#design-side-watchdog任意のセーフティネット) です。
 
-orchestrator のスケジュール方法は次の 2 通り:
+明示的な fallback/legacy タイマーを使う場合、orchestrator のスケジュール方法は次の
+2 通りです:
 
-- **Codex automation（5 分ごと）** — 起動ごとに 1 回の orchestrator wake を実行: 設計進捗
-  と返信を確認し、intent-cli に状態を問い合わせ、GitHub の事実を検証し、最大 1 通だけ
-  メッセージを送って終了する。
-- **Claude 同一スレッド `/loop 5m`** — orchestrator スレッドで `/loop 5m` を実行し、同じ
-  スレッドが 5 分ごとに 1 パスずつ再起動する。
+- **Codex automation（5 分ごと・任意）** — 起動ごとに 1 回の orchestrator wake を実行:
+  設計進捗と返信を確認し、intent-cli に状態を問い合わせ、GitHub の事実を検証し、
+  最大 1 通だけメッセージを送って終了する。
+- **Claude 同一スレッド `/loop 5m`（任意）** — orchestrator スレッドで `/loop 5m` を実行し、
+  同じスレッドが 5 分ごとに 1 パスずつ再起動する。
 
 実装/レビュースレッドでは `/loop` や Codex automation を **同時に実行しないでください** —
+orchestrator がメッセージ駆動で動作する場合でも fallback/legacy タイマーを使う場合でも、
 これらは loopless receiver です。
 
 ### 各 orchestrator wake
 
-権威ある wake プロンプトは intent-cli から生成します。各 wake は次を行うべきです:
+権威ある wake プロンプトは intent-cli から生成します。wake は implementation/review
+からの agmsg 返信の到着（メッセージ駆動の定常状態）か、任意の fallback/legacy タイマーの
+発火のいずれかによってトリガーされます — どちらのトリガーでも 1 パスだけ実行します:
 
 - 設計側の進捗を確認（新しい packet/issue、intent status の変化）。
 - 保留中の agmsg 返信を読む（シグナルのみ — intent-cli / GitHub に対して再検証）。
@@ -380,7 +392,8 @@ review の内部に留まり、人間が必要な判断のみが design スレ�
 
 design receiving を有効にしたときの 4 つの論理ロール:
 
-- **orchestrator** — 唯一のスケジュールドライバー。
+- **orchestrator** — agmsg 経由で他のロールをペース配分する。既定はメッセージ駆動で、
+  明示的なタイマーは fallback/legacy オプションとしてのみ使う。
 - **implementation receiver** — loopless。委譲にのみ反応する。
 - **review receiver** — loopless。委譲にのみ反応する。
 - **design / human receiver** — 任意。人間が必要なエスカレーションのみを受け取り、これも
@@ -456,6 +469,48 @@ resume）します。その後 orchestrator がループを自律的に駆動し
 - **design inbox workflow** — design スレッドは loopless receiver でオンデマンドに読みます。
   エスカレーションを拾うには `inbox.sh` で design inbox を確認します — 特に monitor delivery が
   ライブで現れなかった場合や、design セッションが orchestrator の送信後に開始した場合。
+
+## design-side watchdog（任意のセーフティネット）
+
+メッセージ駆動の定常状態では、implementation/review の返信がすでに orchestrator を
+起こしているため、高速な orchestrator ループは冗長です。代わりに推奨されるセーフティ
+ネットは、**design** スレッドから実行する **任意**・**低頻度** の watchdog です:
+HITL（human-in-the-loop）メッセージが届いているか、orchestrator が停滞していないかを
+確認し、**最大 1 通** の canonical な repair/status リクエストを送ります — ルーチンな
+オーケストレーションそのものは駆動しません。
+
+- **頻度** — 低頻度のみ（例: 数十分〜数時間ごと、5 分ごとではない）。高速な watchdog
+  ループはメッセージ駆動モデルが取り除いたのと同じチャーンを再現してしまいます。
+- **チェック内容** — design/HITL inbox で未読の人間向けエスカレーションを確認
+  （design ロールの `inbox.sh`）、および read-only な intent-cli/GitHub の事実
+  （`worker next-action --github-only`、open PR/CI/label 状態）を最後に確認した
+  orchestrator の活動と比較して orchestrator の停滞を確認します。
+- **アクション** — 停滞または未回答の HITL メッセージを検知したら、orchestrator へ
+  canonical な repair/status リクエストを最大 1 通だけ送ります:
+
+  ```json
+  {"type":"status-request","to":"orchestrator","from":"design-watchdog","ask":"non-destructive liveness check: reply with current state and next action, or confirm idle"}
+  ```
+
+- **停止条件** — backlog と human-decision（HITL）キューの両方がなくなったら watchdog を
+  停止またはアーカイブします。
+
+watchdog の安全ルールは次を **禁止** します:
+
+- 重複した delegation — watchdog は自分で delegation を再送・再作成しません。
+  delegation するのは orchestrator だけです。
+- permission プロンプトのクリア — `waiting-permission` は引き続きオペレーター向けの
+  通知であり、watchdog が自動でクリアすることはありません。
+- 進行中の作業のキャンセルやリセット。
+- issue/PR やその他の終端アクションの強制クローズ。
+- 推測的な durable-state の手術 — label、queue-state、host metadata の手編集は
+  行いません。
+
+明示的な orchestrator タイマー（Codex automation 5 分ごと、または Claude 同一スレッド
+`/loop 5m`）は、オペレーターがメッセージ駆動の定常状態の代わりにスケジュールされた
+ポーリングを明示的に望む場合の fallback/legacy ポーリングとして引き続きサポートされ
+ます — design-side watchdog と orchestrator の fallback タイマーは代替のセーフティ
+ネットであり、両方を同時に必要とするわけではありません。
 
 ## monitor リカバリ
 

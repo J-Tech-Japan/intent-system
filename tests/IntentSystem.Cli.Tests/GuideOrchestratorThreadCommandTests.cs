@@ -259,20 +259,48 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
-    public void Execute_Markdown_SchedulesOnlyOrchestrator_WithCodexAndClaudeLoopPrompts()
+    public void Execute_Markdown_IsMessageDriven_WithOptionalFallbackCodexAndClaudeLoopPrompts_G518()
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
 
         Assert.Contains("## Scheduled orchestrator cadence", output, StringComparison.Ordinal);
-        // Orchestrator is the single recurring driver.
-        Assert.Contains("single recurring driver", output, StringComparison.Ordinal);
-        Assert.Contains("scheduled thread: `orchestrator`", output, StringComparison.Ordinal);
-        // Both setup prompts are present.
-        Assert.Contains("Codex automation (5m)", output, StringComparison.Ordinal);
-        Assert.Contains("Claude `/loop 5m`", output, StringComparison.Ordinal);
-        // Receivers are explicitly loopless.
+        // Steady state is message-driven; the orchestrator is no longer described as the
+        // unconditional single recurring 5m driver.
+        Assert.Contains("MESSAGE-DRIVEN", output, StringComparison.Ordinal);
+        Assert.Contains("routine fast polling is NOT required", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("is the SINGLE recurring driver", output, StringComparison.Ordinal);
+        Assert.Contains("scheduled thread when an explicit timer is used: `orchestrator`", output, StringComparison.Ordinal);
+        // Both setup prompts are present, but framed as optional fallback/legacy polling.
+        Assert.Contains("Codex automation (5m) — orchestrator (fallback/legacy, optional)", output, StringComparison.Ordinal);
+        Assert.Contains("Claude `/loop 5m` — orchestrator (fallback/legacy, optional)", output, StringComparison.Ordinal);
+        Assert.Contains("OPTIONAL fallback/legacy polling", output, StringComparison.Ordinal);
+        // Receivers are explicitly loopless regardless of drive mode.
         Assert.Contains("loopless receiver", output, StringComparison.Ordinal);
         Assert.Contains("do NOT start your own", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_HasDesignSideWatchdog_AsOptionalLowFrequencySafetyNet_G518()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Design-side watchdog (optional safety net)", output, StringComparison.Ordinal);
+        Assert.Contains("optional: yes", output, StringComparison.Ordinal);
+        Assert.Contains("LOW frequency only", output, StringComparison.Ordinal);
+        Assert.Contains("### Watchdog checks", output, StringComparison.Ordinal);
+        Assert.Contains("HITL", output, StringComparison.Ordinal);
+        Assert.Contains("orchestrator staleness", output, StringComparison.Ordinal);
+        Assert.Contains("AT MOST ONE canonical repair/status", output, StringComparison.Ordinal);
+        Assert.Contains("stop condition", output, StringComparison.Ordinal);
+        Assert.Contains("backlog and the human-decision (HITL) queues are", output, StringComparison.Ordinal);
+        Assert.Contains("### Watchdog safety rules", output, StringComparison.Ordinal);
+        Assert.Contains("PROHIBITED: duplicate delegation", output, StringComparison.Ordinal);
+        Assert.Contains("PROHIBITED: clearing a permission prompt", output, StringComparison.Ordinal);
+        Assert.Contains("PROHIBITED: cancelling or resetting", output, StringComparison.Ordinal);
+        Assert.Contains("PROHIBITED: force-closing", output, StringComparison.Ordinal);
+        Assert.Contains("PROHIBITED: speculative durable-state surgery", output, StringComparison.Ordinal);
+        // The orchestrator fallback timer remains supported as an alternative, explicit legacy option.
+        Assert.Contains("remains SUPPORTED as fallback/legacy polling", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -322,6 +350,43 @@ public sealed class GuideOrchestratorThreadCommandTests
             .ToDictionary(t => t.GetProperty("role").GetString()!, t => t.GetProperty("prompt").GetString()!);
         Assert.Contains("LOOPLESS receiver", prompts["implementation"], StringComparison.Ordinal);
         Assert.Contains("LOOPLESS receiver", prompts["review"], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_CarriesDesignWatchdog_AsOptionalLowFrequencySafetyNet_G518()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var watchdog = doc.RootElement.GetProperty("design_watchdog");
+
+        Assert.True(watchdog.GetProperty("optional").GetBoolean());
+        Assert.True(watchdog.TryGetProperty("frequency", out _));
+        Assert.NotEmpty(watchdog.GetProperty("checks").EnumerateArray());
+        Assert.True(watchdog.TryGetProperty("action", out _));
+        Assert.True(watchdog.TryGetProperty("repair_status_request_template", out _));
+        Assert.True(watchdog.TryGetProperty("stop_condition", out _));
+        Assert.True(watchdog.TryGetProperty("fallback_timer_note", out _));
+
+        var safetyRules = watchdog.GetProperty("safety_rules").EnumerateArray()
+            .Select(r => r.GetString()!)
+            .ToArray();
+        Assert.Contains(safetyRules, r => r.Contains("duplicate delegation", StringComparison.Ordinal));
+        Assert.Contains(safetyRules, r => r.Contains("permission prompt", StringComparison.Ordinal));
+        Assert.Contains(safetyRules, r => r.Contains("cancelling or resetting", StringComparison.Ordinal));
+        Assert.Contains(safetyRules, r => r.Contains("force-closing", StringComparison.Ordinal));
+        Assert.Contains(safetyRules, r => r.Contains("speculative durable-state surgery", StringComparison.Ordinal));
+
+        // Scheduling no longer frames the orchestrator as the unconditional single recurring 5m driver.
+        var scheduling = doc.RootElement.GetProperty("scheduling");
+        var summary = scheduling.GetProperty("summary").GetString()!;
+        Assert.Contains("MESSAGE-DRIVEN", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("is the SINGLE recurring driver", summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -956,7 +1021,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("RECOMMENDED", output, StringComparison.Ordinal);
         // Four logical roles, including the design/human receiver.
         Assert.Contains("### Four logical roles", output, StringComparison.Ordinal);
-        Assert.Contains("orchestrator — the single scheduled driver", output, StringComparison.Ordinal);
+        Assert.Contains("orchestrator — paces the other roles over agmsg; message-driven by default", output, StringComparison.Ordinal);
         Assert.Contains("implementation receiver — LOOPLESS", output, StringComparison.Ordinal);
         Assert.Contains("review receiver — LOOPLESS", output, StringComparison.Ordinal);
         Assert.Contains("design / human receiver — OPTIONAL", output, StringComparison.Ordinal);
