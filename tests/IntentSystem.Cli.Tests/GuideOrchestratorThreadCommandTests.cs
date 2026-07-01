@@ -183,6 +183,16 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("Realtime Monitor delivery is NOT required for orchestrator mode", output, StringComparison.Ordinal);
         Assert.Contains("fall back to `turn` delivery or manual `inbox.sh` polling", output, StringComparison.Ordinal);
         Assert.Contains("diagnostic/fallback only — never a substitute for the Claude Code Monitor", output, StringComparison.Ordinal);
+
+        // G517: missing-Monitor project-settings diagnosis (tool-surface first, before agmsg).
+        Assert.Contains("Missing-Monitor project-settings diagnosis (G517)", output, StringComparison.Ordinal);
+        Assert.Contains("Claude Code TOOL-SURFACE problem FIRST, before debugging agmsg delivery", output, StringComparison.Ordinal);
+        Assert.Contains("`.claude/settings.json`, `.claude/settings.local.json`, `~/.claude.json` project trust/onboarding flags", output, StringComparison.Ordinal);
+        Assert.Contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=true", output, StringComparison.Ordinal);
+        Assert.Contains("DISABLE_TELEMETRY=true", output, StringComparison.Ordinal);
+        Assert.Contains("PRESERVING the agmsg SessionStart hooks", output, StringComparison.Ordinal);
+        // G517 preserves the G516 marker distinction.
+        Assert.Contains("`1 monitor` = live success, `1 shell` = diagnostic/fallback only", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -205,6 +215,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.NotEmpty(distinction.GetProperty("trust_repair").EnumerateArray());
         Assert.NotEmpty(distinction.GetProperty("windows_guidance").EnumerateArray());
         Assert.NotEmpty(distinction.GetProperty("fallback_ladder").EnumerateArray());
+        Assert.NotEmpty(distinction.GetProperty("project_settings_diagnosis").EnumerateArray());
     }
 
     [Fact]

@@ -521,6 +521,13 @@ First message — design → orchestrator (paste into the design thread):
   → Git Bash on Windows → compare known-good → `turn`/manual `inbox.sh` or
   escalate). Full checklist:
   [Orchestrator-message mode — Monitor tool vs delivery-mode](orchestrator-message-mode.md).
+- **`ToolSearch select:Monitor` finds no Monitor tool at all** — this is a Claude
+  Code tool-surface problem *before* it is an agmsg problem, regardless of
+  `mode=monitor`. Compare `.claude/settings.json` / `.claude/settings.local.json`
+  / `~/.claude.json` against a known-good folder and remove suspect project-level
+  `env` overrides (e.g. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=true`),
+  preserving agmsg hooks, then restart and re-verify. See
+  [Missing-Monitor project-settings diagnosis](orchestrator-message-mode.md#missing-monitor-project-settings-diagnosis).
 
 ## Design traffic-controller playbook
 
