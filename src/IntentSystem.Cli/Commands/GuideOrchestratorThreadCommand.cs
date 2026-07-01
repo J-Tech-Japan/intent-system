@@ -627,6 +627,21 @@ internal static class GuideOrchestratorThreadCommand
                     "Root cause: the exact-cwd project key in `~/.claude.json` with `hasTrustDialogAccepted=false` suppresses the SessionStart directive that launches Monitor, so no Monitor attaches and the inbox never streams (the receiver still reports `mode=monitor`).",
                     "Repair (operator action only): repair Claude project trust for that exact cwd, restart the receiver session, then re-verify the success markers above. intent-cli never auto-detects or edits `~/.claude.json`.",
                 },
+                WindowsGuidance = new[]
+                {
+                    "On Windows, start the monitor-mode Claude Code receiver from **Git Bash**. Dogfooding showed PowerShell / native-Windows startup may not attach the agmsg Monitor reliably (the SessionStart `watch.sh` directive assumes a bash environment), so the receiver can report `mode=monitor` yet never stream.",
+                    "If Git Bash is unavailable or the Monitor still does not attach on Windows, fall back to `turn` delivery or manual `inbox.sh` polling (see the fallback ladder) — do NOT report the receiver ready on `mode=monitor` alone.",
+                },
+                FallbackLadder = new[]
+                {
+                    "Realtime Monitor delivery is NOT required for orchestrator mode — it is a convenience. When the success markers are missing, work the bounded ladder below and then keep going with an explicit fallback; do not silently claim a live monitor.",
+                    "Restart the receiver Claude Code session so the SessionStart directive re-launches `watch.sh`/Monitor on a fresh turn, then re-check the success markers.",
+                    "Verify project trust / session: the exact-cwd `~/.claude.json` project key must have trust accepted (see the trust-repair runbook); confirm `ToolSearch select:Monitor` resolves the generic Monitor tool in that session.",
+                    "On Windows, relaunch the receiver from Git Bash (see Windows guidance) rather than PowerShell / a native shell.",
+                    "Compare against a known-good receiver project (one already showing `1 monitor` / `Monitor event`) to isolate whether the break is this cwd's config or the environment.",
+                    "If it still will not attach, fall back to `turn` delivery or manual `inbox.sh` polling and say so explicitly, or escalate to the operator. A Bash/background `watch.sh` (`1 shell`) is diagnostic/fallback only — never a substitute for the Claude Code Monitor, and never a reason to report the receiver as live-monitored.",
+                    "See the agmsg monitor-delivery docs (https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md) for backend-specific delivery/watch details; intent-cli does not own or modify agmsg internals or Claude Code tool availability.",
+                },
             },
             IntakeForm = new OrchestratorIntakeForm
             {
@@ -1571,6 +1586,20 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine($"- {step}");
         }
         writer.WriteLine();
+        writer.WriteLine("Windows guidance:");
+        writer.WriteLine();
+        foreach (var note in guide.MonitorToolDistinction.WindowsGuidance)
+        {
+            writer.WriteLine($"- {note}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("Fallback ladder — orchestrator mode stays usable without realtime Monitor:");
+        writer.WriteLine();
+        foreach (var step in guide.MonitorToolDistinction.FallbackLadder)
+        {
+            writer.WriteLine($"- {step}");
+        }
+        writer.WriteLine();
 
         writer.WriteLine("## Domain routing — single-domain vs multi-domain");
         writer.WriteLine();
@@ -2399,6 +2428,12 @@ internal sealed record OrchestratorMonitorDistinction
 
     [JsonPropertyName("trust_repair")]
     public required IReadOnlyList<string> TrustRepair { get; init; }
+
+    [JsonPropertyName("windows_guidance")]
+    public required IReadOnlyList<string> WindowsGuidance { get; init; }
+
+    [JsonPropertyName("fallback_ladder")]
+    public required IReadOnlyList<string> FallbackLadder { get; init; }
 }
 
 internal sealed record OrchestratorReceiverReadiness

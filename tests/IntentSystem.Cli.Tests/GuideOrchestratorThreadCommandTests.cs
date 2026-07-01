@@ -172,6 +172,17 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("`~/.claude.json` with `hasTrustDialogAccepted=false` suppresses", output, StringComparison.Ordinal);
         Assert.Contains("repair Claude project trust for that exact cwd, restart", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli never auto-detects or edits `~/.claude.json`", output, StringComparison.Ordinal);
+
+        // G516: Windows / Git Bash guidance.
+        Assert.Contains("Windows guidance:", output, StringComparison.Ordinal);
+        Assert.Contains("start the monitor-mode Claude Code receiver from **Git Bash**", output, StringComparison.Ordinal);
+        Assert.Contains("PowerShell / native-Windows startup may not attach the agmsg Monitor", output, StringComparison.Ordinal);
+
+        // G516: bounded fallback ladder keeps orchestrator mode usable without realtime Monitor.
+        Assert.Contains("Fallback ladder — orchestrator mode stays usable without realtime Monitor:", output, StringComparison.Ordinal);
+        Assert.Contains("Realtime Monitor delivery is NOT required for orchestrator mode", output, StringComparison.Ordinal);
+        Assert.Contains("fall back to `turn` delivery or manual `inbox.sh` polling", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic/fallback only — never a substitute for the Claude Code Monitor", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -192,6 +203,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Equal(4, distinction.GetProperty("success_markers").GetArrayLength());
         Assert.NotEmpty(distinction.GetProperty("failure_markers").EnumerateArray());
         Assert.NotEmpty(distinction.GetProperty("trust_repair").EnumerateArray());
+        Assert.NotEmpty(distinction.GetProperty("windows_guidance").EnumerateArray());
+        Assert.NotEmpty(distinction.GetProperty("fallback_ladder").EnumerateArray());
     }
 
     [Fact]

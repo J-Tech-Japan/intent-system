@@ -514,6 +514,13 @@ First message — design → orchestrator (paste into the design thread):
   next-action` / `intent status` report an actionable item for **this**
   domain/repo (not another visible domain). If issue-cut-ready and safe, the
   orchestrator should publish one issue itself rather than wait.
+- **`mode=monitor` but no live stream** — `delivery.sh status` `mode=monitor` is
+  configuration only, not proof a Claude Code `Monitor` is attached. Verify the
+  live-attachment success markers (`1 monitor` / `Monitor event`), check Windows
+  Git Bash startup, and work the bounded fallback ladder (restart → verify trust
+  → Git Bash on Windows → compare known-good → `turn`/manual `inbox.sh` or
+  escalate). Full checklist:
+  [Orchestrator-message mode — Monitor tool vs delivery-mode](orchestrator-message-mode.md).
 
 ## Design traffic-controller playbook
 
