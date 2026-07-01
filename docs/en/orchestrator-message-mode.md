@@ -65,5 +65,39 @@ When the success markers are missing:
   the receiver session, then re-verify the success markers above. intent-cli never
   auto-detects or edits `~/.claude.json`.
 
+## Windows guidance
+
+- On Windows, start the monitor-mode Claude Code receiver from **Git Bash**. Dogfooding
+  showed PowerShell / native-Windows startup may not attach the agmsg Monitor reliably
+  (the SessionStart `watch.sh` directive assumes a bash environment), so the receiver can
+  report `mode=monitor` yet never stream.
+- If Git Bash is unavailable or the Monitor still does not attach on Windows, fall back to
+  `turn` delivery or manual `inbox.sh` polling (see the fallback ladder) — do not report
+  the receiver ready on `mode=monitor` alone.
+
+## Fallback ladder — orchestrator mode stays usable without realtime Monitor
+
+Realtime Monitor delivery is a convenience, **not** a requirement for orchestrator mode.
+When the success markers are missing, work this bounded ladder and then keep going with
+an explicit fallback; do not silently claim a live monitor.
+
+1. Restart the receiver Claude Code session so the SessionStart directive re-launches
+   `watch.sh`/Monitor on a fresh turn, then re-check the success markers.
+2. Verify project trust / session: the exact-cwd `~/.claude.json` project key must have
+   trust accepted (see the trust-repair runbook); confirm `ToolSearch select:Monitor`
+   resolves the generic Monitor tool in that session.
+3. On Windows, relaunch the receiver from Git Bash (see Windows guidance) rather than
+   PowerShell / a native shell.
+4. Compare against a known-good receiver project (one already showing `1 monitor` /
+   `Monitor event`) to isolate whether the break is this cwd's config or the environment.
+5. If it still will not attach, fall back to `turn` delivery or manual `inbox.sh` polling
+   and say so explicitly, or escalate to the operator. A Bash/background `watch.sh`
+   (`1 shell`) is diagnostic/fallback only — never a substitute for the Claude Code
+   Monitor, and never a reason to report the receiver as live-monitored.
+
+See the [agmsg monitor-delivery docs](https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md)
+for backend-specific delivery/watch details; intent-cli does not own or modify agmsg
+internals or Claude Code tool availability.
+
 This page does not change agmsg scripts (`watch.sh` / `delivery.sh`) and intent-cli does
 not edit `~/.claude.json`; the trust repair is an operator action only.

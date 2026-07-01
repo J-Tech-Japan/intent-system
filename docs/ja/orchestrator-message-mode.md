@@ -64,5 +64,41 @@ success marker が欠けている場合:
   receiver セッションを再起動してから、上記の success marker を再検証します。intent-cli は
   `~/.claude.json` を自動検出も自動編集もしません。
 
+## Windows ガイダンス
+
+- Windows では monitor モードの Claude Code receiver を **Git Bash** から起動してください。
+  dogfooding では PowerShell / ネイティブ Windows 起動だと agmsg Monitor が確実に attach
+  されない場合が確認されました（SessionStart の `watch.sh` ディレクティブは bash 環境を
+  前提とします）。そのため receiver が `mode=monitor` と報告してもストリーミングしない
+  ことがあります。
+- Git Bash が使えない、または Windows で Monitor が依然として attach されない場合は、
+  `turn` 配信または手動の `inbox.sh` ポーリングへフォールバックしてください（下記
+  フォールバックの段階手順を参照）。`mode=monitor` だけを根拠に receiver を ready と
+  報告しないでください。
+
+## フォールバックの段階手順 — realtime Monitor なしでも orchestrator モードは使える
+
+realtime Monitor 配信は利便性であり、orchestrator モードの **必須要件ではありません**。
+success marker が欠けている場合は、この bounded な段階手順を実施し、その後は明示的な
+フォールバックで作業を続けてください。ライブ monitor だと無言で主張しないこと。
+
+1. receiver の Claude Code セッションを再起動し、SessionStart ディレクティブが新しい turn で
+   `watch.sh`/Monitor を再起動するようにしてから、success marker を再確認する。
+2. project trust / セッションを検証: exact-cwd の `~/.claude.json` project キーが trust
+   accepted である必要がある（trust 修復 runbook を参照）。そのセッションで
+   `ToolSearch select:Monitor` が汎用 Monitor ツールを解決することを確認する。
+3. Windows では、PowerShell / ネイティブシェルではなく Git Bash から receiver を再起動する
+   （Windows ガイダンスを参照）。
+4. 既知の正常な receiver プロジェクト（すでに `1 monitor` / `Monitor event` を表示している
+   もの）と比較し、破損がこの cwd の設定か環境かを切り分ける。
+5. それでも attach しない場合は、`turn` 配信または手動 `inbox.sh` ポーリングへフォールバック
+   してその旨を明示するか、operator にエスカレーションする。Bash/バックグラウンドの
+   `watch.sh`（`1 shell`）は診断/フォールバック専用であり、Claude Code Monitor の代替には
+   決してならず、receiver を live-monitored と報告する根拠にもなりません。
+
+backend 固有の配信/watch の詳細は
+[agmsg monitor-delivery ドキュメント](https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md)
+を参照してください。intent-cli は agmsg 内部や Claude Code のツール可用性を所有・変更しません。
+
 このページは agmsg スクリプト（`watch.sh` / `delivery.sh`）を変更せず、intent-cli は
 `~/.claude.json` を編集しません。trust の修復は operator のアクションのみです。

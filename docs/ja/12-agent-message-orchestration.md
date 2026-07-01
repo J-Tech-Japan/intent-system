@@ -469,6 +469,12 @@ resume）します。その後 orchestrator がループを自律的に駆動し
   受信したか（`inbox.sh`）、`worker next-action` / `intent status` が **この** domain/repo に対して
   実行可能項目を報告しているか（host repo に見える別ドメインではない）を確認する。issue-cut-ready で
   安全なら、orchestrator は待たずに自分で 1 つ issue を publish すべき。
+- **`mode=monitor` だがライブストリームがない** — `delivery.sh status` `mode=monitor` は設定にすぎず、
+  Claude Code `Monitor` が attach されている証明ではない。ライブ attach の success marker（`1 monitor` /
+  `Monitor event`）を検証し、Windows では Git Bash 起動を確認し、bounded なフォールバック段階手順
+  （再起動 → trust 検証 → Windows で Git Bash → 既知の正常環境と比較 → `turn`/手動 `inbox.sh` または
+  エスカレーション）を実施する。完全なチェックリスト:
+  [orchestrator-message モード — Monitor ツールと delivery-mode の違い](orchestrator-message-mode.md)。
 
 ## design traffic-controller プレイブック
 
