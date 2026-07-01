@@ -429,7 +429,8 @@ human reliably, and it may receive manually by checking its inbox.
 
 Four logical roles when design receiving is enabled:
 
-- **orchestrator** — the single scheduled driver.
+- **orchestrator** — paces the other roles over agmsg; message-driven by
+  default, with an explicit timer only as a fallback/legacy option.
 - **implementation receiver** — loopless; acts on delegations only.
 - **review receiver** — loopless; acts on delegations only.
 - **design / human receiver** — optional; receives only human-needed escalations

@@ -536,7 +536,7 @@ internal static class GuideOrchestratorThreadCommand
                 Optional = true,
                 Roles = new[]
                 {
-                    "orchestrator — the single scheduled driver.",
+                    "orchestrator — paces the other roles over agmsg; message-driven by default, with an explicit timer only as a fallback/legacy option.",
                     "implementation receiver — LOOPLESS; acts on delegations only, never starts its own timer.",
                     "review receiver — LOOPLESS; acts on delegations only, never starts its own timer.",
                     "design / human receiver — OPTIONAL; receives ONLY human-needed escalations and is also loopless (the human reads on demand, e.g. via `inbox.sh`).",

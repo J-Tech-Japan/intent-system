@@ -117,13 +117,16 @@ each answer until a stop condition is reached.
 > review run as independent **timer loops** (fully supported, unchanged). The
 > optional **agmsg orchestrator mode** adds a fourth orchestrator thread that
 > paces the implementation and review threads over a local message bus instead
-> of timers: the orchestrator is the only scheduled driver, the implementation
-> and review threads are loopless receivers, and you should not also run their
-> recurring timers for the same route. It covers single/multi-domain routing,
-> next-slice publication, CI wait, dependency planning, a safe stale-thread
-> health check, and safe-repair vs escalation. agmsg is a signal layer only —
-> intent-cli and GitHub stay authoritative. This mode is opt-in and still being
-> hardened.
+> of timers: the normal steady state is message-driven — implementation/review
+> replies wake the orchestrator, so routine fast polling is not required — with
+> an optional low-frequency design-side watchdog as the safety net; an explicit
+> orchestrator timer remains supported only as a fallback/legacy polling
+> option. The implementation and review threads are always loopless receivers,
+> and you should not also run their recurring timers for the same route. It
+> covers single/multi-domain routing, next-slice publication, CI wait,
+> dependency planning, a safe stale-thread health check, and safe-repair vs
+> escalation. agmsg is a signal layer only — intent-cli and GitHub stay
+> authoritative. This mode is opt-in and still being hardened.
 
 ---
 

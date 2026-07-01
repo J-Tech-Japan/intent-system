@@ -392,7 +392,8 @@ review の内部に留まり、人間が必要な判断のみが design スレ�
 
 design receiving を有効にしたときの 4 つの論理ロール:
 
-- **orchestrator** — 唯一のスケジュールドライバー。
+- **orchestrator** — agmsg 経由で他のロールをペース配分する。既定はメッセージ駆動で、
+  明示的なタイマーは fallback/legacy オプションとしてのみ使う。
 - **implementation receiver** — loopless。委譲にのみ反応する。
 - **review receiver** — loopless。委譲にのみ反応する。
 - **design / human receiver** — 任意。人間が必要なエスカレーションのみを受け取り、これも

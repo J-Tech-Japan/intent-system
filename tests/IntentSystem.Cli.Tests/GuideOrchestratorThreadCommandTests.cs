@@ -1021,7 +1021,7 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("RECOMMENDED", output, StringComparison.Ordinal);
         // Four logical roles, including the design/human receiver.
         Assert.Contains("### Four logical roles", output, StringComparison.Ordinal);
-        Assert.Contains("orchestrator — the single scheduled driver", output, StringComparison.Ordinal);
+        Assert.Contains("orchestrator — paces the other roles over agmsg; message-driven by default", output, StringComparison.Ordinal);
         Assert.Contains("implementation receiver — LOOPLESS", output, StringComparison.Ordinal);
         Assert.Contains("review receiver — LOOPLESS", output, StringComparison.Ordinal);
         Assert.Contains("design / human receiver — OPTIONAL", output, StringComparison.Ordinal);
