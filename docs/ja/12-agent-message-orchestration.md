@@ -475,6 +475,12 @@ resume）します。その後 orchestrator がループを自律的に駆動し
   （再起動 → trust 検証 → Windows で Git Bash → 既知の正常環境と比較 → `turn`/手動 `inbox.sh` または
   エスカレーション）を実施する。完全なチェックリスト:
   [orchestrator-message モード — Monitor ツールと delivery-mode の違い](orchestrator-message-mode.md)。
+- **`ToolSearch select:Monitor` が Monitor ツールを一切見つけられない** — これは `mode=monitor` の
+  状態に関わらず、agmsg の問題である *前に* Claude Code の tool-surface の問題。`.claude/settings.json` /
+  `.claude/settings.local.json` / `~/.claude.json` を既知の正常フォルダと比較し、疑わしい project レベルの
+  `env` オーバーライド（例: `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=true`）を削除する（agmsg hooks は保持）。
+  その後、再起動して再検証する。参照:
+  [Monitor が見つからない場合の project-settings 診断](orchestrator-message-mode.md#monitor-が見つからない場合の-project-settings-診断)。
 
 ## design traffic-controller プレイブック
 

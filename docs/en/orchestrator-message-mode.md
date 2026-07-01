@@ -99,5 +99,49 @@ See the [agmsg monitor-delivery docs](https://github.com/fujibee/agmsg/blob/main
 for backend-specific delivery/watch details; intent-cli does not own or modify agmsg
 internals or Claude Code tool availability.
 
+## Missing-Monitor project-settings diagnosis
+
+The trust-repair runbook and fallback ladder above assume a `Monitor` tool *exists* but is
+not attached. A distinct, higher-priority failure is when **`ToolSearch select:Monitor`
+finds no `Monitor` tool at all** — the tool is simply absent, not `1 shell` vs `1 monitor`.
+That is a **Claude Code tool-surface problem first, before it is an agmsg delivery
+problem**, regardless of what `delivery.sh status` `mode=monitor` reports. agmsg cannot
+stream through a Monitor tool that Claude Code is not exposing, so debugging agmsg here
+wastes effort.
+
+**Known-good comparison checklist** — diff this project's Claude Code config against a
+folder where `1 monitor` already works:
+
+- `.claude/settings.json`
+- `.claude/settings.local.json`
+- `~/.claude.json` project trust / onboarding flags
+- the enabled / disabled MCP server lists
+- project-level `env` settings
+
+**Suspect project-level `env` overrides** (observed in dogfooding under `.claude/settings.json`
+`env`) that can suppress the tool surface so `Monitor` never appears:
+
+- `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=true`
+- `CLAUDE_CODE_ENABLE_TELEMETRY=false`
+- `DISABLE_ERROR_REPORTING=true`
+- `DISABLE_TELEMETRY=true`
+
+Removing or isolating these project `env` overrides (agmsg hooks preserved) restored
+`ToolSearch select:Monitor` in the affected folders.
+
+**Safe remediation** (operator action; does not touch agmsg):
+
+1. Close the Claude Code sessions.
+2. Remove or isolate the suspect project-level `env` settings, **preserving the agmsg
+   SessionStart hooks**.
+3. Reopen Claude Code.
+4. Run `ToolSearch select:Monitor`.
+5. Verify `Monitor(agmsg inbox stream)`, the footer `1 monitor`, and
+   `Monitor event: "agmsg inbox stream"` as inbox messages arrive.
+
+This is a Claude Code project-config repair, not an agmsg change. Preserve the G516
+distinction throughout: `1 monitor` is success, `1 shell` is fallback/failure.
+
 This page does not change agmsg scripts (`watch.sh` / `delivery.sh`) and intent-cli does
-not edit `~/.claude.json`; the trust repair is an operator action only.
+not edit `.claude/settings.json` or `~/.claude.json`; the trust repair and project-settings
+repair are operator actions only.

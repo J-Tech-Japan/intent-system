@@ -642,6 +642,14 @@ internal static class GuideOrchestratorThreadCommand
                     "If it still will not attach, fall back to `turn` delivery or manual `inbox.sh` polling and say so explicitly, or escalate to the operator. A Bash/background `watch.sh` (`1 shell`) is diagnostic/fallback only — never a substitute for the Claude Code Monitor, and never a reason to report the receiver as live-monitored.",
                     "See the agmsg monitor-delivery docs (https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md) for backend-specific delivery/watch details; intent-cli does not own or modify agmsg internals or Claude Code tool availability.",
                 },
+                ProjectSettingsDiagnosis = new[]
+                {
+                    "When `ToolSearch select:Monitor` finds NO generic `Monitor` tool at all (not `1 shell` vs `1 monitor` — the tool is simply absent), treat it as a Claude Code TOOL-SURFACE problem FIRST, before debugging agmsg delivery — regardless of what `delivery.sh status` `mode=monitor` reports. agmsg cannot stream through a Monitor tool that Claude Code is not exposing.",
+                    "Known-good comparison checklist — diff this project's Claude Code config against a folder where `1 monitor` already works: `.claude/settings.json`, `.claude/settings.local.json`, `~/.claude.json` project trust/onboarding flags, the enabled/disabled MCP server lists, and project-level `env` settings.",
+                    "Suspect project-level `env` overrides observed in dogfooding (in `.claude/settings.json` `env`) that can suppress the tool surface: `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=true`, `CLAUDE_CODE_ENABLE_TELEMETRY=false`, `DISABLE_ERROR_REPORTING=true`, `DISABLE_TELEMETRY=true`. Removing/isolating these project `env` overrides (agmsg hooks preserved) restored `ToolSearch select:Monitor` in the affected folders.",
+                    "Safe remediation (operator action, does NOT touch agmsg): close the Claude Code sessions → remove or isolate the suspect project-level `env` settings while PRESERVING the agmsg SessionStart hooks → reopen Claude Code → run `ToolSearch select:Monitor` → verify `Monitor(agmsg inbox stream)`, the footer `1 monitor`, and `Monitor event` as inbox messages arrive.",
+                    "This is a Claude Code project-config repair, not an agmsg change — intent-cli never edits `.claude/settings.json`, `~/.claude.json`, or agmsg internals. Preserve the G516 distinction throughout: `1 monitor` = live success, `1 shell` = diagnostic/fallback only, never success.",
+                },
             },
             IntakeForm = new OrchestratorIntakeForm
             {
@@ -1600,6 +1608,13 @@ internal static class GuideOrchestratorThreadCommand
             writer.WriteLine($"- {step}");
         }
         writer.WriteLine();
+        writer.WriteLine("Missing-Monitor project-settings diagnosis (G517) — when `ToolSearch select:Monitor` finds no Monitor tool at all:");
+        writer.WriteLine();
+        foreach (var step in guide.MonitorToolDistinction.ProjectSettingsDiagnosis)
+        {
+            writer.WriteLine($"- {step}");
+        }
+        writer.WriteLine();
 
         writer.WriteLine("## Domain routing — single-domain vs multi-domain");
         writer.WriteLine();
@@ -2434,6 +2449,9 @@ internal sealed record OrchestratorMonitorDistinction
 
     [JsonPropertyName("fallback_ladder")]
     public required IReadOnlyList<string> FallbackLadder { get; init; }
+
+    [JsonPropertyName("project_settings_diagnosis")]
+    public required IReadOnlyList<string> ProjectSettingsDiagnosis { get; init; }
 }
 
 internal sealed record OrchestratorReceiverReadiness

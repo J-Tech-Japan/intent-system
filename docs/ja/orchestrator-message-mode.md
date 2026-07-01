@@ -100,5 +100,49 @@ backend 固有の配信/watch の詳細は
 [agmsg monitor-delivery ドキュメント](https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md)
 を参照してください。intent-cli は agmsg 内部や Claude Code のツール可用性を所有・変更しません。
 
+## Monitor が見つからない場合の project-settings 診断
+
+上記の trust 修復 runbook とフォールバック段階手順は、`Monitor` ツールが *存在するが* attach
+されていないことを前提とします。より優先度の高い別の失敗は、**`ToolSearch select:Monitor` が
+`Monitor` ツールを一切見つけられない**場合です — `1 shell` と `1 monitor` の違いではなく、
+ツール自体が存在しません。これは `delivery.sh status` `mode=monitor` が何を報告していても、
+**agmsg 配信の問題である前に、まず Claude Code の tool-surface の問題**です。Claude Code が
+露出していない Monitor ツールを通じて agmsg はストリーミングできないため、ここで agmsg を
+デバッグするのは無駄になります。
+
+**既知の正常環境との比較チェックリスト** — `1 monitor` がすでに機能するフォルダと、この
+プロジェクトの Claude Code 設定を diff します:
+
+- `.claude/settings.json`
+- `.claude/settings.local.json`
+- `~/.claude.json` の project trust / onboarding フラグ
+- 有効/無効な MCP サーバーのリスト
+- project レベルの `env` 設定
+
+**疑わしい project レベルの `env` オーバーライド**（dogfooding で `.claude/settings.json` の
+`env` 配下に観測）— tool surface を抑制し `Monitor` が現れなくなる原因:
+
+- `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=true`
+- `CLAUDE_CODE_ENABLE_TELEMETRY=false`
+- `DISABLE_ERROR_REPORTING=true`
+- `DISABLE_TELEMETRY=true`
+
+これらの project `env` オーバーライドを削除または隔離する（agmsg hooks は保持）ことで、
+該当フォルダで `ToolSearch select:Monitor` が復旧しました。
+
+**安全な修復手順**（operator のアクション。agmsg には触れない）:
+
+1. Claude Code セッションを閉じる。
+2. 疑わしい project レベルの `env` 設定を削除または隔離する（**agmsg SessionStart hooks は
+   保持**）。
+3. Claude Code を再度開く。
+4. `ToolSearch select:Monitor` を実行する。
+5. inbox メッセージ到着時に `Monitor(agmsg inbox stream)`、フッター `1 monitor`、
+   `Monitor event: "agmsg inbox stream"` を検証する。
+
+これは agmsg の変更ではなく Claude Code の project-config 修復です。全体を通じて G516 の区別を
+保ちます: `1 monitor` は成功、`1 shell` はフォールバック/失敗です。
+
 このページは agmsg スクリプト（`watch.sh` / `delivery.sh`）を変更せず、intent-cli は
-`~/.claude.json` を編集しません。trust の修復は operator のアクションのみです。
+`.claude/settings.json` や `~/.claude.json` を編集しません。trust の修復と project-settings の
+修復は operator のアクションのみです。
