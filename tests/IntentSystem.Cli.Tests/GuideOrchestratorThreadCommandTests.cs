@@ -773,6 +773,107 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_ReviewDelegation_RequiresManagedWorktreeRoot_ProhibitsRawTmpRm_G520()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Review delegation — managed worktrees and design alignment", output, StringComparison.Ordinal);
+        Assert.Contains(".intent-cli/worktrees/review-<unit>", output, StringComparison.Ordinal);
+        Assert.Contains("PROHIBITED as the normal path", output, StringComparison.Ordinal);
+        Assert.Contains("/tmp/...review...", output, StringComparison.Ordinal);
+        Assert.Contains("rm -rf /tmp/... && git worktree add ...", output, StringComparison.Ordinal);
+        Assert.Contains("git worktree remove <managed-path>", output, StringComparison.Ordinal);
+        Assert.Contains("REGISTERED, CLEAN worktree only", output, StringComparison.Ordinal);
+        // Unsafe/stale paths become a structured blocker reply, never an operator approval prompt.
+        Assert.Contains("STRUCTURED BLOCKER agmsg reply to", output, StringComparison.Ordinal);
+        Assert.Contains("NEVER an operator `rm -rf` approval prompt", output, StringComparison.Ordinal);
+        // Delegation example carries the policy + design-alignment requirement.
+        Assert.Contains("\"managed_worktree_policy\":", output, StringComparison.Ordinal);
+        Assert.Contains("\"design_alignment_required\":true", output, StringComparison.Ordinal);
+        // Design-alignment sources checklist.
+        Assert.Contains("review-context — the review-context artifact", output, StringComparison.Ordinal);
+        Assert.Contains("intent tree — the relevant intent-tree entries", output, StringComparison.Ordinal);
+        Assert.Contains("ADR / decision notes", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_HasReviewDelegationContractShape_G520()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var review = doc.RootElement.GetProperty("review_delegation_contract");
+
+        Assert.Contains(".intent-cli/worktrees", review.GetProperty("managed_worktree_root").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("PROHIBITED", review.GetProperty("prohibited_pattern").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("git worktree remove", review.GetProperty("cleanup_rule").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("STRUCTURED BLOCKER", review.GetProperty("unsafe_stale_path_rule").GetString()!, StringComparison.Ordinal);
+
+        var delegationExample = review.GetProperty("delegation_example").GetString()!;
+        Assert.Contains("\"managed_worktree_policy\"", delegationExample, StringComparison.Ordinal);
+        Assert.Contains("\"design_alignment_required\":true", delegationExample, StringComparison.Ordinal);
+
+        Assert.Equal(5, review.GetProperty("design_alignment_sources").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_Markdown_ReviewThreadPrompt_RequiresManagedWorktreeAndDesignAlignment_G520()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // The review thread prompt (Thread prompts / review) carries both requirements inline.
+        var reviewPromptIndex = output.IndexOf("### review", StringComparison.Ordinal);
+        Assert.True(reviewPromptIndex >= 0, "review thread prompt section must be present.");
+        var reviewSection = output.Substring(reviewPromptIndex);
+
+        Assert.Contains(".intent-cli/worktrees/review-<unit>", reviewSection, StringComparison.Ordinal);
+        Assert.Contains("NEVER a raw `/tmp/...review...` path", reviewSection, StringComparison.Ordinal);
+        Assert.Contains("STRUCTURED BLOCKER reply to the orchestrator", reviewSection, StringComparison.Ordinal);
+        Assert.Contains("design_alignment_checked: true", reviewSection, StringComparison.Ordinal);
+        Assert.Contains("packet, review-context, intent tree, ADR/decision", reviewSection, StringComparison.Ordinal);
+        Assert.Contains("INCOMPLETE review", reviewSection, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_AgmsgReplyContract_HasReviewCompletedExample_AndIncompleteRule_G520()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var contract = doc.RootElement.GetProperty("agmsg_reply_contract");
+
+        var reviewCompleted = contract.GetProperty("review_completed_example").GetString()!;
+        Assert.Contains("\"design_alignment_checked\":true", reviewCompleted, StringComparison.Ordinal);
+        Assert.Contains("\"design_alignment_sources_checked\":", reviewCompleted, StringComparison.Ordinal);
+        Assert.Contains("\"managed_worktree_policy\":", reviewCompleted, StringComparison.Ordinal);
+
+        var incompleteRule = contract.GetProperty("review_incomplete_rule").GetString()!;
+        Assert.Contains("INCOMPLETE", incompleteRule, StringComparison.Ordinal);
+        Assert.Contains("authoritative PRIOR approval state", incompleteRule, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_Troubleshooting_IncludesRmRfTmpReviewSymptom_G520()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("Codex asks to approve `rm -rf /tmp/...review...`", output, StringComparison.Ordinal);
+        Assert.Contains("RIGHT safety behavior for the WRONG workflow", output, StringComparison.Ordinal);
+        // The fix is the managed root, not weakening approval settings.
+        Assert.Contains("NOT weakening approval settings", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_Markdown_SetupIntake_NoInputs_IsMissingInputs_ListsOnlyMissingFields_G500()
     {
         var output = RunMarkdown([]);
