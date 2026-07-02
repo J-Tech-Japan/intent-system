@@ -29,8 +29,9 @@ intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> 
   分の最初のプロンプト、最初の検証（existing-loop 競合チェック、read-only first wake、ping/inbox
   テスト）を emit する。
 - **blocked** — 同じ domain/repo の既存の実装/レビュー timer loop が orchestrator と競合する。
-  開始前に停止する（または `--existing-loop-policy will-stop` を渡す）。orchestrator のみが
-  スケジュールされる。
+  開始前に停止する（または `--existing-loop-policy will-stop` を渡す）。receiver は決してスケジュール
+  されない — 明示的な fallback/legacy タイマーを使う場合（既定はメッセージ駆動の wake）のみ、
+  orchestrator が唯一スケジュールされるスレッドになる。
 
 ```bash
 intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> \
@@ -324,6 +325,52 @@ state**、それを裏付ける evidence、必要なときだけの options、�
   **代替ではありません**。最小権限の承認をデフォルトに保ちます。目標は破壊的な `rm -rf` プロンプトを
   抑制することではなく、そもそも必要としないことです。
 
+## review 委譲 — managed worktree と design alignment
+
+review の委譲は managed-worktree ポリシーと design-alignment のエビデンス要求を **あらかじめ**
+含んでいる必要があります — reviewer に発見させてはいけません。dogfooding では、reviewer が生の
+`/tmp/...review...` worktree を割り当て、Codex が破壊的な `rm -rf` の承認を正しく求めるという
+事例が見つかりました — これは **正しい** 安全動作ですが、**間違った** workflow です。修正は
+managed root であり、承認設定を弱めることでは **ありません**。
+
+- **managed worktree root** — review worktree は他のオーケストレーション作業と **同じ** managed・
+  workspace-local root を使います — `[project] worktree_root`（デフォルト `.intent-cli/worktrees/`）、
+  例: `.intent-cli/worktrees/review-<unit>` — 任意の `/tmp/...review...` パスは **決して** 使いません。
+- **禁止パターン** — 生の `/tmp/...` review worktree と `rm -rf /tmp/... && git worktree add ...`
+  のクリーンアップチェーンは、通常のパスとして **禁止** されます。このパターンに手が伸びたら、
+  それは停止して managed root の下に割り当て直す合図です — オペレーターに `rm -rf` の承認を
+  求める合図ではありません。
+- **クリーンアップルール** — クリーンアップは **登録済みで clean な** worktree に対してのみ
+  `git worktree remove <managed-path>` を使います（`git worktree list` と clean な `git status`
+  でまず確認する）。
+- **unsafe/stale パスのルール** — 登録済み git worktree ではない、managed root の外にある、
+  または dirty/unsafe な stale パスは **決して** オペレーターの `rm -rf` 承認プロンプトには
+  なりません — それは orchestrator への **structured blocker** agmsg 返信（`status: blocked`）
+  であり、orchestrator が repair としてルーティングできるようにします。reviewer が unmanaged な
+  パスを force-delete して解決するものではありません。
+
+review 委譲の例（orchestrator → review）:
+
+```json
+{"delegate":{"domain":"<domain>","execution_unit":"<unit>","target_repo":"<owner/repo>","pr":"<n>","review_cwd":"/review/<domain>","managed_worktree_policy":"required — allocate under [project] worktree_root (default .intent-cli/worktrees/), never /tmp","design_alignment_required":true,"destination_thread":"review@<domain>"}}
+```
+
+review の `completed` 返信は design-alignment のエビデンスを含む必要があります:
+
+```json
+{"status":"completed","thread":"review","ref":"pr#<n>","note":"approved; closeout done","design_alignment_checked":true,"design_alignment_sources_checked":["packet","review-context","intent-tree","adr-decision-notes","relevant-docs"],"managed_worktree_policy":"compliant — .intent-cli/worktrees/review-<unit>, removed after review"}
+```
+
+review 返信がチェック済みとして挙げられる design-alignment ソース: **packet**（内容と受け入れ基準）、
+その PR/unit の **review-context** artifact、関連する **intent tree** のエントリ、リンクされた
+**ADR / decision notes**、変更が触れる **関連 docs**。
+
+**review-incomplete ルール:** `design_alignment_checked: true` とチェック済みソースのリストを
+省いた review の `completed` 返信は **incomplete** です — orchestrator はその返信だけでは
+merge/closeout をルーティングしません。唯一の例外は、権威ある **事前の** approval state が
+すでに同等の design-alignment review を証明している場合です（orchestrator はその具体的な
+事前エビデンスを指し示す必要があり、同等性を仮定してはいけません）。
+
 ## receiver の準備状態（readiness）
 
 monitor の設定だけでは **不十分** です。team 登録 + delivery mode 設定があっても、receiver が
@@ -590,6 +637,13 @@ preflight します。receiver が誤った repo・誤ったブランチ・dirty
 - **receiver の cwd が委譲と異なる repo/domain を見る** — 停止。claim しない。receiver の cwd/worktree・
   git remote・委譲された domain がルーティングと一致する必要がある。blocked を返して re-route する。
   execution-unit prefix の不一致だけでは signal にならない — packet/domain メタデータを比較する。
+- **Codex が `rm -rf /tmp/...review...` の承認を求めてくる** — これは **正しい** 安全動作ですが
+  **間違った** workflow です: review worktree が managed root ではなく unmanaged な `/tmp` パスに
+  割り当てられています。修正は managed root（`.intent-cli/worktrees/review-<unit>`）であり、承認
+  設定を弱めることでは **ありません** — managed root の下に再割り当てしてください
+  （[review 委譲](#review-委譲--managed-worktree-と-design-alignment) 参照）。stale な `/tmp` パスの
+  `rm -rf` は承認せず、代わりに orchestrator に blocked を返信して repair としてルーティングして
+  もらいます。
 
 ## draft PR のレビュー可否
 

@@ -31,7 +31,9 @@ outcome is one of `missing-inputs`, `setup-ready`, or `blocked`:
   (existing-loop conflict check, read-only first wake, ping/inbox test).
 - **blocked** — an existing implementation/review timer loop for this domain/repo
   would race the orchestrator; stop it (or pass `--existing-loop-policy
-  will-stop`) before starting. Only the orchestrator is scheduled.
+  will-stop`) before starting. Receivers are never scheduled; when an explicit
+  fallback/legacy timer is used (message-driven wakes are the default), the
+  orchestrator is the only thread ever scheduled.
 
 ```bash
 intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> \
@@ -353,6 +355,59 @@ symptom of an unmanaged workspace.
   default; the goal is to never need a destructive `rm -rf` prompt, not to
   suppress it.
 
+## Review delegation — managed worktrees and design alignment
+
+Review delegation must carry the managed-worktree policy and require
+design-alignment evidence **up front** — not leave the reviewer to discover
+it. Dogfooding showed a reviewer allocate a raw `/tmp/...review...` worktree
+and Codex correctly ask to approve a destructive `rm -rf` — the **right**
+safety behavior for the **wrong** workflow. The fix is a managed root, **not**
+weakening approval settings.
+
+- **Managed worktree root** — review worktrees use the **same** managed,
+  workspace-local root as the rest of orchestrated work — the `[project]
+  worktree_root` (default `.intent-cli/worktrees/`), e.g.
+  `.intent-cli/worktrees/review-<unit>` — **never** an arbitrary
+  `/tmp/...review...` path.
+- **Prohibited pattern** — a raw `/tmp/...` review worktree, and a
+  `rm -rf /tmp/... && git worktree add ...` cleanup chain, are **prohibited**
+  as the normal path. Reaching for this pattern is the signal to stop and
+  allocate under the managed root instead — not to ask the operator to
+  approve the `rm -rf`.
+- **Cleanup rule** — cleanup is `git worktree remove <managed-path>` for a
+  **registered, clean** worktree only (confirm via `git worktree list` and a
+  clean `git status` first).
+- **Unsafe/stale path rule** — a stale path that is not a registered git
+  worktree, is outside the managed root, or is dirty/unsafe is **never** an
+  operator `rm -rf` approval prompt — it is a **structured blocker** agmsg
+  reply to the orchestrator (`status: blocked`) so the orchestrator can route
+  the repair, not something the reviewer resolves by force-deleting an
+  unmanaged path.
+
+Review delegation example (orchestrator → review):
+
+```json
+{"delegate":{"domain":"<domain>","execution_unit":"<unit>","target_repo":"<owner/repo>","pr":"<n>","review_cwd":"/review/<domain>","managed_worktree_policy":"required — allocate under [project] worktree_root (default .intent-cli/worktrees/), never /tmp","design_alignment_required":true,"destination_thread":"review@<domain>"}}
+```
+
+A review `completed` reply must include design-alignment evidence:
+
+```json
+{"status":"completed","thread":"review","ref":"pr#<n>","note":"approved; closeout done","design_alignment_checked":true,"design_alignment_sources_checked":["packet","review-context","intent-tree","adr-decision-notes","relevant-docs"],"managed_worktree_policy":"compliant — .intent-cli/worktrees/review-<unit>, removed after review"}
+```
+
+Design-alignment sources a review reply may cite as checked: the **packet**
+(content and acceptance criteria), the **review-context** artifact for the
+PR/unit, the relevant **intent tree** entries, any linked **ADR / decision
+notes**, and **relevant docs** the change touches.
+
+**Review-incomplete rule:** a review `completed` reply that omits
+`design_alignment_checked: true` and the checked-source list is
+**incomplete** — the orchestrator does not route merge/closeout on that reply
+alone. The only exception is when an authoritative **prior** approval state
+already proves equivalent design-alignment review (the orchestrator must
+point to that specific prior evidence, not assume equivalence).
+
 ## Receiver readiness
 
 Monitor configuration is **not enough**. A registered team plus a configured
@@ -649,6 +704,14 @@ branch, or over dirty user work is the most common orchestration failure.
   claim. The receiver's cwd/worktree, git remote, and delegated domain must
   match the routing; reply blocked and re-route. An execution-unit prefix
   mismatch alone is not the signal — compare packet/domain metadata.
+- **Codex asks to approve `rm -rf /tmp/...review...`** — this is the **right**
+  safety behavior for the **wrong** workflow: the review worktree was
+  allocated at an unmanaged `/tmp` path instead of the managed root. The fix
+  is the managed root (`.intent-cli/worktrees/review-<unit>`), **not**
+  weakening approval settings — re-allocate under the managed root (see
+  [Review delegation](#review-delegation--managed-worktrees-and-design-alignment)),
+  and do not approve the `rm -rf` for the stale `/tmp` path; reply blocked to
+  the orchestrator instead so it can route the cleanup as a repair.
 
 ## Draft PR reviewability
 

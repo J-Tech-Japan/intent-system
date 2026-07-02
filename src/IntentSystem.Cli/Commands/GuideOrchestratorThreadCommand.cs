@@ -231,7 +231,8 @@ internal static class GuideOrchestratorThreadCommand
                 ReceiverNote =
                     "Implementation and review threads are loopless receivers: do NOT start a recurring timer/loop in a "
                     + "receiver thread for this domain/repo. A receiver waits for an agmsg delegation, acts once, replies "
-                    + "once, and waits again. Only the orchestrator is scheduled.",
+                    + "once, and waits again. Receivers are NEVER scheduled; when an explicit fallback/legacy timer is "
+                    + "used (message-driven wakes are the default), the orchestrator is the only thread ever scheduled.",
                 CodexSetupPrompt = Apply(
                     "OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the ORCHESTRATOR "
                     + "thread, domain `<domain>` against `<owner/repo>` using `<agent>`: on each run perform exactly "
@@ -812,6 +813,44 @@ internal static class GuideOrchestratorThreadCommand
                     + "least-privilege approvals as the default; the goal is to never need a destructive `rm -rf` prompt, "
                     + "not to suppress the prompt.",
             },
+            ReviewDelegationContract = new OrchestratorReviewDelegationContract
+            {
+                Summary =
+                    "Review delegation must carry the managed-worktree policy and require design-alignment evidence up "
+                    + "front — not leave the reviewer to discover it. Dogfooding showed a reviewer allocate a raw "
+                    + "`/tmp/...review...` worktree and Codex correctly ask to approve a destructive `rm -rf` — the "
+                    + "RIGHT safety behavior for the WRONG workflow. The fix is a managed root, NOT weakening approval "
+                    + "settings.",
+                ManagedWorktreeRoot =
+                    "Review worktrees use the SAME managed, workspace-local root as the rest of orchestrated work — the "
+                    + "`[project] worktree_root` (default `.intent-cli/worktrees/`), e.g. "
+                    + "`.intent-cli/worktrees/review-<unit>` — NEVER an arbitrary `/tmp/...review...` path.",
+                ProhibitedPattern =
+                    "PROHIBITED as the normal path: a raw `/tmp/...` review worktree, and a `rm -rf /tmp/... && git "
+                    + "worktree add ...` cleanup chain. Reaching for this pattern is the signal to STOP and allocate "
+                    + "under the managed root instead — not to ask the operator to approve the `rm -rf`.",
+                CleanupRule =
+                    "Cleanup is `git worktree remove <managed-path>` for a REGISTERED, CLEAN worktree only — confirmed "
+                    + "via `git worktree list` and a clean `git status` first.",
+                UnsafeStalePathRule =
+                    "A stale path that is NOT a registered git worktree, is OUTSIDE the managed root, or is dirty/"
+                    + "unsafe is NEVER an operator `rm -rf` approval prompt — it is a STRUCTURED BLOCKER agmsg reply to "
+                    + "the orchestrator (`status: blocked`) so the orchestrator can route the repair, not something the "
+                    + "reviewer resolves by force-deleting an unmanaged path.",
+                DelegationExample =
+                    "{\"delegate\":{\"domain\":\"<domain>\",\"execution_unit\":\"<unit>\",\"target_repo\":"
+                    + "\"<owner/repo>\",\"pr\":\"<n>\",\"review_cwd\":\"/review/<domain>\",\"managed_worktree_policy\":"
+                    + "\"required — allocate under [project] worktree_root (default .intent-cli/worktrees/), never "
+                    + "/tmp\",\"design_alignment_required\":true,\"destination_thread\":\"review@<domain>\"}}",
+                DesignAlignmentSources = new[]
+                {
+                    "packet — the authored packet content and acceptance criteria.",
+                    "review-context — the review-context artifact for this PR/unit.",
+                    "intent tree — the relevant intent-tree entries for the touched domain.",
+                    "ADR / decision notes — any linked architecture or design-decision records.",
+                    "relevant docs — user-facing or developer docs the change touches.",
+                },
+            },
             Setup = new OrchestratorSetup
             {
                 Summary =
@@ -901,6 +940,11 @@ internal static class GuideOrchestratorThreadCommand
                 {
                     Symptom = "Receiver cwd sees a different repo/domain than delegated",
                     Action = "STOP — do not claim. The receiver's cwd/worktree, git remote, and delegated domain must match the routing; reply blocked and re-route. An execution-unit ID prefix mismatch alone is NOT the signal — compare packet/domain metadata and the routing context.",
+                },
+                new OrchestratorTroubleshooting
+                {
+                    Symptom = "Codex asks to approve `rm -rf /tmp/...review...`",
+                    Action = "This is the RIGHT safety behavior for the WRONG workflow — the review worktree was allocated at an unmanaged `/tmp` path instead of the managed root. The fix is the managed root (`.intent-cli/worktrees/review-<unit>`), NOT weakening approval settings: re-allocate under the managed root (see Review delegation — managed worktrees and design alignment), and do NOT approve the `rm -rf` for the stale `/tmp` path — reply blocked to the orchestrator so it can route the cleanup as a repair instead.",
                 },
             },
             ReceiverReadiness = new OrchestratorReceiverReadiness
@@ -1018,7 +1062,7 @@ internal static class GuideOrchestratorThreadCommand
                         "You are the IMPLEMENTATION thread for domain `<domain>` against `<owner/repo>` using `<agent>`, "
                         + "driven by orchestrator agmsg delegations. You are a LOOPLESS receiver: do NOT start your own "
                         + "recurring timer/loop for this domain/repo — wait for a delegation, act once, reply once, then "
-                        + "wait again (only the orchestrator is scheduled). When delegated an item, run "
+                        + "wait again (receivers are never scheduled; the orchestrator is message-driven by default, with an explicit fallback/legacy timer as the only case where it is scheduled). When delegated an item, run "
                         + "the normal child implementation workflow: the issue/PR number comes from `intent-cli worker "
                         + "next-action --repo <owner/repo> --github-only`, NOT from the agmsg text. Before claiming, "
                         + "verify your local checkout context matches the delegation: your cwd/worktree, the git remote "
@@ -1042,13 +1086,23 @@ internal static class GuideOrchestratorThreadCommand
                         "You are the REVIEW thread for domain `<domain>` against `<owner/repo>` using `<agent>`, driven "
                         + "by orchestrator agmsg delegations. You are a LOOPLESS receiver: do NOT start your own "
                         + "recurring timer/loop for this domain/repo — wait for a delegation, act once, reply once, then "
-                        + "wait again (only the orchestrator is scheduled). When delegated a PR, run the "
+                        + "wait again (receivers are never scheduled; the orchestrator is message-driven by default, with an explicit fallback/legacy timer as the only case where it is scheduled). When delegated a PR, run the "
                         + "official host review/closeout through intent-cli surfaces (`review closeout-plan`, `guide "
                         + "review`, `automation pr-transition`, `closeout pr`) — agmsg never replaces semantic review or "
                         + "authorizes a merge. Perform semantic review only when you are the packet `review_role` or "
                         + "explicitly assigned (G480); otherwise orchestrate the merge/closeout of an already-approved "
-                        + "PR. Report ONE structured agmsg reply (accepted / progress / completed / blocked) citing the "
-                        + "intent-cli/GitHub facts. intent-cli and GitHub stay authoritative."),
+                        + "PR. If you need a review worktree, allocate it under the MANAGED root "
+                        + "(`.intent-cli/worktrees/review-<unit>`) — NEVER a raw `/tmp/...review...` path, and NEVER "
+                        + "`rm -rf /tmp/... && git worktree add ...`; remove it only with `git worktree remove` once it "
+                        + "is a registered, clean worktree. A non-registered, dirty, or otherwise unsafe stale path is a "
+                        + "STRUCTURED BLOCKER reply to the orchestrator, not an operator `rm -rf` approval prompt (see "
+                        + "Review delegation — managed worktrees and design alignment). Your review must be grounded in "
+                        + "design intent, not only diff/CI: check the packet, review-context, intent tree, ADR/decision "
+                        + "notes, and relevant docs, and your reply must set `design_alignment_checked: true` plus which "
+                        + "of those sources you checked — the orchestrator treats a reply missing that evidence as an "
+                        + "INCOMPLETE review unless an authoritative prior approval state already proves equivalent "
+                        + "review. Report ONE structured agmsg reply (accepted / progress / completed / blocked) citing "
+                        + "the intent-cli/GitHub facts. intent-cli and GitHub stay authoritative."),
                 },
             },
             AgmsgReplyContract = new OrchestratorReplyContract
@@ -1061,6 +1115,16 @@ internal static class GuideOrchestratorThreadCommand
                 Progress = "{\"status\":\"progress\",\"thread\":\"implementation\",\"ref\":\"issue#<n>\",\"note\":\"branch pushed; CI running\"}",
                 Completed = "{\"status\":\"completed\",\"thread\":\"implementation\",\"ref\":\"pr#<n>\",\"note\":\"PR opened, Closes #<n>, CI green\"}",
                 Blocked = "{\"status\":\"blocked\",\"thread\":\"review\",\"ref\":\"pr#<n>\",\"classification\":\"clarification-required\",\"note\":\"one operator action: <text>\"}",
+                ReviewCompletedExample =
+                    "{\"status\":\"completed\",\"thread\":\"review\",\"ref\":\"pr#<n>\",\"note\":\"approved; closeout done\","
+                    + "\"design_alignment_checked\":true,\"design_alignment_sources_checked\":[\"packet\","
+                    + "\"review-context\",\"intent-tree\",\"adr-decision-notes\",\"relevant-docs\"],"
+                    + "\"managed_worktree_policy\":\"compliant — .intent-cli/worktrees/review-<unit>, removed after review\"}",
+                ReviewIncompleteRule =
+                    "A review `completed` reply that omits `design_alignment_checked: true` and the checked-source list "
+                    + "is INCOMPLETE — the orchestrator does not route merge/closeout on that reply alone. The only "
+                    + "exception is when an authoritative PRIOR approval state already proves equivalent design-alignment "
+                    + "review (the orchestrator must point to that specific prior evidence, not assume equivalence).",
             },
             OrchestratorFirstWake = new[]
             {
@@ -1178,7 +1242,9 @@ internal static class GuideOrchestratorThreadCommand
                 Headline =
                     "blocked — existing implementation/review timer loops for this domain/repo would race the "
                     + "orchestrator (mixed-mode). Stop the existing loops (or re-run with --existing-loop-policy "
-                    + "will-stop) before starting orchestrator mode; only the orchestrator is scheduled.",
+                    + "will-stop) before starting orchestrator mode; receivers are never scheduled — orchestrator "
+                    + "wakes are message-driven by default, with an explicit fallback/legacy timer as the only case "
+                    + "where the orchestrator itself is scheduled.",
                 MissingFields = Array.Empty<string>(),
                 Inputs = inputs,
                 LooplessReceiverNote = LooplessReceiverNote,
@@ -1989,6 +2055,29 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Review delegation — managed worktrees and design alignment");
+        writer.WriteLine();
+        writer.WriteLine(guide.ReviewDelegationContract.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **managed worktree root** — {guide.ReviewDelegationContract.ManagedWorktreeRoot}");
+        writer.WriteLine($"- **prohibited pattern** — {guide.ReviewDelegationContract.ProhibitedPattern}");
+        writer.WriteLine($"- **cleanup rule** — {guide.ReviewDelegationContract.CleanupRule}");
+        writer.WriteLine($"- **unsafe/stale path rule** — {guide.ReviewDelegationContract.UnsafeStalePathRule}");
+        writer.WriteLine();
+        writer.WriteLine("Review delegation example (orchestrator → review):");
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(guide.ReviewDelegationContract.DelegationExample);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine("Design-alignment sources a review reply may cite as checked:");
+        writer.WriteLine();
+        foreach (var source in guide.ReviewDelegationContract.DesignAlignmentSources)
+        {
+            writer.WriteLine($"- {source}");
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Thread prompts");
         foreach (var thread in guide.Threads)
         {
@@ -2013,6 +2102,14 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine(guide.AgmsgReplyContract.Completed);
         writer.WriteLine(guide.AgmsgReplyContract.Blocked);
         writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine("Review `completed` reply — must include design-alignment evidence:");
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(guide.AgmsgReplyContract.ReviewCompletedExample);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"- **review-incomplete rule** — {guide.AgmsgReplyContract.ReviewIncompleteRule}");
         writer.WriteLine();
 
         writer.WriteLine("## Orchestrator first wake");
@@ -2193,6 +2290,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("worktree_management")]
     public required OrchestratorWorktreeManagement WorktreeManagement { get; init; }
 
+    [JsonPropertyName("review_delegation_contract")]
+    public required OrchestratorReviewDelegationContract ReviewDelegationContract { get; init; }
+
     [JsonPropertyName("setup")]
     public required OrchestratorSetup Setup { get; init; }
 
@@ -2345,6 +2445,30 @@ internal sealed record OrchestratorWorktreeManagement
 
     [JsonPropertyName("approval_policy_note")]
     public required string ApprovalPolicyNote { get; init; }
+}
+
+internal sealed record OrchestratorReviewDelegationContract
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("managed_worktree_root")]
+    public required string ManagedWorktreeRoot { get; init; }
+
+    [JsonPropertyName("prohibited_pattern")]
+    public required string ProhibitedPattern { get; init; }
+
+    [JsonPropertyName("cleanup_rule")]
+    public required string CleanupRule { get; init; }
+
+    [JsonPropertyName("unsafe_stale_path_rule")]
+    public required string UnsafeStalePathRule { get; init; }
+
+    [JsonPropertyName("delegation_example")]
+    public required string DelegationExample { get; init; }
+
+    [JsonPropertyName("design_alignment_sources")]
+    public required IReadOnlyList<string> DesignAlignmentSources { get; init; }
 }
 
 internal sealed record OrchestratorIntakeForm
@@ -2696,4 +2820,10 @@ internal sealed record OrchestratorReplyContract
 
     [JsonPropertyName("blocked")]
     public required string Blocked { get; init; }
+
+    [JsonPropertyName("review_completed_example")]
+    public required string ReviewCompletedExample { get; init; }
+
+    [JsonPropertyName("review_incomplete_rule")]
+    public required string ReviewIncompleteRule { get; init; }
 }
