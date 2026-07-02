@@ -231,7 +231,8 @@ internal static class GuideOrchestratorThreadCommand
                 ReceiverNote =
                     "Implementation and review threads are loopless receivers: do NOT start a recurring timer/loop in a "
                     + "receiver thread for this domain/repo. A receiver waits for an agmsg delegation, acts once, replies "
-                    + "once, and waits again. Only the orchestrator is scheduled.",
+                    + "once, and waits again. Receivers are NEVER scheduled; when an explicit fallback/legacy timer is "
+                    + "used (message-driven wakes are the default), the orchestrator is the only thread ever scheduled.",
                 CodexSetupPrompt = Apply(
                     "OPTIONAL fallback/legacy polling — Codex automation (run every 5 minutes) for the ORCHESTRATOR "
                     + "thread, domain `<domain>` against `<owner/repo>` using `<agent>`: on each run perform exactly "
@@ -1061,7 +1062,7 @@ internal static class GuideOrchestratorThreadCommand
                         "You are the IMPLEMENTATION thread for domain `<domain>` against `<owner/repo>` using `<agent>`, "
                         + "driven by orchestrator agmsg delegations. You are a LOOPLESS receiver: do NOT start your own "
                         + "recurring timer/loop for this domain/repo — wait for a delegation, act once, reply once, then "
-                        + "wait again (only the orchestrator is scheduled). When delegated an item, run "
+                        + "wait again (receivers are never scheduled; the orchestrator is message-driven by default, with an explicit fallback/legacy timer as the only case where it is scheduled). When delegated an item, run "
                         + "the normal child implementation workflow: the issue/PR number comes from `intent-cli worker "
                         + "next-action --repo <owner/repo> --github-only`, NOT from the agmsg text. Before claiming, "
                         + "verify your local checkout context matches the delegation: your cwd/worktree, the git remote "
@@ -1085,7 +1086,7 @@ internal static class GuideOrchestratorThreadCommand
                         "You are the REVIEW thread for domain `<domain>` against `<owner/repo>` using `<agent>`, driven "
                         + "by orchestrator agmsg delegations. You are a LOOPLESS receiver: do NOT start your own "
                         + "recurring timer/loop for this domain/repo — wait for a delegation, act once, reply once, then "
-                        + "wait again (only the orchestrator is scheduled). When delegated a PR, run the "
+                        + "wait again (receivers are never scheduled; the orchestrator is message-driven by default, with an explicit fallback/legacy timer as the only case where it is scheduled). When delegated a PR, run the "
                         + "official host review/closeout through intent-cli surfaces (`review closeout-plan`, `guide "
                         + "review`, `automation pr-transition`, `closeout pr`) — agmsg never replaces semantic review or "
                         + "authorizes a merge. Perform semantic review only when you are the packet `review_role` or "
@@ -1241,7 +1242,9 @@ internal static class GuideOrchestratorThreadCommand
                 Headline =
                     "blocked — existing implementation/review timer loops for this domain/repo would race the "
                     + "orchestrator (mixed-mode). Stop the existing loops (or re-run with --existing-loop-policy "
-                    + "will-stop) before starting orchestrator mode; only the orchestrator is scheduled.",
+                    + "will-stop) before starting orchestrator mode; receivers are never scheduled — orchestrator "
+                    + "wakes are message-driven by default, with an explicit fallback/legacy timer as the only case "
+                    + "where the orchestrator itself is scheduled.",
                 MissingFields = Array.Empty<string>(),
                 Inputs = inputs,
                 LooplessReceiverNote = LooplessReceiverNote,

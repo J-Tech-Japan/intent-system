@@ -890,8 +890,11 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("- implementer agent", output, StringComparison.Ordinal);
         Assert.Contains("- delivery mode", output, StringComparison.Ordinal);
         Assert.Contains("- existing-loop stop policy", output, StringComparison.Ordinal);
-        // Only the orchestrator is scheduled.
-        Assert.Contains("Only the orchestrator is scheduled", output, StringComparison.Ordinal);
+        // Receivers are never scheduled; the orchestrator is message-driven by default,
+        // with an explicit fallback/legacy timer as the only case where it is scheduled.
+        Assert.Contains("Receivers are NEVER scheduled", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Only the orchestrator is scheduled", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("only the orchestrator is scheduled", output, StringComparison.Ordinal);
         // No setup-intake agmsg registration block emitted while inputs are missing
         // (the setup-ready path adds this header; reference sections may mention
         // agmsg commands generically).

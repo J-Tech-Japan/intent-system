@@ -29,8 +29,9 @@ intent-cli guide orchestrator-thread --domain <name> --target-repo <owner/repo> 
   分の最初のプロンプト、最初の検証（existing-loop 競合チェック、read-only first wake、ping/inbox
   テスト）を emit する。
 - **blocked** — 同じ domain/repo の既存の実装/レビュー timer loop が orchestrator と競合する。
-  開始前に停止する（または `--existing-loop-policy will-stop` を渡す）。orchestrator のみが
-  スケジュールされる。
+  開始前に停止する（または `--existing-loop-policy will-stop` を渡す）。receiver は決してスケジュール
+  されない — 明示的な fallback/legacy タイマーを使う場合（既定はメッセージ駆動の wake）のみ、
+  orchestrator が唯一スケジュールされるスレッドになる。
 
 ```bash
 intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> \

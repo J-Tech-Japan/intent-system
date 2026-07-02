@@ -31,7 +31,9 @@ outcome is one of `missing-inputs`, `setup-ready`, or `blocked`:
   (existing-loop conflict check, read-only first wake, ping/inbox test).
 - **blocked** — an existing implementation/review timer loop for this domain/repo
   would race the orchestrator; stop it (or pass `--existing-loop-policy
-  will-stop`) before starting. Only the orchestrator is scheduled.
+  will-stop`) before starting. Receivers are never scheduled; when an explicit
+  fallback/legacy timer is used (message-driven wakes are the default), the
+  orchestrator is the only thread ever scheduled.
 
 ```bash
 intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> \
