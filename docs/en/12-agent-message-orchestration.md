@@ -643,6 +643,58 @@ are alternative safety nets, not both required together.
   preserving agmsg hooks, then restart and re-verify. See
   [Missing-Monitor project-settings diagnosis](orchestrator-message-mode.md#missing-monitor-project-settings-diagnosis).
 
+## Codex monitor (beta) failure modes
+
+The agmsg Codex monitor (beta) is a different delivery backend from the Claude
+Code `Monitor` tool above — it bridges agmsg into a Codex CLI session instead.
+intent-cli does not own or modify agmsg internals; this section only covers
+what an operator needs to set up a Codex receiver and recognize/recover from
+the two field-verified failure modes. See the
+[agmsg codex-monitor-beta doc](https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md)
+for implementation internals.
+
+> Observed at agmsg 1.1.6 / Codex v0.144.1 (macOS, `codex()` shim launch) — the
+> setup preflight, healthy-state markers, and troubleshooting entries below
+> are observations from that tested environment, not a permanent bridge
+> contract. Re-verify against the installed agmsg/Codex versions after an
+> upgrade before trusting the exact mechanics (e.g. retry interval, thread
+> attachment order) described here.
+
+**Setup preflight** — before launching a Codex receiver, verify the (project,
+codex) pair resolves to exactly **one** identity: `whoami.sh <project> codex`
+should print a single `agent=` line. Clean up any stale registration first
+(e.g. a leftover `actas` registering another role into the project) — more
+than one identity blocks the bridge launcher silently.
+
+**Healthy-state markers:**
+
+- `delivery.sh status` shows `Codex bridge: <team>/<role> alive (pid N)`.
+- The bridge arms on the **first turn** sent to the session, not at Codex
+  startup — do not expect delivery before that first turn.
+- An already-running Codex session stays unmonitored until it is restarted
+  after the bridge is enabled.
+
+**Troubleshooting:**
+
+- **`mode: monitor` but the Codex bridge never starts** — the (project, codex)
+  pair resolves to more than one identity; `codex-bridge-launcher.sh` proceeds
+  only when there is exactly one, and otherwise retries silently every 0.3s
+  forever (e.g. a stale `actas` registration for another role). Check the
+  identity count with `whoami.sh <project> codex`, remove the stale
+  registration, then relaunch.
+- **Bridge alive (pid shown) but the Codex TUI never moves / never reacts to
+  messages** — the shared Codex app-server accumulates loaded threads across
+  sessions, and `codex-bridge.js` attaches to the FIRST (oldest) entry of
+  `thread/loaded/list` — turns are injected into an old background thread
+  while the visible TUI never reacts. Recover by: quit the TUI, stop the
+  app-server/bridge/launcher processes, remove the recorded app-server/bridge
+  state files (`codex-app-server.*.{pid,port,version}` and the bridge
+  `{pid,appserver,meta}` files), relaunch codex, then send one turn to
+  re-arm.
+- **Responses to one message appear twice across a restart window** —
+  suspect a doubled bridge; verify only one bridge pid exists
+  (`delivery.sh status`) before relaunching.
+
 ## Design traffic-controller playbook
 
 The design thread acts as a **traffic controller**, not an implementer. It

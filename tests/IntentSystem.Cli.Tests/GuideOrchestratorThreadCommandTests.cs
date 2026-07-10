@@ -196,6 +196,67 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_CodexBridgeGuidance_CoversSetupPreflightAndFailureModes_G521()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## Codex monitor (beta) failure modes (G521)", output, StringComparison.Ordinal);
+
+        // Version-observation framing: scopes the failure modes to the tested environment, not a permanent contract.
+        Assert.Contains("Observed at agmsg 1.1.6 / Codex v0.144.1", output, StringComparison.Ordinal);
+        Assert.Contains("not a permanent bridge contract", output, StringComparison.Ordinal);
+        Assert.Contains("Re-verify against the installed agmsg/Codex versions after an upgrade", output, StringComparison.Ordinal);
+
+        // Setup preflight: single-identity precondition before launching a Codex receiver.
+        Assert.Contains("resolves to exactly ONE identity", output, StringComparison.Ordinal);
+        Assert.Contains("`whoami.sh <project> codex` should print a single `agent=` line", output, StringComparison.Ordinal);
+
+        // Healthy-state markers.
+        Assert.Contains("`delivery.sh status` shows `Codex bridge: <team>/<role> alive (pid N)`", output, StringComparison.Ordinal);
+        Assert.Contains("bridge arms on the FIRST turn", output, StringComparison.Ordinal);
+        Assert.Contains("already-running Codex session stays unmonitored until it is restarted", output, StringComparison.Ordinal);
+
+        // Troubleshooting entry 1: silent launcher blocked by multiple identities.
+        Assert.Contains("mode: monitor but the Codex bridge never starts", output, StringComparison.Ordinal);
+        Assert.Contains("resolves to more than one identity", output, StringComparison.Ordinal);
+        Assert.Contains("retries silently every 0.3s forever", output, StringComparison.Ordinal);
+
+        // Troubleshooting entry 2: static TUI from stale loaded app-server threads, full recovery sequence.
+        Assert.Contains("bridge alive (pid shown) but the Codex TUI never moves", output, StringComparison.Ordinal);
+        Assert.Contains("attaches to the FIRST (oldest) entry of `thread/loaded/list`", output, StringComparison.Ordinal);
+        Assert.Contains("quit the TUI, stop the app-server/bridge/launcher processes", output, StringComparison.Ordinal);
+        Assert.Contains("send one turn to re-arm", output, StringComparison.Ordinal);
+
+        // Troubleshooting entry 3: doubled bridge.
+        Assert.Contains("responses to one message appear twice across a restart window", output, StringComparison.Ordinal);
+        Assert.Contains("Suspect a doubled bridge", output, StringComparison.Ordinal);
+
+        // Links out to agmsg internals rather than restating them.
+        Assert.Contains("https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_CarriesCodexBridgeGuidance_WithTroubleshootingArray()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var guidance = doc.RootElement.GetProperty("codex_bridge_guidance");
+
+        Assert.Contains("agmsg 1.1.6", guidance.GetProperty("observed_versions").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Codex v0.144.1", guidance.GetProperty("observed_versions").GetString(), StringComparison.Ordinal);
+        Assert.True(guidance.TryGetProperty("setup_preflight", out _));
+        Assert.NotEmpty(guidance.GetProperty("healthy_state_markers").EnumerateArray());
+        Assert.Equal(3, guidance.GetProperty("troubleshooting").GetArrayLength());
+        Assert.True(guidance.TryGetProperty("reference_link", out _));
+    }
+
+    [Fact]
     public void Execute_Json_CarriesMonitorToolDistinction_WithMarkerArrays()
     {
         using var writer = new StringWriter();

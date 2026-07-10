@@ -584,6 +584,56 @@ watchdog の安全ルールは次を **禁止** します:
   その後、再起動して再検証する。参照:
   [Monitor が見つからない場合の project-settings 診断](orchestrator-message-mode.md#monitor-が見つからない場合の-project-settings-診断)。
 
+## Codex monitor（beta）の failure mode
+
+agmsg の Codex monitor（beta）は、上記の Claude Code `Monitor` ツールとは別の
+delivery backend であり、agmsg を Codex CLI セッションへブリッジします。
+intent-cli は agmsg の内部実装を所有・変更しません。ここでは、オペレーターが
+Codex receiver をセットアップする際に必要な情報と、フィールドで確認済みの
+2 つの failure mode を認識・復旧する方法だけを扱います。内部実装については
+[agmsg codex-monitor-beta doc](https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md)
+を参照してください。
+
+> agmsg 1.1.6 / Codex v0.144.1（macOS、`codex()` shim launch）で観測した内容です —
+> 以下の setup preflight・healthy-state marker・トラブルシューティング項目は、
+> その検証環境における観測にすぎず、永続的な bridge の契約ではありません。
+> アップグレード後は、ここに書かれている具体的な挙動（リトライ間隔、thread の
+> attach 順序など）を鵜呑みにする前に、インストール済みの agmsg/Codex の
+> バージョンに対して再確認してください。
+
+**setup preflight** — Codex receiver を起動する前に、(project, codex) のペアが
+ちょうど 1 つの identity に解決されることを確認する: `whoami.sh <project> codex`
+は `agent=` の行を 1 行だけ出力するはず。まず古い登録を掃除する（例えば別ロールを
+そのプロジェクトに登録したままの `actas` の残骸）— identity が 2 つ以上あると
+bridge launcher は無言でブロックされる。
+
+**healthy-state marker:**
+
+- `delivery.sh status` が `Codex bridge: <team>/<role> alive (pid N)` を表示する。
+- bridge はセッション起動時ではなく、送信された **最初の turn** で arm する —
+  その最初の turn より前に delivery を期待しない。
+- 既に起動済みの Codex セッションは、bridge を有効化した後に再起動するまで
+  監視対象外のままになる。
+
+**トラブルシューティング:**
+
+- **`mode: monitor` だが Codex bridge が一切起動しない** — (project, codex) の
+  ペアが 2 つ以上の identity に解決されている。`codex-bridge-launcher.sh` は
+  ちょうど 1 つのときのみ処理を進め、それ以外は 0.3 秒ごとに無言でリトライし
+  続ける（例えば別ロールの `actas` の残骸）。`whoami.sh <project> codex` で
+  identity 数を確認し、古い登録を削除してから再起動する。
+- **bridge は alive（pid 表示あり）だが Codex の TUI が全く動かない/メッセージに
+  反応しない** — 共有の Codex app-server はセッションをまたいで loaded thread を
+  蓄積し、`codex-bridge.js` は `thread/loaded/list` の最初（最も古い）エントリに
+  attach する — turn は古いバックグラウンド thread に注入され、可視の TUI は
+  一切反応しない。復旧手順: TUI を終了し、app-server/bridge/launcher の
+  プロセスを停止し、記録されている app-server/bridge の state ファイル
+  （`codex-app-server.*.{pid,port,version}` と bridge の `{pid,appserver,meta}`
+  ファイル）を削除し、codex を再起動してから 1 turn 送信して re-arm する。
+- **再起動をまたいで 1 件のメッセージへの返信が二重に現れる** — bridge が
+  二重になっている疑いがある。再起動前に `delivery.sh status` で bridge の
+  pid が 1 つだけであることを確認する。
+
 ## design traffic-controller プレイブック
 
 design スレッドは実装者ではなく **traffic controller**（交通整理役）として振る舞います。

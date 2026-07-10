@@ -705,6 +705,47 @@ internal static class GuideOrchestratorThreadCommand
                     "This is a Claude Code project-config repair, not an agmsg change — intent-cli never edits `.claude/settings.json`, `~/.claude.json`, or agmsg internals. Preserve the G516 distinction throughout: `1 monitor` = live success, `1 shell` = diagnostic/fallback only, never success.",
                 },
             },
+            CodexBridgeGuidance = new OrchestratorCodexBridgeGuidance
+            {
+                ObservedVersions =
+                    "Observed at agmsg 1.1.6 / Codex v0.144.1 (macOS, `codex()` shim launch) — the setup preflight, "
+                    + "healthy-state markers, and troubleshooting entries below are observations from that tested "
+                    + "environment, not a permanent bridge contract. Re-verify against the installed agmsg/Codex "
+                    + "versions after an upgrade before trusting the exact mechanics (e.g. retry interval, thread "
+                    + "attachment order) described here.",
+                SetupPreflight =
+                    "Before launching a Codex receiver, verify the (project, codex) pair resolves to exactly ONE "
+                    + "identity — `whoami.sh <project> codex` should print a single `agent=` line. Clean up any stale "
+                    + "registration first (e.g. a leftover `actas` registering another role into the project); more "
+                    + "than one identity blocks the bridge launcher silently.",
+                HealthyStateMarkers = new[]
+                {
+                    "`delivery.sh status` shows `Codex bridge: <team>/<role> alive (pid N)`.",
+                    "The bridge arms on the FIRST turn sent to the session, not at Codex startup — do not expect delivery before that first turn.",
+                    "An already-running Codex session stays unmonitored until it is restarted after the bridge is enabled.",
+                },
+                Troubleshooting = new[]
+                {
+                    new OrchestratorTroubleshooting
+                    {
+                        Symptom = "mode: monitor but the Codex bridge never starts",
+                        Action = "The (project, codex) pair resolves to more than one identity — `codex-bridge-launcher.sh` proceeds only when there is exactly ONE, and otherwise retries silently every 0.3s forever (e.g. a stale `actas` registration for another role). Check the identity count with `whoami.sh <project> codex`, remove the stale registration, then relaunch.",
+                    },
+                    new OrchestratorTroubleshooting
+                    {
+                        Symptom = "bridge alive (pid shown) but the Codex TUI never moves / never reacts to messages",
+                        Action = "The shared Codex app-server accumulates loaded threads across sessions, and `codex-bridge.js` attaches to the FIRST (oldest) entry of `thread/loaded/list` — turns are injected into an old background thread while the visible TUI never reacts. Recover by: quit the TUI, stop the app-server/bridge/launcher processes, remove the recorded app-server/bridge state files (`codex-app-server.*.{pid,port,version}` and the bridge `{pid,appserver,meta}` files), relaunch codex, then send one turn to re-arm.",
+                    },
+                    new OrchestratorTroubleshooting
+                    {
+                        Symptom = "responses to one message appear twice across a restart window",
+                        Action = "Suspect a doubled bridge — verify only one bridge pid exists (`delivery.sh status`) before relaunching; kill any duplicate bridge process first.",
+                    },
+                },
+                ReferenceLink =
+                    "See the agmsg codex-monitor-beta doc (https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md) "
+                    + "for internals — intent-cli does not own or modify agmsg's Codex bridge implementation.",
+            },
             IntakeForm = new OrchestratorIntakeForm
             {
                 Summary =
@@ -1742,6 +1783,29 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
 
+        writer.WriteLine("## Codex monitor (beta) failure modes (G521)");
+        writer.WriteLine();
+        writer.WriteLine($"> {guide.CodexBridgeGuidance.ObservedVersions}");
+        writer.WriteLine();
+        writer.WriteLine($"- **setup preflight** — {guide.CodexBridgeGuidance.SetupPreflight}");
+        writer.WriteLine();
+        writer.WriteLine("Healthy-state markers:");
+        writer.WriteLine();
+        foreach (var marker in guide.CodexBridgeGuidance.HealthyStateMarkers)
+        {
+            writer.WriteLine($"- {marker}");
+        }
+        writer.WriteLine();
+        writer.WriteLine("Troubleshooting:");
+        writer.WriteLine();
+        foreach (var entry in guide.CodexBridgeGuidance.Troubleshooting)
+        {
+            writer.WriteLine($"- **{entry.Symptom}** — {entry.Action}");
+        }
+        writer.WriteLine();
+        writer.WriteLine(guide.CodexBridgeGuidance.ReferenceLink);
+        writer.WriteLine();
+
         writer.WriteLine("## Domain routing — single-domain vs multi-domain");
         writer.WriteLine();
         writer.WriteLine($"- selected mode: `{guide.DomainRouting.Mode}`");
@@ -2281,6 +2345,9 @@ internal sealed record OrchestratorThreadGuide
     [JsonPropertyName("monitor_tool_distinction")]
     public required OrchestratorMonitorDistinction MonitorToolDistinction { get; init; }
 
+    [JsonPropertyName("codex_bridge_guidance")]
+    public required OrchestratorCodexBridgeGuidance CodexBridgeGuidance { get; init; }
+
     [JsonPropertyName("intake_form")]
     public required OrchestratorIntakeForm IntakeForm { get; init; }
 
@@ -2703,6 +2770,24 @@ internal sealed record OrchestratorMonitorDistinction
 
     [JsonPropertyName("project_settings_diagnosis")]
     public required IReadOnlyList<string> ProjectSettingsDiagnosis { get; init; }
+}
+
+internal sealed record OrchestratorCodexBridgeGuidance
+{
+    [JsonPropertyName("observed_versions")]
+    public required string ObservedVersions { get; init; }
+
+    [JsonPropertyName("setup_preflight")]
+    public required string SetupPreflight { get; init; }
+
+    [JsonPropertyName("healthy_state_markers")]
+    public required IReadOnlyList<string> HealthyStateMarkers { get; init; }
+
+    [JsonPropertyName("troubleshooting")]
+    public required IReadOnlyList<OrchestratorTroubleshooting> Troubleshooting { get; init; }
+
+    [JsonPropertyName("reference_link")]
+    public required string ReferenceLink { get; init; }
 }
 
 internal sealed record OrchestratorReceiverReadiness
