@@ -707,6 +707,12 @@ internal static class GuideOrchestratorThreadCommand
             },
             CodexBridgeGuidance = new OrchestratorCodexBridgeGuidance
             {
+                ObservedVersions =
+                    "Observed at agmsg 1.1.6 / Codex v0.144.1 (macOS, `codex()` shim launch) — the setup preflight, "
+                    + "healthy-state markers, and troubleshooting entries below are observations from that tested "
+                    + "environment, not a permanent bridge contract. Re-verify against the installed agmsg/Codex "
+                    + "versions after an upgrade before trusting the exact mechanics (e.g. retry interval, thread "
+                    + "attachment order) described here.",
                 SetupPreflight =
                     "Before launching a Codex receiver, verify the (project, codex) pair resolves to exactly ONE "
                     + "identity — `whoami.sh <project> codex` should print a single `agent=` line. Clean up any stale "
@@ -1779,6 +1785,8 @@ internal static class GuideOrchestratorThreadCommand
 
         writer.WriteLine("## Codex monitor (beta) failure modes (G521)");
         writer.WriteLine();
+        writer.WriteLine($"> {guide.CodexBridgeGuidance.ObservedVersions}");
+        writer.WriteLine();
         writer.WriteLine($"- **setup preflight** — {guide.CodexBridgeGuidance.SetupPreflight}");
         writer.WriteLine();
         writer.WriteLine("Healthy-state markers:");
@@ -2766,6 +2774,9 @@ internal sealed record OrchestratorMonitorDistinction
 
 internal sealed record OrchestratorCodexBridgeGuidance
 {
+    [JsonPropertyName("observed_versions")]
+    public required string ObservedVersions { get; init; }
+
     [JsonPropertyName("setup_preflight")]
     public required string SetupPreflight { get; init; }
 

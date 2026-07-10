@@ -653,6 +653,13 @@ the two field-verified failure modes. See the
 [agmsg codex-monitor-beta doc](https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md)
 for implementation internals.
 
+> Observed at agmsg 1.1.6 / Codex v0.144.1 (macOS, `codex()` shim launch) — the
+> setup preflight, healthy-state markers, and troubleshooting entries below
+> are observations from that tested environment, not a permanent bridge
+> contract. Re-verify against the installed agmsg/Codex versions after an
+> upgrade before trusting the exact mechanics (e.g. retry interval, thread
+> attachment order) described here.
+
 **Setup preflight** — before launching a Codex receiver, verify the (project,
 codex) pair resolves to exactly **one** identity: `whoami.sh <project> codex`
 should print a single `agent=` line. Clean up any stale registration first

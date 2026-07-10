@@ -202,6 +202,11 @@ public sealed class GuideOrchestratorThreadCommandTests
 
         Assert.Contains("## Codex monitor (beta) failure modes (G521)", output, StringComparison.Ordinal);
 
+        // Version-observation framing: scopes the failure modes to the tested environment, not a permanent contract.
+        Assert.Contains("Observed at agmsg 1.1.6 / Codex v0.144.1", output, StringComparison.Ordinal);
+        Assert.Contains("not a permanent bridge contract", output, StringComparison.Ordinal);
+        Assert.Contains("Re-verify against the installed agmsg/Codex versions after an upgrade", output, StringComparison.Ordinal);
+
         // Setup preflight: single-identity precondition before launching a Codex receiver.
         Assert.Contains("resolves to exactly ONE identity", output, StringComparison.Ordinal);
         Assert.Contains("`whoami.sh <project> codex` should print a single `agent=` line", output, StringComparison.Ordinal);
@@ -243,6 +248,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         using var doc = JsonDocument.Parse(writer.ToString());
         var guidance = doc.RootElement.GetProperty("codex_bridge_guidance");
 
+        Assert.Contains("agmsg 1.1.6", guidance.GetProperty("observed_versions").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Codex v0.144.1", guidance.GetProperty("observed_versions").GetString(), StringComparison.Ordinal);
         Assert.True(guidance.TryGetProperty("setup_preflight", out _));
         Assert.NotEmpty(guidance.GetProperty("healthy_state_markers").EnumerateArray());
         Assert.Equal(3, guidance.GetProperty("troubleshooting").GetArrayLength());

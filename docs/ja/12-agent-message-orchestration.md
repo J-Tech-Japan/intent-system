@@ -594,6 +594,13 @@ Codex receiver をセットアップする際に必要な情報と、フィー�
 [agmsg codex-monitor-beta doc](https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md)
 を参照してください。
 
+> agmsg 1.1.6 / Codex v0.144.1（macOS、`codex()` shim launch）で観測した内容です —
+> 以下の setup preflight・healthy-state marker・トラブルシューティング項目は、
+> その検証環境における観測にすぎず、永続的な bridge の契約ではありません。
+> アップグレード後は、ここに書かれている具体的な挙動（リトライ間隔、thread の
+> attach 順序など）を鵜呑みにする前に、インストール済みの agmsg/Codex の
+> バージョンに対して再確認してください。
+
 **setup preflight** — Codex receiver を起動する前に、(project, codex) のペアが
 ちょうど 1 つの identity に解決されることを確認する: `whoami.sh <project> codex`
 は `agent=` の行を 1 行だけ出力するはず。まず古い登録を掃除する（例えば別ロールを
