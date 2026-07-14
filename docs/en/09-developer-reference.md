@@ -261,23 +261,38 @@ Categories:
   `Completed` (closeout — `pr-merged` + `closeout-recorded` runs events —
   has not been recorded).
 
-Each item reports `kind`, `execution_unit` (derived from the `<unit>: ...`
-title prefix convention used across this repo's own issues/PRs), `issue`
-and/or `pr` (number + url), `age_minutes`, and `recommended_action` — the
-exact canonical command to run next (`worker claim`, `automation
-pr-transition --transition review-start`, or `closeout pr`, respectively).
-`--stale-minutes` filters out items younger than the given threshold
-(default `0` — report everything with its age; callers pick their own
-threshold). `age_minutes` is approximated from the relevant GitHub entity's
-`createdAt`/`updatedAt` timestamp, since GitHub does not expose
-per-label-application timestamps.
+Each item reports `kind`, `execution_unit`, `issue` and/or `pr` (number +
+url), `age_minutes`, and `recommended_action` — the exact canonical command
+to run next (`worker claim`, `automation pr-transition --transition
+review-start`, or `closeout pr`, respectively). `--stale-minutes` filters
+out items younger than the given threshold (default `0` — report everything
+with its age; callers pick their own threshold). `age_minutes` is
+approximated from the relevant GitHub entity's `createdAt`/`updatedAt`
+timestamp, since GitHub does not expose per-label-application timestamps.
+`published-not-delegated` also checks the already-fetched PR closing
+references independently of issue labels, so a completion label that has
+drifted out of sync with reality (an open PR already closes the issue, but
+`intent-pr-created` was never applied or was removed) never produces a
+false `worker claim` recommendation.
 
-Domain scoping follows the execution-unit-regex binding convention (not the
-per-candidate packet.yaml lookup from G522): an item whose derived execution
-unit does not match the requested domain's `execution_unit_regex`
-(`intents/<domain>/automation/bindings.md`) is excluded. A missing/invalid
-binding degrades to "no filter" (with a surfaced `warnings` entry) rather
-than blocking this diagnostic-only surface.
+**Domain isolation is grounded in packet/queue metadata, consistent with
+G522 — never in a title-prefix regex match.** A `<unit>: ...` title prefix
+is derived for every GitHub issue/PR candidate, but it is used ONLY to
+locate that candidate's `.intent-cli/issues/<unit>/packet.yaml` — the
+packet's own declared `domain:` field is the sole authority consulted
+against the requested `--domain`. A candidate is included in `items[]` only
+when its packet-declared domain matches the requested `--domain` exactly. A
+candidate whose packet-declared domain contradicts `--domain`, or whose
+domain cannot be derived at all (no packet.yaml, or no `domain:` field on
+it), is FAIL-CLOSED: excluded from `items[]` and reported instead in
+`excluded[]` (`kind`, `execution_unit`, `issue`/`pr`, `reason` —
+`domain-contradiction` or `domain-underivable` — and a `detail` message
+naming candidate domains and the exact `--domain` re-invocation). Unlike the
+other G522 surfaces (where an explicit `--domain` can stand alone for a
+single operator-named execution unit), this is a broad multi-candidate scan
+over a shared repo's issues/PRs — an explicit `--domain` alone is never
+trusted to apply to a candidate whose own metadata cannot corroborate it, so
+a candidate never silently joins the scan and never silently disappears.
 
 This slice is detection only — consuming the surface from the orchestrator
 wake procedure and from an external heartbeat are separate follow-up slices.

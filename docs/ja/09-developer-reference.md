@@ -252,23 +252,41 @@ queue-state、`runs.jsonl` を変更することは一切ありません。
   まだ `Completed` になっていない（closeout — `pr-merged` +
   `closeout-recorded` の runs event — がまだ記録されていない）。
 
-各 item は `kind`、`execution_unit`（このリポジトリ自身の issue/PR で
-使われている `<unit>: ...` というタイトル prefix の慣習から導出）、
-`issue` および/または `pr`（番号 + url）、`age_minutes`、
-`recommended_action`（次に実行すべき正確な canonical コマンド —
-それぞれ `worker claim`、`automation pr-transition --transition
-review-start`、`closeout pr`）を報告します。`--stale-minutes` は、
-指定した閾値より新しい item を除外します（デフォルトは `0` —
-すべてを age 付きで報告し、閾値は呼び出し側が選ぶ）。`age_minutes` は、
-GitHub が label 適用時刻を公開していないため、該当する GitHub entity の
-`createdAt`/`updatedAt` タイムスタンプからの近似値です。
+各 item は `kind`、`execution_unit`、`issue` および/または `pr`
+（番号 + url）、`age_minutes`、`recommended_action`（次に実行すべき
+正確な canonical コマンド — それぞれ `worker claim`、`automation
+pr-transition --transition review-start`、`closeout pr`）を報告します。
+`--stale-minutes` は、指定した閾値より新しい item を除外します
+（デフォルトは `0` — すべてを age 付きで報告し、閾値は呼び出し側が選ぶ）。
+`age_minutes` は、GitHub が label 適用時刻を公開していないため、
+該当する GitHub entity の `createdAt`/`updatedAt` タイムスタンプからの
+近似値です。`published-not-delegated` は、既に取得済みの PR closing
+reference も issue label とは独立にチェックします — そのため、
+completion label が実態とずれてしまっていても（intent-pr-created が
+一度も付与されていない、または削除されてしまったが、OPEN の PR が
+既にその issue を close している場合）、誤って `worker claim` を推奨する
+ことはありません。
 
-domain スコープは（G522 の per-candidate packet.yaml lookup ではなく）
-execution-unit-regex binding の慣習に従います: 導出された execution unit
-が要求された domain の `execution_unit_regex`
-（`intents/<domain>/automation/bindings.md`）に一致しない item は除外
-されます。binding が無い/不正な場合は、この診断専用サーフェスをブロック
-するのではなく「フィルタなし」に degrade します（`warnings` に明示）。
+**domain isolation は（title-prefix の正規表現一致ではなく）G522 と同様に
+packet/queue metadata に基づきます。** すべての GitHub issue/PR candidate
+について `<unit>: ...` というタイトル prefix を導出しますが、これは
+その candidate の `.intent-cli/issues/<unit>/packet.yaml` を特定するため
+だけに使われます — 要求された `--domain` と照合する唯一の権威は、
+その packet 自身が宣言する `domain:` フィールドです。candidate が
+`items[]` に含まれるのは、packet が宣言する domain が要求された
+`--domain` と完全に一致する場合のみです。packet が宣言する domain が
+`--domain` と矛盾する candidate、あるいは domain を全く導出できない
+candidate（packet.yaml が無い、またはそれに `domain:` フィールドが
+無い）は FAIL-CLOSED になります: `items[]` から除外され、代わりに
+`excluded[]`（`kind`、`execution_unit`、`issue`/`pr`、`reason` —
+`domain-contradiction` または `domain-underivable` —、候補 domain と
+正確な `--domain` 再実行コマンドを示す `detail`）に報告されます。
+（単一の operator 指定 execution unit に対しては明示的な `--domain`
+単独で成立する）他の G522 サーフェスとは異なり、これは共有 repo の
+issue/PR にまたがる broad multi-candidate scan です — 明示的な
+`--domain` だけでは、自身のメタデータで裏付けが取れない candidate に
+適用されると信頼することはありません。したがって candidate が黙って
+scan に紛れ込むことも、黙って消えることもありません。
 
 このスライスは検出のみです — orchestrator wake procedure や外部
 heartbeat からこのサーフェスを利用する部分は、別の後続スライスです。

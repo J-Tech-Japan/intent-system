@@ -15,8 +15,10 @@ namespace IntentSystem.Cli.Commands;
 /// Categories:
 /// <list type="bullet">
 /// <item><c>published-not-delegated</c> — an OPEN issue carries
-///   <c>intent-target</c> but no claim label
-///   (<c>intent-issue-in-progress</c> / <c>intent-pr-created</c>) yet.</item>
+///   <c>intent-target</c>, has no claim label
+///   (<c>intent-issue-in-progress</c> / <c>intent-pr-created</c>), and no
+///   open PR in this repo closes it (checked independently of label state,
+///   since a label can drift out of sync with an already-created PR).</item>
 /// <item><c>pr-created-not-reviewing</c> — the source issue carries
 ///   <c>intent-pr-created</c> and its closing PR has not had the
 ///   <c>review-start</c> transition applied (no <c>intent-pr-reviewing</c> /
@@ -31,11 +33,19 @@ namespace IntentSystem.Cli.Commands;
 /// been pending".
 ///
 /// Strictly read-only: no GitHub mutation, no queue-state/runs.jsonl write,
-/// no label change. Domain scoping follows the G522 direction — items whose
-/// derived execution unit does not match the requested domain's
-/// `execution_unit_regex` binding (`intents/&lt;domain&gt;/automation/bindings.md`)
-/// are excluded; a missing/invalid binding degrades to "no filter" (with a
-/// surfaced warning) rather than blocking this diagnostic-only surface.
+/// no label change.
+///
+/// Domain isolation (G522 direction, tightened per PR #1148 review): a
+/// title-derived execution-unit prefix is NOT sufficient routing evidence by
+/// itself — it is used only to locate
+/// <c>.intent-cli/issues/&lt;unit&gt;/packet.yaml</c>, and that packet's own
+/// declared <c>domain:</c> field is the authoritative source consulted
+/// against the requested <c>--domain</c>. A candidate whose packet-declared
+/// domain contradicts <c>--domain</c>, or whose domain cannot be derived at
+/// all (no packet.yaml, or no `domain:` field on it), is FAIL-CLOSED —
+/// excluded from <c>items[]</c> and reported instead in <c>excluded[]</c>
+/// with a structured reason. It never silently joins the scan and never
+/// silently disappears.
 /// </summary>
 internal static class AutomationStalledWorkCommand
 {
@@ -95,22 +105,15 @@ internal static class AutomationStalledWorkCommand
             return 1;
         }
 
-        var regexResolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(context, domain);
-        var warnings = new List<string>();
-        if (regexResolution.Regex is null)
-        {
-            warnings.Add(
-                $"domain '{domain}' has no resolvable `execution_unit_regex` binding "
-                + $"({regexResolution.BindingsPath ?? "(unresolved)"}) — items are NOT filtered by domain; "
-                + "results may include other domains' work on a shared host.");
-        }
-
         var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var candidateDomains = DomainCandidateScanner.Scan(context);
         var items = new List<StalledWorkItem>();
+        var excluded = new List<StalledWorkExcluded>();
+        var warnings = new List<string>();
 
-        CollectPublishedNotDelegated(openIssues, regexResolution.Regex, repo!, now, items);
-        CollectPrCreatedNotReviewing(openIssues, openPrs, regexResolution.Regex, repo!, now, items);
-        CollectMergedNotClosedOut(context, domain!, repo!, mergedPrs, regexResolution.Regex, now, items, warnings);
+        CollectPublishedNotDelegated(context, domain!, candidateDomains, openIssues, openPrs, repo!, now, items, excluded);
+        CollectPrCreatedNotReviewing(context, domain!, candidateDomains, openIssues, openPrs, repo!, now, items, excluded);
+        CollectMergedNotClosedOut(context, domain!, candidateDomains, repo!, mergedPrs, now, items, excluded, warnings);
 
         var filtered = items
             .Where(item => item.AgeMinutes >= staleMinutes)
@@ -124,6 +127,7 @@ internal static class AutomationStalledWorkCommand
             StaleMinutesThreshold = staleMinutes,
             Stalled = filtered.Length > 0,
             Items = filtered,
+            Excluded = excluded,
             Warnings = warnings,
         };
 
@@ -141,11 +145,15 @@ internal static class AutomationStalledWorkCommand
     }
 
     private static void CollectPublishedNotDelegated(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
         IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
-        System.Text.RegularExpressions.Regex? domainRegex,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
         string repo,
         DateTimeOffset now,
-        List<StalledWorkItem> items)
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
     {
         foreach (var issue in openIssues)
         {
@@ -167,9 +175,31 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var executionUnit = ExecutionUnitFromTitle(issue.Title);
-            if (domainRegex is not null && !domainRegex.IsMatch(executionUnit))
+            // PR #1148 review repair: a completion label can drift out of
+            // sync with reality — an open PR may already close this issue
+            // even though `intent-pr-created` was never applied (or was
+            // removed). Check the already-fetched PR closing references
+            // independently of issue labels so a label-drifted, already-
+            // implemented issue is never mis-recommended for `worker claim`.
+            if (HasOpenClosingPr(issue.Number, openPrs, repo))
             {
+                continue;
+            }
+
+            var executionUnit = ExecutionUnitFromTitle(issue.Title);
+            var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
+            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit,
+                    out var reason, out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindPublishedNotDelegated,
+                    ExecutionUnit = executionUnit,
+                    Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
+                    Pr = null,
+                    Reason = reason,
+                    Detail = detail,
+                });
                 continue;
             }
 
@@ -187,12 +217,15 @@ internal static class AutomationStalledWorkCommand
     }
 
     private static void CollectPrCreatedNotReviewing(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
         IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
-        System.Text.RegularExpressions.Regex? domainRegex,
         string repo,
         DateTimeOffset now,
-        List<StalledWorkItem> items)
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
     {
         var issuesWithPrCreated = openIssues
             .Where(issue => IsOpen(issue.State) && LabelSet(issue.Labels).Contains(WorkerNextActionConstants.Labels.IntentPrCreated))
@@ -235,8 +268,19 @@ internal static class AutomationStalledWorkCommand
             }
 
             var executionUnit = ExecutionUnitFromTitle(matchedIssue.Title);
-            if (domainRegex is not null && !domainRegex.IsMatch(executionUnit))
+            var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
+            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit,
+                    out var reason, out var detail))
             {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindPrCreatedNotReviewing,
+                    ExecutionUnit = executionUnit,
+                    Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
+                    Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                    Reason = reason,
+                    Detail = detail,
+                });
                 continue;
             }
 
@@ -256,11 +300,12 @@ internal static class AutomationStalledWorkCommand
     private static void CollectMergedNotClosedOut(
         CliContext context,
         string domain,
+        IReadOnlyList<string> candidateDomains,
         string repo,
         IReadOnlyList<GitHubAutomationPrCandidate> mergedPrs,
-        System.Text.RegularExpressions.Regex? domainRegex,
         DateTimeOffset now,
         List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded,
         List<string> warnings)
     {
         if (mergedPrs.Count == 0)
@@ -295,8 +340,24 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            if (domainRegex is not null && !domainRegex.IsMatch(matchedItem.ExecutionUnit))
+            var issueRef = matchedItem.LinkedIssue is { Number: { } linkedIssueNumber } linkedIssue
+                ? new StalledWorkRef { Number = linkedIssueNumber, Url = linkedIssue.Url ?? string.Empty }
+                : null;
+            var prRef = new StalledWorkRef { Number = pr.Number, Url = pr.Url };
+
+            var packetDeclaredDomain = ReadPacketDeclaredDomain(context, matchedItem.ExecutionUnit);
+            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, matchedItem.ExecutionUnit,
+                    out var reason, out var detail))
             {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindMergedNotClosedOut,
+                    ExecutionUnit = matchedItem.ExecutionUnit,
+                    Issue = issueRef,
+                    Pr = prRef,
+                    Reason = reason,
+                    Detail = detail,
+                });
                 continue;
             }
 
@@ -304,10 +365,8 @@ internal static class AutomationStalledWorkCommand
             {
                 Kind = KindMergedNotClosedOut,
                 ExecutionUnit = matchedItem.ExecutionUnit,
-                Issue = matchedItem.LinkedIssue is { Number: { } linkedIssueNumber } linkedIssue
-                    ? new StalledWorkRef { Number = linkedIssueNumber, Url = linkedIssue.Url ?? string.Empty }
-                    : null,
-                Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                Issue = issueRef,
+                Pr = prRef,
                 // Best-effort merge-time proxy: `gh pr list` does not expose a
                 // dedicated `mergedAt` field in the requested field set;
                 // `updatedAt` is set to the merge time for a merged PR.
@@ -316,6 +375,93 @@ internal static class AutomationStalledWorkCommand
                     $"intent-cli closeout pr --pr {pr.Number} --repo {repo} --domain {domain} --pr-merged true --write --format json",
             });
         }
+    }
+
+    /// <summary>
+    /// PR #1148 review repair: domain confirmation is now ALWAYS grounded in
+    /// the candidate's own packet-declared domain — never in a title-prefix
+    /// regex match, and never assumed from the explicit <c>--domain</c>
+    /// alone. Unlike <see cref="PacketDomainResolution"/> (tuned for a
+    /// single operator-named execution unit, where an explicit
+    /// <c>--domain</c> may stand alone), a broad multi-candidate scan like
+    /// this one cannot trust that the requested domain applies to a
+    /// candidate it cannot corroborate — so a missing/absent packet-declared
+    /// domain here is fail-closed (excluded), not accepted.
+    /// </summary>
+    private static bool TryConfirmDomain(
+        string domain,
+        string? packetDeclaredDomain,
+        IReadOnlyList<string> candidateDomains,
+        string executionUnit,
+        out string reason,
+        out string detail)
+    {
+        if (string.IsNullOrWhiteSpace(packetDeclaredDomain))
+        {
+            reason = PacketDomainResolution.ReasonUnderivable;
+            var candidates = candidateDomains.Count > 0
+                ? string.Join(", ", candidateDomains)
+                : "(none found under intents/)";
+            detail =
+                $"domain could not be confirmed for `{executionUnit}`: no packet-declared `domain:` field was found "
+                + $"(expected at `.intent-cli/issues/{executionUnit}/packet.yaml`). Candidate domains: {candidates}. "
+                + "Excluded rather than assumed to belong to the requested --domain.";
+            return false;
+        }
+
+        if (!string.Equals(domain, packetDeclaredDomain, StringComparison.Ordinal))
+        {
+            reason = PacketDomainResolution.ReasonContradiction;
+            detail =
+                $"requested --domain '{domain}' does not match the packet-declared domain '{packetDeclaredDomain}' "
+                + $"for `{executionUnit}`.";
+            return false;
+        }
+
+        reason = string.Empty;
+        detail = string.Empty;
+        return true;
+    }
+
+    private static string? ReadPacketDeclaredDomain(CliContext context, string executionUnit)
+    {
+        if (string.IsNullOrWhiteSpace(executionUnit))
+        {
+            return null;
+        }
+        var packetYamlPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit, "packet.yaml");
+        if (!File.Exists(packetYamlPath))
+        {
+            return null;
+        }
+        try
+        {
+            PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath)).TryGetValue("domain", out var declaredDomain);
+            return declaredDomain;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static bool HasOpenClosingPr(int issueNumber, IReadOnlyList<GitHubAutomationPrCandidate> openPrs, string repo)
+    {
+        foreach (var pr in openPrs)
+        {
+            if (!IsOpen(pr.State))
+            {
+                continue;
+            }
+            foreach (var reference in pr.ClosingIssuesReferences)
+            {
+                if (reference.Number == issueNumber && ReferenceMatchesRepo(reference, repo))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static bool IsOpen(string state) =>
@@ -360,7 +506,9 @@ internal static class AutomationStalledWorkCommand
     /// <summary>
     /// Derives the candidate execution unit from a title following the
     /// established convention used across this repository's own issues/PRs
-    /// (e.g. <c>"G523: Add automation stalled-work surface..."</c>).
+    /// (e.g. <c>"G523: Add automation stalled-work surface..."</c>). This
+    /// string is used ONLY to locate the candidate's packet.yaml — never as
+    /// the domain-membership decision itself (see <see cref="TryConfirmDomain"/>).
     /// </summary>
     private static string ExecutionUnitFromTitle(string title)
     {
@@ -471,6 +619,7 @@ internal static class AutomationStalledWorkCommand
         writer.WriteLine($"- stale_minutes_threshold: {result.StaleMinutesThreshold}");
         writer.WriteLine($"- stalled: {(result.Stalled ? "true" : "false")}");
         writer.WriteLine($"- items: {result.Items.Count}");
+        writer.WriteLine($"- excluded: {result.Excluded.Count}");
         writer.WriteLine();
 
         if (result.Items.Count == 0)
@@ -493,6 +642,16 @@ internal static class AutomationStalledWorkCommand
                 writer.WriteLine($"- recommended_action: `{item.RecommendedAction}`");
                 writer.WriteLine();
             }
+        }
+
+        if (result.Excluded.Count > 0)
+        {
+            writer.WriteLine("## Excluded (domain could not be confirmed)");
+            foreach (var item in result.Excluded)
+            {
+                writer.WriteLine($"- `{item.ExecutionUnit}` ({item.Kind}, {item.Reason}): {item.Detail}");
+            }
+            writer.WriteLine();
         }
 
         if (result.Warnings.Count > 0)
@@ -523,6 +682,16 @@ internal sealed record AutomationStalledWorkResult
     [JsonPropertyName("items")]
     public required IReadOnlyList<StalledWorkItem> Items { get; init; }
 
+    /// <summary>
+    /// PR #1148 review repair (G522 domain-isolation boundary): candidates
+    /// whose domain could not be confirmed against the candidate's own
+    /// packet-declared domain (underivable or contradicting) are reported
+    /// here instead of silently joining or silently vanishing from
+    /// <see cref="Items"/>.
+    /// </summary>
+    [JsonPropertyName("excluded")]
+    public required IReadOnlyList<StalledWorkExcluded> Excluded { get; init; }
+
     [JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }
 }
@@ -546,6 +715,27 @@ internal sealed record StalledWorkItem
 
     [JsonPropertyName("recommended_action")]
     public required string RecommendedAction { get; init; }
+}
+
+internal sealed record StalledWorkExcluded
+{
+    [JsonPropertyName("kind")]
+    public required string Kind { get; init; }
+
+    [JsonPropertyName("execution_unit")]
+    public required string ExecutionUnit { get; init; }
+
+    [JsonPropertyName("issue")]
+    public StalledWorkRef? Issue { get; init; }
+
+    [JsonPropertyName("pr")]
+    public StalledWorkRef? Pr { get; init; }
+
+    [JsonPropertyName("reason")]
+    public required string Reason { get; init; }
+
+    [JsonPropertyName("detail")]
+    public required string Detail { get; init; }
 }
 
 internal sealed record StalledWorkRef
