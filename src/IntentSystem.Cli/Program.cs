@@ -114,6 +114,7 @@ internal static class Program
                 || string.Equals(args[1], "queue-seed-from-packet", StringComparison.Ordinal)
                 || string.Equals(args[1], "reconcile", StringComparison.Ordinal)
                 || string.Equals(args[1], "same-repo-metadata-preflight", StringComparison.Ordinal)
+                || string.Equals(args[1], "stalled-work", StringComparison.Ordinal)
                 || string.Equals(args[1], "summary", StringComparison.Ordinal)
                 || string.Equals(args[1], "workspace-guard", StringComparison.Ordinal));
     }

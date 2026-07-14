@@ -240,6 +240,67 @@ All three surfaces apply the full order strictly — none of them fall back to
   multiple candidates with different (but each individually derivable)
   domains may still coexist in one broad-scan result.
 
+### Stalled-work detection (G523)
+
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] --format json|markdown`
+is a **read-only** inventory of pending pipeline transitions with ages, so a
+single orchestrator wake (or an external heartbeat) can detect and recover a
+stalled pipeline without a human cross-checking GitHub labels, PR state, and
+queue-state by hand. It never mutates GitHub labels, queue-state, or
+`runs.jsonl`.
+
+Categories:
+
+- `published-not-delegated` — an OPEN issue carries `intent-target` but has
+  no claim label (`intent-issue-in-progress` / `intent-pr-created`) yet, and
+  no PR was ever created for it.
+- `pr-created-not-reviewing` — the source issue carries `intent-pr-created`
+  and its closing PR has not had the `review-start` transition applied (no
+  `intent-pr-reviewing` / `intent-pr-approved` on the PR).
+- `merged-not-closed-out` — a MERGED PR's linked queue-state item is not yet
+  `Completed` (closeout — `pr-merged` + `closeout-recorded` runs events —
+  has not been recorded).
+
+Each item reports `kind`, `execution_unit`, `issue` and/or `pr` (number +
+url), `age_minutes`, and `recommended_action` — the exact canonical command
+to run next (`worker claim`, `automation pr-transition --transition
+review-start`, or `closeout pr`, respectively). `--stale-minutes` filters
+out items younger than the given threshold (default `0` — report everything
+with its age; callers pick their own threshold). `age_minutes` is
+approximated from the relevant GitHub entity's `createdAt`/`updatedAt`
+timestamp, since GitHub does not expose per-label-application timestamps.
+`published-not-delegated` also checks the already-fetched PR closing
+references independently of issue labels, so a completion label that has
+drifted out of sync with reality (an open PR already closes the issue, but
+`intent-pr-created` was never applied or was removed) never produces a
+false `worker claim` recommendation.
+
+**Domain isolation is grounded in packet/queue metadata, consistent with
+G522 — never in a title-prefix regex match.** A `<unit>: ...` title prefix
+is derived for every GitHub issue/PR candidate, but it is used ONLY to
+locate that candidate's `.intent-cli/issues/<unit>/packet.yaml` — the
+packet's own declared `domain:` field is the sole authority consulted
+against the requested `--domain`. A candidate is included in `items[]` only
+when its packet-declared domain matches the requested `--domain` exactly. A
+candidate whose packet-declared domain contradicts `--domain`, or whose
+domain cannot be derived at all (no packet.yaml, or no `domain:` field on
+it), is FAIL-CLOSED: excluded from `items[]` and reported instead in
+`excluded[]` (`kind`, `execution_unit`, `issue`/`pr`, `reason`, `detail`).
+`reason` is `domain-contradiction` (with `detail` naming the specific
+conflicting packet-declared domain) or `domain-underivable` (with `detail`
+naming the candidate domains scanned from `intents/*/` AND the exact,
+runnable re-invocation — `intent-cli automation stalled-work --domain <name>
+--repo <owner/repo> --format json` — inherited from the G522 underivable
+diagnostic contract). Unlike the other G522 surfaces (where an explicit
+`--domain` can stand alone for a single operator-named execution unit), this
+is a broad multi-candidate scan over a shared repo's issues/PRs — an
+explicit `--domain` alone is never trusted to apply to a candidate whose own
+metadata cannot corroborate it, so a candidate never silently joins the scan
+and never silently disappears.
+
+This slice is detection only — consuming the surface from the orchestrator
+wake procedure and from an external heartbeat are separate follow-up slices.
+
 ---
 
 ## Version flow

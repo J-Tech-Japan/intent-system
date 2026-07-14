@@ -185,6 +185,7 @@ internal static class CommandRouter
                 ["queue-seed-from-packet"] = AutomationQueueSeedFromPacketCommand.Execute,
                 ["reconcile"] = AutomationReconcileCommand.Execute,
                 ["same-repo-metadata-preflight"] = AutomationSameRepoMetadataPreflightCommand.Execute,
+                ["stalled-work"] = AutomationStalledWorkCommand.Execute,
                 ["state-doctor"] = AutomationStateDoctorCommand.Execute,
                 ["summary"] = AutomationSummaryCommand.Execute,
                 ["workspace-guard"] = AutomationWorkspaceGuardCommand.Execute

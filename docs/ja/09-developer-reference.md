@@ -231,6 +231,70 @@ binding fallback は、packet 自身の `domain:` フィールドが別の値を
   （個別に導出可能な）異なる domain を持つ複数の候補が 1 回の broad-scan
   結果に共存することがあります。
 
+### stalled-work 検出 (G523)
+
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] --format json|markdown`
+は、保留中の pipeline transition を age 付きで一覧化する **read-only** な
+サーフェスです。これにより、1 回の orchestrator wake（あるいは外部の
+heartbeat）だけで、人間が GitHub label・PR state・queue-state を手で
+突き合わせることなく stall を検出・復旧できます。GitHub label、
+queue-state、`runs.jsonl` を変更することは一切ありません。
+
+カテゴリ:
+
+- `published-not-delegated` — OPEN の issue が `intent-target` を持つが、
+  claim label（`intent-issue-in-progress` / `intent-pr-created`）がまだ無く、
+  PR も一度も作成されていない。
+- `pr-created-not-reviewing` — 元の issue が `intent-pr-created` を持ち、
+  その issue を close する PR に `review-start` transition がまだ適用
+  されていない（PR に `intent-pr-reviewing` / `intent-pr-approved` が無い）。
+- `merged-not-closed-out` — MERGED 状態の PR に紐づく queue-state item が
+  まだ `Completed` になっていない（closeout — `pr-merged` +
+  `closeout-recorded` の runs event — がまだ記録されていない）。
+
+各 item は `kind`、`execution_unit`、`issue` および/または `pr`
+（番号 + url）、`age_minutes`、`recommended_action`（次に実行すべき
+正確な canonical コマンド — それぞれ `worker claim`、`automation
+pr-transition --transition review-start`、`closeout pr`）を報告します。
+`--stale-minutes` は、指定した閾値より新しい item を除外します
+（デフォルトは `0` — すべてを age 付きで報告し、閾値は呼び出し側が選ぶ）。
+`age_minutes` は、GitHub が label 適用時刻を公開していないため、
+該当する GitHub entity の `createdAt`/`updatedAt` タイムスタンプからの
+近似値です。`published-not-delegated` は、既に取得済みの PR closing
+reference も issue label とは独立にチェックします — そのため、
+completion label が実態とずれてしまっていても（intent-pr-created が
+一度も付与されていない、または削除されてしまったが、OPEN の PR が
+既にその issue を close している場合）、誤って `worker claim` を推奨する
+ことはありません。
+
+**domain isolation は（title-prefix の正規表現一致ではなく）G522 と同様に
+packet/queue metadata に基づきます。** すべての GitHub issue/PR candidate
+について `<unit>: ...` というタイトル prefix を導出しますが、これは
+その candidate の `.intent-cli/issues/<unit>/packet.yaml` を特定するため
+だけに使われます — 要求された `--domain` と照合する唯一の権威は、
+その packet 自身が宣言する `domain:` フィールドです。candidate が
+`items[]` に含まれるのは、packet が宣言する domain が要求された
+`--domain` と完全に一致する場合のみです。packet が宣言する domain が
+`--domain` と矛盾する candidate、あるいは domain を全く導出できない
+candidate（packet.yaml が無い、またはそれに `domain:` フィールドが
+無い）は FAIL-CLOSED になります: `items[]` から除外され、代わりに
+`excluded[]`（`kind`、`execution_unit`、`issue`/`pr`、`reason`、
+`detail`）に報告されます。`reason` は `domain-contradiction`
+（`detail` に矛盾している具体的な packet-declared domain を明示）
+または `domain-underivable`（`detail` に `intents/*/` からスキャンした
+候補 domain **と** 正確に実行可能な再実行コマンド —
+`intent-cli automation stalled-work --domain <name> --repo <owner/repo>
+--format json` — の両方を明示。G522 の underivable diagnostic 契約を
+継承）のいずれかです。（単一の operator 指定 execution unit に対しては
+明示的な `--domain` 単独で成立する）他の G522 サーフェスとは異なり、
+これは共有 repo の issue/PR にまたがる broad multi-candidate scan です
+— 明示的な `--domain` だけでは、自身のメタデータで裏付けが取れない
+candidate に適用されると信頼することはありません。したがって
+candidate が黙って scan に紛れ込むことも、黙って消えることもありません。
+
+このスライスは検出のみです — orchestrator wake procedure や外部
+heartbeat からこのサーフェスを利用する部分は、別の後続スライスです。
+
 ---
 
 ## バージョンフロー
