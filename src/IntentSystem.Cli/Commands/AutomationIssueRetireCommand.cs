@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -275,18 +276,23 @@ internal static class AutomationIssueRetireCommand
                 + "If it was already fully processed (e.g. merged and closed out), no action is needed.");
             return 1;
         }
-        else if (!HasCanonicalRetireMarker(snapshot.Comments, executionUnit))
+        else if (!HasCanonicalRetireMarker(snapshot.Comments, executionUnit, reason!))
         {
             // Repair: `stateReason == NOT_PLANNED` alone is not durable
             // provenance — an issue closed manually/independently as "not
             // planned" would pass that check too. Require the canonical
             // marker comment this command itself posts alongside its close,
-            // tied to the exact candidate execution unit, before resuming.
+            // anchored to the exact candidate execution unit AND the exact
+            // requested reason, before resuming. A quoted/substring marker,
+            // a unit-prefix collision, or a marker recorded under a
+            // different reason all fail this check.
             writer.WriteLine(
                 $"refusing to retire issue #{issue}: it is CLOSED in {repo} with reason 'not planned', but no "
-                + $"canonical `automation issue-retire` marker comment for '{executionUnit}' was found — this does "
-                + "not look like a partial-failure recovery from a prior run of this command (e.g. a manual or "
-                + "unrelated 'not planned' closure). Refusing with zero GitHub or local mutation.");
+                + $"canonical `automation issue-retire` marker comment for '{executionUnit}' with reason "
+                + $"'{reason}' was found — this does not look like a partial-failure recovery from a prior run of "
+                + "this command with the same reason (e.g. a manual/unrelated 'not planned' closure, a marker for "
+                + "a different unit or reason, or a comment merely quoting the marker text). Refusing with zero "
+                + "GitHub or local mutation.");
             return 1;
         }
 
@@ -595,12 +601,25 @@ internal static class AutomationIssueRetireCommand
         }
     }
 
-    /// <summary>Prefix of the durable-provenance marker embedded in the close comment (see <see cref="HasCanonicalRetireMarker"/>).</summary>
-    private const string RetireMarkerPrefix = "[issue-retire:";
+    // Repair: the marker literals below are the SINGLE source of truth for
+    // both writing (BuildReasonComment) and reading (the compiled regex)
+    // the canonical provenance record, so the two can never drift apart. A
+    // naive substring `Contains` check on the prefix alone would accept a
+    // comment merely quoting the marker, a differently-reasoned marker, or
+    // an unrelated unit whose name happens to share a prefix — the regex is
+    // anchored to the WHOLE trimmed comment body and captures both the exact
+    // unit and reason for an equality check, closing all three gaps.
+    private const string RetireMarkerPrefixLiteral = "[issue-retire:";
+    private const string RetireMarkerMiddleLiteral = "] Retired via canonical `automation issue-retire` transition — reason: ";
+
+    private static readonly Regex CanonicalRetireMarkerPattern = new(
+        "^" + Regex.Escape(RetireMarkerPrefixLiteral) + "(?<unit>[^\\]]+)" + Regex.Escape(RetireMarkerMiddleLiteral)
+        + "(?<reason>" + string.Join("|", AllowedReasons.Select(Regex.Escape)) + @")\.(?: Note: .*)?$",
+        RegexOptions.Singleline);
 
     private static string BuildReasonComment(string executionUnit, string reason, string? note)
     {
-        var comment = $"{RetireMarkerPrefix}{executionUnit}] Retired via canonical `automation issue-retire` transition — reason: {reason}.";
+        var comment = $"{RetireMarkerPrefixLiteral}{executionUnit}{RetireMarkerMiddleLiteral}{reason}.";
         if (!string.IsNullOrWhiteSpace(note))
         {
             comment += $" Note: {note}";
@@ -610,19 +629,29 @@ internal static class AutomationIssueRetireCommand
 
     /// <summary>
     /// Repair: durable provenance that THIS command (not a manual/unrelated
-    /// closure) closed the issue as "not planned" for THIS candidate
-    /// execution unit — required before a CLOSED issue is treated as a
+    /// closure, and not merely a comment quoting the marker) closed the
+    /// issue as "not planned" for THIS candidate execution unit AND THIS
+    /// requested reason — required before a CLOSED issue is treated as a
     /// partial-failure recovery target, since <c>stateReason == NOT_PLANNED</c>
     /// alone is not sufficient authentication.
     /// </summary>
-    private static bool HasCanonicalRetireMarker(IReadOnlyList<string> comments, string executionUnit)
+    private static bool HasCanonicalRetireMarker(IReadOnlyList<string> comments, string executionUnit, string reason)
     {
         if (string.IsNullOrWhiteSpace(executionUnit))
         {
             return false;
         }
-        var marker = $"{RetireMarkerPrefix}{executionUnit}]";
-        return comments.Any(body => !string.IsNullOrEmpty(body) && body.Contains(marker, StringComparison.Ordinal));
+        return comments.Any(body =>
+        {
+            if (string.IsNullOrEmpty(body))
+            {
+                return false;
+            }
+            var match = CanonicalRetireMarkerPattern.Match(body.Trim());
+            return match.Success
+                && string.Equals(match.Groups["unit"].Value, executionUnit, StringComparison.Ordinal)
+                && string.Equals(match.Groups["reason"].Value, reason, StringComparison.Ordinal);
+        });
     }
 
     private static bool TryParseArguments(

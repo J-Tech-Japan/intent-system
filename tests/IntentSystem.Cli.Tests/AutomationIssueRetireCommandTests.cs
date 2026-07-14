@@ -544,6 +544,132 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_Write_RecoversWhenExactMarkerFoundAmongMultipleComments()
+    {
+        using var workspace = new RetireWorkspace();
+        AutomationIssueRetireCommand.LabelMutatorFactory = () => new FakeLabelMutator(Array.Empty<string>());
+        var retirementMutator = new FakeRetirementMutator();
+        retirementMutator.Snapshots[1744] = new IssueSnapshot
+        {
+            State = "CLOSED",
+            StateReason = "NOT_PLANNED",
+            Title = "SKS-G812: Oversized single-slice contract",
+            Url = $"https://github.com/{Repo}/issues/1744",
+            Labels = Array.Empty<string>(),
+            Comments = new[]
+            {
+                "Closing as not planned — duplicate of #1700.",
+                CanonicalMarkerComment("SKS-G812", "obsolete"), // wrong reason — must not match either
+                CanonicalMarkerComment("SKS-G812", "decomposed"), // the exact match
+            },
+        };
+        AutomationIssueRetireCommand.RetirementMutatorFactory = () => retirementMutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssueRetireCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--issue", "1744", "--reason", "decomposed", "--domain", "intent-cli", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationIssueRetireResult>(writer.ToString())!;
+        Assert.True(result.Applied);
+        Assert.Empty(retirementMutator.Closed); // already closed — not re-closed.
+        var item = Assert.Single(QueueStateSerializer.Deserialize(File.ReadAllText(workspace.Context.GetQueueStatePath())).Items);
+        Assert.Equal(QueueItemState.Retired, item.State);
+    }
+
+    [Fact]
+    public void Execute_Write_RefusesRecoveryWhenMarkerIsOnlyAQuotedSubstring()
+    {
+        // A comment merely QUOTING the marker text (e.g. someone pasting an
+        // example of the format) must not authenticate a recovery — the
+        // marker must anchor the WHOLE comment body, not appear as a
+        // substring inside unrelated surrounding text.
+        using var workspace = new RetireWorkspace();
+        var retirementMutator = new FakeRetirementMutator();
+        retirementMutator.Snapshots[1744] = new IssueSnapshot
+        {
+            State = "CLOSED",
+            StateReason = "NOT_PLANNED",
+            Title = "SKS-G812: Oversized single-slice contract",
+            Url = $"https://github.com/{Repo}/issues/1744",
+            Labels = Array.Empty<string>(),
+            Comments = new[] { $"For reference, the format looks like: {CanonicalMarkerComment("SKS-G812", "decomposed")} — that's it." },
+        };
+        AutomationIssueRetireCommand.RetirementMutatorFactory = () => retirementMutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssueRetireCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--issue", "1744", "--reason", "decomposed", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("no canonical", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(retirementMutator.Closed);
+        Assert.False(File.Exists(workspace.Context.GetQueueStatePath()));
+    }
+
+    [Fact]
+    public void Execute_Write_RefusesRecoveryWhenMarkerUnitIsAPrefixCollision()
+    {
+        // "G52" must never match the candidate unit "G525" — the marker's
+        // captured unit is compared for exact equality, not prefix/contains.
+        using var workspace = new RetireWorkspace();
+        var retirementMutator = new FakeRetirementMutator();
+        retirementMutator.Snapshots[1744] = new IssueSnapshot
+        {
+            State = "CLOSED",
+            StateReason = "NOT_PLANNED",
+            Title = "G525: some title deriving the candidate unit G525",
+            Url = $"https://github.com/{Repo}/issues/1744",
+            Labels = Array.Empty<string>(),
+            Comments = new[] { CanonicalMarkerComment("G52", "decomposed") },
+        };
+        AutomationIssueRetireCommand.RetirementMutatorFactory = () => retirementMutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssueRetireCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--issue", "1744", "--reason", "decomposed", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("no canonical", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(retirementMutator.Closed);
+        Assert.False(File.Exists(workspace.Context.GetQueueStatePath()));
+    }
+
+    [Fact]
+    public void Execute_Write_RefusesRecoveryWhenMarkerReasonDiffersFromRequestedReason()
+    {
+        using var workspace = new RetireWorkspace();
+        var retirementMutator = new FakeRetirementMutator();
+        retirementMutator.Snapshots[1744] = new IssueSnapshot
+        {
+            State = "CLOSED",
+            StateReason = "NOT_PLANNED",
+            Title = "SKS-G812: Oversized single-slice contract",
+            Url = $"https://github.com/{Repo}/issues/1744",
+            Labels = Array.Empty<string>(),
+            Comments = new[] { CanonicalMarkerComment("SKS-G812", "obsolete") },
+        };
+        AutomationIssueRetireCommand.RetirementMutatorFactory = () => retirementMutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssueRetireCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--issue", "1744", "--reason", "decomposed", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("no canonical", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(retirementMutator.Closed);
+        Assert.False(File.Exists(workspace.Context.GetQueueStatePath()));
+    }
+
+    [Fact]
     public void Execute_Write_QueueStateWriteFails_RecoversOnRetryWithoutReClosing()
     {
         // Fault injected AFTER close + label removal succeed, around queue
@@ -742,6 +868,20 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
         Labels = labels,
         Comments = comments ?? Array.Empty<string>(),
     };
+
+    // Mirrors the exact canonical format AutomationIssueRetireCommand's
+    // BuildReasonComment/CanonicalRetireMarkerPattern produce and parse —
+    // used to hand-author fixture comments simulating what a prior close
+    // (or an unrelated/malicious comment) would look like.
+    private static string CanonicalMarkerComment(string executionUnit, string reason, string? note = null)
+    {
+        var comment = $"[issue-retire:{executionUnit}] Retired via canonical `automation issue-retire` transition — reason: {reason}.";
+        if (!string.IsNullOrWhiteSpace(note))
+        {
+            comment += $" Note: {note}";
+        }
+        return comment;
+    }
 
     private static string BuildRunEventLine(string executionUnit, string eventName) =>
         RunLogSerializer.SerializeLine(new RunEvent
