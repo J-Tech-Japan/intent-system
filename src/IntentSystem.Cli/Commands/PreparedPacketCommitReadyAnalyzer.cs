@@ -634,24 +634,34 @@ internal static class PreparedPacketYamlScalarParser
             }
             value = value.Trim();
 
-            // Fail closed on unbalanced quotes in the value scalar.
-            if (HasUnbalancedQuote(value, '\''))
+            // G527: quote-balance rules depend on the scalar's OWN delimiter
+            // (standard YAML behavior) — a quote character that is not the
+            // scalar's delimiter is literal content and must never trigger a
+            // balance check for the OTHER quote style. A double-quoted value
+            // containing an apostrophe (e.g. `"it's here"`) is valid YAML and
+            // must parse, not fail closed.
+            if (value.Length > 0 && value[0] == '"')
             {
-                throw new FormatException(
-                    $"line {lineNumber}: unbalanced single quote in value for `{key}`: `{rawValue.Trim()}`.");
-            }
-            if (HasUnbalancedQuote(value, '"'))
-            {
-                throw new FormatException(
-                    $"line {lineNumber}: unbalanced double quote in value for `{key}`: `{rawValue.Trim()}`.");
-            }
-
-            if (value.Length >= 2
-                && (value[0] == '"' && value[^1] == '"'
-                    || value[0] == '\'' && value[^1] == '\''))
-            {
+                if (!IsBalancedDoubleQuotedScalar(value))
+                {
+                    throw new FormatException(
+                        $"line {lineNumber}: unbalanced double quote in value for `{key}`: `{rawValue.Trim()}`.");
+                }
                 value = value.Substring(1, value.Length - 2);
             }
+            else if (value.Length > 0 && value[0] == '\'')
+            {
+                if (!IsBalancedSingleQuotedScalar(value))
+                {
+                    throw new FormatException(
+                        $"line {lineNumber}: unbalanced single quote in value for `{key}`: `{rawValue.Trim()}`.");
+                }
+                value = value.Substring(1, value.Length - 2);
+            }
+            // else: an unquoted plain scalar. Standard YAML gives quote
+            // characters no special meaning inside a plain scalar (they are
+            // only significant as the very first character, handled above),
+            // so no balance check applies here.
 
             while (pathStack.Count > 0 && pathStack[^1].Indent >= indent)
             {
@@ -679,20 +689,55 @@ internal static class PreparedPacketYamlScalarParser
         return fields;
     }
 
-    private static bool HasUnbalancedQuote(string value, char quote)
+    /// <summary>
+    /// G527: <paramref name="value"/> is known to start with <c>"</c>. Valid
+    /// only when it also ends with an unescaped <c>"</c> and no other
+    /// double quote appears in between — this lightweight reader does not
+    /// support a <c>\"</c> escape, so any interior double quote makes the
+    /// scalar's boundary genuinely ambiguous. A single quote (apostrophe)
+    /// anywhere inside is literal content and never affects this check.
+    /// </summary>
+    private static bool IsBalancedDoubleQuotedScalar(string value)
     {
-        if (string.IsNullOrEmpty(value))
+        if (value.Length < 2 || value[^1] != '"')
         {
             return false;
         }
-        var count = 0;
-        foreach (var ch in value)
+        for (var i = 1; i < value.Length - 1; i++)
         {
-            if (ch == quote)
+            if (value[i] == '"')
             {
-                count++;
+                return false;
             }
         }
-        return (count % 2) != 0;
+        return true;
+    }
+
+    /// <summary>
+    /// G527: <paramref name="value"/> is known to start with <c>'</c>. Valid
+    /// when scanning from the character after the opening quote finds an
+    /// unescaped closing <c>'</c> exactly at the last position — a doubled
+    /// <c>''</c> is the standard YAML escape for a literal single quote
+    /// inside a single-quoted scalar and is consumed as one escaped
+    /// character rather than treated as a delimiter. A double quote
+    /// anywhere inside is literal content and never affects this check.
+    /// </summary>
+    private static bool IsBalancedSingleQuotedScalar(string value)
+    {
+        var index = 1;
+        while (index < value.Length)
+        {
+            if (value[index] == '\'')
+            {
+                if (index + 1 < value.Length && value[index + 1] == '\'')
+                {
+                    index += 2;
+                    continue;
+                }
+                return index == value.Length - 1;
+            }
+            index++;
+        }
+        return false;
     }
 }
