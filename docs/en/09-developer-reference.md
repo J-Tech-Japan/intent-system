@@ -240,6 +240,48 @@ All three surfaces apply the full order strictly — none of them fall back to
   multiple candidates with different (but each individually derivable)
   domains may still coexist in one broad-scan result.
 
+### Stalled-work detection (G523)
+
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] --format json|markdown`
+is a **read-only** inventory of pending pipeline transitions with ages, so a
+single orchestrator wake (or an external heartbeat) can detect and recover a
+stalled pipeline without a human cross-checking GitHub labels, PR state, and
+queue-state by hand. It never mutates GitHub labels, queue-state, or
+`runs.jsonl`.
+
+Categories:
+
+- `published-not-delegated` — an OPEN issue carries `intent-target` but has
+  no claim label (`intent-issue-in-progress` / `intent-pr-created`) yet, and
+  no PR was ever created for it.
+- `pr-created-not-reviewing` — the source issue carries `intent-pr-created`
+  and its closing PR has not had the `review-start` transition applied (no
+  `intent-pr-reviewing` / `intent-pr-approved` on the PR).
+- `merged-not-closed-out` — a MERGED PR's linked queue-state item is not yet
+  `Completed` (closeout — `pr-merged` + `closeout-recorded` runs events —
+  has not been recorded).
+
+Each item reports `kind`, `execution_unit` (derived from the `<unit>: ...`
+title prefix convention used across this repo's own issues/PRs), `issue`
+and/or `pr` (number + url), `age_minutes`, and `recommended_action` — the
+exact canonical command to run next (`worker claim`, `automation
+pr-transition --transition review-start`, or `closeout pr`, respectively).
+`--stale-minutes` filters out items younger than the given threshold
+(default `0` — report everything with its age; callers pick their own
+threshold). `age_minutes` is approximated from the relevant GitHub entity's
+`createdAt`/`updatedAt` timestamp, since GitHub does not expose
+per-label-application timestamps.
+
+Domain scoping follows the execution-unit-regex binding convention (not the
+per-candidate packet.yaml lookup from G522): an item whose derived execution
+unit does not match the requested domain's `execution_unit_regex`
+(`intents/<domain>/automation/bindings.md`) is excluded. A missing/invalid
+binding degrades to "no filter" (with a surfaced `warnings` entry) rather
+than blocking this diagnostic-only surface.
+
+This slice is detection only — consuming the surface from the orchestrator
+wake procedure and from an external heartbeat are separate follow-up slices.
+
 ---
 
 ## Version flow

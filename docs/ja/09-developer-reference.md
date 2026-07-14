@@ -231,6 +231,48 @@ binding fallback は、packet 自身の `domain:` フィールドが別の値を
   （個別に導出可能な）異なる domain を持つ複数の候補が 1 回の broad-scan
   結果に共存することがあります。
 
+### stalled-work 検出 (G523)
+
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] --format json|markdown`
+は、保留中の pipeline transition を age 付きで一覧化する **read-only** な
+サーフェスです。これにより、1 回の orchestrator wake（あるいは外部の
+heartbeat）だけで、人間が GitHub label・PR state・queue-state を手で
+突き合わせることなく stall を検出・復旧できます。GitHub label、
+queue-state、`runs.jsonl` を変更することは一切ありません。
+
+カテゴリ:
+
+- `published-not-delegated` — OPEN の issue が `intent-target` を持つが、
+  claim label（`intent-issue-in-progress` / `intent-pr-created`）がまだ無く、
+  PR も一度も作成されていない。
+- `pr-created-not-reviewing` — 元の issue が `intent-pr-created` を持ち、
+  その issue を close する PR に `review-start` transition がまだ適用
+  されていない（PR に `intent-pr-reviewing` / `intent-pr-approved` が無い）。
+- `merged-not-closed-out` — MERGED 状態の PR に紐づく queue-state item が
+  まだ `Completed` になっていない（closeout — `pr-merged` +
+  `closeout-recorded` の runs event — がまだ記録されていない）。
+
+各 item は `kind`、`execution_unit`（このリポジトリ自身の issue/PR で
+使われている `<unit>: ...` というタイトル prefix の慣習から導出）、
+`issue` および/または `pr`（番号 + url）、`age_minutes`、
+`recommended_action`（次に実行すべき正確な canonical コマンド —
+それぞれ `worker claim`、`automation pr-transition --transition
+review-start`、`closeout pr`）を報告します。`--stale-minutes` は、
+指定した閾値より新しい item を除外します（デフォルトは `0` —
+すべてを age 付きで報告し、閾値は呼び出し側が選ぶ）。`age_minutes` は、
+GitHub が label 適用時刻を公開していないため、該当する GitHub entity の
+`createdAt`/`updatedAt` タイムスタンプからの近似値です。
+
+domain スコープは（G522 の per-candidate packet.yaml lookup ではなく）
+execution-unit-regex binding の慣習に従います: 導出された execution unit
+が要求された domain の `execution_unit_regex`
+（`intents/<domain>/automation/bindings.md`）に一致しない item は除外
+されます。binding が無い/不正な場合は、この診断専用サーフェスをブロック
+するのではなく「フィルタなし」に degrade します（`warnings` に明示）。
+
+このスライスは検出のみです — orchestrator wake procedure や外部
+heartbeat からこのサーフェスを利用する部分は、別の後続スライスです。
+
 ---
 
 ## バージョンフロー

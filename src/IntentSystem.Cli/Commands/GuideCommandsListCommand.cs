@@ -137,7 +137,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerHostLoop,
-            Purpose = "Host-side label transitions and capability JSON: summary / doctor / host-review-preflight / issue-publish / pr-transition / check / complete / clarification-stop. doctor / reconcile / publish-recovery are the recovery-diagnostics subset."
+            Purpose = "Host-side label transitions and capability JSON: summary / doctor / host-review-preflight / issue-publish / pr-transition / check / complete / clarification-stop. doctor / reconcile / publish-recovery / stalled-work are the recovery-diagnostics subset (stalled-work is read-only: reports pending pipeline transitions with ages, never mutates)."
         },
         new CommandGroupEntry
         {
