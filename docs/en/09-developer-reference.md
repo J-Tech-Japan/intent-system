@@ -217,22 +217,28 @@ domain, or `queue-seed-from-packet` running the wrong domain's
 unchanged and still used elsewhere; only what these surfaces consult when
 `--domain` is omitted has changed.
 
-Per-surface notes:
+All three surfaces apply the full order strictly — none of them fall back to
+`[project] domain` when a domain cannot be derived:
 
-- `automation queue-seed-from-packet` applies the full order strictly — when
-  neither `--domain` nor the packet's `domain:` field is available, the
-  command refuses to seed rather than falling back to `[project] domain`.
-- `review closeout-plan` is a read-only planning surface: when a domain
-  genuinely cannot be derived (no matched queue item, or its packet.yaml
-  declares no `domain:` field), it keeps reporting the host's default domain
-  binding rather than hard-failing an otherwise-successful gap report — an
-  explicit `--domain` still wins, and a contradiction with a
-  packet-declared domain is still an error.
-- `automation publish-recovery` accepts an optional `--domain` that scopes
-  the candidate set to that domain's `execution_unit_regex` binding, so a
-  different domain's execution unit never leaks into this domain's recovery
-  analysis. Omitting `--domain` preserves the original unscoped broad-scan
-  behavior.
+- `automation queue-seed-from-packet` — when neither `--domain` nor the
+  packet's `domain:` field is available, the command refuses to seed.
+- `review closeout-plan` — when a domain cannot be derived for the resolved
+  queue item (no matched item, or its packet.yaml declares no `domain:`
+  field), the command fails loud naming candidate domains and the exact
+  `--domain` re-invocation, instead of reporting the host's default domain
+  binding.
+- `automation publish-recovery` resolves a domain for EVERY candidate
+  execution unit before it may join repair analysis — from `--domain` when
+  given (erroring per-candidate on contradiction with that candidate's own
+  packet-declared domain) or otherwise from that candidate's own
+  packet-declared domain. A candidate with neither becomes a structured
+  `domain-underivable` unsafe stop rather than silently joining (or being
+  silently dropped from) the scan; a candidate contradicting an explicit
+  `--domain` becomes a structured `domain-contradiction` unsafe stop. This
+  applies to both the `--pr`-scoped path and the broad (unscoped) scan.
+  Omitting `--domain` entirely does not request cross-candidate scoping, so
+  multiple candidates with different (but each individually derivable)
+  domains may still coexist in one broad-scan result.
 
 ---
 

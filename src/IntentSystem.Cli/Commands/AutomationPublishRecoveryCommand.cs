@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -79,25 +78,8 @@ internal static class AutomationPublishRecoveryCommand
             return 1;
         }
 
-        // G522: `--domain` is optional here (this surface, unlike
-        // `review closeout-plan` / `automation queue-seed-from-packet`, has
-        // no single resolved packet to derive a domain from until AFTER an
-        // execution unit is scoped, and a broad scan may legitimately span
-        // several domains). When `--domain` IS given, scope the candidate
-        // set to that domain's `execution_unit_regex` binding so a
-        // cross-domain execution unit (e.g. a different domain's unit
-        // sharing the same host) never leaks into this domain's analysis —
-        // the concrete bug this closes. Missing/invalid bindings degrade to
-        // "no filter" (same fail-open convention as
-        // NextSliceDomainBindingsExecutionUnitRegex's other callers) rather
-        // than blocking recovery on a misconfigured bindings file.
-        Regex? domainFilterRegex = null;
-        if (!string.IsNullOrWhiteSpace(domain))
-        {
-            domainFilterRegex = NextSliceDomainBindingsExecutionUnitRegex.TryLoad(context, domain);
-        }
-
-        var candidates = BuildCandidates(context, queueState, domainFilterRegex);
+        var rawCandidates = BuildCandidates(context, queueState);
+        var candidateDomains = DomainCandidateScanner.Scan(context);
 
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs;
         try
@@ -112,17 +94,79 @@ internal static class AutomationPublishRecoveryCommand
             return 1;
         }
 
-        // G351: when --pr is given, scope the analysis to only the queue
-        // item relevant to the selected PR. This avoids flooding the
-        // operator with unrelated unsafe stops from a broad scan.
+        // G522: domain resolution order — explicit `--domain` > the
+        // resolved candidate's own packet-declared domain > structured
+        // fail-loud. No candidate participates in repair analysis
+        // unfiltered: every candidate's domain is resolved before it is
+        // allowed into `PublishRecoveryAnalyzer`, and an underivable or
+        // contradictory candidate becomes a structured unsafe stop instead
+        // of silently joining (or silently being dropped from) the scan.
         PublishRecoveryAnalysis analysis;
+        var domainBlockedStops = new List<PublishRecoveryUnsafeStop>();
         if (selectedPr is int prNumber)
         {
-            analysis = PublishRecoveryAnalyzer.AnalyzeScopedToPr(repo!, candidates, openPrs, prNumber);
+            // G351: run the scoped analyzer against the FULL (domain-
+            // unfiltered) candidate set first, to identify the single
+            // execution unit relevant to this PR — then domain-check ONLY
+            // that unit. This preserves the "scoped result returns at most
+            // one repair or one unsafe stop" contract while still refusing
+            // to let a domain-blocked candidate produce a safe repair.
+            var scoped = PublishRecoveryAnalyzer.AnalyzeScopedToPr(repo!, rawCandidates, openPrs, prNumber);
+            var relevantUnit = scoped.SafeRepairs.Count > 0
+                ? scoped.SafeRepairs[0].ExecutionUnit
+                : scoped.UnsafeStops.Count > 0 ? scoped.UnsafeStops[0].ExecutionUnit : null;
+            var domainResolution = relevantUnit is null
+                ? (PacketDomainResolutionResult?)null
+                : ResolveCandidateDomain(context, domain, relevantUnit, candidateDomains, repo!, selectedPr);
+            if (domainResolution is { IsError: true } blocked)
+            {
+                analysis = new PublishRecoveryAnalysis
+                {
+                    Repo = repo!,
+                    SafeRepairs = Array.Empty<PublishRecoveryRepair>(),
+                    UnsafeStops = new[]
+                    {
+                        new PublishRecoveryUnsafeStop
+                        {
+                            Kind = blocked.Reason!,
+                            ExecutionUnit = relevantUnit!,
+                            Reason = blocked.ErrorMessage!,
+                            PublishArtifactPath = IssuePublishArtifactPathResolver.Resolve(relevantUnit!),
+                        },
+                    },
+                };
+            }
+            else
+            {
+                analysis = scoped;
+            }
         }
         else
         {
-            analysis = PublishRecoveryAnalyzer.Analyze(repo!, candidates, openPrs);
+            // Broad scan: resolve every candidate's domain up front; only
+            // domain-eligible candidates reach the analyzer.
+            var eligible = new List<PublishRecoveryCandidate>();
+            foreach (var candidate in rawCandidates)
+            {
+                var resolution = ResolveCandidateDomain(context, domain, candidate.ExecutionUnit, candidateDomains, repo!, selectedPr: null);
+                if (resolution.IsError)
+                {
+                    domainBlockedStops.Add(new PublishRecoveryUnsafeStop
+                    {
+                        Kind = resolution.Reason!,
+                        ExecutionUnit = candidate.ExecutionUnit,
+                        Reason = resolution.ErrorMessage!,
+                        PublishArtifactPath = candidate.PublishArtifactExpectedPath,
+                    });
+                    continue;
+                }
+                eligible.Add(candidate);
+            }
+
+            var scanned = PublishRecoveryAnalyzer.Analyze(repo!, eligible, openPrs);
+            analysis = domainBlockedStops.Count == 0
+                ? scanned
+                : scanned with { UnsafeStops = domainBlockedStops.Concat(scanned.UnsafeStops).ToArray() };
         }
 
         var applied = new List<PublishRecoveryRepair>();
@@ -192,10 +236,42 @@ internal static class AutomationPublishRecoveryCommand
             onlyLinkedPrMissing: hasSafeLinkedPrRepair).Classification;
     }
 
-    private static IReadOnlyList<PublishRecoveryCandidate> BuildCandidates(
+    /// <summary>
+    /// G522: resolve a single candidate execution unit's domain via the
+    /// shared order (explicit `--domain` &gt; the candidate's own
+    /// packet-declared domain &gt; structured fail-loud). Reads
+    /// <c>.intent-cli/issues/&lt;unit&gt;/packet.yaml</c> directly rather than
+    /// a binding regex — the packet's own `domain:` field is authoritative
+    /// and needs no per-domain bindings.md lookup.
+    /// </summary>
+    private static PacketDomainResolutionResult ResolveCandidateDomain(
         CliContext context,
-        QueueState queueState,
-        Regex? domainFilterRegex)
+        string? explicitDomain,
+        string executionUnit,
+        IReadOnlyList<string> candidateDomains,
+        string repo,
+        int? selectedPr)
+    {
+        var packetYamlPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit, "packet.yaml");
+        string? packetDeclaredDomain = null;
+        if (File.Exists(packetYamlPath))
+        {
+            try
+            {
+                PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath)).TryGetValue("domain", out packetDeclaredDomain);
+            }
+            catch (FormatException)
+            {
+                packetDeclaredDomain = null;
+            }
+        }
+
+        var reinvocation = $"intent-cli automation publish-recovery --repo {repo} --domain <name>"
+            + (selectedPr is int pr ? $" --pr {pr}" : string.Empty);
+        return PacketDomainResolution.Resolve(explicitDomain, packetDeclaredDomain, candidateDomains, reinvocation);
+    }
+
+    private static IReadOnlyList<PublishRecoveryCandidate> BuildCandidates(CliContext context, QueueState queueState)
     {
         var candidates = new List<PublishRecoveryCandidate>();
         foreach (var item in queueState.Items)
@@ -204,15 +280,6 @@ internal static class AutomationPublishRecoveryCommand
             // are now in scope (queue-state-backed lane). Skip only items
             // that already have a linked_pr — those are fully linked.
             if (!string.IsNullOrWhiteSpace(item.LinkedPr))
-            {
-                continue;
-            }
-
-            // G522: when a domain filter is active, skip execution units
-            // that don't match the requested domain's binding regex so a
-            // different domain's unit never leaks into this domain's
-            // recovery analysis.
-            if (domainFilterRegex is not null && !domainFilterRegex.IsMatch(item.ExecutionUnit))
             {
                 continue;
             }

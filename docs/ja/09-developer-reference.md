@@ -207,22 +207,29 @@ binding fallback は、packet 自身の `domain:` フィールドが別の値を
 されておらず他の箇所では引き続き使われます。変わったのは、これらの
 サーフェスが `--domain` 省略時に何を参照するかだけです。
 
-サーフェスごとの補足:
+3つのサーフェスすべてがこの順序を厳密に適用します — domain を導出できない
+場合に `[project] domain` へ fallback することはありません:
 
-- `automation queue-seed-from-packet` はこの順序を厳密に適用します —
-  `--domain` と packet の `domain:` フィールドのどちらも無い場合、
-  `[project] domain` へ fallback せず seed を拒否します。
-- `review closeout-plan` は read-only な planning サーフェスです:
-  domain を本当に導出できない場合（一致する queue item が無い、または
-  その packet.yaml に `domain:` フィールドが無い場合）、成功している gap
-  report を hard-fail させるのではなく、ホストの default domain binding を
-  引き続き報告します — 明示的な `--domain` は引き続き優先され、
-  packet が宣言する domain との矛盾は引き続きエラーになります。
-- `automation publish-recovery` はオプションの `--domain` を受け付け、
-  その domain の `execution_unit_regex` binding に候補セットを絞り込みます。
-  これにより、別 domain の execution unit がこの domain の recovery
-  解析に紛れ込むことがなくなります。`--domain` を省略した場合は、
-  従来のスコープなしの broad-scan 挙動のままです。
+- `automation queue-seed-from-packet` — `--domain` と packet の `domain:`
+  フィールドのどちらも無い場合、seed を拒否します。
+- `review closeout-plan` — 解決された queue item に対して domain を
+  導出できない場合（一致する queue item が無い、またはその packet.yaml に
+  `domain:` フィールドが無い場合）、ホストの default domain binding を
+  報告する代わりに、候補 domain と正確な `--domain` 再実行コマンドを示して
+  fail loud します。
+- `automation publish-recovery` は、各 execution unit の候補が repair 解析に
+  参加する前に、必ず domain を解決します — `--domain` が指定されていれば
+  それを使用し（その候補自身が宣言する packet-declared domain と矛盾する
+  場合は候補ごとにエラーになります）、指定が無ければその候補自身の
+  packet-declared domain から導出します。どちらも無い候補は、スキャンに
+  黙って参加する（あるいは黙って除外される）のではなく、構造化された
+  `domain-underivable` の unsafe stop になります。明示的な `--domain` と
+  矛盾する候補は構造化された `domain-contradiction` の unsafe stop に
+  なります。これは `--pr` でスコープされたパスと、スコープなしの broad
+  scan の両方に適用されます。`--domain` を完全に省略した場合は
+  cross-candidate なスコープを要求したことにはならないため、
+  （個別に導出可能な）異なる domain を持つ複数の候補が 1 回の broad-scan
+  結果に共存することがあります。
 
 ---
 

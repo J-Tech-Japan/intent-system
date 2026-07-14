@@ -409,24 +409,21 @@ internal static class ReviewCloseoutPlanCommand
         // an error if it contradicts the packet-declared domain); else the
         // domain declared by the resolved packet is authoritative for the
         // REPORTED domain, overriding the probe domain used above only to
-        // locate the (possibly legacy/unscoped) queue-state file. When no
-        // domain can be derived from the packet (no matched item, no
-        // packet.yaml, or no `domain:` field on it), this read-only
-        // planning surface keeps reporting the probe domain — hard-failing
-        // an otherwise-successful gap report isn't warranted here, unlike
-        // the write-gated `automation queue-seed-from-packet` surface.
+        // locate the (possibly legacy/unscoped) queue-state file; else the
+        // surface fails loud naming candidate domains and the exact
+        // re-invocation — it never silently falls back to the host's
+        // default domain binding.
         var domainResolution = PacketDomainResolution.Resolve(
             domainOverride,
             packetDeclaredDomain,
-            Array.Empty<string>(),
+            DomainCandidateScanner.Scan(context),
             $"intent-cli review closeout-plan --pr {pr} --repo {repo} --domain <name>");
-        if (domainResolution.IsError
-            && string.Equals(domainResolution.Reason, PacketDomainResolution.ReasonContradiction, StringComparison.Ordinal))
+        if (domainResolution.IsError)
         {
             writer.WriteLine(domainResolution.ErrorMessage);
             return 1;
         }
-        var reportedDomain = domainResolution.IsError ? domain : domainResolution.Domain!;
+        var reportedDomain = domainResolution.Domain!;
 
         var expectedSubmodulePath = DeriveSubmodulePath(repo!);
 
