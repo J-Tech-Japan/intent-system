@@ -24,7 +24,14 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
 
     public AutomationIssueRetireCommandTests()
     {
-        AutomationIssueRetireCommand.CandidateListerFactory = null;
+        // Default to an empty fake lister so tests that never override it
+        // (most: they only care about the issue snapshot / label / queue
+        // seams) cannot silently fall back to a REAL `gh pr list` subprocess
+        // for the open-linked-PR check — that fallback happens to succeed
+        // on a machine with an authenticated `gh` (e.g. a dev box) but fails
+        // in CI, which is exactly the class of environment-dependent test
+        // bug already hit once in this execution unit.
+        AutomationIssueRetireCommand.CandidateListerFactory = () => new FakeLister();
         AutomationIssueRetireCommand.LabelMutatorFactory = null;
         AutomationIssueRetireCommand.RetirementMutatorFactory = null;
         AutomationIssueRetireCommand.UtcNowFactory = () => FixedNow;
