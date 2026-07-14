@@ -573,12 +573,59 @@ resume）します。その後 orchestrator がループを自律的に駆動し
   エスカレーションを拾うには `inbox.sh` で design inbox を確認します — 特に monitor delivery が
   ライブで現れなかった場合や、design セッションが orchestrator の送信後に開始した場合。
 
-## design-side watchdog（任意のセーフティネット）
+## external heartbeat（推奨セーフティネット）
+
+フィールドデータ(2026-06-28..07-14、16 日間): 手動でリカバリした 11 件のスタール
+すべてが **1 通** の inbound メッセージで解消されました — orchestrator はどんな wake
+に対しても約 2 分以内に正しく reconcile します。したがって **推奨** されるセーフティ
+ネットは、セッションに依存しない **外部** スケジューラ(cron/launchd — in-session
+タイマーでは *ない*)から `intent-cli automation heartbeat` を低頻度(60 分クラス)で
+実行することです: パイプラインが健全な間は完全に沈黙し、agent/session の再起動を
+すべて生き延び、最悪ケースのスタール時間をその実行間隔自体(実測された 26 時間という
+最悪ケースの代わりに)まで抑え込みます。
+
+- **頻度** — 60 分クラス(例: 毎時)。沈黙したノイズとして扱えるほど低頻度で、かつ
+  フィールドで観測された最悪ケースを大きく下回るようスタールを抑え込めるだけの
+  頻度です。
+- **コマンド** —
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
+  は `automation stalled-work`(G523)をラップし、何かがスタールしている場合は
+  スタールした各項目とその canonical な次のコマンドを示す `message_body` を返します。
+  健全な場合は `stale=false` で `message_body` はありません。
+- **コピペ用ラッパー**(cron/launchd から実行、agent session の中ではない):
+
+  ```sh
+  #!/bin/sh
+  # cron/launchd から実行される — agent session の中ではない。
+  result=$(intent-cli automation heartbeat --domain "$DOMAIN" --repo "$REPO" --format json)
+  stale=$(echo "$result" | jq -r '.stale')
+  if [ "$stale" = "true" ]; then
+    message=$(echo "$result" | jq -r '.message_body')
+    ~/.agents/skills/agmsg/scripts/send.sh <team> heartbeat orchestrator "$message"
+  fi
+  ```
+
+- **1 回の実行につき最大 1 通** — `intent-cli` は自分でメッセージを送ったり agent を
+  起動したりすることは一切ありません。テキストを計算するだけです。ラッパーは
+  1 回の実行につき **最大 1 通** だけ送ります(`stale` が false の場合は何も送りません)
+  — これは G524 の wake contract、すなわち 1 通の reconcile メッセージだけで
+  完全な recovery wake をトリガーするのに十分である、という契約と一致します。
+- **代替案** — design-side watchdog と 5 分ごとの in-session orchestrator fallback
+  タイマーは(下記の通り)引き続き代替案としてサポートされますが、どちらも同じ
+  フィールドトライアルで実測された弱点があります: fallback タイマーはオペレーターが
+  明示的に望んでいない高速ポーリングであり、design-side watchdog は観測された中で
+  最も脆弱な単一コンポーネントの中で動作しています — design session 自体が 16 日間で
+  8〜9 回死に、その monitor は手動で復旧するまで死んだままでした。いくつかのスタールは
+  そのセッションがたまたま再起動したときにしか発見されませんでした。特に代替案を
+  使う理由がない限り、external heartbeat を優先してください。
+
+## design-side watchdog（代替のセーフティネット）
 
 メッセージ駆動の定常状態では、implementation/review の返信がすでに orchestrator を
-起こしているため、高速な orchestrator ループは冗長です。代わりに推奨されるセーフティ
-ネットは、**design** スレッドから実行する **任意**・**低頻度** の watchdog です:
-HITL（human-in-the-loop）メッセージが届いているか、orchestrator が停滞していないかを
+起こしているため、高速な orchestrator ループは冗長です。**代替の** セーフティネット
+(推奨されるオプションについては上記の external heartbeat を参照)は、**design**
+スレッドから実行する **任意**・**低頻度** の watchdog です:
+HITL(human-in-the-loop)メッセージが届いているか、orchestrator が停滞していないかを
 確認し、**最大 1 通** の canonical な repair/status リクエストを送ります — ルーチンな
 オーケストレーションそのものは駆動しません。
 
@@ -612,8 +659,17 @@ watchdog の安全ルールは次を **禁止** します:
 明示的な orchestrator タイマー（Codex automation 5 分ごと、または Claude 同一スレッド
 `/loop 5m`）は、オペレーターがメッセージ駆動の定常状態の代わりにスケジュールされた
 ポーリングを明示的に望む場合の fallback/legacy ポーリングとして引き続きサポートされ
-ます — design-side watchdog と orchestrator の fallback タイマーは代替のセーフティ
-ネットであり、両方を同時に必要とするわけではありません。
+ます — 実測された弱点: これはオペレーターが明示的に望んでいない定常状態での高速
+ポーリングであり、まさにこれが external heartbeat が推奨されるようになった理由です。
+external heartbeat・design-side watchdog・orchestrator の fallback タイマーは代替の
+セーフティネットであり、すべてを同時に必要とするわけではありません。
+
+**実測された弱点** — フィールドトライアル(2026-06-28..07-14): この watchdog が動作する
+design session 自体が 16 日間で 8〜9 回死に、その monitor は手動で復旧するまで死んだ
+ままでした。いくつかのスタールは、そのセッションがたまたま再起動したときにしか
+発見されませんでした。最も脆弱な単一コンポーネントの中で動作するセーフティネットは、
+セッションに依存しない外部スケジューラ(上記の external heartbeat を参照)よりも
+弱い保証しか提供しません。
 
 ## monitor リカバリ
 
