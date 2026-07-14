@@ -461,6 +461,7 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
                     },
                 },
             };
+            WriteInstalledCliScript();
         }
 
         public string RootPath { get; }
@@ -468,6 +469,43 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
         public CliContext Context { get; }
 
         public void WriteQueueState(string json) => File.WriteAllText(Context.GetQueueStatePath(), json);
+
+        // Without a cwd-local shim, AutomationInstalledCliSurfaceProbe falls back to
+        // searching PATH for a globally installed intent-cli — present on a dev
+        // machine but absent on CI runners, which made the WIP-gating test pass
+        // locally and fail in CI. Writing the shim here removes that environment
+        // dependency (mirrors AutomationHostReviewPreflightCommandTests's workspace).
+        private void WriteInstalledCliScript()
+        {
+            var binPath = Path.Combine(RootPath, ".intent-cli", "bin");
+            Directory.CreateDirectory(binPath);
+            var scriptPath = Path.Combine(binPath, "intent-cli");
+            File.WriteAllText(
+                scriptPath,
+                "#!/bin/sh\n"
+                + "case \"$*\" in\n"
+                + "  'automation summary') echo '--domain is required.'; exit 1 ;;\n"
+                + "  'automation host-review-preflight') echo '--repo is required.'; exit 1 ;;\n"
+                + "  'automation issue-publish') echo '--issue is required.'; exit 1 ;;\n"
+                + "  'automation pr-transition')\n"
+                + "    echo '--transition is required (review-start, request-update, or approved).'\n"
+                + "    exit 1\n"
+                + "    ;;\n"
+                + "  *) echo \"unexpected probe: $*\"; exit 1 ;;\n"
+                + "esac\n");
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    scriptPath,
+                    UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead
+                    | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead
+                    | UnixFileMode.OtherExecute);
+            }
+        }
 
         public void Dispose()
         {
