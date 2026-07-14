@@ -543,6 +543,36 @@ Demo.
     }
 
     [Fact]
+    public void Analyze_PacketYamlWithApostropheInDoubleQuotedValue_G527Regression_IsCommitReady()
+    {
+        // G527 regression: the 2026-07-10 field incident — a correctly
+        // double-quoted `placement_rationale` value containing an
+        // apostrophe was rejected as `packet-yaml-unparseable`. It must now
+        // be accepted end-to-end through the same analyzer
+        // `queue-seed-from-packet` uses.
+        const string packetYamlWithApostrophe = """
+implementation_issue_packet:
+  source_execution_unit: Z4R-G3
+  issue_title: Demo packet
+  target_repo: J-Tech-Creations/Zero4Racer
+placement_rationale: "This is Sekiban's core boundary and it's the right place."
+""";
+        var result = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "Z4R-G3",
+            PacketYaml = packetYamlWithApostrophe,
+            ImplementationMarkdown = CanonicalImplementation,
+            ReviewContextMarkdown = CanonicalReviewContext,
+            GithubBodyMarkdown = CanonicalGithubBody,
+            ExecutionUnitRegex = "^Z4R-G[0-9]+$",
+            RequestedTargetRepo = "J-Tech-Creations/Zero4Racer",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady, result.Classification);
+    }
+
+    [Fact]
     public void Analyze_MalformedPacketYaml_UnbalancedQuote_ReturnsUnsafeUnparseable()
     {
         // An operator typo that breaks scalar parsing (unbalanced
