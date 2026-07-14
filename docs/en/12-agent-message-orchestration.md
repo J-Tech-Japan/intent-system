@@ -626,15 +626,89 @@ First message — design → orchestrator (paste into the design thread):
   especially when monitor delivery did not appear live or the design session
   started after the orchestrator sent.
 
-## Design-side watchdog (optional safety net)
+## External heartbeat (recommended safety net)
+
+Field data (2026-06-28..07-14, 16 days): all 11 manually-recovered stalls were
+fixed by **one** inbound message — the orchestrator reconciles correctly
+within roughly 2 minutes of ANY wake. The **recommended** safety net is
+therefore a session-independent **external** scheduler (cron/launchd — *not*
+an in-session timer) running `intent-cli automation heartbeat` at a low,
+60-minute-class frequency: it stays completely silent while the pipeline is
+healthy, survives every agent/session restart, and bounds the worst-case
+stall by the staleness threshold plus the scheduler interval — with the
+recommended defaults (45m threshold + 60m interval ≈ 105m worst case), still
+dramatically below the measured 26-hour worst case, though **not literally 60
+minutes**; tighten the threshold or the interval if a tighter bound is
+required.
+
+- **Frequency** — 60-minute class (e.g. hourly): low enough to be silent
+  noise, frequent enough that the combined bound (threshold + interval, ≈105m
+  with the defaults) stays far below what was observed in the field.
+- **Command** —
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
+  wraps `automation stalled-work` (G523) and, when anything is stale, returns
+  a ready-to-send `message_body` naming each stale item and its canonical next
+  command; `stale=false` and no `message_body` when healthy.
+- **Copy-paste wrapper** (runs from cron/launchd, not inside an agent
+  session; requires `jq`):
+
+  ```sh
+  #!/bin/sh
+  # Runs from cron/launchd — NOT inside any agent session.
+  # Required environment: TEAM (agmsg team), FROM (this pinger's registered agmsg role,
+  # e.g. "heartbeat"), TO (recipient role, e.g. "orchestrator"), DOMAIN, REPO.
+  set -eu
+
+  if ! result=$(intent-cli automation heartbeat --domain "$DOMAIN" --repo "$REPO" --format json); then
+    printf 'heartbeat: intent-cli automation heartbeat failed\n' >&2
+    exit 1
+  fi
+
+  if ! printf '%s' "$result" | jq -e 'type == "object" and (.stale | type) == "boolean"' >/dev/null 2>&1; then
+    printf 'heartbeat: malformed output (expected an object with a boolean .stale)\n' >&2
+    exit 1
+  fi
+
+  stale=$(printf '%s' "$result" | jq -r '.stale')
+
+  if [ "$stale" = "true" ]; then
+    if ! printf '%s' "$result" | jq -e '(.message_body | type) == "string" and (.message_body | length) > 0' >/dev/null 2>&1; then
+      printf 'heartbeat: stale=true but .message_body is missing/empty\n' >&2
+      exit 1
+    fi
+    message=$(printf '%s' "$result" | jq -r '.message_body')
+    ~/.agents/skills/agmsg/scripts/send.sh "$TEAM" "$FROM" "$TO" "$message"
+  fi
+  ```
+
+- **At most one message per run** — `intent-cli` never sends a message or
+  launches an agent itself; it only computes text. The wrapper sends **at
+  most one** message per run (nothing when `stale` is false), matching the
+  G524 wake contract: any single reconcile message is sufficient to trigger a
+  full recovery wake. It fails **loudly** (non-zero exit, stderr message, no
+  send) on a heartbeat command failure, malformed/non-object JSON, a `.stale`
+  field that is not a boolean, or a `.message_body` that is missing/empty
+  when `.stale` is true — a broken safety net must never silently
+  masquerade as "healthy, nothing to report".
+- **Alternatives** — the design-side watchdog and the 5-minute in-session
+  orchestrator fallback timer remain supported as alternatives (see below),
+  but both showed measured weaknesses in the same field trial: the fallback
+  timer is fast polling the operator explicitly does not want, and the
+  design-side watchdog lives in the single most fragile component observed —
+  the design session itself died 8-9 times in 16 days, its monitor dead until
+  manually restored each time, and several stalls were only discovered when
+  that session happened to restart. Prefer the external heartbeat unless an
+  operator has a specific reason to run one of the alternatives instead.
+
+## Design-side watchdog (alternative safety net)
 
 In the message-driven steady state, implementation/review replies already wake
-the orchestrator, so a fast orchestrator loop is redundant. The recommended
-safety net instead is an **optional**, **low-frequency** watchdog run from the
-**design** thread: it checks whether HITL (human-in-the-loop) messages arrived
-and whether the orchestrator looks stalled, then sends **at most one**
-canonical repair/status request — it never drives routine orchestration
-itself.
+the orchestrator, so a fast orchestrator loop is redundant. An **alternative**
+safety net (see External heartbeat above for the recommended option) is an
+**optional**, **low-frequency** watchdog run from the **design** thread: it
+checks whether HITL (human-in-the-loop) messages arrived and whether the
+orchestrator looks stalled, then sends **at most one** canonical repair/status
+request — it never drives routine orchestration itself.
 
 - **Frequency** — low only (e.g. tens of minutes to hours, not every 5m); a
   fast watchdog loop recreates the same churn the message-driven model
@@ -667,8 +741,18 @@ Watchdog safety rules **prohibit**:
 An explicit orchestrator timer (Codex automation every 5m, or Claude
 same-thread `/loop 5m`) remains supported as fallback/legacy polling when an
 operator intentionally wants scheduled polling instead of the message-driven
-steady state — the design-side watchdog and the orchestrator fallback timer
-are alternative safety nets, not both required together.
+steady state — measured weakness: this is fast polling the operator
+explicitly does not want in steady state, which is exactly why the external
+heartbeat is now recommended instead. The external heartbeat, the
+design-side watchdog, and the orchestrator fallback timer are alternative
+safety nets, not all required together.
+
+**Measured weakness** — field trial (2026-06-28..07-14): the design
+session — where this watchdog runs — died 8-9 times in 16 days, its monitor
+dead until manually restored each time; several stalls were only discovered
+when that session happened to restart on its own. A safety net that lives in
+the single most fragile component is a weaker guarantee than a
+session-independent external scheduler (see External heartbeat above).
 
 ## Monitor recovery
 

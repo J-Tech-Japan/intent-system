@@ -618,14 +618,79 @@ internal static class GuideOrchestratorThreadCommand
                     + "not appear live or the design session started after the orchestrator sent. Read, decide/reply, "
                     + "then the orchestrator continues.",
             },
+            ExternalHeartbeat = new OrchestratorExternalHeartbeat
+            {
+                Summary =
+                    "Field data (2026-06-28..07-14, 16 days): all 11 manually-recovered stalls were fixed by ONE "
+                    + "inbound message — the orchestrator reconciles correctly within roughly 2 minutes of ANY wake. "
+                    + "The RECOMMENDED safety net is therefore a session-independent EXTERNAL scheduler (cron/"
+                    + "launchd — NOT an in-session timer) running `intent-cli automation heartbeat` at a LOW, "
+                    + "60-minute-class frequency: it stays completely silent while the pipeline is healthy, "
+                    + "survives every agent/session restart, and bounds the worst-case stall by the staleness "
+                    + $"threshold plus the scheduler interval — with the recommended defaults ({AutomationHeartbeatCommand.DefaultStaleMinutes}m "
+                    + $"threshold + 60m interval ≈ {AutomationHeartbeatCommand.DefaultStaleMinutes + 60}m worst case), still dramatically below the measured "
+                    + "26-hour worst case, though NOT literally 60 minutes — tighten the threshold or the interval "
+                    + "if a tighter bound is required.",
+                Frequency =
+                    "60-minute class (e.g. hourly) — low enough to be silent noise, frequent enough that the "
+                    + $"combined bound (threshold + interval, ≈{AutomationHeartbeatCommand.DefaultStaleMinutes + 60}m with the defaults) stays far below what was "
+                    + "observed in the field.",
+                CommandExample =
+                    "intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json",
+                WrapperExample =
+                    "#!/bin/sh\n"
+                    + "# Runs from cron/launchd — NOT inside any agent session.\n"
+                    + "# Required environment: TEAM (agmsg team), FROM (this pinger's registered agmsg role,\n"
+                    + "# e.g. \"heartbeat\"), TO (recipient role, e.g. \"orchestrator\"), DOMAIN, REPO.\n"
+                    + "set -eu\n"
+                    + "\n"
+                    + "if ! result=$(intent-cli automation heartbeat --domain \"$DOMAIN\" --repo \"$REPO\" --format json); then\n"
+                    + "  printf 'heartbeat: intent-cli automation heartbeat failed\\n' >&2\n"
+                    + "  exit 1\n"
+                    + "fi\n"
+                    + "\n"
+                    + "if ! printf '%s' \"$result\" | jq -e 'type == \"object\" and (.stale | type) == \"boolean\"' >/dev/null 2>&1; then\n"
+                    + "  printf 'heartbeat: malformed output (expected an object with a boolean .stale)\\n' >&2\n"
+                    + "  exit 1\n"
+                    + "fi\n"
+                    + "\n"
+                    + "stale=$(printf '%s' \"$result\" | jq -r '.stale')\n"
+                    + "\n"
+                    + "if [ \"$stale\" = \"true\" ]; then\n"
+                    + "  if ! printf '%s' \"$result\" | jq -e '(.message_body | type) == \"string\" and (.message_body | length) > 0' >/dev/null 2>&1; then\n"
+                    + "    printf 'heartbeat: stale=true but .message_body is missing/empty\\n' >&2\n"
+                    + "    exit 1\n"
+                    + "  fi\n"
+                    + "  message=$(printf '%s' \"$result\" | jq -r '.message_body')\n"
+                    + "  ~/.agents/skills/agmsg/scripts/send.sh \"$TEAM\" \"$FROM\" \"$TO\" \"$message\"\n"
+                    + "fi\n",
+                AtMostOneMessageRule =
+                    "`intent-cli` never sends a message or launches an agent itself — it only computes text (never "
+                    + "more than one `message_body` per run). The wrapper sends AT MOST ONE message per run (nothing "
+                    + "when `stale` is false), matching the G524 wake contract: any single reconcile message is "
+                    + "sufficient to trigger a full recovery wake. It fails LOUDLY (non-zero exit, stderr message, no "
+                    + "send) on a heartbeat command failure, malformed/non-object JSON, a `.stale` field that is not "
+                    + "a boolean, or a `.message_body` that is missing/empty when `.stale` is true — a broken safety "
+                    + "net must never silently masquerade as \"healthy, nothing to report\".",
+                AlternativesNote =
+                    "The design-side watchdog and the 5-minute in-session orchestrator fallback timer remain "
+                    + "SUPPORTED as alternatives (see below), but both showed measured weaknesses in the same field "
+                    + "trial: the fallback timer is fast polling the operator explicitly does not want, and the "
+                    + "design-side watchdog lives in the single most fragile component observed — the design "
+                    + "session itself died 8-9 times in 16 days, its monitor dead until manually restored each "
+                    + "time, and several stalls were only discovered when that session happened to restart. Prefer "
+                    + "the external heartbeat unless an operator has a specific reason to run one of the "
+                    + "alternatives instead.",
+            },
             DesignWatchdog = new OrchestratorDesignWatchdog
             {
                 Summary =
                     "In the message-driven steady state, implementation/review replies already wake the orchestrator, "
-                    + "so a fast orchestrator loop is redundant. The recommended safety net instead is an OPTIONAL, "
-                    + "LOW-frequency watchdog run from the DESIGN thread: it checks whether HITL (human-in-the-loop) "
-                    + "messages arrived and whether the orchestrator looks stalled, then sends AT MOST ONE canonical "
-                    + "repair/status request — it never drives routine orchestration itself.",
+                    + "so a fast orchestrator loop is redundant. An ALTERNATIVE safety net (see External heartbeat "
+                    + "above for the RECOMMENDED option) is an OPTIONAL, LOW-frequency watchdog run from the DESIGN "
+                    + "thread: it checks whether HITL (human-in-the-loop) messages arrived and whether the "
+                    + "orchestrator looks stalled, then sends AT MOST ONE canonical repair/status request — it "
+                    + "never drives routine orchestration itself.",
                 Optional = true,
                 Frequency =
                     "LOW frequency only (e.g. tens of minutes to hours, not every 5m) — the watchdog is a safety net "
@@ -658,8 +723,16 @@ internal static class GuideOrchestratorThreadCommand
                 FallbackTimerNote =
                     "An explicit orchestrator timer (Codex automation every 5m, or Claude same-thread `/loop 5m`) "
                     + "remains SUPPORTED as fallback/legacy polling when an operator intentionally wants scheduled "
-                    + "polling instead of the message-driven steady state — the design-side watchdog and the "
-                    + "orchestrator fallback timer are alternative safety nets, not both required together.",
+                    + "polling instead of the message-driven steady state — measured weakness: this is fast polling "
+                    + "the operator explicitly does not want in steady state, which is exactly why the external "
+                    + "heartbeat is now recommended instead. The external heartbeat, the design-side watchdog, and "
+                    + "the orchestrator fallback timer are alternative safety nets, not all required together.",
+                MeasuredWeakness =
+                    "Field trial (2026-06-28..07-14): the design session — where this watchdog runs — died 8-9 "
+                    + "times in 16 days, its monitor dead until manually restored each time; several stalls were "
+                    + "only discovered when that session happened to restart on its own. A safety net that lives in "
+                    + "the single most fragile component is a weaker guarantee than a session-independent external "
+                    + "scheduler (see External heartbeat above).",
             },
             MonitorRecovery = new[]
             {
@@ -2115,7 +2188,29 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine($"- **design inbox workflow** — {guide.DesignHandoff.DesignInboxWorkflow}");
         writer.WriteLine();
 
-        writer.WriteLine("## Design-side watchdog (optional safety net)");
+        writer.WriteLine("## External heartbeat (recommended safety net)");
+        writer.WriteLine();
+        writer.WriteLine(guide.ExternalHeartbeat.Summary);
+        writer.WriteLine();
+        writer.WriteLine($"- **frequency** — {guide.ExternalHeartbeat.Frequency}");
+        writer.WriteLine();
+        writer.WriteLine("Command:");
+        writer.WriteLine();
+        writer.WriteLine("```");
+        writer.WriteLine(guide.ExternalHeartbeat.CommandExample);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine("Copy-paste wrapper (runs from cron/launchd, not inside an agent session):");
+        writer.WriteLine();
+        writer.WriteLine("```sh");
+        writer.Write(guide.ExternalHeartbeat.WrapperExample);
+        writer.WriteLine("```");
+        writer.WriteLine();
+        writer.WriteLine($"- **at most one message per run** — {guide.ExternalHeartbeat.AtMostOneMessageRule}");
+        writer.WriteLine($"- **alternatives** — {guide.ExternalHeartbeat.AlternativesNote}");
+        writer.WriteLine();
+
+        writer.WriteLine("## Design-side watchdog (alternative safety net)");
         writer.WriteLine();
         writer.WriteLine(guide.DesignWatchdog.Summary);
         writer.WriteLine();
@@ -2147,6 +2242,7 @@ internal static class GuideOrchestratorThreadCommand
         }
         writer.WriteLine();
         writer.WriteLine($"- **fallback timer** — {guide.DesignWatchdog.FallbackTimerNote}");
+        writer.WriteLine($"- **measured weakness** — {guide.DesignWatchdog.MeasuredWeakness}");
         writer.WriteLine();
 
         writer.WriteLine("## Design traffic-controller playbook");
@@ -2421,6 +2517,9 @@ internal sealed record OrchestratorThreadGuide
 
     [JsonPropertyName("design_handoff")]
     public required OrchestratorDesignHandoff DesignHandoff { get; init; }
+
+    [JsonPropertyName("external_heartbeat")]
+    public required OrchestratorExternalHeartbeat ExternalHeartbeat { get; init; }
 
     [JsonPropertyName("design_watchdog")]
     public required OrchestratorDesignWatchdog DesignWatchdog { get; init; }
@@ -2715,6 +2814,39 @@ internal sealed record OrchestratorDesignWatchdog
 
     [JsonPropertyName("fallback_timer_note")]
     public required string FallbackTimerNote { get; init; }
+
+    /// <summary>G526: field-observed weakness of running the safety net from the design thread.</summary>
+    [JsonPropertyName("measured_weakness")]
+    public required string MeasuredWeakness { get; init; }
+}
+
+/// <summary>
+/// G526: the RECOMMENDED safety net — a session-independent external
+/// scheduler (cron/launchd) running <c>intent-cli automation heartbeat</c>
+/// at a low, 60-minute-class frequency. Positioned ahead of the
+/// <see cref="OrchestratorDesignWatchdog"/> and the in-session fallback
+/// timer, both of which showed measured weaknesses in the field trial this
+/// slice is based on.
+/// </summary>
+internal sealed record OrchestratorExternalHeartbeat
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("frequency")]
+    public required string Frequency { get; init; }
+
+    [JsonPropertyName("command_example")]
+    public required string CommandExample { get; init; }
+
+    [JsonPropertyName("wrapper_example")]
+    public required string WrapperExample { get; init; }
+
+    [JsonPropertyName("at_most_one_message_rule")]
+    public required string AtMostOneMessageRule { get; init; }
+
+    [JsonPropertyName("alternatives_note")]
+    public required string AlternativesNote { get; init; }
 }
 
 internal sealed record OrchestratorDesignReceiver

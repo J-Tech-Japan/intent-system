@@ -88,48 +88,16 @@ internal static class AutomationStalledWorkCommand
             return 1;
         }
 
-        IGitHubAutomationCandidateLister lister;
-        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues;
-        IReadOnlyList<GitHubAutomationPrCandidate> openPrs;
-        IReadOnlyList<GitHubAutomationPrCandidate> mergedPrs;
+        AutomationStalledWorkResult result;
         try
         {
-            lister = CandidateListerFactory?.Invoke() ?? new GhCliGitHubAutomationCandidateLister();
-            openIssues = lister.ListIssues(repo!, Array.Empty<string>());
-            openPrs = lister.ListPullRequests(repo!, Array.Empty<string>());
-            mergedPrs = lister.ListMergedPullRequests(repo!, Array.Empty<string>());
+            result = Analyze(context, domain!, repo!, staleMinutes);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
             writer.WriteLine($"failed to read GitHub state for {repo}: {exception.Message}");
             return 1;
         }
-
-        var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
-        var candidateDomains = DomainCandidateScanner.Scan(context);
-        var items = new List<StalledWorkItem>();
-        var excluded = new List<StalledWorkExcluded>();
-        var warnings = new List<string>();
-
-        CollectPublishedNotDelegated(context, domain!, candidateDomains, openIssues, openPrs, repo!, now, items, excluded);
-        CollectPrCreatedNotReviewing(context, domain!, candidateDomains, openIssues, openPrs, repo!, now, items, excluded);
-        CollectMergedNotClosedOut(context, domain!, candidateDomains, repo!, mergedPrs, now, items, excluded, warnings);
-
-        var filtered = items
-            .Where(item => item.AgeMinutes >= staleMinutes)
-            .OrderByDescending(item => item.AgeMinutes)
-            .ToArray();
-
-        var result = new AutomationStalledWorkResult
-        {
-            Domain = domain!,
-            Repo = repo!,
-            StaleMinutesThreshold = staleMinutes,
-            Stalled = filtered.Length > 0,
-            Items = filtered,
-            Excluded = excluded,
-            Warnings = warnings,
-        };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -142,6 +110,53 @@ internal static class AutomationStalledWorkCommand
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// G526: analyzer surface extracted from <see cref="Execute"/> so
+    /// <c>automation heartbeat</c> can wrap the identical scan (through the
+    /// identical <see cref="CandidateListerFactory"/> / <see
+    /// cref="UtcNowFactory"/> seams) without re-shelling to <c>gh</c> or
+    /// round-tripping through this command's own JSON output. Throws
+    /// <see cref="IOException"/> / <see cref="InvalidOperationException"/>
+    /// on a GitHub read failure — callers decide how to report it.
+    /// </summary>
+    public static AutomationStalledWorkResult Analyze(CliContext context, string domain, string repo, int staleMinutes)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(domain);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+
+        var lister = CandidateListerFactory?.Invoke() ?? new GhCliGitHubAutomationCandidateLister();
+        var openIssues = lister.ListIssues(repo, Array.Empty<string>());
+        var openPrs = lister.ListPullRequests(repo, Array.Empty<string>());
+        var mergedPrs = lister.ListMergedPullRequests(repo, Array.Empty<string>());
+
+        var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var candidateDomains = DomainCandidateScanner.Scan(context);
+        var items = new List<StalledWorkItem>();
+        var excluded = new List<StalledWorkExcluded>();
+        var warnings = new List<string>();
+
+        CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
+        CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
+        CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
+
+        var filtered = items
+            .Where(item => item.AgeMinutes >= staleMinutes)
+            .OrderByDescending(item => item.AgeMinutes)
+            .ToArray();
+
+        return new AutomationStalledWorkResult
+        {
+            Domain = domain,
+            Repo = repo,
+            StaleMinutesThreshold = staleMinutes,
+            Stalled = filtered.Length > 0,
+            Items = filtered,
+            Excluded = excluded,
+            Warnings = warnings,
+        };
     }
 
     private static void CollectPublishedNotDelegated(

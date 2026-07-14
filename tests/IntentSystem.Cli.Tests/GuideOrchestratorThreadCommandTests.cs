@@ -345,7 +345,9 @@ public sealed class GuideOrchestratorThreadCommandTests
     {
         var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
 
-        Assert.Contains("## Design-side watchdog (optional safety net)", output, StringComparison.Ordinal);
+        // G526: repositioned as an alternative — the External heartbeat
+        // section above it is now the recommended safety net.
+        Assert.Contains("## Design-side watchdog (alternative safety net)", output, StringComparison.Ordinal);
         Assert.Contains("optional: yes", output, StringComparison.Ordinal);
         Assert.Contains("LOW frequency only", output, StringComparison.Ordinal);
         Assert.Contains("### Watchdog checks", output, StringComparison.Ordinal);
@@ -362,6 +364,29 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("PROHIBITED: speculative durable-state surgery", output, StringComparison.Ordinal);
         // The orchestrator fallback timer remains supported as an alternative, explicit legacy option.
         Assert.Contains("remains SUPPORTED as fallback/legacy polling", output, StringComparison.Ordinal);
+        // G526: measured weakness driving the repositioning.
+        Assert.Contains("measured weakness", output, StringComparison.Ordinal);
+        Assert.Contains("died 8-9 times in 16 days", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_HasExternalHeartbeat_AsRecommendedSafetyNet_G526()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("## External heartbeat (recommended safety net)", output, StringComparison.Ordinal);
+        Assert.Contains("all 11 manually-recovered stalls", output, StringComparison.Ordinal);
+        Assert.Contains("session-independent EXTERNAL scheduler", output, StringComparison.Ordinal);
+        Assert.Contains("cron/launchd", output, StringComparison.Ordinal);
+        Assert.Contains("60-minute", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json", output, StringComparison.Ordinal);
+        Assert.Contains("agmsg/scripts/send.sh", output, StringComparison.Ordinal);
+        Assert.Contains("at most one message per run", output, StringComparison.Ordinal);
+        Assert.Contains("fast polling the operator explicitly does not want", output, StringComparison.Ordinal);
+        // The section appears before the (now alternative) design-side watchdog section.
+        Assert.True(
+            output.IndexOf("## External heartbeat", StringComparison.Ordinal)
+            < output.IndexOf("## Design-side watchdog", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -448,6 +473,59 @@ public sealed class GuideOrchestratorThreadCommandTests
         var summary = scheduling.GetProperty("summary").GetString()!;
         Assert.Contains("MESSAGE-DRIVEN", summary, StringComparison.Ordinal);
         Assert.DoesNotContain("is the SINGLE recurring driver", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_CarriesExternalHeartbeat_AsRecommendedSafetyNet_G526()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var heartbeat = doc.RootElement.GetProperty("external_heartbeat");
+
+        Assert.Contains("all 11 manually-recovered stalls", heartbeat.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("60-minute", heartbeat.GetProperty("frequency").GetString(), StringComparison.Ordinal);
+        Assert.Equal(
+            "intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json",
+            heartbeat.GetProperty("command_example").GetString());
+        Assert.Contains("agmsg/scripts/send.sh", heartbeat.GetProperty("wrapper_example").GetString(), StringComparison.Ordinal);
+        Assert.Contains("cron/launchd", heartbeat.GetProperty("wrapper_example").GetString(), StringComparison.Ordinal);
+        Assert.Contains("AT MOST ONE message per run", heartbeat.GetProperty("at_most_one_message_rule").GetString(), StringComparison.Ordinal);
+        Assert.Contains("fast polling the operator explicitly does not want", heartbeat.GetProperty("alternatives_note").GetString(), StringComparison.Ordinal);
+
+        // G526 rereview repair: the claimed worst-case bound must be the
+        // ACTUAL threshold+interval sum (computed from the command's real
+        // default, not a hand-typed figure that can drift), not a bare
+        // "60 minutes" overclaim.
+        var expectedWorstCaseMinutes = AutomationHeartbeatCommand.DefaultStaleMinutes + 60;
+        Assert.Contains($"{AutomationHeartbeatCommand.DefaultStaleMinutes}m threshold + 60m interval", heartbeat.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains($"{expectedWorstCaseMinutes}m worst case", heartbeat.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("not literally 60 minutes", heartbeat.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains($"{expectedWorstCaseMinutes}m with the defaults", heartbeat.GetProperty("frequency").GetString(), StringComparison.Ordinal);
+
+        // G526 rereview repair: the wrapper must fail closed (never send)
+        // on a heartbeat failure or malformed/missing fields, use `printf`
+        // rather than `echo` (backslash handling is echo-implementation-
+        // defined), and use shell variables rather than a literal
+        // "<team>"-style placeholder that `/bin/sh` would parse as
+        // input redirection.
+        var wrapper = heartbeat.GetProperty("wrapper_example").GetString()!;
+        Assert.Contains("set -eu", wrapper, StringComparison.Ordinal);
+        Assert.Contains("if ! result=$(intent-cli automation heartbeat", wrapper, StringComparison.Ordinal);
+        Assert.Contains("jq -e", wrapper, StringComparison.Ordinal);
+        Assert.Contains("printf '%s' \"$result\"", wrapper, StringComparison.Ordinal);
+        Assert.DoesNotContain("echo \"$result\"", wrapper, StringComparison.Ordinal);
+        Assert.DoesNotContain("<team>", wrapper, StringComparison.Ordinal);
+        Assert.Contains("send.sh \"$TEAM\" \"$FROM\" \"$TO\" \"$message\"", wrapper, StringComparison.Ordinal);
+        Assert.Contains("message_body | length) > 0", wrapper, StringComparison.Ordinal);
+
+        var watchdog = doc.RootElement.GetProperty("design_watchdog");
+        Assert.Contains("died 8-9 times in 16 days", watchdog.GetProperty("measured_weakness").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
