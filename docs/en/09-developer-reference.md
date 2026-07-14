@@ -303,7 +303,7 @@ wake procedure and from an external heartbeat are separate follow-up slices.
 
 ### Retiring a stuck published issue (G525)
 
-`intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--write]`
+`intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--domain <name>] [--write]`
 is the canonical, atomic transition for a published `intent-target` issue
 that can never be started as authored (e.g. a research pass proves the
 slice must be decomposed). Before this command existed, the only escape
@@ -314,7 +314,8 @@ GitHub close, manual label strip, hand-authored queue-state edit) that
 `--write` performs, in order:
 
 1. closes the GitHub issue as **not planned**, with a comment naming the
-   reason and the optional note;
+   reason and the optional note (skipped if the issue is already closed —
+   see partial-failure recovery below);
 2. removes `intent-target` and any other workflow labels present on the
    issue;
 3. marks the corresponding queue-state item's lifecycle `retired` (with the
@@ -331,12 +332,45 @@ It **fails closed** (no mutation at all) when:
   that PR first;
 - the issue carries `intent-issue-in-progress` — an active claim is in
   flight; release it first (e.g. `intent-cli worker complete --kind issue
-  --number <n> --outcome declined-contract-incomplete --write`).
+  --number <n> --outcome declined-contract-incomplete --write`);
+- the matched queue item is already `Completed` (merged/finished work) —
+  retirement only applies to work that was published but can never be
+  completed as authored; this refusal touches neither GitHub nor local
+  state;
+- the resolved domain is underivable or contradicts an explicit `--domain`
+  (see domain resolution below).
+
+**Partial-failure recovery**: the target issue is resolved via a direct
+per-issue GitHub lookup — regardless of open/closed state — instead of
+scanning the OPEN-issues list. If a `--write` dies mid-sequence (issue
+closed but label removal, the queue-state write, or the `runs.jsonl` append
+did not complete), simply re-running the same command finds the issue again
+and finishes the remaining steps instead of dead-ending on "not found among
+OPEN issues." Recovery for an already-CLOSED issue is only authorized when
+GitHub's own close reason is **not planned** (the exact reason this command
+uses) — a closed issue with any other reason (e.g. completed via merge) is
+left untouched.
+
+**Domain resolution (G522 boundary)**: queue-item matching requires an
+exact `(repo, issue number)` pair — a same-numbered issue in a different
+repo can never match this execution unit. The execution unit's domain is
+resolved in the same order as other execution-unit-resolving surfaces: an
+explicit `--domain` wins (it is an error if it contradicts the domain
+declared by the resolved packet.yaml); otherwise the packet-declared
+`domain:` field is used; otherwise the command fails loud, naming candidate
+domains and the exact `--domain` re-invocation. This applies to both an
+existing queue item and a brand-new one derived from the issue title — a
+misleading title prefix alone can never authorize queue creation without a
+packet.yaml (or an explicit operator-supplied `--domain`) confirming it.
 
 **Idempotent**: re-running on an execution unit whose queue-state entry is
 already `retired` is a safe no-op — durable state (not a fragile GitHub
-state re-check) is the source of truth for idempotency. Packet directories
-and the issue comment trail are never touched or deleted.
+state re-check) is the source of truth for idempotency. If `--write` is
+used and the queue-state was retired but the `runs.jsonl` event from a
+prior partial write is missing, the retry finishes exactly that missing
+step (with zero GitHub calls) instead of silently dropping it forever.
+Packet directories and the issue comment trail are never touched or
+deleted.
 
 Retired items clear WIP gating automatically: `automation
 host-review-preflight`'s in-flight scan reads OPEN, `intent-target`-labeled

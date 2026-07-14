@@ -9,10 +9,11 @@ namespace IntentSystem.Cli.Commands;
 
 /// <summary>
 /// G525: <c>intent-cli automation issue-retire --repo &lt;r&gt; --issue &lt;n&gt;
-/// --reason &lt;superseded|decomposed|obsolete&gt; [--note &lt;text&gt;]
-/// [--write]</c> — the canonical, atomic transition that supersedes a
-/// published <c>intent-target</c> issue that can never be started as
-/// authored (e.g. a research pass proves the slice must be decomposed).
+/// --reason &lt;superseded|decomposed|obsolete&gt; [--note &lt;text&gt;] [--domain
+/// &lt;name&gt;] [--write]</c> — the canonical, atomic transition that
+/// supersedes a published <c>intent-target</c> issue that can never be
+/// started as authored (e.g. a research pass proves the slice must be
+/// decomposed).
 ///
 /// <c>--write</c> performs, in order:
 /// <list type="number">
@@ -30,10 +31,33 @@ namespace IntentSystem.Cli.Commands;
 ///
 /// Without <c>--write</c> it is a dry-run that lists the exact planned
 /// mutations. Fails closed (no mutation) when the issue has an open linked
-/// PR or an active claim (<c>intent-issue-in-progress</c>), naming the
-/// release step to run first. Idempotent: re-running on an already-retired
-/// execution unit (queue-state already shows <see cref="QueueItemState.Retired"/>)
-/// is a safe no-op. Never deletes packet files.
+/// PR, an active claim (<c>intent-issue-in-progress</c>), or a matched queue
+/// item that is already <see cref="QueueItemState.Completed"/> (merged/
+/// finished work is out of scope for retirement). Idempotent: re-running on
+/// an already-retired execution unit is a safe no-op that also finishes any
+/// missing <c>runs.jsonl</c> event from a prior partial write. Never deletes
+/// packet files.
+///
+/// Partial-failure recovery (review repair): the target issue is resolved
+/// via a direct <c>gh issue view</c> snapshot — regardless of open/closed
+/// state — instead of scanning the OPEN-issues list. This means a retry
+/// after a mid-sequence failure (close succeeded but label removal or the
+/// durable-state write did not) can still find the issue and finish the
+/// remaining steps: the issue no longer needs to be OPEN for the retry to
+/// converge. Recovery for an already-CLOSED issue is only authorized when
+/// GitHub's own <c>stateReason</c> is <c>NOT_PLANNED</c> (the exact reason
+/// this command uses to close) — a closed issue with any other reason (e.g.
+/// completed via merge) is left untouched.
+///
+/// Domain/repo isolation (G522 boundary): queue-item matching requires an
+/// EXACT <c>(repo, issue number)</c> pair — a same-numbered issue in a
+/// different repo can never match. The execution unit's domain is resolved
+/// via <see cref="PacketDomainResolution"/> (explicit <c>--domain</c> &gt;
+/// packet-declared <c>domain:</c> &gt; fail loud with candidate domains and
+/// an exact <c>--domain</c> re-invocation) for BOTH an existing queue item
+/// and a brand-new one derived from the issue title — a misleading title
+/// prefix alone can never authorize queue creation without a packet.yaml
+/// (or an explicit operator-supplied <c>--domain</c>) confirming it.
 /// </summary>
 internal static class AutomationIssueRetireCommand
 {
@@ -45,6 +69,9 @@ internal static class AutomationIssueRetireCommand
     public const string ReasonObsolete = "obsolete";
 
     private static readonly string[] AllowedReasons = { ReasonSuperseded, ReasonDecomposed, ReasonObsolete };
+
+    /// <summary>GitHub's own reason for a CLOSED issue that this command uses when closing.</summary>
+    private const string StateReasonNotPlanned = "NOT_PLANNED";
 
     /// <summary>Issue-side workflow labels this command may remove.</summary>
     private static readonly string[] KnownIssueWorkflowLabels =
@@ -71,7 +98,7 @@ internal static class AutomationIssueRetireCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation issue-retire --repo <owner/repo> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--write] [--format json|markdown]";
+        "Usage: intent-cli automation issue-retire --repo <owner/repo> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--domain <name>] [--write] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -85,7 +112,7 @@ internal static class AutomationIssueRetireCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var repo, out var issue, out var reason, out var note, out var write, out var format, out var error))
+        if (!TryParseArguments(args, out var repo, out var issue, out var reason, out var note, out var domain, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -107,94 +134,184 @@ internal static class AutomationIssueRetireCommand
             }
         }
 
-        var existingItem = queueState?.Items.FirstOrDefault(item => MatchesLinkedIssue(item.LinkedIssue, issue!.Value));
+        var existingItem = queueState?.Items.FirstOrDefault(item => MatchesLinkedIssue(item.LinkedIssue, repo!, issue!.Value));
+
+        // Out of scope: retiring merged/completed work. Refuse before any
+        // GitHub call — zero GitHub or local mutation for this refusal.
+        if (existingItem is { State: QueueItemState.Completed })
+        {
+            writer.WriteLine(
+                $"refusing to retire issue #{issue}: queue item '{existingItem.ExecutionUnit}' is already "
+                + $"{QueueItemState.Completed} (merged/finished work) — `automation issue-retire` only applies to "
+                + "work that was published but can never be completed as authored. No GitHub or local state was "
+                + "touched.");
+            return 1;
+        }
 
         // Idempotency: durable state is the source of truth. If this
-        // execution unit is already retired, this is a safe no-op —
-        // never re-attempt the GitHub mutation (the issue is presumably
-        // already closed) and never error.
+        // execution unit is already retired, never re-attempt the GitHub
+        // mutation (the issue is presumably already closed). A dry-run
+        // always reports the no-op without touching anything; --write also
+        // finishes a missing runs.jsonl event left over from a prior
+        // partial write (queue-state persisted, but the audit-trail append
+        // that follows it did not) instead of silently dropping it forever.
         if (existingItem is { State: QueueItemState.Retired })
         {
-            var alreadyRetired = new AutomationIssueRetireResult
+            if (!write || RunsLogHasRetireEvent(context, existingItem.ExecutionUnit))
+            {
+                var alreadyRetired = new AutomationIssueRetireResult
+                {
+                    Repo = repo!,
+                    Issue = issue!.Value,
+                    Reason = reason!,
+                    Note = note,
+                    Domain = null,
+                    Mode = write ? "write" : "dry-run",
+                    Applied = false,
+                    AlreadyRetired = true,
+                    ExecutionUnit = existingItem.ExecutionUnit,
+                    PlannedMutations = Array.Empty<string>(),
+                    RefusalReason = null,
+                    Summary = $"'{existingItem.ExecutionUnit}' is already retired ({existingItem.RetirementReason}); no-op.",
+                };
+                EmitResult(writer, format, alreadyRetired);
+                return 0;
+            }
+
+            try
+            {
+                AppendRetireRunEvent(
+                    context,
+                    existingItem.ExecutionUnit,
+                    repo!,
+                    issue!.Value,
+                    existingItem.RetirementReason ?? reason!,
+                    (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime());
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
+            {
+                writer.WriteLine(
+                    $"'{existingItem.ExecutionUnit}' is already retired in queue-state, but appending the "
+                    + $"runs.jsonl event failed: {exception.Message}. Re-run `automation issue-retire --write` to retry.");
+                return 1;
+            }
+
+            var recovered = new AutomationIssueRetireResult
             {
                 Repo = repo!,
                 Issue = issue!.Value,
                 Reason = reason!,
                 Note = note,
-                Mode = write ? "write" : "dry-run",
-                Applied = false,
+                Domain = null,
+                Mode = "write",
+                Applied = true,
                 AlreadyRetired = true,
                 ExecutionUnit = existingItem.ExecutionUnit,
-                PlannedMutations = Array.Empty<string>(),
+                PlannedMutations = new[] { $"append missing `{RetireRunEventName}` event to runs.jsonl for '{existingItem.ExecutionUnit}'" },
                 RefusalReason = null,
-                Summary = $"'{existingItem.ExecutionUnit}' is already retired ({existingItem.RetirementReason}); no-op.",
+                Summary = $"'{existingItem.ExecutionUnit}' was already retired; completed a missing runs.jsonl event from a prior partial write.",
             };
-            EmitResult(writer, format, alreadyRetired);
+            EmitResult(writer, format, recovered);
             return 0;
         }
 
-        IGitHubAutomationCandidateLister lister;
-        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues;
-        IReadOnlyList<GitHubAutomationPrCandidate> openPrs;
+        IGitHubIssueRetirementMutator retirementMutator = RetirementMutatorFactory?.Invoke() ?? new GhCliGitHubIssueRetirementMutator();
+        IssueSnapshot snapshot;
         try
         {
-            lister = CandidateListerFactory?.Invoke() ?? new GhCliGitHubAutomationCandidateLister();
-            openIssues = lister.ListIssues(repo!, Array.Empty<string>());
-            openPrs = lister.ListPullRequests(repo!, Array.Empty<string>());
+            snapshot = retirementMutator.GetSnapshot(repo!, issue!.Value);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
-            writer.WriteLine($"failed to read GitHub state for {repo}: {exception.Message}");
+            writer.WriteLine($"issue #{issue} not found in {repo}, or GitHub could not be reached: {exception.Message}");
             return 1;
         }
 
-        var targetIssue = openIssues.FirstOrDefault(candidate => candidate.Number == issue!.Value);
-        if (targetIssue is null)
+        var currentLabels = snapshot.Labels.ToHashSet(StringComparer.Ordinal);
+        var issueIsOpen = IsOpen(snapshot.State);
+
+        if (issueIsOpen)
+        {
+            var lister = CandidateListerFactory?.Invoke() ?? new GhCliGitHubAutomationCandidateLister();
+            IReadOnlyList<GitHubAutomationPrCandidate> openPrs;
+            try
+            {
+                openPrs = lister.ListPullRequests(repo!, Array.Empty<string>());
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                writer.WriteLine($"failed to read GitHub state for {repo}: {exception.Message}");
+                return 1;
+            }
+
+            var openClosingPr = openPrs.FirstOrDefault(pr => IsOpen(pr.State) && HasClosingReference(pr, issue!.Value, repo!));
+            if (openClosingPr is not null)
+            {
+                writer.WriteLine(
+                    $"refusing to retire issue #{issue}: OPEN PR #{openClosingPr.Number} in {repo} closes it — work is in "
+                    + $"flight. Merge, close, or release PR #{openClosingPr.Number} first (e.g. `intent-cli automation "
+                    + "pr-transition` / `closeout pr` / `gh pr close`), then retry.");
+                return 1;
+            }
+
+            if (currentLabels.Contains(WorkerNextActionConstants.Labels.IntentIssueInProgress))
+            {
+                writer.WriteLine(
+                    $"refusing to retire issue #{issue}: it carries `{WorkerNextActionConstants.Labels.IntentIssueInProgress}` "
+                    + "— an active claim is in flight. Release the claim first (e.g. `intent-cli worker complete --kind "
+                    + "issue --number "
+                    + issue
+                    + " --outcome declined-contract-incomplete --write`), then retry.");
+                return 1;
+            }
+        }
+        else if (!string.Equals(snapshot.StateReason, StateReasonNotPlanned, StringComparison.OrdinalIgnoreCase))
         {
             writer.WriteLine(
-                $"issue #{issue} not found among OPEN issues in {repo}; either it does not exist, or it is already "
-                + "closed for a reason other than `automation issue-retire`. This command only retires OPEN "
-                + "issues that still carry workflow labels.");
+                $"refusing to retire issue #{issue}: it is CLOSED in {repo} with reason "
+                + $"'{(string.IsNullOrWhiteSpace(snapshot.StateReason) ? "(unknown)" : snapshot.StateReason)}', not "
+                + "'not planned' — this does not look like an `automation issue-retire` partial-failure recovery. "
+                + "If it was already fully processed (e.g. merged and closed out), no action is needed.");
             return 1;
         }
 
-        var openClosingPr = openPrs.FirstOrDefault(pr => IsOpen(pr.State) && HasClosingReference(pr, issue!.Value, repo!));
-        if (openClosingPr is not null)
+        var executionUnit = existingItem?.ExecutionUnit ?? ExecutionUnitFromTitle(snapshot.Title);
+        var candidateDomains = DomainCandidateScanner.Scan(context);
+        var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
+        var noteSuffix = string.IsNullOrWhiteSpace(note) ? string.Empty : $" --note \"{note}\"";
+        var domainResolution = PacketDomainResolution.Resolve(
+            domain,
+            packetDeclaredDomain,
+            candidateDomains,
+            $"intent-cli automation issue-retire --repo {repo} --issue {issue} --reason {reason} --domain <name>{noteSuffix} --write");
+        if (domainResolution.IsError)
         {
             writer.WriteLine(
-                $"refusing to retire issue #{issue}: OPEN PR #{openClosingPr.Number} in {repo} closes it — work is in "
-                + $"flight. Merge, close, or release PR #{openClosingPr.Number} first (e.g. `intent-cli automation "
-                + "pr-transition` / `closeout pr` / `gh pr close`), then retry.");
+                $"refusing to retire issue #{issue}: {domainResolution.ErrorMessage} A misleading title prefix "
+                + "alone is never sufficient to create or mutate a queue entry.");
             return 1;
         }
+        var resolvedDomain = domainResolution.Domain!;
 
-        var currentLabels = targetIssue.Labels.Select(label => label.Name).ToHashSet(StringComparer.Ordinal);
-        if (currentLabels.Contains(WorkerNextActionConstants.Labels.IntentIssueInProgress))
-        {
-            writer.WriteLine(
-                $"refusing to retire issue #{issue}: it carries `{WorkerNextActionConstants.Labels.IntentIssueInProgress}` "
-                + "— an active claim is in flight. Release the claim first (e.g. `intent-cli worker complete --kind "
-                + "issue --number "
-                + issue
-                + " --outcome declined-contract-incomplete --write`), then retry.");
-            return 1;
-        }
-
-        var executionUnit = existingItem?.ExecutionUnit ?? ExecutionUnitFromTitle(targetIssue.Title);
         var labelsToRemove = KnownIssueWorkflowLabels.Where(currentLabels.Contains).ToArray();
         var reasonComment = BuildReasonComment(reason!, note);
 
-        var plannedMutations = new List<string>
+        var plannedMutations = new List<string>();
+        if (issueIsOpen)
         {
-            $"gh issue close #{issue} --repo {repo} --reason \"not planned\" --comment <reason comment>",
-        };
+            plannedMutations.Add($"gh issue close #{issue} --repo {repo} --reason \"not planned\" --comment <reason comment>");
+        }
+        else
+        {
+            plannedMutations.Add($"issue #{issue} already CLOSED (not planned) — resuming a partial prior --write");
+        }
         if (labelsToRemove.Length > 0)
         {
             plannedMutations.Add($"remove label(s) from issue #{issue}: {string.Join(", ", labelsToRemove)}");
         }
         plannedMutations.Add(
             existingItem is null
-                ? $"create queue-state entry for '{executionUnit}' with state=retired, reason={reason}"
+                ? $"create queue-state entry for '{executionUnit}' (domain: {resolvedDomain}) with state=retired, reason={reason}"
                 : $"update queue-state entry for '{executionUnit}': state=retired, reason={reason}");
         plannedMutations.Add($"append `{RetireRunEventName}` event to runs.jsonl for '{executionUnit}'");
 
@@ -206,6 +323,7 @@ internal static class AutomationIssueRetireCommand
                 Issue = issue!.Value,
                 Reason = reason!,
                 Note = note,
+                Domain = resolvedDomain,
                 Mode = "dry-run",
                 Applied = false,
                 AlreadyRetired = false,
@@ -218,34 +336,47 @@ internal static class AutomationIssueRetireCommand
             return 0;
         }
 
-        // --write: GitHub mutation first (close + label removal), then the
-        // durable-state mutation (queue-state + runs.jsonl). If the GitHub
-        // step fails, nothing durable changed — safe to retry as-is. If the
-        // durable-state step fails AFTER the GitHub step succeeded, the
-        // issue is already closed; retrying is still safe because the
-        // command is idempotent once queue-state reflects `retired` (and
-        // harmless to re-run before then, since the GitHub calls are
-        // themselves idempotent — closing an already-closed issue / removing
-        // an already-absent label is a no-op from gh's perspective).
-        try
+        // --write: GitHub mutation first (close, then labels), then the
+        // durable-state mutation (queue-state, then runs.jsonl). Each stage
+        // is isolated in its own try/catch so a mid-sequence failure yields
+        // an accurate, actionable recovery hint instead of a blanket "no
+        // durable state changed" claim that would be false once the issue
+        // is already closed. Every stage is safe to re-run: closing is
+        // skipped once the issue is already CLOSED (checked above via the
+        // snapshot), label removal only targets labels still present, and
+        // the queue-state upsert is idempotent by construction.
+        if (issueIsOpen)
         {
-            var retirementMutator = RetirementMutatorFactory?.Invoke() ?? new GhCliGitHubIssueRetirementMutator();
-            retirementMutator.CloseAsNotPlanned(repo!, issue!.Value, reasonComment);
+            try
+            {
+                retirementMutator.CloseAsNotPlanned(repo!, issue!.Value, reasonComment);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                writer.WriteLine(
+                    $"failed to close issue #{issue} in {repo}: {exception.Message}. No durable state was "
+                    + "changed — re-run with --write to retry.");
+                return 1;
+            }
+        }
 
-            if (labelsToRemove.Length > 0)
+        if (labelsToRemove.Length > 0)
+        {
+            try
             {
                 var labelMutator = LabelMutatorFactory?.Invoke() ?? new GhCliGitHubLabelMutator();
                 labelMutator.ApplyLabelTransitions(
                     repo!, GhCliGitHubLabelMutator.Kinds.Issue, issue!.Value,
                     Array.Empty<string>(), labelsToRemove);
             }
-        }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException)
-        {
-            writer.WriteLine(
-                $"failed to close/relabel issue #{issue} in {repo}: {exception.Message}. No durable state was "
-                + "changed — re-run with --write to retry.");
-            return 1;
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                writer.WriteLine(
+                    $"issue #{issue} in {repo} is closed (reason: not planned), but label removal failed: "
+                    + $"{exception.Message}. Re-run `automation issue-retire --write` — the issue is already "
+                    + "closed, so the retry will resume from label removal without re-closing it.");
+                return 1;
+            }
         }
 
         var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
@@ -270,7 +401,7 @@ internal static class AutomationIssueRetireCommand
                 updatedItems.Add(new QueueItem
                 {
                     ExecutionUnit = executionUnit,
-                    Title = targetIssue.Title,
+                    Title = snapshot.Title,
                     State = QueueItemState.Retired,
                     Dependencies = Array.Empty<string>(),
                     BlockedBy = Array.Empty<string>(),
@@ -281,7 +412,7 @@ internal static class AutomationIssueRetireCommand
                         Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
                         ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
                     },
-                    LinkedIssue = new LinkedIssue { Repo = repo!, Number = issue, Url = targetIssue.Url },
+                    LinkedIssue = new LinkedIssue { Repo = repo!, Number = issue, Url = snapshot.Url },
                     LinkedPr = null,
                     WorkerRole = CliRuntimeContracts.DefaultImplementRole,
                     ReviewRole = CliRuntimeContracts.DefaultReviewRole,
@@ -297,15 +428,27 @@ internal static class AutomationIssueRetireCommand
                 Items = updatedItems,
             };
             File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
-
-            AppendRetireRunEvent(context, executionUnit, repo!, issue!.Value, retirementReason, now);
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException)
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
         {
             writer.WriteLine(
-                $"issue #{issue} in {repo} was closed and relabeled, but the queue-state/runs.jsonl update failed: "
-                + $"{exception.Message}. Re-run `automation issue-retire` with --write (idempotent) to retry the "
-                + "durable-state update.");
+                $"issue #{issue} in {repo} is closed and relabeled, but the queue-state update failed: "
+                + $"{exception.Message}. Re-run `automation issue-retire --write` (idempotent) to retry the "
+                + "queue-state and runs.jsonl update.");
+            return 1;
+        }
+
+        try
+        {
+            AppendRetireRunEvent(context, executionUnit, repo!, issue!.Value, retirementReason, now);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
+        {
+            writer.WriteLine(
+                $"issue #{issue} in {repo} is closed, relabeled, and queue-state now shows it retired, but "
+                + $"appending the runs.jsonl event failed: {exception.Message}. Re-run `automation issue-retire "
+                + "--write` (idempotent) — it will detect the queue-state is already retired and finish only "
+                + "the missing runs.jsonl event.");
             return 1;
         }
 
@@ -315,6 +458,7 @@ internal static class AutomationIssueRetireCommand
             Issue = issue!.Value,
             Reason = reason!,
             Note = note,
+            Domain = resolvedDomain,
             Mode = "write",
             Applied = true,
             AlreadyRetired = false,
@@ -343,8 +487,36 @@ internal static class AutomationIssueRetireCommand
         File.AppendAllText(runsPath, RunLogSerializer.SerializeLine(runEvent) + "\n");
     }
 
-    private static bool MatchesLinkedIssue(LinkedIssue? linkedIssue, int issueNumber) =>
-        linkedIssue is { Number: { } number } && number == issueNumber;
+    private static bool RunsLogHasRetireEvent(CliContext context, string executionUnit)
+    {
+        var runsPath = context.GetRunLogPath();
+        if (!File.Exists(runsPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var events = RunLogSerializer.DeserializeAll(File.ReadAllText(runsPath));
+            return events.Any(runEvent =>
+                string.Equals(runEvent.Event, RetireRunEventName, StringComparison.Ordinal)
+                && string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// G522 repair: exact <c>(repo, issue number)</c> match — a same-numbered
+    /// issue in a different repo (a multi-repo host queue-state.json) must
+    /// never match this execution unit.
+    /// </summary>
+    private static bool MatchesLinkedIssue(LinkedIssue? linkedIssue, string repo, int issueNumber) =>
+        linkedIssue is { Number: { } number } linked
+        && number == issueNumber
+        && string.Equals(linked.Repo, repo, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsOpen(string state) =>
         string.IsNullOrEmpty(state) || string.Equals(state, "OPEN", StringComparison.OrdinalIgnoreCase);
@@ -370,6 +542,13 @@ internal static class AutomationIssueRetireCommand
         return false;
     }
 
+    /// <summary>
+    /// Derives a CANDIDATE execution unit from the issue title. Used ONLY to
+    /// locate <c>.intent-cli/issues/&lt;unit&gt;/packet.yaml</c> for domain
+    /// confirmation via <see cref="PacketDomainResolution"/> — never trusted
+    /// on its own to authorize queue creation (see the domain resolution
+    /// call in <see cref="Execute"/>).
+    /// </summary>
     private static string ExecutionUnitFromTitle(string title)
     {
         if (string.IsNullOrWhiteSpace(title))
@@ -378,6 +557,28 @@ internal static class AutomationIssueRetireCommand
         }
         var colonIndex = title.IndexOf(':');
         return (colonIndex > 0 ? title[..colonIndex] : title).Trim();
+    }
+
+    private static string? ReadPacketDeclaredDomain(CliContext context, string executionUnit)
+    {
+        if (string.IsNullOrWhiteSpace(executionUnit))
+        {
+            return null;
+        }
+        var packetYamlPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit, "packet.yaml");
+        if (!File.Exists(packetYamlPath))
+        {
+            return null;
+        }
+        try
+        {
+            PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath)).TryGetValue("domain", out var declaredDomain);
+            return declaredDomain;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
     }
 
     private static string BuildReasonComment(string reason, string? note)
@@ -396,6 +597,7 @@ internal static class AutomationIssueRetireCommand
         out int? issue,
         out string? reason,
         out string? note,
+        out string? domain,
         out bool write,
         out string format,
         out string error)
@@ -404,6 +606,7 @@ internal static class AutomationIssueRetireCommand
         issue = null;
         reason = null;
         note = null;
+        domain = null;
         write = false;
         format = FormatMarkdown;
         error = string.Empty;
@@ -452,6 +655,14 @@ internal static class AutomationIssueRetireCommand
                         return false;
                     }
                     note = args[++index];
+                    break;
+                case "--domain":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--domain requires a value.";
+                        return false;
+                    }
+                    domain = args[++index].Trim();
                     break;
                 case "--write":
                     write = true;
@@ -507,6 +718,10 @@ internal static class AutomationIssueRetireCommand
             writer.WriteLine($"# automation issue-retire — `{result.Repo}` #{result.Issue} ({result.Mode})");
             writer.WriteLine();
             writer.WriteLine($"- execution_unit: `{result.ExecutionUnit}`");
+            if (!string.IsNullOrWhiteSpace(result.Domain))
+            {
+                writer.WriteLine($"- domain: {result.Domain}");
+            }
             writer.WriteLine($"- reason: {result.Reason}");
             if (!string.IsNullOrWhiteSpace(result.Note))
             {
@@ -531,16 +746,45 @@ internal static class AutomationIssueRetireCommand
 
 /// <summary>
 /// G525: testability seam for closing a GitHub issue as "not planned" with
-/// a comment — the production implementation shells out to
-/// <c>gh issue close --reason "not planned" --comment &lt;text&gt;</c>.
+/// a comment, and for reading a single issue's CURRENT state regardless of
+/// open/closed — the production implementation shells out to
+/// <c>gh issue close --reason "not planned" --comment &lt;text&gt;</c> /
+/// <c>gh issue view --json state,stateReason,title,url,labels</c>.
 /// </summary>
 internal interface IGitHubIssueRetirementMutator
 {
     void CloseAsNotPlanned(string repo, int issueNumber, string comment);
+
+    /// <summary>
+    /// Repair: fetches the issue regardless of open/closed state, so a
+    /// retry after a partial <c>--write</c> failure (issue already closed)
+    /// can still locate it instead of dead-ending on an OPEN-only scan.
+    /// </summary>
+    IssueSnapshot GetSnapshot(string repo, int issueNumber);
 }
 
 /// <summary>
-/// G525: default retirement mutator backed by <c>gh issue close</c>.
+/// G525 repair: point-in-time snapshot of a single GitHub issue, used to
+/// resolve the retire target and to detect a same-command partial-failure
+/// recovery (<see cref="StateReason"/> == <c>NOT_PLANNED</c> on a CLOSED
+/// issue).
+/// </summary>
+internal sealed record IssueSnapshot
+{
+    public required string State { get; init; }
+
+    public required string StateReason { get; init; }
+
+    public required string Title { get; init; }
+
+    public required string Url { get; init; }
+
+    public required IReadOnlyList<string> Labels { get; init; }
+}
+
+/// <summary>
+/// G525: default retirement mutator backed by <c>gh issue close</c> /
+/// <c>gh issue view</c>.
 /// </summary>
 internal sealed class GhCliGitHubIssueRetirementMutator : IGitHubIssueRetirementMutator
 {
@@ -554,10 +798,58 @@ internal sealed class GhCliGitHubIssueRetirementMutator : IGitHubIssueRetirement
             "--reason", "not planned",
             "--comment", comment,
         };
-        RunGh(args, $"close issue #{issueNumber} in {repo} as not planned");
+        RunGh(args, $"close issue #{issueNumber} in {repo}");
     }
 
-    private static void RunGh(IReadOnlyList<string> arguments, string description)
+    public IssueSnapshot GetSnapshot(string repo, int issueNumber)
+    {
+        var args = new List<string>
+        {
+            "issue", "view",
+            issueNumber.ToString(CultureInfo.InvariantCulture),
+            "--repo", repo,
+            "--json", "state,stateReason,title,url,labels",
+        };
+        var stdout = RunGh(args, $"view issue #{issueNumber} in {repo}");
+        return ParseSnapshot(stdout);
+    }
+
+    private static IssueSnapshot ParseSnapshot(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        var labels = new List<string>();
+        if (root.TryGetProperty("labels", out var labelsElement) && labelsElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var label in labelsElement.EnumerateArray())
+            {
+                if (label.TryGetProperty("name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String)
+                {
+                    labels.Add(nameElement.GetString() ?? string.Empty);
+                }
+            }
+        }
+
+        return new IssueSnapshot
+        {
+            State = root.TryGetProperty("state", out var stateElement) && stateElement.ValueKind == JsonValueKind.String
+                ? stateElement.GetString() ?? string.Empty
+                : string.Empty,
+            StateReason = root.TryGetProperty("stateReason", out var stateReasonElement) && stateReasonElement.ValueKind == JsonValueKind.String
+                ? stateReasonElement.GetString() ?? string.Empty
+                : string.Empty,
+            Title = root.TryGetProperty("title", out var titleElement) && titleElement.ValueKind == JsonValueKind.String
+                ? titleElement.GetString() ?? string.Empty
+                : string.Empty,
+            Url = root.TryGetProperty("url", out var urlElement) && urlElement.ValueKind == JsonValueKind.String
+                ? urlElement.GetString() ?? string.Empty
+                : string.Empty,
+            Labels = labels,
+        };
+    }
+
+    private static string RunGh(IReadOnlyList<string> arguments, string description)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -602,6 +894,8 @@ internal sealed class GhCliGitHubIssueRetirementMutator : IGitHubIssueRetirement
                 $"[{classification}] `gh` failed to {description} with exit {exitCode}: "
                 + GitHubCliJsonBoundary.SanitizePreview(errorBody));
         }
+
+        return stdout;
     }
 }
 
@@ -618,6 +912,14 @@ internal sealed record AutomationIssueRetireResult
 
     [JsonPropertyName("note")]
     public string? Note { get; init; }
+
+    /// <summary>
+    /// G522 repair: the resolved domain (explicit <c>--domain</c> or
+    /// packet-declared) this retirement was authorized under. Null for the
+    /// already-retired no-op paths, which never re-resolve it.
+    /// </summary>
+    [JsonPropertyName("domain")]
+    public string? Domain { get; init; }
 
     [JsonPropertyName("mode")]
     public required string Mode { get; init; }
