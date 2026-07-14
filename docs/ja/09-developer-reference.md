@@ -181,6 +181,49 @@ packet の正規の publish 経路は **`automation queue-seed-from-packet` →
 アクティブなドメインの regex に一致しない unit は、参照した bindings ソースを明示する精密な
 診断とともに拒否されます。
 
+### execution-unit を解決するサーフェスの domain 解決順序 (G522)
+
+`--pr` や `--execution-unit` から execution unit を解決するサーフェス
+（`review closeout-plan`、`automation queue-seed-from-packet`、
+`automation publish-recovery`、および同じ lookup を使う peer サーフェス）は、
+`--domain` が省略された場合に次の解決順序を適用します:
+
+1. 明示的な `--domain` が優先される — 解決された packet 自身の `domain:`
+   スカラーが宣言する値と矛盾する場合はエラーになる。
+2. それ以外の場合、解決された packet.yaml / queue metadata が宣言する
+   domain を使用する。
+3. それ以外の場合、サーフェスは fail loud する — `intents/*/` から
+   スキャンした候補 domain と、正確な `--domain` 再実行コマンドを示す。
+   ホストのデフォルト domain binding（`.intent-cli/config.toml` の
+   `[project] domain`）へ黙って fallback することは決してない。
+
+これは multi-domain host での既知のギャップを解消します: 従来の default
+binding fallback は、packet 自身の `domain:` フィールドが別の値を宣言して
+いても、間違った domain に対して報告・検証してしまうことがありました
+（例: `review closeout-plan --pr <n>` が、解決された packet の実際の domain
+ではなくホストの default domain を報告してしまう、あるいは
+`queue-seed-from-packet` が間違った domain の `execution_unit_regex`
+チェックを実行してしまう、など）。default binding の仕組み自体は変更
+されておらず他の箇所では引き続き使われます。変わったのは、これらの
+サーフェスが `--domain` 省略時に何を参照するかだけです。
+
+サーフェスごとの補足:
+
+- `automation queue-seed-from-packet` はこの順序を厳密に適用します —
+  `--domain` と packet の `domain:` フィールドのどちらも無い場合、
+  `[project] domain` へ fallback せず seed を拒否します。
+- `review closeout-plan` は read-only な planning サーフェスです:
+  domain を本当に導出できない場合（一致する queue item が無い、または
+  その packet.yaml に `domain:` フィールドが無い場合）、成功している gap
+  report を hard-fail させるのではなく、ホストの default domain binding を
+  引き続き報告します — 明示的な `--domain` は引き続き優先され、
+  packet が宣言する domain との矛盾は引き続きエラーになります。
+- `automation publish-recovery` はオプションの `--domain` を受け付け、
+  その domain の `execution_unit_regex` binding に候補セットを絞り込みます。
+  これにより、別 domain の execution unit がこの domain の recovery
+  解析に紛れ込むことがなくなります。`--domain` を省略した場合は、
+  従来のスコープなしの broad-scan 挙動のままです。
+
 ---
 
 ## バージョンフロー

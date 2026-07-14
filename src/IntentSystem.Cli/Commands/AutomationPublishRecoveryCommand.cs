@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -54,7 +55,7 @@ internal static class AutomationPublishRecoveryCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
 
-        if (!TryParseArguments(args, out var repo, out var selectedPr, out var write, out var format, out var error))
+        if (!TryParseArguments(args, out var repo, out var selectedPr, out var domain, out var write, out var format, out var error))
         {
             writer.WriteLine(error);
             return 1;
@@ -78,7 +79,25 @@ internal static class AutomationPublishRecoveryCommand
             return 1;
         }
 
-        var candidates = BuildCandidates(context, queueState);
+        // G522: `--domain` is optional here (this surface, unlike
+        // `review closeout-plan` / `automation queue-seed-from-packet`, has
+        // no single resolved packet to derive a domain from until AFTER an
+        // execution unit is scoped, and a broad scan may legitimately span
+        // several domains). When `--domain` IS given, scope the candidate
+        // set to that domain's `execution_unit_regex` binding so a
+        // cross-domain execution unit (e.g. a different domain's unit
+        // sharing the same host) never leaks into this domain's analysis —
+        // the concrete bug this closes. Missing/invalid bindings degrade to
+        // "no filter" (same fail-open convention as
+        // NextSliceDomainBindingsExecutionUnitRegex's other callers) rather
+        // than blocking recovery on a misconfigured bindings file.
+        Regex? domainFilterRegex = null;
+        if (!string.IsNullOrWhiteSpace(domain))
+        {
+            domainFilterRegex = NextSliceDomainBindingsExecutionUnitRegex.TryLoad(context, domain);
+        }
+
+        var candidates = BuildCandidates(context, queueState, domainFilterRegex);
 
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs;
         try
@@ -126,6 +145,7 @@ internal static class AutomationPublishRecoveryCommand
             Repo = repo!,
             Mode = write ? ModeWrite : ModeDryRun,
             SelectedPr = selectedPr,
+            Domain = domain,
             QueueStatePath = queueStatePath,
             SafeRepairs = analysis.SafeRepairs,
             UnsafeStops = analysis.UnsafeStops,
@@ -172,7 +192,10 @@ internal static class AutomationPublishRecoveryCommand
             onlyLinkedPrMissing: hasSafeLinkedPrRepair).Classification;
     }
 
-    private static IReadOnlyList<PublishRecoveryCandidate> BuildCandidates(CliContext context, QueueState queueState)
+    private static IReadOnlyList<PublishRecoveryCandidate> BuildCandidates(
+        CliContext context,
+        QueueState queueState,
+        Regex? domainFilterRegex)
     {
         var candidates = new List<PublishRecoveryCandidate>();
         foreach (var item in queueState.Items)
@@ -181,6 +204,15 @@ internal static class AutomationPublishRecoveryCommand
             // are now in scope (queue-state-backed lane). Skip only items
             // that already have a linked_pr — those are fully linked.
             if (!string.IsNullOrWhiteSpace(item.LinkedPr))
+            {
+                continue;
+            }
+
+            // G522: when a domain filter is active, skip execution units
+            // that don't match the requested domain's binding regex so a
+            // different domain's unit never leaks into this domain's
+            // recovery analysis.
+            if (domainFilterRegex is not null && !domainFilterRegex.IsMatch(item.ExecutionUnit))
             {
                 continue;
             }
@@ -325,6 +357,10 @@ internal static class AutomationPublishRecoveryCommand
     {
         writer.WriteLine($"# automation publish-recovery — `{result.Repo}` ({result.Mode})");
         writer.WriteLine();
+        if (!string.IsNullOrWhiteSpace(result.Domain))
+        {
+            writer.WriteLine($"- domain: `{result.Domain}`");
+        }
         writer.WriteLine($"- queue_state_path: `{result.QueueStatePath}`");
         writer.WriteLine($"- safe_repairs: {result.SafeRepairs.Count} (applied: {result.AppliedCount})");
         writer.WriteLine($"- unsafe_stops: {result.UnsafeStops.Count}");
@@ -360,12 +396,14 @@ internal static class AutomationPublishRecoveryCommand
         string[] args,
         out string? repo,
         out int? selectedPr,
+        out string? domain,
         out bool write,
         out string format,
         out string error)
     {
         repo = null;
         selectedPr = null;
+        domain = null;
         write = false;
         format = FormatMarkdown;
         error = string.Empty;
@@ -382,6 +420,18 @@ internal static class AutomationPublishRecoveryCommand
                         return false;
                     }
                     repo = args[++index].Trim();
+                    break;
+                // G522: optional domain scoping — filters candidates to the
+                // requested domain's execution-unit binding so a different
+                // domain's unit never leaks into this domain's recovery
+                // analysis on a multi-domain host.
+                case "--domain":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--domain requires a value.";
+                        return false;
+                    }
+                    domain = args[++index].Trim();
                     break;
                 case "--pr":
                     // G351: optional PR scoping — scope analysis to the queue
@@ -457,6 +507,14 @@ internal sealed record AutomationPublishRecoveryResult
     /// <summary>G351: when --pr was supplied, the selected PR number. Null for a broad scan.</summary>
     [JsonPropertyName("selected_pr")]
     public int? SelectedPr { get; init; }
+
+    /// <summary>
+    /// G522: when --domain was supplied, candidates are scoped to that
+    /// domain's execution-unit binding regex. Null when --domain was
+    /// omitted (unscoped broad-scan behavior, unchanged).
+    /// </summary>
+    [JsonPropertyName("domain")]
+    public string? Domain { get; init; }
 
     [JsonPropertyName("queue_state_path")]
     public required string QueueStatePath { get; init; }

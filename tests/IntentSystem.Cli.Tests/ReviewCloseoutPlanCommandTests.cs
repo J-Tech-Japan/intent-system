@@ -1465,6 +1465,119 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         Assert.Contains("pr-transition", output, StringComparison.Ordinal);
     }
 
+    // ----- G522: domain resolution order (explicit > packet-declared > fallback) -----
+
+    [Fact]
+    public void Execute_DomainOmitted_DerivesReportedDomainFromPacketDeclaredDomain()
+    {
+        // G522: the workspace's host config default domain is "intent-cli"
+        // (see ReviewCloseoutPlanWorkspace ctor), but the packet declares a
+        // DIFFERENT domain. Without --domain, the packet-declared domain
+        // must be reported — this is the exact bug G522 fixes (a
+        // multi-domain host reporting its default binding instead of the
+        // matched packet's real domain).
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/796",
+            linkedIssue: ("J-Tech-Japan/intent-system", 795, "https://github.com/J-Tech-Japan/intent-system/issues/795")));
+        WriteCompliantPacketFiles(workspace, "G247");
+        workspace.WriteFile(".intent-cli/issues/G247/packet.yaml", "domain: sekiban-as-a-service\n");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("sekiban-as-a-service", doc.RootElement.GetProperty("domain").GetString());
+    }
+
+    [Fact]
+    public void Execute_ExplicitDomainMatchingPacketDeclaredDomain_Succeeds()
+    {
+        // G522: explicit --domain wins and is reported when it agrees with
+        // the packet's own declared domain.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/796",
+            linkedIssue: ("J-Tech-Japan/intent-system", 795, "https://github.com/J-Tech-Japan/intent-system/issues/795")));
+        WriteCompliantPacketFiles(workspace, "G247");
+        workspace.WriteFile(".intent-cli/issues/G247/packet.yaml", "domain: sekiban-as-a-service\n");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("sekiban-as-a-service", doc.RootElement.GetProperty("domain").GetString());
+    }
+
+    [Fact]
+    public void Execute_ExplicitDomainContradictsPacketDeclaredDomain_FailsLoud()
+    {
+        // G522: explicit --domain contradicting the packet's own declared
+        // domain must error rather than silently pick one.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/796",
+            linkedIssue: ("J-Tech-Japan/intent-system", 795, "https://github.com/J-Tech-Japan/intent-system/issues/795")));
+        WriteCompliantPacketFiles(workspace, "G247");
+        workspace.WriteFile(".intent-cli/issues/G247/packet.yaml", "domain: sekiban-as-a-service\n");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("contradicts the domain declared by the resolved packet", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PacketDeclaresNoDomainField_FallsBackToHostConfigDefault()
+    {
+        // G522 scoping decision (documented in the PR description): this
+        // read-only, gap-reporting surface keeps its pre-existing fallback
+        // to the host config default when the packet declares no `domain:`
+        // field at all — hard-failing an otherwise-successful plan isn't
+        // warranted here (unlike the write-gated
+        // `automation queue-seed-from-packet`, which fails loud).
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/796",
+            linkedIssue: ("J-Tech-Japan/intent-system", 795, "https://github.com/J-Tech-Japan/intent-system/issues/795")));
+        WriteCompliantPacketFiles(workspace, "G247");
+        // No packet.yaml written at all — no domain field to derive from.
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("intent-cli", doc.RootElement.GetProperty("domain").GetString());
+    }
+
     private static void WriteCompliantPacketFiles(ReviewCloseoutPlanWorkspace workspace, string executionUnit)
     {
         workspace.WriteFile(

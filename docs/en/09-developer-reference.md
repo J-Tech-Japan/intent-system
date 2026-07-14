@@ -192,6 +192,48 @@ resolved from one shared source, so `automation summary --domain <d>` and
 valid. A unit that does not match the active domain's regex is refused with a
 precise diagnostic that names the consulted bindings source.
 
+### Domain resolution order for execution-unit-resolving surfaces (G522)
+
+Surfaces that resolve an execution unit from `--pr` or `--execution-unit`
+(`review closeout-plan`, `automation queue-seed-from-packet`,
+`automation publish-recovery`, and peers using the same lookup) apply this
+resolution order when `--domain` is omitted:
+
+1. an explicit `--domain` wins; it is an error if it contradicts the domain
+   declared by the resolved packet's own `domain:` scalar;
+2. otherwise the domain declared by the resolved packet.yaml / queue metadata
+   is used;
+3. otherwise the surface fails loud, naming candidate domains (scanned from
+   `intents/*/`) and the exact `--domain` re-invocation — it never silently
+   falls back to the host's default domain binding (`[project] domain` in
+   `.intent-cli/config.toml`).
+
+This closes a multi-domain-host gap: the default binding fallback could
+previously report or validate against the WRONG domain for a packet whose
+own `domain:` field says otherwise (e.g. `review closeout-plan --pr <n>`
+reporting the host's default domain instead of the resolved packet's actual
+domain, or `queue-seed-from-packet` running the wrong domain's
+`execution_unit_regex` check). The default binding mechanism itself is
+unchanged and still used elsewhere; only what these surfaces consult when
+`--domain` is omitted has changed.
+
+Per-surface notes:
+
+- `automation queue-seed-from-packet` applies the full order strictly — when
+  neither `--domain` nor the packet's `domain:` field is available, the
+  command refuses to seed rather than falling back to `[project] domain`.
+- `review closeout-plan` is a read-only planning surface: when a domain
+  genuinely cannot be derived (no matched queue item, or its packet.yaml
+  declares no `domain:` field), it keeps reporting the host's default domain
+  binding rather than hard-failing an otherwise-successful gap report — an
+  explicit `--domain` still wins, and a contradiction with a
+  packet-declared domain is still an error.
+- `automation publish-recovery` accepts an optional `--domain` that scopes
+  the candidate set to that domain's `execution_unit_regex` binding, so a
+  different domain's execution unit never leaks into this domain's recovery
+  analysis. Omitting `--domain` preserves the original unscoped broad-scan
+  behavior.
+
 ---
 
 ## Version flow

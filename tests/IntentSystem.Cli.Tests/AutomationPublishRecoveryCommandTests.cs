@@ -443,6 +443,76 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         Assert.Contains("--repo", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // --- G522: --domain scoped candidate filtering ----
+
+    [Fact]
+    public void Execute_WithDomain_ExcludesExecutionUnitsOutsideDomainBinding()
+    {
+        // G522: without domain scoping, a broad scan mixes execution units
+        // from every domain sharing this host's queue-state.json — the
+        // "misidentified SKS-G512 for an intent-cli workstream" bug from the
+        // G522 issue. With --domain, only execution units matching that
+        // domain's binding regex are analyzed; a different domain's unit
+        // must not appear at all.
+        using var workspace = new RecoveryWorkspace();
+        var liIntentCli = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        var liOtherDomain = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 512,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/512" };
+        workspace.WriteQueueState(BuildQueueStateMulti(
+            ("G346", liIntentCli, null),
+            ("SKS-G512", liOtherDomain, null)));
+        workspace.WriteBindings("intent-cli", "^G[0-9]+$");
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(796, "Closes #795"), BuildPr(900, "Closes #512") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("intent-cli", root.GetProperty("domain").GetString());
+        Assert.Equal(1, root.GetProperty("safe_repairs").GetArrayLength());
+        Assert.Equal("G346", root.GetProperty("safe_repairs")[0].GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_WithoutDomain_BroadScanRemainsUnfiltered()
+    {
+        // G522: `--domain` is optional — omitting it preserves the existing
+        // unscoped broad-scan behavior (backward compatible for
+        // single-domain hosts and hosts not yet passing --domain).
+        using var workspace = new RecoveryWorkspace();
+        var liIntentCli = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        var liOtherDomain = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 512,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/512" };
+        workspace.WriteQueueState(BuildQueueStateMulti(
+            ("G346", liIntentCli, null),
+            ("SKS-G512", liOtherDomain, null)));
+        workspace.WriteBindings("intent-cli", "^G[0-9]+$");
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(796, "Closes #795"), BuildPr(900, "Closes #512") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("domain").ValueKind);
+        Assert.Equal(2, root.GetProperty("safe_repairs").GetArrayLength());
+    }
+
     // --- G351: --pr scoped recovery ----
 
     [Fact]
@@ -727,6 +797,14 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
                 PublishedLabelName = "intent-target"
             };
             File.WriteAllText(Path.Combine(dir, "publish.yaml"), IssuePublishArtifactYaml.Serialize(artifact));
+        }
+
+        public void WriteBindings(string domain, string executionUnitRegex)
+        {
+            var dir = Path.Combine(RootPath, "intents", domain, "automation");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "bindings.md"),
+                $"---\nexecution_unit_regex: '{executionUnitRegex}'\n---\n");
         }
 
         public void Dispose()
