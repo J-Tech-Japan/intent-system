@@ -29,4 +29,11 @@ public sealed record QueueItem
     public required string ReviewRole { get; init; }
 
     public required string Priority { get; init; }
+
+    /// <summary>
+    /// G525: set when <see cref="State"/> is <see cref="QueueItemState.Retired"/>
+    /// — one of <c>superseded</c>, <c>decomposed</c>, or <c>obsolete</c>,
+    /// optionally suffixed with an operator note. Null for every other state.
+    /// </summary>
+    public string? RetirementReason { get; init; }
 }

@@ -295,6 +295,52 @@ candidate が黙って scan に紛れ込むことも、黙って消えること�
 このスライスは検出のみです — orchestrator wake procedure や外部
 heartbeat からこのサーフェスを利用する部分は、別の後続スライスです。
 
+### 行き詰まった published issue を retire する (G525)
+
+`intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--write]`
+は、authored 通りには決して開始できない published な `intent-target` issue
+（例: research pass によって slice を decompose する必要があると判明した場合）
+のための canonical かつ atomic な transition です。このコマンドが存在する
+以前は、このデッドロックからの唯一の逃げ道は、operator が承認する
+noncanonical なリカバリ（手動での GitHub close、手動での label 除去、
+手書きの queue-state 編集）であり、その後 `metadata validate` はそれを
+認識できませんでした。
+
+`--write` は次の順序で実行します:
+
+1. GitHub issue を **not planned** として close し、reason と任意の note
+   を記載したコメントを付ける;
+2. issue に付いている `intent-target` およびその他の workflow label を
+   すべて除去する;
+3. 対応する queue-state item の lifecycle を（reason 付きで）`retired`
+   としてマークする — **エントリが存在しなければ新規作成する**。
+   publish されたが一度も delegate されていない issue には queue-state
+   エントリが無いことが一般的なためです。これにより `metadata validate`
+   は queue entry の欠落を報告するのではなく、retired lifecycle を
+   認識できるようになります;
+4. `runs.jsonl` に `packet-retired` イベントを追記する。
+
+`--write` を付けない場合は、正確な planned mutation を一覧表示する
+dry-run になります。次の場合は **fail closed**（一切の変更なし）します:
+
+- 同じ repo の OPEN な PR がその issue を close する — 先にその PR を
+  merge・close、またはリリースしてください;
+- issue が `intent-issue-in-progress` を持つ — アクティブな claim が
+  進行中です。先にそれを解放してください（例:
+  `intent-cli worker complete --kind issue --number <n> --outcome
+  declined-contract-incomplete --write`）。
+
+**冪等**: queue-state エントリが既に `retired` になっている execution
+unit に対して再実行しても安全な no-op です — 冪等性の判断根拠は
+（不安定な GitHub 状態の再チェックではなく）durable state です。packet
+ディレクトリと issue のコメント履歴には一切触れず、削除もしません。
+
+retired になった item は自動的に WIP gating から外れます:
+`automation host-review-preflight` の in-flight スキャンは OPEN で
+`intent-target` ラベル付きの GitHub issue/PR をライブに読むため、close
+されて label が外れた issue は単にそこから消えるだけです — 別途コード
+パスは不要です。
+
 ---
 
 ## バージョンフロー

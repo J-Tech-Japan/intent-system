@@ -55,6 +55,7 @@ internal sealed class QueueItemStateJsonConverter : JsonConverter<QueueItemState
             "clarify-blocked" => QueueItemState.ClarifyBlocked,
             "blocked" => QueueItemState.Blocked,
             "completed" => QueueItemState.Completed,
+            "retired" => QueueItemState.Retired,
             _ => throw new JsonException(
                 $"Unrecognized queue item state value '{raw}'.")
         };
@@ -71,6 +72,7 @@ internal sealed class QueueItemStateJsonConverter : JsonConverter<QueueItemState
             QueueItemState.ClarifyBlocked => "clarify-blocked",
             QueueItemState.Blocked => "blocked",
             QueueItemState.Completed => "completed",
+            QueueItemState.Retired => "retired",
             _ => throw new JsonException(
                 $"Unrecognized queue item state value '{value}'.")
         };

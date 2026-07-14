@@ -301,6 +301,48 @@ and never silently disappears.
 This slice is detection only — consuming the surface from the orchestrator
 wake procedure and from an external heartbeat are separate follow-up slices.
 
+### Retiring a stuck published issue (G525)
+
+`intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--write]`
+is the canonical, atomic transition for a published `intent-target` issue
+that can never be started as authored (e.g. a research pass proves the
+slice must be decomposed). Before this command existed, the only escape
+from this deadlock was an operator-authorized noncanonical recovery (manual
+GitHub close, manual label strip, hand-authored queue-state edit) that
+`metadata validate` then failed to recognize.
+
+`--write` performs, in order:
+
+1. closes the GitHub issue as **not planned**, with a comment naming the
+   reason and the optional note;
+2. removes `intent-target` and any other workflow labels present on the
+   issue;
+3. marks the corresponding queue-state item's lifecycle `retired` (with the
+   reason) — **creating the entry if none existed yet**, since a
+   published-but-never-delegated issue commonly has no queue-state entry at
+   all; this is what lets `metadata validate` recognize the retired
+   lifecycle instead of reporting a missing queue entry;
+4. appends a `packet-retired` event to `runs.jsonl`.
+
+Without `--write` it is a dry-run that lists the exact planned mutations.
+It **fails closed** (no mutation at all) when:
+
+- an OPEN PR in the same repo closes the issue — merge, close, or release
+  that PR first;
+- the issue carries `intent-issue-in-progress` — an active claim is in
+  flight; release it first (e.g. `intent-cli worker complete --kind issue
+  --number <n> --outcome declined-contract-incomplete --write`).
+
+**Idempotent**: re-running on an execution unit whose queue-state entry is
+already `retired` is a safe no-op — durable state (not a fragile GitHub
+state re-check) is the source of truth for idempotency. Packet directories
+and the issue comment trail are never touched or deleted.
+
+Retired items clear WIP gating automatically: `automation
+host-review-preflight`'s in-flight scan reads OPEN, `intent-target`-labeled
+GitHub issues/PRs live, so a closed, unlabeled issue simply disappears from
+it — no separate code path needed.
+
 ---
 
 ## Version flow
