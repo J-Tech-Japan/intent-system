@@ -498,6 +498,32 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("AT MOST ONE message per run", heartbeat.GetProperty("at_most_one_message_rule").GetString(), StringComparison.Ordinal);
         Assert.Contains("fast polling the operator explicitly does not want", heartbeat.GetProperty("alternatives_note").GetString(), StringComparison.Ordinal);
 
+        // G526 rereview repair: the claimed worst-case bound must be the
+        // ACTUAL threshold+interval sum (computed from the command's real
+        // default, not a hand-typed figure that can drift), not a bare
+        // "60 minutes" overclaim.
+        var expectedWorstCaseMinutes = AutomationHeartbeatCommand.DefaultStaleMinutes + 60;
+        Assert.Contains($"{AutomationHeartbeatCommand.DefaultStaleMinutes}m threshold + 60m interval", heartbeat.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains($"{expectedWorstCaseMinutes}m worst case", heartbeat.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("not literally 60 minutes", heartbeat.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains($"{expectedWorstCaseMinutes}m with the defaults", heartbeat.GetProperty("frequency").GetString(), StringComparison.Ordinal);
+
+        // G526 rereview repair: the wrapper must fail closed (never send)
+        // on a heartbeat failure or malformed/missing fields, use `printf`
+        // rather than `echo` (backslash handling is echo-implementation-
+        // defined), and use shell variables rather than a literal
+        // "<team>"-style placeholder that `/bin/sh` would parse as
+        // input redirection.
+        var wrapper = heartbeat.GetProperty("wrapper_example").GetString()!;
+        Assert.Contains("set -eu", wrapper, StringComparison.Ordinal);
+        Assert.Contains("if ! result=$(intent-cli automation heartbeat", wrapper, StringComparison.Ordinal);
+        Assert.Contains("jq -e", wrapper, StringComparison.Ordinal);
+        Assert.Contains("printf '%s' \"$result\"", wrapper, StringComparison.Ordinal);
+        Assert.DoesNotContain("echo \"$result\"", wrapper, StringComparison.Ordinal);
+        Assert.DoesNotContain("<team>", wrapper, StringComparison.Ordinal);
+        Assert.Contains("send.sh \"$TEAM\" \"$FROM\" \"$TO\" \"$message\"", wrapper, StringComparison.Ordinal);
+        Assert.Contains("message_body | length) > 0", wrapper, StringComparison.Ordinal);
+
         var watchdog = doc.RootElement.GetProperty("design_watchdog");
         Assert.Contains("died 8-9 times in 16 days", watchdog.GetProperty("measured_weakness").GetString(), StringComparison.Ordinal);
     }

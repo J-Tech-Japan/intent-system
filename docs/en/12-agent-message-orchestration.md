@@ -634,28 +634,50 @@ within roughly 2 minutes of ANY wake. The **recommended** safety net is
 therefore a session-independent **external** scheduler (cron/launchd — *not*
 an in-session timer) running `intent-cli automation heartbeat` at a low,
 60-minute-class frequency: it stays completely silent while the pipeline is
-healthy, survives every agent/session restart, and caps the worst-case stall
-at its own interval instead of the measured 26-hour worst case.
+healthy, survives every agent/session restart, and bounds the worst-case
+stall by the staleness threshold plus the scheduler interval — with the
+recommended defaults (45m threshold + 60m interval ≈ 105m worst case), still
+dramatically below the measured 26-hour worst case, though **not literally 60
+minutes**; tighten the threshold or the interval if a tighter bound is
+required.
 
 - **Frequency** — 60-minute class (e.g. hourly): low enough to be silent
-  noise, frequent enough to bound the worst-case stall far below what was
-  observed in the field.
+  noise, frequent enough that the combined bound (threshold + interval, ≈105m
+  with the defaults) stays far below what was observed in the field.
 - **Command** —
   `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
   wraps `automation stalled-work` (G523) and, when anything is stale, returns
   a ready-to-send `message_body` naming each stale item and its canonical next
   command; `stale=false` and no `message_body` when healthy.
 - **Copy-paste wrapper** (runs from cron/launchd, not inside an agent
-  session):
+  session; requires `jq`):
 
   ```sh
   #!/bin/sh
   # Runs from cron/launchd — NOT inside any agent session.
-  result=$(intent-cli automation heartbeat --domain "$DOMAIN" --repo "$REPO" --format json)
-  stale=$(echo "$result" | jq -r '.stale')
+  # Required environment: TEAM (agmsg team), FROM (this pinger's registered agmsg role,
+  # e.g. "heartbeat"), TO (recipient role, e.g. "orchestrator"), DOMAIN, REPO.
+  set -eu
+
+  if ! result=$(intent-cli automation heartbeat --domain "$DOMAIN" --repo "$REPO" --format json); then
+    printf 'heartbeat: intent-cli automation heartbeat failed\n' >&2
+    exit 1
+  fi
+
+  if ! printf '%s' "$result" | jq -e 'type == "object" and (.stale | type) == "boolean"' >/dev/null 2>&1; then
+    printf 'heartbeat: malformed output (expected an object with a boolean .stale)\n' >&2
+    exit 1
+  fi
+
+  stale=$(printf '%s' "$result" | jq -r '.stale')
+
   if [ "$stale" = "true" ]; then
-    message=$(echo "$result" | jq -r '.message_body')
-    ~/.agents/skills/agmsg/scripts/send.sh <team> heartbeat orchestrator "$message"
+    if ! printf '%s' "$result" | jq -e '(.message_body | type) == "string" and (.message_body | length) > 0' >/dev/null 2>&1; then
+      printf 'heartbeat: stale=true but .message_body is missing/empty\n' >&2
+      exit 1
+    fi
+    message=$(printf '%s' "$result" | jq -r '.message_body')
+    ~/.agents/skills/agmsg/scripts/send.sh "$TEAM" "$FROM" "$TO" "$message"
   fi
   ```
 
@@ -663,7 +685,11 @@ at its own interval instead of the measured 26-hour worst case.
   launches an agent itself; it only computes text. The wrapper sends **at
   most one** message per run (nothing when `stale` is false), matching the
   G524 wake contract: any single reconcile message is sufficient to trigger a
-  full recovery wake.
+  full recovery wake. It fails **loudly** (non-zero exit, stderr message, no
+  send) on a heartbeat command failure, malformed/non-object JSON, a `.stale`
+  field that is not a boolean, or a `.message_body` that is missing/empty
+  when `.stale` is true — a broken safety net must never silently
+  masquerade as "healthy, nothing to report".
 - **Alternatives** — the design-side watchdog and the 5-minute in-session
   orchestrator fallback timer remain supported as alternatives (see below),
   but both showed measured weaknesses in the same field trial: the fallback

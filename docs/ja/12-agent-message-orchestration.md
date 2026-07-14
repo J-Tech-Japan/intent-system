@@ -581,27 +581,49 @@ resume）します。その後 orchestrator がループを自律的に駆動し
 ネットは、セッションに依存しない **外部** スケジューラ(cron/launchd — in-session
 タイマーでは *ない*)から `intent-cli automation heartbeat` を低頻度(60 分クラス)で
 実行することです: パイプラインが健全な間は完全に沈黙し、agent/session の再起動を
-すべて生き延び、最悪ケースのスタール時間をその実行間隔自体(実測された 26 時間という
-最悪ケースの代わりに)まで抑え込みます。
+すべて生き延び、最悪ケースのスタール時間を staleness の閾値とスケジューラの実行間隔の
+合計で抑え込みます — 推奨されるデフォルト値(45 分の閾値 + 60 分の実行間隔 ≈ 最悪
+ケースで 105 分)では、実測された 26 時間という最悪ケースを依然として大きく下回り
+ますが、文字通りの 60 分ではありません。より厳密な上限が必要な場合は、閾値または
+実行間隔を短くしてください。
 
 - **頻度** — 60 分クラス(例: 毎時)。沈黙したノイズとして扱えるほど低頻度で、かつ
-  フィールドで観測された最悪ケースを大きく下回るようスタールを抑え込めるだけの
-  頻度です。
+  合計の上限(閾値+実行間隔、デフォルト値では ≈105 分)がフィールドで観測された
+  最悪ケースを大きく下回るだけの頻度です。
 - **コマンド** —
   `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
   は `automation stalled-work`(G523)をラップし、何かがスタールしている場合は
   スタールした各項目とその canonical な次のコマンドを示す `message_body` を返します。
   健全な場合は `stale=false` で `message_body` はありません。
-- **コピペ用ラッパー**(cron/launchd から実行、agent session の中ではない):
+- **コピペ用ラッパー**(cron/launchd から実行、agent session の中ではない。`jq` が
+  必要):
 
   ```sh
   #!/bin/sh
   # cron/launchd から実行される — agent session の中ではない。
-  result=$(intent-cli automation heartbeat --domain "$DOMAIN" --repo "$REPO" --format json)
-  stale=$(echo "$result" | jq -r '.stale')
+  # 必須の環境変数: TEAM(agmsg team)、FROM(この pinger 自身が登録している agmsg
+  # role、例えば "heartbeat")、TO(送信先の role、例えば "orchestrator")、DOMAIN、REPO。
+  set -eu
+
+  if ! result=$(intent-cli automation heartbeat --domain "$DOMAIN" --repo "$REPO" --format json); then
+    printf 'heartbeat: intent-cli automation heartbeat failed\n' >&2
+    exit 1
+  fi
+
+  if ! printf '%s' "$result" | jq -e 'type == "object" and (.stale | type) == "boolean"' >/dev/null 2>&1; then
+    printf 'heartbeat: malformed output (expected an object with a boolean .stale)\n' >&2
+    exit 1
+  fi
+
+  stale=$(printf '%s' "$result" | jq -r '.stale')
+
   if [ "$stale" = "true" ]; then
-    message=$(echo "$result" | jq -r '.message_body')
-    ~/.agents/skills/agmsg/scripts/send.sh <team> heartbeat orchestrator "$message"
+    if ! printf '%s' "$result" | jq -e '(.message_body | type) == "string" and (.message_body | length) > 0' >/dev/null 2>&1; then
+      printf 'heartbeat: stale=true but .message_body is missing/empty\n' >&2
+      exit 1
+    fi
+    message=$(printf '%s' "$result" | jq -r '.message_body')
+    ~/.agents/skills/agmsg/scripts/send.sh "$TEAM" "$FROM" "$TO" "$message"
   fi
   ```
 
@@ -610,6 +632,10 @@ resume）します。その後 orchestrator がループを自律的に駆動し
   1 回の実行につき **最大 1 通** だけ送ります(`stale` が false の場合は何も送りません)
   — これは G524 の wake contract、すなわち 1 通の reconcile メッセージだけで
   完全な recovery wake をトリガーするのに十分である、という契約と一致します。
+  heartbeat コマンド自体の失敗、不正な/オブジェクトでない JSON、boolean でない
+  `.stale`、`.stale` が true なのに欠落/空の `.message_body` の場合は、**大声で**
+  失敗します(非ゼロ終了・stderr メッセージ・送信なし)— 壊れたセーフティネットが
+  「健全で報告することは何もない」と黙って偽装することは決してありません。
 - **代替案** — design-side watchdog と 5 分ごとの in-session orchestrator fallback
   タイマーは(下記の通り)引き続き代替案としてサポートされますが、どちらも同じ
   フィールドトライアルで実測された弱点があります: fallback タイマーはオペレーターが

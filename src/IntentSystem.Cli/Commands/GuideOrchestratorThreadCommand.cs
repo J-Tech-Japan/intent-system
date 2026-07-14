@@ -626,27 +626,52 @@ internal static class GuideOrchestratorThreadCommand
                     + "The RECOMMENDED safety net is therefore a session-independent EXTERNAL scheduler (cron/"
                     + "launchd — NOT an in-session timer) running `intent-cli automation heartbeat` at a LOW, "
                     + "60-minute-class frequency: it stays completely silent while the pipeline is healthy, "
-                    + "survives every agent/session restart, and caps the worst-case stall at its own interval "
-                    + "instead of the measured 26-hour worst case.",
+                    + "survives every agent/session restart, and bounds the worst-case stall by the staleness "
+                    + $"threshold plus the scheduler interval — with the recommended defaults ({AutomationHeartbeatCommand.DefaultStaleMinutes}m "
+                    + $"threshold + 60m interval ≈ {AutomationHeartbeatCommand.DefaultStaleMinutes + 60}m worst case), still dramatically below the measured "
+                    + "26-hour worst case, though NOT literally 60 minutes — tighten the threshold or the interval "
+                    + "if a tighter bound is required.",
                 Frequency =
-                    "60-minute class (e.g. hourly) — low enough to be silent noise, frequent enough to bound the "
-                    + "worst-case stall far below what was observed in the field.",
+                    "60-minute class (e.g. hourly) — low enough to be silent noise, frequent enough that the "
+                    + $"combined bound (threshold + interval, ≈{AutomationHeartbeatCommand.DefaultStaleMinutes + 60}m with the defaults) stays far below what was "
+                    + "observed in the field.",
                 CommandExample =
                     "intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json",
                 WrapperExample =
                     "#!/bin/sh\n"
                     + "# Runs from cron/launchd — NOT inside any agent session.\n"
-                    + "result=$(intent-cli automation heartbeat --domain \"$DOMAIN\" --repo \"$REPO\" --format json)\n"
-                    + "stale=$(echo \"$result\" | jq -r '.stale')\n"
+                    + "# Required environment: TEAM (agmsg team), FROM (this pinger's registered agmsg role,\n"
+                    + "# e.g. \"heartbeat\"), TO (recipient role, e.g. \"orchestrator\"), DOMAIN, REPO.\n"
+                    + "set -eu\n"
+                    + "\n"
+                    + "if ! result=$(intent-cli automation heartbeat --domain \"$DOMAIN\" --repo \"$REPO\" --format json); then\n"
+                    + "  printf 'heartbeat: intent-cli automation heartbeat failed\\n' >&2\n"
+                    + "  exit 1\n"
+                    + "fi\n"
+                    + "\n"
+                    + "if ! printf '%s' \"$result\" | jq -e 'type == \"object\" and (.stale | type) == \"boolean\"' >/dev/null 2>&1; then\n"
+                    + "  printf 'heartbeat: malformed output (expected an object with a boolean .stale)\\n' >&2\n"
+                    + "  exit 1\n"
+                    + "fi\n"
+                    + "\n"
+                    + "stale=$(printf '%s' \"$result\" | jq -r '.stale')\n"
+                    + "\n"
                     + "if [ \"$stale\" = \"true\" ]; then\n"
-                    + "  message=$(echo \"$result\" | jq -r '.message_body')\n"
-                    + "  ~/.agents/skills/agmsg/scripts/send.sh <team> heartbeat orchestrator \"$message\"\n"
+                    + "  if ! printf '%s' \"$result\" | jq -e '(.message_body | type) == \"string\" and (.message_body | length) > 0' >/dev/null 2>&1; then\n"
+                    + "    printf 'heartbeat: stale=true but .message_body is missing/empty\\n' >&2\n"
+                    + "    exit 1\n"
+                    + "  fi\n"
+                    + "  message=$(printf '%s' \"$result\" | jq -r '.message_body')\n"
+                    + "  ~/.agents/skills/agmsg/scripts/send.sh \"$TEAM\" \"$FROM\" \"$TO\" \"$message\"\n"
                     + "fi\n",
                 AtMostOneMessageRule =
                     "`intent-cli` never sends a message or launches an agent itself — it only computes text (never "
                     + "more than one `message_body` per run). The wrapper sends AT MOST ONE message per run (nothing "
                     + "when `stale` is false), matching the G524 wake contract: any single reconcile message is "
-                    + "sufficient to trigger a full recovery wake.",
+                    + "sufficient to trigger a full recovery wake. It fails LOUDLY (non-zero exit, stderr message, no "
+                    + "send) on a heartbeat command failure, malformed/non-object JSON, a `.stale` field that is not "
+                    + "a boolean, or a `.message_body` that is missing/empty when `.stale` is true — a broken safety "
+                    + "net must never silently masquerade as \"healthy, nothing to report\".",
                 AlternativesNote =
                     "The design-side watchdog and the 5-minute in-session orchestrator fallback timer remain "
                     + "SUPPORTED as alternatives (see below), but both showed measured weaknesses in the same field "
