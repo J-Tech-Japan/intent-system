@@ -164,8 +164,28 @@ either trigger runs exactly one pass:
 - Verify GitHub facts directly: open PRs, CI conclusion, approvals, merge
   state, closeout/label state.
 - Detect stale blockers and no-reply receivers.
-- Decide the single action this wake: delegate the next slice/PR, send one
-  repair message, or escalate one operator decision.
+- **Publish + delegate in the SAME wake (G524).** If you publish a ready
+  next-slice issue this wake, verify it exists, THEN delegate it to the
+  implementation thread within this same wake — never defer the delegation
+  to an unscheduled "next wake"; nothing else will ever trigger it (this was
+  the single largest measured stall class: ~60 hours across four slices in
+  one field trace).
+- **Per-wake cap is at most one delegation per receiver, not
+  at-most-one-message (G524).** A wake may include a publish + its
+  same-wake delegation, one repair message per stalled receiver, one
+  operator escalation, and handling of any pending receiver reports — all
+  together.
+- **Verify the recipient roster before dispatch (G524).** Before sending any
+  agmsg message, confirm the recipient id is on the team roster
+  (`agmsg team.sh`); agmsg accepts an unknown recipient silently, so treat an
+  off-roster id as an error, never a guess (a legacy `review` vs the
+  registered `reviewer` has silently lost messages in the field).
+- **End the wake with a stalled-work check (G523/G524).** Run
+  `intent-cli automation stalled-work --domain <domain> --repo <owner/repo>
+  --format json` and process every actionable item it reports before
+  sleeping — a wake must never end leaving an actionable transition for an
+  unscheduled next wake; escalate explicitly if an item is genuinely blocked
+  on an operator decision.
 
 ### Repair vs escalate
 
@@ -203,7 +223,10 @@ Routine next-slice issue publication is an **orchestrator responsibility**, not
 an operator question. When intent-cli reports a candidate as `issue-cut-ready`
 and all safety gates pass, the orchestrator publishes it itself through
 canonical intent-cli commands rather than stopping to ask the operator to create
-the GitHub issue. **At most one issue per wake.**
+the GitHub issue. **At most one issue per wake**, then verify, THEN **delegate
+that same issue to implementation in the SAME wake (G524)** — publish and
+delegate complete together; never defer the delegation to an unscheduled
+next wake.
 
 Publish only when **all** of these hold:
 
@@ -223,9 +246,44 @@ Publish through the canonical surfaces only — `intent-cli issue publish-flow`
 and `intent-cli automation issue-publish` — never raw `gh issue create` or
 `gh ... --add-label`. After publishing, verify via intent-cli / GitHub (not
 chat) that the issue exists with the expected body and the `intent-target`
-label and that durable state reflects it, then delegate implementation over
-agmsg. The implementation receiver still derives its target from
-`intent-cli worker next-action`, not the agmsg text.
+label and that durable state reflects it, then, **in this same wake**,
+delegate implementation over agmsg (G524) — do not stop after publishing to
+wait for a future wake. The implementation receiver still derives its target
+from `intent-cli worker next-action`, not the agmsg text.
+
+## End-of-wake check (G523/G524)
+
+Every orchestrator wake ends with a read-only stalled-work check — a wake
+must never end leaving an actionable pending transition for an unscheduled
+"next wake" that nothing would trigger. This closes the measured
+publish-then-sleep and silent-completion stall classes without adding any
+timer.
+
+```text
+intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json
+```
+
+- **Never defer** — process every actionable item the check reports in THIS
+  wake (delegate, repair, or route to closeout) before sleeping. Do not
+  announce work for a future wake unless an explicit fallback/legacy timer
+  is actually scheduled to run it; message-driven wakes have no other
+  trigger to pick deferred work back up.
+- **Escalate instead of defer** — if an item is genuinely blocked on an
+  external/operator decision, escalate it explicitly to the design thread
+  now via the design-thread escalation filter; do not silently defer it and
+  do not leave it unprocessed.
+
+## Dispatch verification (G524)
+
+Before sending ANY agmsg message, verify the recipient id is present in the
+team roster (agmsg `team.sh`). agmsg accepts an unknown recipient silently —
+there is no delivery error to notice. Treat a recipient id that is not on
+the roster as an error: fix the id or the roster registration before
+sending; never guess or approximate a role name.
+
+Field-observed loss: 8 dispatches addressed to `review` were silently lost
+when the registered role was `reviewer` — agmsg neither delivered nor
+reported the mismatch.
 
 ## Dependency planning
 
@@ -840,6 +898,25 @@ Implementation threads stay **GitHub-contract-only**: they do not read or
 mutate host metadata (`.intent-cli/**`, `intents/**`). All label transitions go
 through `intent-cli worker` / `intent-cli automation`.
 
+**Reporting completion or blocked status to the orchestrator is a REQUIRED
+FINAL STEP of every delegation (G524)** — it is not optional, and the
+orchestrator cannot discover a silent completion on its own (a PR opened
+with no report reaching the orchestrator is lost work from the
+orchestrator's perspective; one field case sat undiscovered for 88 minutes
+until a manual GitHub check found it). Send exactly this shape when done:
+
+```json
+{"status":"completed","thread":"implementation","ref":"pr#<n>","note":"PR opened, Closes #<n>, CI green"}
+```
+
+or the `blocked` shape naming one operator action. The same required-final-step
+rule applies to the review thread, whose `completed` reply additionally
+carries `design_alignment_checked` and the checked-source list:
+
+```json
+{"status":"completed","thread":"review","ref":"pr#<n>","note":"approved; closeout done","design_alignment_checked":true,"design_alignment_sources_checked":["packet","review-context","intent-tree","adr-decision-notes","relevant-docs"]}
+```
+
 ## Safety boundaries (summary)
 
 - agmsg is a signal layer only; intent-cli and GitHub are authoritative for all
@@ -853,3 +930,13 @@ through `intent-cli worker` / `intent-cli automation`.
   require explicit per-delegation routing.
 - Fail closed on duplicate orchestrators or when a signal conflicts with
   intent-cli/GitHub facts — stop and escalate, never guess.
+- Per-wake cap is **at most one delegation per receiver** (implementation,
+  review) — NOT at-most-one-message: a publish's same-wake delegation, repair
+  messages, an escalation, and receiver-report handling may all happen in one
+  wake (G524); never defer a publish's delegation to an unscheduled future
+  wake.
+- Verify the recipient id against the team roster (`agmsg team.sh`) before
+  every send; an id not on the roster is an error, not a guess (G524).
+- End every wake with a stalled-work check (`automation stalled-work`, G523)
+  and process any actionable item before sleeping; escalate explicitly
+  rather than deferring silently.

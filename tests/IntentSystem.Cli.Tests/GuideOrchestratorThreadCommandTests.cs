@@ -60,9 +60,9 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("\"status\":\"completed\"", output, StringComparison.Ordinal);
         Assert.Contains("\"status\":\"blocked\"", output, StringComparison.Ordinal);
 
-        // First wake: read replies, ask intent-cli, verify GitHub, one message per wake.
+        // First wake: read replies, ask intent-cli, verify GitHub, per-receiver delegation cap (G524).
         Assert.Contains("## Orchestrator first wake", output, StringComparison.Ordinal);
-        Assert.Contains("Send AT MOST ONE message this wake", output, StringComparison.Ordinal);
+        Assert.Contains("AT MOST ONE DELEGATION PER RECEIVER", output, StringComparison.Ordinal);
 
         // Safety boundaries.
         Assert.Contains("## Safety boundaries", output, StringComparison.Ordinal);
@@ -552,11 +552,11 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.NotEmpty(publication.GetProperty("canonical_commands").EnumerateArray());
         Assert.NotEmpty(publication.GetProperty("post_publish_verification").EnumerateArray());
 
-        // The orchestrator prompt lists publication as a possible single action.
+        // The orchestrator prompt describes publish-then-same-wake-delegate (G524).
         var orchestrator = doc.RootElement.GetProperty("threads").EnumerateArray()
             .First(t => t.GetProperty("role").GetString() == "orchestrator")
             .GetProperty("prompt").GetString()!;
-        Assert.Contains("publish one ready next-slice issue", orchestrator, StringComparison.Ordinal);
+        Assert.Contains("publish a ready next-slice issue", orchestrator, StringComparison.Ordinal);
         Assert.Contains("issue-cut-ready", orchestrator, StringComparison.Ordinal);
     }
 
@@ -1542,6 +1542,127 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("guide orchestrator-thread", output, StringComparison.Ordinal);
         Assert.Contains("OPTIONAL", output, StringComparison.Ordinal);
         Assert.Contains("not replaced", output, StringComparison.Ordinal);
+    }
+
+    // ----- G524: orchestrator wake contract (finish pending transitions in-wake) -----
+
+    [Fact]
+    public void Execute_Markdown_PublishAndDelegate_HappenInSameWake_NoDeferToNextWakeWording()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // AC: guide output states publish + delegate happen in the same wake.
+        Assert.Contains("THE SAME WAKE", output, StringComparison.Ordinal);
+        Assert.Contains("delegate that same issue to implementation", output, StringComparison.Ordinal);
+
+        // AC: no longer contains the defer-delegation-to-next-wake instruction.
+        Assert.DoesNotContain("delegation intentionally deferred to the next wake", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("deferred to the next wake", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_Markdown_MessageCap_IsPerReceiverDelegation_NotAtMostOneMessage()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // AC: the message cap reads "at most one delegation per receiver per wake"
+        // and explicitly permits publish + delegation + reports within one wake.
+        Assert.Contains("AT MOST ONE DELEGATION PER RECEIVER", output, StringComparison.Ordinal);
+        Assert.Contains("NOT at-most-one-message", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Send AT MOST ONE message this wake", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Decide the single action for this wake", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_EndOfWakeCheck_RequiresStalledWorkAndNeverDefers()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // AC: guide output contains the end-of-wake stalled-work check (G523)
+        // and the never-end-with-unprocessed-actionable-transitions rule.
+        Assert.Contains("## End-of-wake check (G523/G524)", output, StringComparison.Ordinal);
+        Assert.Contains("automation stalled-work --domain", output, StringComparison.Ordinal);
+        Assert.Contains("never defer", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("escalate", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_Json_EndOfWakeCheck_HasCommandAndRules()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var check = doc.RootElement.GetProperty("end_of_wake_check");
+        Assert.Contains("stalled-work", check.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("automation stalled-work", check.GetProperty("command").GetString(), StringComparison.Ordinal);
+        Assert.True(check.GetProperty("never_defer_rule").GetString()!.Length > 0);
+        Assert.True(check.GetProperty("escalate_instead_of_defer_rule").GetString()!.Length > 0);
+    }
+
+    [Fact]
+    public void Execute_Markdown_ReceiverPrompts_RequireCompletionOrBlockedReportAsFinalStep()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // AC: implementation and review thread prompts contain the required
+        // completion-or-blocked report step with its expected shape.
+        Assert.Contains("REQUIRED FINAL STEP of EVERY delegation", output, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"completed\",\"thread\":\"implementation\"", output, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"completed\",\"thread\":\"review\"", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_ReceiverPrompts_ContainRequiredReportStep()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var threads = doc.RootElement.GetProperty("threads").EnumerateArray().ToArray();
+        var implementation = threads.First(t => t.GetProperty("role").GetString() == "implementation").GetProperty("prompt").GetString()!;
+        var review = threads.First(t => t.GetProperty("role").GetString() == "review").GetProperty("prompt").GetString()!;
+
+        Assert.Contains("REQUIRED FINAL STEP", implementation, StringComparison.Ordinal);
+        Assert.Contains("REQUIRED FINAL STEP", review, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_DispatchVerification_RequiresRosterCheckBeforeSend()
+    {
+        var output = RunMarkdown(["--domain", "intent-cli", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        // AC: dispatch guidance requires team-roster verification of the
+        // recipient id before sending.
+        Assert.Contains("## Dispatch verification (G524)", output, StringComparison.Ordinal);
+        Assert.Contains("team roster", output, StringComparison.Ordinal);
+        Assert.Contains("team.sh", output, StringComparison.Ordinal);
+        Assert.Contains("`review`", output, StringComparison.Ordinal);
+        Assert.Contains("`reviewer`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Json_DispatchVerification_HasRuleAndDeadAddressExample()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOrchestratorThreadCommand.Execute(
+            CreateContext(),
+            ["--domain", "intent-cli", "--target-repo", "owner/repo", "--agent", "claude", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var verification = doc.RootElement.GetProperty("dispatch_verification");
+        Assert.Contains("team.sh", verification.GetProperty("rule").GetString(), StringComparison.Ordinal);
+        Assert.True(verification.GetProperty("dead_address_example").GetString()!.Length > 0);
     }
 
     private static string RunMarkdown(string[] args)

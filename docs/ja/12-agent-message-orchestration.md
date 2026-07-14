@@ -151,8 +151,27 @@ orchestrator がメッセージ駆動で動作する場合でも fallback/legacy
 - host レビュー準備状況を確認（`automation host-review-preflight`）。
 - GitHub の事実を直接検証: open PR、CI 結論、承認、マージ状態、closeout/label 状態。
 - 停滞ブロッカーと無返信の receiver を検知する。
-- この wake の単一アクションを決定する: 次の slice/PR を委譲、1 通の repair メッセージ送信、
-  または 1 件のオペレーター判断にエスカレーション。
+- **publish と delegate は SAME WAKE で行う（G524）。** この wake で next-slice issue を
+  publish した場合、存在を検証したうえで、その **同じ wake の中で** implementation
+  スレッドへ delegate する — delegate をスケジュールされていない「次の wake」に
+  先送りしてはいけない。他に何もそれをトリガーしないためです（フィールドトレースでは
+  4 slice にまたがり合計約 60 時間という、測定された中で最大の stall class でした）。
+- **1 wake あたりの上限は「receiver ごとに最大 1 件の delegation」であり、
+  「最大 1 メッセージ」ではありません（G524）。** 1 回の wake に、publish とその
+  同一 wake 内 delegation、停滞している receiver ごとに 1 通の repair メッセージ、
+  1 件のオペレーターエスカレーション、保留中の receiver report への対応が
+  すべて含まれてよい。
+- **送信前に受信者ロースターを検証する（G524）。** どの agmsg メッセージを送る前にも、
+  受信者 id が team roster（`agmsg team.sh`）に存在することを確認する — agmsg は
+  未知の受信者を黙って受け付けてしまうため、roster に無い id は推測せず、
+  エラーとして扱う（フィールドでは、登録済みロール `reviewer` に対して `review` と
+  誤指定し、メッセージが静かに失われた例があります）。
+- **stalled-work チェックで wake を終える（G523/G524）。**
+  `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`
+  を実行し、報告されたすべての actionable item を眠りにつく前に処理する — wake が
+  actionable な transition をスケジュールされていない次の wake に残したまま終わる
+  ことは決してない。オペレーターの判断に本当にブロックされている場合は、黙って
+  先送りせず明示的にエスカレーションする。
 
 ### repair と escalate
 
@@ -188,7 +207,10 @@ green は古くなっている可能性があります。
 ルーチンな next-slice issue の publish は **orchestrator の責務** であり、オペレーターへの
 質問ではありません。intent-cli が候補を `issue-cut-ready` と報告し、すべての安全ゲートを
 通過したら、orchestrator はオペレーターに GitHub issue 作成を依頼して止まるのではなく、
-canonical な intent-cli コマンドで自分で publish します。**1 wake につき最大 1 件** です。
+canonical な intent-cli コマンドで自分で publish します。**1 wake につき最大 1 件** で
+publish し、検証したうえで、**同じ wake の中で** その issue を implementation へ
+delegate します（G524）— publish と delegate は一緒に完了させ、delegate を
+スケジュールされていない次の wake に先送りしてはいけません。
 
 次の **すべて** が成り立つときのみ publish します:
 
@@ -208,8 +230,42 @@ publish は canonical な surface のみ — `intent-cli issue publish-flow` と
 `intent-cli automation issue-publish` — を使い、生の `gh issue create` や
 `gh ... --add-label` は使いません。publish 後は intent-cli / GitHub（チャットではなく）で
 issue が期待どおりの body と `intent-target` label を持つこと、durable state がそれを
-反映していることを検証し、その後 agmsg で実装を委譲します。実装 receiver は依然として
+反映していることを検証し、**その同じ wake の中で** agmsg で実装を委譲します（G524）—
+publish した後で止まって将来の wake を待つことはしません。実装 receiver は依然として
 `intent-cli worker next-action` からターゲットを得ます（agmsg テキストからではありません）。
+
+## end-of-wake チェック（G523/G524）
+
+すべての orchestrator wake は read-only な stalled-work チェックで終わります —
+wake は、何もトリガーしないスケジュールされていない「次の wake」に actionable な
+pending transition を残したまま終わってはいけません。これにより、測定された
+publish-then-sleep と silent-completion の stall class を、タイマーを追加することなく
+解消します。
+
+```text
+intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json
+```
+
+- **先送りしない** — このチェックが報告するすべての actionable item を、眠りにつく前に
+  この wake の中で処理する（delegate、repair、または closeout へのルーティング）。
+  明示的な fallback/legacy タイマーが実際にそれを実行するようスケジュールされていない
+  限り、将来の wake のために作業を告知しない。メッセージ駆動の wake には、先送りした
+  作業を拾い直す他のトリガーがありません。
+- **先送りせずエスカレーションする** — item が本当に外部/オペレーターの判断に
+  ブロックされている場合は、design スレッドのエスカレーションフィルターを通じて
+  今すぐ明示的にエスカレーションする。黙って先送りしたり未処理のまま残したりしない。
+
+## dispatch 検証（G524）
+
+どの agmsg メッセージを送る前にも、受信者 id が team roster（agmsg `team.sh`）に
+存在することを確認してください。agmsg は未知の受信者を黙って受け付けてしまいます —
+配信エラーとして気づく手段がありません。roster に無い受信者 id はエラーとして扱い、
+送信前に id か roster 登録を修正してください。ロール名を推測したり近似したり
+しないでください。
+
+フィールドで観測された損失: 登録済みロールが `reviewer` であったにもかかわらず
+`review` 宛に送られた 8 件の dispatch が、静かに失われました — agmsg は配信もせず、
+不一致を報告もしませんでした。
 
 ## 依存の計画（dependency planning）
 
@@ -767,6 +823,25 @@ host チェックアウトは正当に **複数** の intent ドメインを含�
 （`.intent-cli/**`、`intents/**`）を読んだり変更したりしません。すべての label 遷移は
 `intent-cli worker` / `intent-cli automation` を経由します。
 
+**orchestrator への completion または blocked の報告は、すべての delegation の
+REQUIRED FINAL STEP です（G524）** — これは任意ではなく、orchestrator が自力で
+silent completion を発見することはできません（orchestrator に報告が届かないまま
+PR が open された場合、それは orchestrator の視点では失われた作業です — フィールドの
+ある事例では、手動の GitHub チェックで発見されるまで 88 分間気づかれませんでした）。
+完了時は正確に次の shape を送ってください:
+
+```json
+{"status":"completed","thread":"implementation","ref":"pr#<n>","note":"PR opened, Closes #<n>, CI green"}
+```
+
+または 1 件のオペレーターアクションを名指しする `blocked` の shape。同じ
+required-final-step のルールは review スレッドにも適用され、その `completed` 返信は
+さらに `design_alignment_checked` とチェック済みソースのリストを持ちます:
+
+```json
+{"status":"completed","thread":"review","ref":"pr#<n>","note":"approved; closeout done","design_alignment_checked":true,"design_alignment_sources_checked":["packet","review-context","intent-tree","adr-decision-notes","relevant-docs"]}
+```
+
 ## セーフティ境界（まとめ）
 
 - agmsg はシグナル層のみ。intent-cli と GitHub がすべてのワークフロー状態の権威。
@@ -778,3 +853,13 @@ host チェックアウトは正当に **複数** の intent ドメインを含�
   を要求する。
 - orchestrator の重複や、シグナルが intent-cli/GitHub の事実と矛盾する場合は fail closed —
   推測せず、停止してエスカレーションする。
+- 1 wake あたりの上限は **receiver ごとに最大 1 件の delegation**（implementation、
+  review）— 「最大 1 メッセージ」ではない。publish の同一 wake 内 delegation、repair
+  メッセージ、1 件のエスカレーション、receiver report への対応は 1 回の wake に
+  すべて含まれてよい（G524）。publish の delegation をスケジュールされていない
+  将来の wake に先送りしない。
+- 送信の前に必ず受信者 id を team roster（`agmsg team.sh`）と照合する。roster に
+  無い id は推測ではなくエラーとして扱う（G524）。
+- すべての wake を stalled-work チェック（`automation stalled-work`、G523）で終え、
+  眠りにつく前に actionable な item を処理する。黙って先送りせず、明示的に
+  エスカレーションする。
