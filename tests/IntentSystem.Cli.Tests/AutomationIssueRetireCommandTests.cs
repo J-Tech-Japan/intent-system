@@ -77,6 +77,7 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
         Assert.Equal(1744, closed.IssueNumber);
         Assert.Contains("decomposed", closed.Comment, StringComparison.Ordinal);
         Assert.Contains("oversized; split into successor slices", closed.Comment, StringComparison.Ordinal);
+        Assert.Contains("[issue-retire:SKS-G812]", closed.Comment, StringComparison.Ordinal);
         var transition = Assert.Single(labelMutator.Transitions);
         Assert.Equal("issue", transition.Kind);
         Assert.Equal(1744, transition.Number);
@@ -446,9 +447,14 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
         Assert.Single(retirementMutator.Closed); // close DID happen — stage pinned after A, before B.
         Assert.False(File.Exists(workspace.Context.GetQueueStatePath()));
 
-        // Retry: the issue is now CLOSED (not planned) with labels still
-        // present — exactly what the first attempt's failure left behind.
-        retirementMutator.Snapshots[1744] = ClosedNotPlannedSnapshot(1744, "SKS-G812: Oversized single-slice contract", new[] { "intent-target" });
+        // Retry: the issue is now CLOSED (not planned), still carrying the
+        // canonical marker comment the first attempt's close posted (durable
+        // provenance this is OUR partial write, not an unrelated closure),
+        // with labels still present — exactly what the first attempt's
+        // failure left behind.
+        retirementMutator.Snapshots[1744] = ClosedNotPlannedSnapshot(
+            1744, "SKS-G812: Oversized single-slice contract", new[] { "intent-target" },
+            new[] { retirementMutator.Closed[0].Comment });
         labelMutator.ThrowOnApply = null;
 
         using var secondWriter = new StringWriter();
@@ -485,6 +491,7 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
             Title = "SKS-G812: Oversized single-slice contract",
             Url = $"https://github.com/{Repo}/issues/1744",
             Labels = Array.Empty<string>(),
+            Comments = Array.Empty<string>(),
         };
         AutomationIssueRetireCommand.RetirementMutatorFactory = () => retirementMutator;
 
@@ -498,6 +505,42 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
         Assert.Contains("COMPLETED", writer.ToString(), StringComparison.Ordinal);
         Assert.Empty(retirementMutator.Closed);
         Assert.False(File.Exists(workspace.Context.GetQueueStatePath()));
+    }
+
+    [Fact]
+    public void Execute_Write_RefusesRecoveryWhenClosedNotPlannedButNoProvenanceMarker()
+    {
+        // Rereview repair: `stateReason == NOT_PLANNED` alone is NOT durable
+        // provenance — an issue closed manually or by an unrelated process
+        // with reason "not planned" must never be treated as THIS command's
+        // partial-failure recovery target just because the reason string
+        // happens to match. Only the canonical marker comment this command
+        // itself posts alongside its own close authenticates a resume.
+        using var workspace = new RetireWorkspace();
+        var retirementMutator = new FakeRetirementMutator();
+        retirementMutator.Snapshots[1744] = new IssueSnapshot
+        {
+            State = "CLOSED",
+            StateReason = "NOT_PLANNED",
+            Title = "SKS-G812: Oversized single-slice contract",
+            Url = $"https://github.com/{Repo}/issues/1744",
+            Labels = Array.Empty<string>(),
+            Comments = new[] { "Closing as not planned — this was a duplicate of #1700." },
+        };
+        AutomationIssueRetireCommand.RetirementMutatorFactory = () => retirementMutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationIssueRetireCommand.Execute(
+            workspace.Context,
+            ["--repo", Repo, "--issue", "1744", "--reason", "obsolete", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("no canonical", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("marker comment", writer.ToString(), StringComparison.Ordinal);
+        Assert.Empty(retirementMutator.Closed);
+        Assert.False(File.Exists(workspace.Context.GetQueueStatePath()));
+        Assert.False(File.Exists(workspace.Context.GetRunLogPath()));
     }
 
     [Fact]
@@ -541,7 +584,8 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
         File.SetUnixFileMode(
             queueStatePath,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
-        retirementMutator.Snapshots[2001] = ClosedNotPlannedSnapshot(2001, "G600: Some slice", Array.Empty<string>());
+        retirementMutator.Snapshots[2001] = ClosedNotPlannedSnapshot(
+            2001, "G600: Some slice", Array.Empty<string>(), new[] { retirementMutator.Closed[0].Comment });
 
         using var secondWriter = new StringWriter();
         var secondExitCode = AutomationIssueRetireCommand.Execute(
@@ -680,15 +724,23 @@ public sealed class AutomationIssueRetireCommandTests : IDisposable
         Title = title,
         Url = $"https://github.com/{Repo}/issues/{number}",
         Labels = labels,
+        Comments = Array.Empty<string>(),
     };
 
-    private static IssueSnapshot ClosedNotPlannedSnapshot(int number, string title, IReadOnlyList<string> labels) => new()
+    // `comments` should normally be seeded from the real close comment a
+    // prior successful attempt recorded (`retirementMutator.Closed[i].Comment`)
+    // so the marker text matches exactly what the command itself produces —
+    // pass an empty list to simulate an unrelated/manual "not planned"
+    // closure lacking any canonical provenance.
+    private static IssueSnapshot ClosedNotPlannedSnapshot(
+        int number, string title, IReadOnlyList<string> labels, IReadOnlyList<string>? comments = null) => new()
     {
         State = "CLOSED",
         StateReason = "NOT_PLANNED",
         Title = title,
         Url = $"https://github.com/{Repo}/issues/{number}",
         Labels = labels,
+        Comments = comments ?? Array.Empty<string>(),
     };
 
     private static string BuildRunEventLine(string executionUnit, string eventName) =>

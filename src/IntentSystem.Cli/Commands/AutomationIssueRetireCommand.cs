@@ -229,6 +229,7 @@ internal static class AutomationIssueRetireCommand
 
         var currentLabels = snapshot.Labels.ToHashSet(StringComparer.Ordinal);
         var issueIsOpen = IsOpen(snapshot.State);
+        var executionUnit = existingItem?.ExecutionUnit ?? ExecutionUnitFromTitle(snapshot.Title);
 
         if (issueIsOpen)
         {
@@ -274,8 +275,21 @@ internal static class AutomationIssueRetireCommand
                 + "If it was already fully processed (e.g. merged and closed out), no action is needed.");
             return 1;
         }
+        else if (!HasCanonicalRetireMarker(snapshot.Comments, executionUnit))
+        {
+            // Repair: `stateReason == NOT_PLANNED` alone is not durable
+            // provenance — an issue closed manually/independently as "not
+            // planned" would pass that check too. Require the canonical
+            // marker comment this command itself posts alongside its close,
+            // tied to the exact candidate execution unit, before resuming.
+            writer.WriteLine(
+                $"refusing to retire issue #{issue}: it is CLOSED in {repo} with reason 'not planned', but no "
+                + $"canonical `automation issue-retire` marker comment for '{executionUnit}' was found — this does "
+                + "not look like a partial-failure recovery from a prior run of this command (e.g. a manual or "
+                + "unrelated 'not planned' closure). Refusing with zero GitHub or local mutation.");
+            return 1;
+        }
 
-        var executionUnit = existingItem?.ExecutionUnit ?? ExecutionUnitFromTitle(snapshot.Title);
         var candidateDomains = DomainCandidateScanner.Scan(context);
         var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
         var noteSuffix = string.IsNullOrWhiteSpace(note) ? string.Empty : $" --note \"{note}\"";
@@ -294,7 +308,7 @@ internal static class AutomationIssueRetireCommand
         var resolvedDomain = domainResolution.Domain!;
 
         var labelsToRemove = KnownIssueWorkflowLabels.Where(currentLabels.Contains).ToArray();
-        var reasonComment = BuildReasonComment(reason!, note);
+        var reasonComment = BuildReasonComment(executionUnit, reason!, note);
 
         var plannedMutations = new List<string>();
         if (issueIsOpen)
@@ -581,14 +595,34 @@ internal static class AutomationIssueRetireCommand
         }
     }
 
-    private static string BuildReasonComment(string reason, string? note)
+    /// <summary>Prefix of the durable-provenance marker embedded in the close comment (see <see cref="HasCanonicalRetireMarker"/>).</summary>
+    private const string RetireMarkerPrefix = "[issue-retire:";
+
+    private static string BuildReasonComment(string executionUnit, string reason, string? note)
     {
-        var comment = $"Retired via canonical `automation issue-retire` transition — reason: {reason}.";
+        var comment = $"{RetireMarkerPrefix}{executionUnit}] Retired via canonical `automation issue-retire` transition — reason: {reason}.";
         if (!string.IsNullOrWhiteSpace(note))
         {
             comment += $" Note: {note}";
         }
         return comment;
+    }
+
+    /// <summary>
+    /// Repair: durable provenance that THIS command (not a manual/unrelated
+    /// closure) closed the issue as "not planned" for THIS candidate
+    /// execution unit — required before a CLOSED issue is treated as a
+    /// partial-failure recovery target, since <c>stateReason == NOT_PLANNED</c>
+    /// alone is not sufficient authentication.
+    /// </summary>
+    private static bool HasCanonicalRetireMarker(IReadOnlyList<string> comments, string executionUnit)
+    {
+        if (string.IsNullOrWhiteSpace(executionUnit))
+        {
+            return false;
+        }
+        var marker = $"{RetireMarkerPrefix}{executionUnit}]";
+        return comments.Any(body => !string.IsNullOrEmpty(body) && body.Contains(marker, StringComparison.Ordinal));
     }
 
     private static bool TryParseArguments(
@@ -749,7 +783,7 @@ internal static class AutomationIssueRetireCommand
 /// a comment, and for reading a single issue's CURRENT state regardless of
 /// open/closed — the production implementation shells out to
 /// <c>gh issue close --reason "not planned" --comment &lt;text&gt;</c> /
-/// <c>gh issue view --json state,stateReason,title,url,labels</c>.
+/// <c>gh issue view --json state,stateReason,title,url,labels,comments</c>.
 /// </summary>
 internal interface IGitHubIssueRetirementMutator
 {
@@ -765,9 +799,12 @@ internal interface IGitHubIssueRetirementMutator
 
 /// <summary>
 /// G525 repair: point-in-time snapshot of a single GitHub issue, used to
-/// resolve the retire target and to detect a same-command partial-failure
-/// recovery (<see cref="StateReason"/> == <c>NOT_PLANNED</c> on a CLOSED
-/// issue).
+/// resolve the retire target and to authenticate a same-command
+/// partial-failure recovery — <see cref="StateReason"/> == <c>NOT_PLANNED</c>
+/// on a CLOSED issue is a necessary but NOT sufficient signal (a manual or
+/// unrelated "not planned" closure would also match it); <see cref="Comments"/>
+/// is required in addition to confirm the canonical retire marker this
+/// command itself posts (see <c>HasCanonicalRetireMarker</c>).
 /// </summary>
 internal sealed record IssueSnapshot
 {
@@ -780,6 +817,8 @@ internal sealed record IssueSnapshot
     public required string Url { get; init; }
 
     public required IReadOnlyList<string> Labels { get; init; }
+
+    public required IReadOnlyList<string> Comments { get; init; }
 }
 
 /// <summary>
@@ -808,7 +847,7 @@ internal sealed class GhCliGitHubIssueRetirementMutator : IGitHubIssueRetirement
             "issue", "view",
             issueNumber.ToString(CultureInfo.InvariantCulture),
             "--repo", repo,
-            "--json", "state,stateReason,title,url,labels",
+            "--json", "state,stateReason,title,url,labels,comments",
         };
         var stdout = RunGh(args, $"view issue #{issueNumber} in {repo}");
         return ParseSnapshot(stdout);
@@ -831,6 +870,18 @@ internal sealed class GhCliGitHubIssueRetirementMutator : IGitHubIssueRetirement
             }
         }
 
+        var comments = new List<string>();
+        if (root.TryGetProperty("comments", out var commentsElement) && commentsElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var comment in commentsElement.EnumerateArray())
+            {
+                if (comment.TryGetProperty("body", out var bodyElement) && bodyElement.ValueKind == JsonValueKind.String)
+                {
+                    comments.Add(bodyElement.GetString() ?? string.Empty);
+                }
+            }
+        }
+
         return new IssueSnapshot
         {
             State = root.TryGetProperty("state", out var stateElement) && stateElement.ValueKind == JsonValueKind.String
@@ -846,6 +897,7 @@ internal sealed class GhCliGitHubIssueRetirementMutator : IGitHubIssueRetirement
                 ? urlElement.GetString() ?? string.Empty
                 : string.Empty,
             Labels = labels,
+            Comments = comments,
         };
     }
 
