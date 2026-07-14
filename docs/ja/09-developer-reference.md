@@ -278,15 +278,19 @@ packet/queue metadata に基づきます。** すべての GitHub issue/PR candi
 `--domain` と矛盾する candidate、あるいは domain を全く導出できない
 candidate（packet.yaml が無い、またはそれに `domain:` フィールドが
 無い）は FAIL-CLOSED になります: `items[]` から除外され、代わりに
-`excluded[]`（`kind`、`execution_unit`、`issue`/`pr`、`reason` —
-`domain-contradiction` または `domain-underivable` —、候補 domain と
-正確な `--domain` 再実行コマンドを示す `detail`）に報告されます。
-（単一の operator 指定 execution unit に対しては明示的な `--domain`
-単独で成立する）他の G522 サーフェスとは異なり、これは共有 repo の
-issue/PR にまたがる broad multi-candidate scan です — 明示的な
-`--domain` だけでは、自身のメタデータで裏付けが取れない candidate に
-適用されると信頼することはありません。したがって candidate が黙って
-scan に紛れ込むことも、黙って消えることもありません。
+`excluded[]`（`kind`、`execution_unit`、`issue`/`pr`、`reason`、
+`detail`）に報告されます。`reason` は `domain-contradiction`
+（`detail` に矛盾している具体的な packet-declared domain を明示）
+または `domain-underivable`（`detail` に `intents/*/` からスキャンした
+候補 domain **と** 正確に実行可能な再実行コマンド —
+`intent-cli automation stalled-work --domain <name> --repo <owner/repo>
+--format json` — の両方を明示。G522 の underivable diagnostic 契約を
+継承）のいずれかです。（単一の operator 指定 execution unit に対しては
+明示的な `--domain` 単独で成立する）他の G522 サーフェスとは異なり、
+これは共有 repo の issue/PR にまたがる broad multi-candidate scan です
+— 明示的な `--domain` だけでは、自身のメタデータで裏付けが取れない
+candidate に適用されると信頼することはありません。したがって
+candidate が黙って scan に紛れ込むことも、黙って消えることもありません。
 
 このスライスは検出のみです — orchestrator wake procedure や外部
 heartbeat からこのサーフェスを利用する部分は、別の後続スライスです。

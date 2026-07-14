@@ -188,7 +188,7 @@ internal static class AutomationStalledWorkCommand
 
             var executionUnit = ExecutionUnitFromTitle(issue.Title);
             var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
-            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit,
+            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
@@ -269,7 +269,7 @@ internal static class AutomationStalledWorkCommand
 
             var executionUnit = ExecutionUnitFromTitle(matchedIssue.Title);
             var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
-            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit,
+            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
@@ -346,7 +346,7 @@ internal static class AutomationStalledWorkCommand
             var prRef = new StalledWorkRef { Number = pr.Number, Url = pr.Url };
 
             var packetDeclaredDomain = ReadPacketDeclaredDomain(context, matchedItem.ExecutionUnit);
-            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, matchedItem.ExecutionUnit,
+            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, matchedItem.ExecutionUnit, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
@@ -393,6 +393,7 @@ internal static class AutomationStalledWorkCommand
         string? packetDeclaredDomain,
         IReadOnlyList<string> candidateDomains,
         string executionUnit,
+        string repo,
         out string reason,
         out string detail)
     {
@@ -402,9 +403,13 @@ internal static class AutomationStalledWorkCommand
             var candidates = candidateDomains.Count > 0
                 ? string.Join(", ", candidateDomains)
                 : "(none found under intents/)";
+            // PR #1148 review re-repair: the underivable detail must name an
+            // exact, runnable re-invocation (inherited from the G522
+            // underivable diagnostic contract), not just candidate domains.
             detail =
                 $"domain could not be confirmed for `{executionUnit}`: no packet-declared `domain:` field was found "
                 + $"(expected at `.intent-cli/issues/{executionUnit}/packet.yaml`). Candidate domains: {candidates}. "
+                + $"Re-invoke with: intent-cli automation stalled-work --domain <name> --repo {repo} --format json. "
                 + "Excluded rather than assumed to belong to the requested --domain.";
             return false;
         }

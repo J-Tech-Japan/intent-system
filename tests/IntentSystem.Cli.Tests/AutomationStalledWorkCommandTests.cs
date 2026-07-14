@@ -334,6 +334,40 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
         Assert.Equal("SKS-G512", excludedItem.GetProperty("execution_unit").GetString());
         Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+        // PR #1148 review re-repair: the detail must name candidate domains
+        // AND the exact, runnable re-invocation — pinned here in JSON.
+        Assert.Contains("Candidate domains:", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "Re-invoke with: intent-cli automation stalled-work --domain <name> --repo J-Tech-Japan/intent-system --format json",
+            excludedItem.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_NoPacketYamlAtAll_Markdown_PinsExactReinvocationCommand()
+    {
+        // Same underivable fixture as above, rendered as markdown — the
+        // exact re-invocation command must survive both output formats so
+        // docs, schema, and rendering cannot drift independently.
+        using var workspace = new StalledWorkWorkspace();
+        var issue = BuildIssue(9999, "SKS-G512: From a different domain naming convention", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("SKS-G512", output, StringComparison.Ordinal);
+        Assert.Contains("domain-underivable", output, StringComparison.Ordinal);
+        Assert.Contains("Candidate domains:", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "Re-invoke with: intent-cli automation stalled-work --domain <name> --repo J-Tech-Japan/intent-system --format json",
+            output,
+            StringComparison.Ordinal);
     }
 
     [Fact]

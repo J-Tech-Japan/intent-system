@@ -285,14 +285,18 @@ when its packet-declared domain matches the requested `--domain` exactly. A
 candidate whose packet-declared domain contradicts `--domain`, or whose
 domain cannot be derived at all (no packet.yaml, or no `domain:` field on
 it), is FAIL-CLOSED: excluded from `items[]` and reported instead in
-`excluded[]` (`kind`, `execution_unit`, `issue`/`pr`, `reason` —
-`domain-contradiction` or `domain-underivable` — and a `detail` message
-naming candidate domains and the exact `--domain` re-invocation). Unlike the
-other G522 surfaces (where an explicit `--domain` can stand alone for a
-single operator-named execution unit), this is a broad multi-candidate scan
-over a shared repo's issues/PRs — an explicit `--domain` alone is never
-trusted to apply to a candidate whose own metadata cannot corroborate it, so
-a candidate never silently joins the scan and never silently disappears.
+`excluded[]` (`kind`, `execution_unit`, `issue`/`pr`, `reason`, `detail`).
+`reason` is `domain-contradiction` (with `detail` naming the specific
+conflicting packet-declared domain) or `domain-underivable` (with `detail`
+naming the candidate domains scanned from `intents/*/` AND the exact,
+runnable re-invocation — `intent-cli automation stalled-work --domain <name>
+--repo <owner/repo> --format json` — inherited from the G522 underivable
+diagnostic contract). Unlike the other G522 surfaces (where an explicit
+`--domain` can stand alone for a single operator-named execution unit), this
+is a broad multi-candidate scan over a shared repo's issues/PRs — an
+explicit `--domain` alone is never trusted to apply to a candidate whose own
+metadata cannot corroborate it, so a candidate never silently joins the scan
+and never silently disappears.
 
 This slice is detection only — consuming the surface from the orchestrator
 wake procedure and from an external heartbeat are separate follow-up slices.
