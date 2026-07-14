@@ -192,6 +192,54 @@ resolved from one shared source, so `automation summary --domain <d>` and
 valid. A unit that does not match the active domain's regex is refused with a
 precise diagnostic that names the consulted bindings source.
 
+### Domain resolution order for execution-unit-resolving surfaces (G522)
+
+Surfaces that resolve an execution unit from `--pr` or `--execution-unit`
+(`review closeout-plan`, `automation queue-seed-from-packet`,
+`automation publish-recovery`, and peers using the same lookup) apply this
+resolution order when `--domain` is omitted:
+
+1. an explicit `--domain` wins; it is an error if it contradicts the domain
+   declared by the resolved packet's own `domain:` scalar;
+2. otherwise the domain declared by the resolved packet.yaml / queue metadata
+   is used;
+3. otherwise the surface fails loud, naming candidate domains (scanned from
+   `intents/*/`) and the exact `--domain` re-invocation — it never silently
+   falls back to the host's default domain binding (`[project] domain` in
+   `.intent-cli/config.toml`).
+
+This closes a multi-domain-host gap: the default binding fallback could
+previously report or validate against the WRONG domain for a packet whose
+own `domain:` field says otherwise (e.g. `review closeout-plan --pr <n>`
+reporting the host's default domain instead of the resolved packet's actual
+domain, or `queue-seed-from-packet` running the wrong domain's
+`execution_unit_regex` check). The default binding mechanism itself is
+unchanged and still used elsewhere; only what these surfaces consult when
+`--domain` is omitted has changed.
+
+All three surfaces apply the full order strictly — none of them fall back to
+`[project] domain` when a domain cannot be derived:
+
+- `automation queue-seed-from-packet` — when neither `--domain` nor the
+  packet's `domain:` field is available, the command refuses to seed.
+- `review closeout-plan` — when a domain cannot be derived for the resolved
+  queue item (no matched item, or its packet.yaml declares no `domain:`
+  field), the command fails loud naming candidate domains and the exact
+  `--domain` re-invocation, instead of reporting the host's default domain
+  binding.
+- `automation publish-recovery` resolves a domain for EVERY candidate
+  execution unit before it may join repair analysis — from `--domain` when
+  given (erroring per-candidate on contradiction with that candidate's own
+  packet-declared domain) or otherwise from that candidate's own
+  packet-declared domain. A candidate with neither becomes a structured
+  `domain-underivable` unsafe stop rather than silently joining (or being
+  silently dropped from) the scan; a candidate contradicting an explicit
+  `--domain` becomes a structured `domain-contradiction` unsafe stop. This
+  applies to both the `--pr`-scoped path and the broad (unscoped) scan.
+  Omitting `--domain` entirely does not request cross-candidate scoping, so
+  multiple candidates with different (but each individually derivable)
+  domains may still coexist in one broad-scan result.
+
 ---
 
 ## Version flow

@@ -324,6 +324,7 @@ internal static class ReviewCloseoutPlanCommand
         IReadOnlyList<string> packetFiles = Array.Empty<string>();
         IReadOnlyList<string> missingSections = Array.Empty<string>();
         ReviewCloseoutLinkedIssue? linkedIssue = null;
+        string? packetDeclaredDomain = null;
         if (matchedItem is not null)
         {
             packetDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "issues", matchedItem.ExecutionUnit);
@@ -333,6 +334,28 @@ internal static class ReviewCloseoutPlanCommand
                     .Select(file => Path.GetFileName(file))
                     .OrderBy(name => name, StringComparer.Ordinal)
                     .ToArray();
+
+                // G522: the packet's own `domain:` scalar is authoritative
+                // for which domain this execution unit belongs to — more
+                // reliable than the probe domain used above just to locate
+                // the (possibly legacy, unscoped) queue-state file. See the
+                // domain resolution applied to `domain` below.
+                var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+                if (File.Exists(packetYamlPath))
+                {
+                    try
+                    {
+                        var packetFields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath));
+                        packetFields.TryGetValue("domain", out packetDeclaredDomain);
+                    }
+                    catch (FormatException)
+                    {
+                        // Malformed packet.yaml is surfaced elsewhere (G361
+                        // validation on the write-side commands); here it
+                        // just means no domain can be derived from it.
+                        packetDeclaredDomain = null;
+                    }
+                }
 
                 var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
                 if (!File.Exists(githubBodyPath))
@@ -381,6 +404,26 @@ internal static class ReviewCloseoutPlanCommand
                 };
             }
         }
+
+        // G522: domain resolution order — explicit `--domain` wins (it is
+        // an error if it contradicts the packet-declared domain); else the
+        // domain declared by the resolved packet is authoritative for the
+        // REPORTED domain, overriding the probe domain used above only to
+        // locate the (possibly legacy/unscoped) queue-state file; else the
+        // surface fails loud naming candidate domains and the exact
+        // re-invocation — it never silently falls back to the host's
+        // default domain binding.
+        var domainResolution = PacketDomainResolution.Resolve(
+            domainOverride,
+            packetDeclaredDomain,
+            DomainCandidateScanner.Scan(context),
+            $"intent-cli review closeout-plan --pr {pr} --repo {repo} --domain <name>");
+        if (domainResolution.IsError)
+        {
+            writer.WriteLine(domainResolution.ErrorMessage);
+            return 1;
+        }
+        var reportedDomain = domainResolution.Domain!;
 
         var expectedSubmodulePath = DeriveSubmodulePath(repo!);
 
@@ -485,7 +528,7 @@ internal static class ReviewCloseoutPlanCommand
 
         var result = new ReviewCloseoutPlanResult
         {
-            Domain = domain,
+            Domain = reportedDomain,
             Repo = repo!,
             Pr = pr!.Value,
             QueueStatePath = queueStatePath,

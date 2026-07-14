@@ -181,6 +181,56 @@ packet の正規の publish 経路は **`automation queue-seed-from-packet` →
 アクティブなドメインの regex に一致しない unit は、参照した bindings ソースを明示する精密な
 診断とともに拒否されます。
 
+### execution-unit を解決するサーフェスの domain 解決順序 (G522)
+
+`--pr` や `--execution-unit` から execution unit を解決するサーフェス
+（`review closeout-plan`、`automation queue-seed-from-packet`、
+`automation publish-recovery`、および同じ lookup を使う peer サーフェス）は、
+`--domain` が省略された場合に次の解決順序を適用します:
+
+1. 明示的な `--domain` が優先される — 解決された packet 自身の `domain:`
+   スカラーが宣言する値と矛盾する場合はエラーになる。
+2. それ以外の場合、解決された packet.yaml / queue metadata が宣言する
+   domain を使用する。
+3. それ以外の場合、サーフェスは fail loud する — `intents/*/` から
+   スキャンした候補 domain と、正確な `--domain` 再実行コマンドを示す。
+   ホストのデフォルト domain binding（`.intent-cli/config.toml` の
+   `[project] domain`）へ黙って fallback することは決してない。
+
+これは multi-domain host での既知のギャップを解消します: 従来の default
+binding fallback は、packet 自身の `domain:` フィールドが別の値を宣言して
+いても、間違った domain に対して報告・検証してしまうことがありました
+（例: `review closeout-plan --pr <n>` が、解決された packet の実際の domain
+ではなくホストの default domain を報告してしまう、あるいは
+`queue-seed-from-packet` が間違った domain の `execution_unit_regex`
+チェックを実行してしまう、など）。default binding の仕組み自体は変更
+されておらず他の箇所では引き続き使われます。変わったのは、これらの
+サーフェスが `--domain` 省略時に何を参照するかだけです。
+
+3つのサーフェスすべてがこの順序を厳密に適用します — domain を導出できない
+場合に `[project] domain` へ fallback することはありません:
+
+- `automation queue-seed-from-packet` — `--domain` と packet の `domain:`
+  フィールドのどちらも無い場合、seed を拒否します。
+- `review closeout-plan` — 解決された queue item に対して domain を
+  導出できない場合（一致する queue item が無い、またはその packet.yaml に
+  `domain:` フィールドが無い場合）、ホストの default domain binding を
+  報告する代わりに、候補 domain と正確な `--domain` 再実行コマンドを示して
+  fail loud します。
+- `automation publish-recovery` は、各 execution unit の候補が repair 解析に
+  参加する前に、必ず domain を解決します — `--domain` が指定されていれば
+  それを使用し（その候補自身が宣言する packet-declared domain と矛盾する
+  場合は候補ごとにエラーになります）、指定が無ければその候補自身の
+  packet-declared domain から導出します。どちらも無い候補は、スキャンに
+  黙って参加する（あるいは黙って除外される）のではなく、構造化された
+  `domain-underivable` の unsafe stop になります。明示的な `--domain` と
+  矛盾する候補は構造化された `domain-contradiction` の unsafe stop に
+  なります。これは `--pr` でスコープされたパスと、スコープなしの broad
+  scan の両方に適用されます。`--domain` を完全に省略した場合は
+  cross-candidate なスコープを要求したことにはならないため、
+  （個別に導出可能な）異なる domain を持つ複数の候補が 1 回の broad-scan
+  結果に共存することがあります。
+
 ---
 
 ## バージョンフロー

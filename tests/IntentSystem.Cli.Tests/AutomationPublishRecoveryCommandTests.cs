@@ -33,7 +33,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -61,7 +61,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--write", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -91,7 +91,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--write", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -120,7 +120,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--write", "--format", "json"],
             writer);
 
         using var doc = JsonDocument.Parse(writer.ToString());
@@ -150,7 +150,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -187,7 +187,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -214,7 +214,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -242,7 +242,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--write", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -278,7 +278,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--write", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -307,7 +307,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -341,7 +341,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var recoveryWriter = new StringWriter();
         var recoveryExit = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "3642", "--write", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "3642", "--write", "--format", "json"],
             recoveryWriter);
 
         Assert.Equal(0, recoveryExit);
@@ -368,7 +368,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var closeoutWriter = new StringWriter();
         var closeoutExit = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "3642", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "3642", "--format", "json"],
             closeoutWriter);
 
         Assert.Equal(0, closeoutExit);
@@ -409,7 +409,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--write", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -443,6 +443,151 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         Assert.Contains("--repo", writer.ToString(), StringComparison.Ordinal);
     }
 
+    // --- G522: --domain scoped candidate filtering ----
+
+    [Fact]
+    public void Execute_ExplicitDomain_ExcludesCandidateContradictingItAsUnsafeStop()
+    {
+        // G522 (tightened per PR #1146 review): explicit `--domain` is
+        // checked against EACH candidate's own packet-declared domain. A
+        // candidate whose packet declares a DIFFERENT domain must not
+        // silently join the scan (the "misidentified SKS-G512 for an
+        // intent-cli workstream" bug) — it must surface as a structured
+        // domain-contradiction unsafe stop instead.
+        using var workspace = new RecoveryWorkspace();
+        var liIntentCli = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        var liOtherDomain = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 512,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/512" };
+        workspace.WriteQueueState(BuildQueueStateMulti(
+            ("G346", liIntentCli, null),
+            ("SKS-G512", liOtherDomain, null)));
+        workspace.WritePacketDomain("G346", "intent-cli");
+        workspace.WritePacketDomain("SKS-G512", "sekiban-as-a-service");
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(796, "Closes #795"), BuildPr(900, "Closes #512") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal("intent-cli", root.GetProperty("domain").GetString());
+        Assert.Equal(1, root.GetProperty("safe_repairs").GetArrayLength());
+        Assert.Equal("G346", root.GetProperty("safe_repairs")[0].GetProperty("execution_unit").GetString());
+        var stops = root.GetProperty("unsafe_stops").EnumerateArray().ToArray();
+        Assert.Contains(stops, s => s.GetProperty("execution_unit").GetString() == "SKS-G512"
+            && s.GetProperty("kind").GetString() == "domain-contradiction");
+    }
+
+    [Fact]
+    public void Execute_DomainOmitted_DerivesEachCandidateFromItsOwnPacketMetadata()
+    {
+        // G522: with `--domain` omitted, each candidate's domain is derived
+        // from its OWN packet metadata (no cross-candidate scoping is
+        // requested) — a candidate with a resolvable domain still
+        // participates even alongside a candidate from a different domain,
+        // as long as EVERY included candidate's domain was explicitly
+        // derived (never silently assumed).
+        using var workspace = new RecoveryWorkspace();
+        var liIntentCli = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        var liOtherDomain = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 512,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/512" };
+        workspace.WriteQueueState(BuildQueueStateMulti(
+            ("G346", liIntentCli, null),
+            ("SKS-G512", liOtherDomain, null)));
+        workspace.WritePacketDomain("G346", "intent-cli");
+        workspace.WritePacketDomain("SKS-G512", "sekiban-as-a-service");
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(796, "Closes #795"), BuildPr(900, "Closes #512") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("domain").ValueKind);
+        Assert.Equal(2, root.GetProperty("safe_repairs").GetArrayLength());
+        Assert.Equal(0, root.GetProperty("unsafe_stops").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_DomainOmittedAndNoPacketDeclaresADomain_AllCandidatesFailLoud()
+    {
+        // G522: a candidate with NO derivable domain (no `--domain`, no
+        // packet-declared domain) must never silently participate in an
+        // unfiltered scan — it becomes a structured domain-underivable
+        // unsafe stop instead.
+        using var workspace = new RecoveryWorkspace();
+        var liIntentCli = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        var liOtherDomain = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 512,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/512" };
+        workspace.WriteQueueState(BuildQueueStateMulti(
+            ("G346", liIntentCli, null),
+            ("SKS-G512", liOtherDomain, null)));
+        // No packet.yaml written for either unit — no domain to derive.
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(796, "Closes #795"), BuildPr(900, "Closes #512") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal(0, root.GetProperty("safe_repairs").GetArrayLength());
+        var stops = root.GetProperty("unsafe_stops").EnumerateArray().ToArray();
+        Assert.Equal(2, stops.Length);
+        Assert.All(stops, s => Assert.Equal("domain-underivable", s.GetProperty("kind").GetString()));
+    }
+
+    [Fact]
+    public void Execute_ScopedToPr_CandidateContradictsExplicitDomain_ProducesSingleDomainStop()
+    {
+        // G522: the `--pr`-scoped path must ALSO enforce domain isolation —
+        // a domain-contradicting candidate must not produce a safe repair
+        // just because it was the one PR-scoped candidate.
+        using var workspace = new RecoveryWorkspace();
+        var li795 = new LinkedIssue { Repo = "J-Tech-Japan/intent-system", Number = 795,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/795" };
+        workspace.WriteQueueState(BuildQueueState("SKS-G219", linkedIssue: li795, linkedPr: null));
+        workspace.WritePacketDomain("SKS-G219", "sekiban-as-a-service");
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
+            new[] { BuildPr(559, "Closes #795") });
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "559", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+        Assert.Equal(0, root.GetProperty("safe_repairs").GetArrayLength());
+        Assert.Equal(1, root.GetProperty("unsafe_stops").GetArrayLength());
+        var stop = root.GetProperty("unsafe_stops")[0];
+        Assert.Equal("SKS-G219", stop.GetProperty("execution_unit").GetString());
+        Assert.Equal("domain-contradiction", stop.GetProperty("kind").GetString());
+    }
+
     // --- G351: --pr scoped recovery ----
 
     [Fact]
@@ -468,7 +613,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "796", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -502,7 +647,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--write", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "796", "--write", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -528,7 +673,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
 
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "not-a-number"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "not-a-number"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -551,7 +696,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "796", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -579,7 +724,7 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "796", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -727,6 +872,18 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
                 PublishedLabelName = "intent-target"
             };
             File.WriteAllText(Path.Combine(dir, "publish.yaml"), IssuePublishArtifactYaml.Serialize(artifact));
+        }
+
+        /// <summary>
+        /// G522: write a minimal packet.yaml declaring `domain:` for a
+        /// candidate execution unit, so <c>automation publish-recovery</c>
+        /// can derive that candidate's domain from its own packet metadata.
+        /// </summary>
+        public void WritePacketDomain(string executionUnit, string domain)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "packet.yaml"), $"domain: {domain}\n");
         }
 
         public void Dispose()

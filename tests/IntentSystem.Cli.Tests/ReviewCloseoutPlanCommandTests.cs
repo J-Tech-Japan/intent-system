@@ -56,7 +56,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -86,7 +86,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -108,7 +108,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -126,7 +126,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -144,7 +144,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -167,7 +167,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "670", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "670", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -197,7 +197,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "670", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "670", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -242,7 +242,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/SekibanAsAService", "--pr", "647", "--format", "json"],
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--domain", "intent-cli", "--pr", "647", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -285,7 +285,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -317,7 +317,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -355,7 +355,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -389,7 +389,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/SekibanAsAService", "--pr", "647", "--format", "json"],
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--domain", "intent-cli", "--pr", "647", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -411,7 +411,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "670", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "670", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -434,7 +434,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -468,7 +468,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "670", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "670", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -487,7 +487,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -544,7 +544,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/SekibanAsAService", "--pr", "490", "--format", "json"],
+            ["--repo", "J-Tech-Japan/SekibanAsAService", "--domain", "intent-cli", "--pr", "490", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -590,7 +590,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
 
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596", "--format", "yaml"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596", "--format", "yaml"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -607,7 +607,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "596"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "596"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -695,7 +695,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--closing-issues", "759",
                 "--format", "json"
@@ -742,7 +742,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--closing-issues", "759",
                 "--format", "json"
@@ -794,7 +794,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--closing-issues", "759",
                 "--format", "json"
@@ -830,7 +830,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--format", "json"
             },
@@ -863,7 +863,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--closing-issues", "759",
                 "--format", "json"
@@ -896,7 +896,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--closing-issues", "759",
                 "--format", "json"
@@ -933,7 +933,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "760", "--format", "json" },
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "760", "--format", "json" },
             writer);
 
         Assert.Equal(0, exitCode);
@@ -964,7 +964,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "760", "--format", "json" },
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "760", "--format", "json" },
             writer);
 
         Assert.Equal(1, exitCode);
@@ -1000,7 +1000,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--write-recovered-linkage",
                 "--format", "json"
@@ -1054,7 +1054,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--write-recovered-linkage",
                 "--format", "json"
@@ -1093,7 +1093,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--closing-issues", "759",
                 "--format", "json"
@@ -1117,7 +1117,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             workspace.Context,
             new[]
             {
-                "--repo", "J-Tech-Japan/intent-system",
+                "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli",
                 "--pr", "760",
                 "--closing-issues", "759,not-a-number",
                 "--format", "json"
@@ -1158,7 +1158,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exit = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "770", "--format", "json" },
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "770", "--format", "json" },
             writer);
 
         Assert.Equal(0, exit);
@@ -1189,7 +1189,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exit = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "770", "--format", "json" },
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "770", "--format", "json" },
             writer);
 
         Assert.Equal(0, exit);
@@ -1225,7 +1225,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exit = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "770", "--format", "json" },
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "770", "--format", "json" },
             writer);
 
         Assert.Equal(0, exit);
@@ -1369,7 +1369,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "796", "--format", "json"],
             writer);
 
         Assert.Equal(1, exitCode);
@@ -1402,7 +1402,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "796", "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -1433,7 +1433,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "796", "--format", "json"],
             writer);
 
         using var doc = JsonDocument.Parse(writer.ToString());
@@ -1457,12 +1457,126 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         using var writer = new StringWriter();
         ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796"],
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--pr", "796"],
             writer);
 
         var output = writer.ToString();
         Assert.Contains("review-release", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("pr-transition", output, StringComparison.Ordinal);
+    }
+
+    // ----- G522: domain resolution order (explicit > packet-declared > fallback) -----
+
+    [Fact]
+    public void Execute_DomainOmitted_DerivesReportedDomainFromPacketDeclaredDomain()
+    {
+        // G522: the workspace's host config default domain is "intent-cli"
+        // (see ReviewCloseoutPlanWorkspace ctor), but the packet declares a
+        // DIFFERENT domain. Without --domain, the packet-declared domain
+        // must be reported — this is the exact bug G522 fixes (a
+        // multi-domain host reporting its default binding instead of the
+        // matched packet's real domain).
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/796",
+            linkedIssue: ("J-Tech-Japan/intent-system", 795, "https://github.com/J-Tech-Japan/intent-system/issues/795")));
+        WriteCompliantPacketFiles(workspace, "G247");
+        workspace.WriteFile(".intent-cli/issues/G247/packet.yaml", "domain: sekiban-as-a-service\n");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("sekiban-as-a-service", doc.RootElement.GetProperty("domain").GetString());
+    }
+
+    [Fact]
+    public void Execute_ExplicitDomainMatchingPacketDeclaredDomain_Succeeds()
+    {
+        // G522: explicit --domain wins and is reported when it agrees with
+        // the packet's own declared domain.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/796",
+            linkedIssue: ("J-Tech-Japan/intent-system", 795, "https://github.com/J-Tech-Japan/intent-system/issues/795")));
+        WriteCompliantPacketFiles(workspace, "G247");
+        workspace.WriteFile(".intent-cli/issues/G247/packet.yaml", "domain: sekiban-as-a-service\n");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--domain", "sekiban-as-a-service", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("sekiban-as-a-service", doc.RootElement.GetProperty("domain").GetString());
+    }
+
+    [Fact]
+    public void Execute_ExplicitDomainContradictsPacketDeclaredDomain_FailsLoud()
+    {
+        // G522: explicit --domain contradicting the packet's own declared
+        // domain must error rather than silently pick one.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/796",
+            linkedIssue: ("J-Tech-Japan/intent-system", 795, "https://github.com/J-Tech-Japan/intent-system/issues/795")));
+        WriteCompliantPacketFiles(workspace, "G247");
+        workspace.WriteFile(".intent-cli/issues/G247/packet.yaml", "domain: sekiban-as-a-service\n");
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("contradicts the domain declared by the resolved packet", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PacketDeclaresNoDomainFieldAndNoExplicitDomain_FailsLoudNamingCandidates()
+    {
+        // G522 AC (tightened per PR #1146 review — no config-default
+        // fallback is authorized): when the resolved packet declares no
+        // `domain:` field and no `--domain` was passed, this surface must
+        // fail loud naming candidate domains and the exact re-invocation —
+        // it must NOT silently resolve against the host's default domain
+        // binding, even though this is a read-only, gap-reporting surface.
+        using var workspace = new ReviewCloseoutPlanWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G247", "review",
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/796",
+            linkedIssue: ("J-Tech-Japan/intent-system", 795, "https://github.com/J-Tech-Japan/intent-system/issues/795")));
+        WriteCompliantPacketFiles(workspace, "G247");
+        // No packet.yaml written at all — no domain field to derive from.
+
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher(Array.Empty<int>());
+
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--pr", "796", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--domain could not be derived", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Candidate domains:", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--pr 796 --repo J-Tech-Japan/intent-system --domain <name>", writer.ToString(), StringComparison.Ordinal);
     }
 
     private static void WriteCompliantPacketFiles(ReviewCloseoutPlanWorkspace workspace, string executionUnit)
