@@ -295,6 +295,86 @@ candidate が黙って scan に紛れ込むことも、黙って消えること�
 このスライスは検出のみです — orchestrator wake procedure や外部
 heartbeat からこのサーフェスを利用する部分は、別の後続スライスです。
 
+### 行き詰まった published issue を retire する (G525)
+
+`intent-cli automation issue-retire --repo <r> --issue <n> --reason <superseded|decomposed|obsolete> [--note <text>] [--domain <name>] [--write]`
+は、authored 通りには決して開始できない published な `intent-target` issue
+（例: research pass によって slice を decompose する必要があると判明した場合）
+のための canonical かつ atomic な transition です。このコマンドが存在する
+以前は、このデッドロックからの唯一の逃げ道は、operator が承認する
+noncanonical なリカバリ（手動での GitHub close、手動での label 除去、
+手書きの queue-state 編集）であり、その後 `metadata validate` はそれを
+認識できませんでした。
+
+`--write` は次の順序で実行します:
+
+1. GitHub issue を **not planned** として close し、reason と任意の note
+   を記載したコメントを付ける(issue が既に close 済みの場合はスキップ
+   される — 下記の partial-failure recovery を参照);
+2. issue に付いている `intent-target` およびその他の workflow label を
+   すべて除去する;
+3. 対応する queue-state item の lifecycle を（reason 付きで）`retired`
+   としてマークする — **エントリが存在しなければ新規作成する**。
+   publish されたが一度も delegate されていない issue には queue-state
+   エントリが無いことが一般的なためです。これにより `metadata validate`
+   は queue entry の欠落を報告するのではなく、retired lifecycle を
+   認識できるようになります;
+4. `runs.jsonl` に `packet-retired` イベントを追記する。
+
+`--write` を付けない場合は、正確な planned mutation を一覧表示する
+dry-run になります。次の場合は **fail closed**（一切の変更なし）します:
+
+- 同じ repo の OPEN な PR がその issue を close する — 先にその PR を
+  merge・close、またはリリースしてください;
+- issue が `intent-issue-in-progress` を持つ — アクティブな claim が
+  進行中です。先にそれを解放してください（例:
+  `intent-cli worker complete --kind issue --number <n> --outcome
+  declined-contract-incomplete --write`）。
+- マッチした queue item が既に `Completed`(merge/完了済みの作業)である
+  — retire は authored 通りには決して完了できない published work にのみ
+  適用されます。この refusal は GitHub にも local state にも一切触れません;
+- 解決された domain が導出不能、または明示的な `--domain` と矛盾する
+  (下記の domain resolution を参照)。
+
+**Partial-failure recovery**: 対象 issue は OPEN issue の一覧スキャンでは
+なく、open/closed を問わない直接の GitHub 参照で解決されます。`--write`
+がシーケンスの途中で失敗した場合(issue は close されたが label 除去・
+queue-state 書き込み・`runs.jsonl` 追記のいずれかが完了しなかった場合)、
+同じコマンドを再実行するだけで issue が再び見つかり、残りのステップが
+完了します — 「OPEN issues の中に見つからない」で行き詰まることは
+ありません。既に CLOSED な issue に対する recovery は、GitHub 自身の
+close reason が **not planned**(このコマンドが close 時に使う reason
+そのもの)である場合のみ許可されます — それ以外の reason(例: merge に
+よる completed)で close された issue には一切触れません。
+
+**Domain resolution (G522 boundary)**: queue item のマッチングは
+`(repo, issue number)` の完全一致を要求します — 別 repo の同番号 issue が
+この execution unit にマッチすることはありません。execution unit の
+domain は、他の execution-unit-resolving なサーフェスと同じ順序で解決
+されます: 明示的な `--domain` が優先されます(解決された packet.yaml が
+宣言する domain と矛盾する場合はエラー); それ以外の場合は
+packet-declared な `domain:` フィールドが使われます; どちらも無い場合は
+candidate domains と正確な `--domain` re-invocation を示して fail loud
+します。これは既存の queue item にも、issue タイトルから新規に導出される
+item にも適用されます — misleading な title prefix だけでは、packet.yaml
+(または operator が明示的に指定した `--domain`)による裏付けなしに queue
+を作成することは決してできません。
+
+**冪等**: queue-state エントリが既に `retired` になっている execution
+unit に対して再実行しても安全な no-op です — 冪等性の判断根拠は
+（不安定な GitHub 状態の再チェックではなく）durable state です。`--write`
+を使った際、queue-state は既に retired だが直前の partial write による
+`runs.jsonl` イベントが欠落している場合、再実行はその欠落したステップ
+だけを(GitHub 呼び出しゼロで)完了させます — 永久に黙って失われることは
+ありません。packet ディレクトリと issue のコメント履歴には一切触れず、
+削除もしません。
+
+retired になった item は自動的に WIP gating から外れます:
+`automation host-review-preflight` の in-flight スキャンは OPEN で
+`intent-target` ラベル付きの GitHub issue/PR をライブに読むため、close
+されて label が外れた issue は単にそこから消えるだけです — 別途コード
+パスは不要です。
+
 ---
 
 ## バージョンフロー

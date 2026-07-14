@@ -177,6 +177,7 @@ internal static class CommandRouter
                 ["intent-target-gap-recovery"] = AutomationIntentTargetGapRecoveryCommand.Execute,
                 ["issue-publish"] = AutomationIssuePublishCommand.Execute,
                 ["issue-release"] = AutomationIssueReleaseCommand.Execute,
+                ["issue-retire"] = AutomationIssueRetireCommand.Execute,
                 ["label-palette-audit"] = AutomationLabelPaletteAuditCommand.Execute,
                 ["label-palette-sync"] = AutomationLabelPaletteSyncCommand.Execute,
                 ["pr-transition"] = AutomationPrTransitionCommand.Execute,
