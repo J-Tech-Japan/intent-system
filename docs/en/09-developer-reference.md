@@ -519,34 +519,60 @@ whitespace, starts with `"- "` or is exactly `"-"`) rather than by counting
 columns, so either convention parses — and the two conventions may even be
 mixed across different fields within the same file.
 
-**`queue transition --to retired` backfills a queue-state entry.** A packet
-retired via `intent-cli packet retire` (which writes only `lifecycle.yaml`,
-never touches `queue-state.json`) or via `automation issue-retire`
-predating queue tracking sometimes needs its queue-state item marked
-`retired` directly, without hand-editing the JSON file. `retired` is now
-accepted as a transition target — `queue transition <execution-unit>
-retired [--reason <text>]` — through the same generic, permissive
-transition path used by every other non-blocking target (`queued`,
-`active`, `review`, `fixing`, `completed`); the item must already exist in
-queue-state (create it first via `queue enqueue` if it doesn't). Naming an
-unsupported target still refuses and lists the full allowed set, which now
-includes `retired`.
+**`queue transition --to retired` backfills a queue-state entry — as a
+guarded, idempotent, terminal transition.** A packet retired via
+`intent-cli packet retire` (which writes only `lifecycle.yaml`, never
+touches `queue-state.json`) or via `automation issue-retire` predating
+queue tracking sometimes needs its queue-state item marked `retired`
+directly, without hand-editing the JSON file. `retired` is now accepted as
+a transition target — `queue transition <execution-unit> retired` — but,
+unlike every other non-blocking target, it does **not** route through the
+generic, source-state-agnostic transition path; it has its own guarded
+entry point (`QueueManager.Retire`) consistent with `automation
+issue-retire`'s own refusal (G525):
 
-**The publish selector excludes units retired either way, even with no
-queue entry at all.** `intent next-slice` already correctly skipped a unit
-whose packet directory carries a `lifecycle.yaml` marking it
-`retired`/`absorbed`/`superseded` — including one with no queue-state entry
-whatsoever, via its fallback scan over every packet directory under
-`.intent-cli/issues/`. It did not, however, exclude a unit that was
-`Retired` purely in `queue-state.json` (e.g. via `automation issue-retire`,
-or now via `queue transition --to retired`) with no `lifecycle.yaml`
-sidecar: the state-bucketing switch had no case for `QueueItemState.Retired`,
-so such a unit fell into no bucket, and the fallback loop's only
-queue-state-derived exclusion was `completed`. Retired units are now
-tracked and excluded the same way completed ones are, so either retirement
-signal — packet-level `lifecycle.yaml` or queue-state `Retired` — reliably
-removes a unit from next-slice candidate selection and lets the next real
-candidate surface instead.
+- legal from any state except `Completed` — a completed item (merged or
+  otherwise finished work, including one that still carries a linked PR)
+  refuses retirement with zero mutation and zero run event, since
+  retirement only ever applies to work that can never be completed as
+  authored;
+- idempotent when the item is already `Retired` — a no-op that changes
+  nothing and never appends a duplicate `retired` run event, however many
+  times it is re-run;
+- terminal once applied — a retired item can never be transitioned to any
+  other state (`queued`, `active`, `completed`, `blocked`, …) through
+  `queue transition`; the generic non-blocking/blocking transition paths
+  now refuse outright when the current state is `Retired`, closing what
+  was previously a silent reactivation path.
+
+The item must already exist in queue-state (create it first via `queue
+enqueue` if it doesn't). Naming an unsupported target still refuses and
+lists the full allowed set, which now includes `retired`.
+
+**The publish selector combines queue-state and packet-lifecycle evidence
+explicitly, and fails closed on ambiguous lifecycle metadata.** `intent
+next-slice` reads each candidate's `lifecycle.yaml` (if any) into one of
+four explicit states — absent (no sidecar; not an error), valid-active
+(`lifecycle: ready`), valid-retired (`absorbed`/`retired`/`superseded`), or
+invalid (unreadable, missing the `lifecycle` key, blank, or an
+unrecognized value) — and combines that with the queue-state `Retired`
+signal:
+
+- either signal alone recording retirement excludes the unit — this holds
+  even when there is no queue-state entry whatsoever (a lifecycle-only
+  retirement) or no `lifecycle.yaml` at all (a queue-only retirement, e.g.
+  via `automation issue-retire` or `queue transition --to retired`);
+- an explicit `lifecycle: ready` does **not** override a queue-state
+  `Retired` record — that combination is a contradiction, still excluded,
+  and surfaced as an actionable diagnostic (`lifecycle-metadata-diagnostic`
+  warning, with a note naming the unit and the sidecar path) so it can be
+  reconciled instead of silently resolved either direction;
+- invalid lifecycle metadata (unreadable, blank, missing key, or an
+  unrecognized value) excludes the unit and raises the same diagnostic
+  regardless of queue state — ambiguous retirement evidence must never
+  resolve to "publishable," so a malformed sidecar can never let its
+  packet quietly surface as the next candidate, even when it is the only
+  packet directory available.
 
 Together, these three fixes let a repo recover from a stuck or
 pre-queue-tracking retirement entirely through `queue enqueue` / `queue

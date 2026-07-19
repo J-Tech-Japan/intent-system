@@ -140,6 +140,146 @@ public sealed class QueueTransitionCommandTests
         Assert.Equal("A2", runEvents[^1].ExecutionUnit);
     }
 
+    // ─── G534 review repair: guarded/idempotent/terminal `retired` ───────────
+
+    [Fact]
+    public void Execute_GivenRetiredTargetOnQueuedItem_Succeeds()
+    {
+        // Pins the "queued" legal source state alongside the existing
+        // "review" legal source state (Execute_GivenRetiredTarget...above).
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(new QueueState
+            {
+                SchemaVersion = "1",
+                UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+                Items = [CreateItem("A2", QueueItemState.Queued)]
+            }));
+        using var writer = new StringWriter();
+
+        var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+        Assert.Equal(0, exitCode);
+        var updatedState = QueueStateSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+        Assert.Equal(QueueItemState.Retired, updatedState.Items.Single(item => item.ExecutionUnit == "A2").State);
+    }
+
+    [Fact]
+    public void Execute_GivenRetiredTargetOnCompletedItem_RefusesWithoutMutation()
+    {
+        // G534 review repair (blocker #1): a Completed item (merged/finished
+        // work) must never be reclassified as retired — retirement only
+        // applies to work that can never be completed as authored.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        var queueStateContents = QueueStateSerializer.Serialize(new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items = [CreateItem("A2", QueueItemState.Completed)]
+        });
+        tempDirectory.CreateFile(queueStatePath, queueStateContents);
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(runLogPath, string.Empty);
+        using var writer = new StringWriter();
+
+        var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("completed", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(queueStateContents, File.ReadAllText(queueStatePath));
+        Assert.Empty(File.ReadAllText(runLogPath));
+    }
+
+    [Fact]
+    public void Execute_GivenRetiredTargetOnCompletedItemWithMergedLinkedPr_RefusesWithoutMutation()
+    {
+        // G534 review repair: pins the "merged-linked" phrasing explicitly —
+        // a Completed item carrying a linked (merged) PR refuses exactly
+        // like any other Completed item.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        var queueStateContents = QueueStateSerializer.Serialize(new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items = [CreateItem("A2", QueueItemState.Completed) with { LinkedPr = "https://github.com/org/repo/pull/42" }]
+        });
+        tempDirectory.CreateFile(queueStatePath, queueStateContents);
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(runLogPath, string.Empty);
+        using var writer = new StringWriter();
+
+        var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(queueStateContents, File.ReadAllText(queueStatePath));
+        Assert.Empty(File.ReadAllText(runLogPath));
+    }
+
+    [Fact]
+    public void Execute_GivenRetiredTargetOnAlreadyRetiredItem_IsIdempotentWithNoDuplicateEvent()
+    {
+        // G534 review repair: Retired -> Retired must be a safe no-op — no
+        // state churn, and critically no duplicate run event on repeated
+        // calls (a naive re-run must never grow runs.jsonl).
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        var queueStateContents = QueueStateSerializer.Serialize(new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items = [CreateItem("A2", QueueItemState.Retired)]
+        });
+        tempDirectory.CreateFile(queueStatePath, queueStateContents);
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(runLogPath, string.Empty);
+        using var writer = new StringWriter();
+
+        var firstExitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+        var secondExitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+        Assert.Equal(0, firstExitCode);
+        Assert.Equal(0, secondExitCode);
+        Assert.Contains("already retired", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(queueStateContents, File.ReadAllText(queueStatePath));
+        Assert.Empty(File.ReadAllText(runLogPath));
+    }
+
+    [Fact]
+    public void Execute_GivenReactivationAttemptOnRetiredItem_RefusesWithoutMutation()
+    {
+        // G534 review repair (blocker #1): Retired is terminal — a retired
+        // item can never be transitioned back to queued/active/etc through
+        // this surface.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        var queueStateContents = QueueStateSerializer.Serialize(new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items = [CreateItem("A2", QueueItemState.Retired)]
+        });
+        tempDirectory.CreateFile(queueStatePath, queueStateContents);
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(runLogPath, string.Empty);
+        using var writer = new StringWriter();
+
+        var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "active"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("terminal", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(queueStateContents, File.ReadAllText(queueStatePath));
+        Assert.Empty(File.ReadAllText(runLogPath));
+    }
+
     [Fact]
     public void Execute_GivenMissingRunLog_CreatesRunLogFile()
     {

@@ -55,6 +55,35 @@ internal static class QueueTransitionCommand
 
         try
         {
+            // G534 review repair: `retired` is a guarded, idempotent,
+            // terminal transition (refuses Completed, no-ops on an
+            // already-Retired item) — routed through the dedicated
+            // QueueManager.Retire rather than the generic non-blocking
+            // path, which never asserted a source state at all.
+            if (targetState == QueueItemState.Retired)
+            {
+                var retireResult = QueueManager.Retire(
+                    queueState,
+                    args[0],
+                    TransitionActor,
+                    DateTimeOffset.UtcNow);
+
+                if (!retireResult.WasRetired)
+                {
+                    writer.WriteLine($"{args[0]} is already retired; no changes made (idempotent).");
+                    return 0;
+                }
+
+                PersistTransition(context, new QueueTransitionResult
+                {
+                    UpdatedState = retireResult.UpdatedState,
+                    Event = retireResult.Event!
+                });
+
+                writer.WriteLine($"Transitioned {args[0]} to retired.");
+                return 0;
+            }
+
             var result = IsBlockingTargetState(targetState)
                 ? QueueManager.TransitionBlocking(
                     queueState,

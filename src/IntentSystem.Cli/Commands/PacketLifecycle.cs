@@ -99,6 +99,125 @@ internal static class PacketLifecycle
     }
 
     /// <summary>
+    /// G534 review repair: <see cref="TryRead"/> collapses "no sidecar",
+    /// "sidecar present but unreadable/blank/unknown", and "sidecar present
+    /// and valid" into the same null-vs-non-null shape, so a caller like
+    /// the old <see cref="IsRetired"/> treats an unreadable or malformed
+    /// <c>lifecycle.yaml</c> exactly like an absent one — the unsafe
+    /// direction for ambiguous retirement evidence, since it lets a
+    /// malformed sidecar's packet stay publishable. This reads the sidecar
+    /// into an explicit <see cref="PacketLifecycleState"/> so a caller can
+    /// fail closed on <see cref="PacketLifecycleState.Invalid"/> instead of
+    /// silently treating it as <see cref="PacketLifecycleState.Absent"/>.
+    /// </summary>
+    internal static PacketLifecycleReadOutcome ReadState(string packetDirectory)
+    {
+        var sidecarPath = SidecarPath(packetDirectory);
+        if (Directory.Exists(sidecarPath))
+        {
+            return new PacketLifecycleReadOutcome
+            {
+                State = PacketLifecycleState.Invalid,
+                SidecarPath = sidecarPath,
+                Detail = "unreadable (path is a directory, not a file)"
+            };
+        }
+
+        if (!File.Exists(sidecarPath))
+        {
+            return new PacketLifecycleReadOutcome
+            {
+                State = PacketLifecycleState.Absent,
+                SidecarPath = sidecarPath
+            };
+        }
+
+        string text;
+        try
+        {
+            text = File.ReadAllText(sidecarPath);
+        }
+        catch (IOException exception)
+        {
+            return new PacketLifecycleReadOutcome
+            {
+                State = PacketLifecycleState.Invalid,
+                SidecarPath = sidecarPath,
+                Detail = $"unreadable ({exception.Message})"
+            };
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            return new PacketLifecycleReadOutcome
+            {
+                State = PacketLifecycleState.Invalid,
+                SidecarPath = sidecarPath,
+                Detail = $"unreadable ({exception.Message})"
+            };
+        }
+
+        var fields = ParseFlatYaml(text);
+        if (!fields.TryGetValue("lifecycle", out var lifecycle))
+        {
+            return new PacketLifecycleReadOutcome
+            {
+                State = PacketLifecycleState.Invalid,
+                SidecarPath = sidecarPath,
+                Detail = "missing required 'lifecycle' key"
+            };
+        }
+
+        var trimmedLifecycle = lifecycle.Trim();
+        if (trimmedLifecycle.Length == 0)
+        {
+            return new PacketLifecycleReadOutcome
+            {
+                State = PacketLifecycleState.Invalid,
+                SidecarPath = sidecarPath,
+                Detail = "blank 'lifecycle' value"
+            };
+        }
+
+        var metadata = new PacketLifecycleMetadata
+        {
+            Lifecycle = trimmedLifecycle,
+            AbsorbedBy = fields.GetValueOrDefault("absorbed_by"),
+            SupersededBy = fields.GetValueOrDefault("superseded_by"),
+            RetiredReason = fields.GetValueOrDefault("retired_reason"),
+            RetiredAt = fields.GetValueOrDefault("retired_at")
+        };
+
+        if (trimmedLifecycle == LifecycleReady)
+        {
+            return new PacketLifecycleReadOutcome
+            {
+                State = PacketLifecycleState.ValidActive,
+                SidecarPath = sidecarPath,
+                Metadata = metadata
+            };
+        }
+
+        if (IsNonPublishable(metadata))
+        {
+            return new PacketLifecycleReadOutcome
+            {
+                State = PacketLifecycleState.ValidRetired,
+                SidecarPath = sidecarPath,
+                Metadata = metadata
+            };
+        }
+
+        return new PacketLifecycleReadOutcome
+        {
+            State = PacketLifecycleState.Invalid,
+            SidecarPath = sidecarPath,
+            Metadata = metadata,
+            Detail = $"unknown lifecycle value '{trimmedLifecycle}' "
+                + $"(expected one of: {LifecycleReady}, {LifecycleAbsorbed}, {LifecycleRetired}, {LifecycleSuperseded})"
+        };
+    }
+
+    /// <summary>
     /// Detects a stale human-only retirement marker (e.g.
     /// <c>STATUS: ABSORBED</c>) in any packet content file. Used to recommend
     /// converting to machine-readable metadata instead of publishing.
@@ -233,4 +352,48 @@ internal sealed record PacketLifecycleMetadata
     public string? RetiredReason { get; init; }
 
     public string? RetiredAt { get; init; }
+}
+
+/// <summary>
+/// G534 review repair: the structured outcome of reading a packet's
+/// <c>lifecycle.yaml</c> sidecar, distinguishing "no sidecar" (a normal,
+/// non-alarming state — most packets never carry one) from "sidecar
+/// present but unreadable/blank/unknown" (an ambiguous state a caller
+/// must fail closed on, never treat as equivalent to absence).
+/// </summary>
+internal enum PacketLifecycleState
+{
+    /// <summary>No <c>lifecycle.yaml</c> sidecar exists. Not an error.</summary>
+    Absent,
+
+    /// <summary>Sidecar exists and explicitly declares <c>lifecycle: ready</c>.</summary>
+    ValidActive,
+
+    /// <summary>Sidecar exists and declares a non-publishable lifecycle
+    /// (<c>absorbed</c>/<c>retired</c>/<c>superseded</c>).</summary>
+    ValidRetired,
+
+    /// <summary>Sidecar exists but is unreadable, missing the required
+    /// <c>lifecycle</c> key, blank, or carries an unrecognized value. A
+    /// caller must fail closed rather than treat this like
+    /// <see cref="Absent"/>.</summary>
+    Invalid
+}
+
+/// <summary>
+/// G534 review repair: result of <see cref="PacketLifecycle.ReadState"/>.
+/// </summary>
+internal sealed record PacketLifecycleReadOutcome
+{
+    public required PacketLifecycleState State { get; init; }
+
+    public required string SidecarPath { get; init; }
+
+    /// <summary>Human-readable diagnostic detail. Populated only for <see cref="PacketLifecycleState.Invalid"/>.</summary>
+    public string? Detail { get; init; }
+
+    /// <summary>Parsed metadata. Populated for <see cref="PacketLifecycleState.ValidActive"/> and
+    /// <see cref="PacketLifecycleState.ValidRetired"/> (and, best-effort, when the only defect is an
+    /// unrecognized lifecycle value).</summary>
+    public PacketLifecycleMetadata? Metadata { get; init; }
 }

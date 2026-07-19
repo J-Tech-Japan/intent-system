@@ -538,37 +538,65 @@ quoted / unquoted を問わずすべての item で `field line is missing ':''`
 ごとに convention を混在させることも可能です。
 
 **`queue transition --to retired` が queue-state エントリを backfill
-する。** `intent-cli packet retire`(`lifecycle.yaml` のみを書き込み、
+する — guarded・idempotent・terminal な transition として。**
+`intent-cli packet retire`(`lifecycle.yaml` のみを書き込み、
 `queue-state.json` には一切触れない)で retire された packet や、queue
 tracking より前に `automation issue-retire` で retire された packet は、
 JSON ファイルを手編集することなく、その queue-state item を直接
 `retired` としてマークする必要が生じることがあります。`retired` は
-transition target として受け付けられるようになりました —
-`queue transition <execution-unit> retired [--reason <text>]` — 他の
-すべての non-blocking target(`queued`、`active`、`review`、`fixing`、
-`completed`)と同じ、汎用的で許容的な transition path を通ります。item
-は queue-state に既に存在している必要があります(存在しなければ先に
-`queue enqueue` で作成してください)。サポートされていない target を
-指定した場合は引き続き refuse され、許可されている target の完全な一覧
-(今回 `retired` を含むようになったもの)が表示されます。
+transition target として受け付けられるようになりましたが —
+`queue transition <execution-unit> retired` — 他の non-blocking target と
+異なり、汎用的で source state を問わない transition path は通りません。
+`automation issue-retire` 自身の refusal(G525)と一貫した、専用の
+guarded な entry point(`QueueManager.Retire`)を持ちます:
 
-**publish selector は、queue entry が一切無い場合も含め、どちらの方法で
-retire された unit も除外する。** `intent next-slice` は、packet
-directory が `lifecycle.yaml` を持ち `retired`/`absorbed`/`superseded`
-とマークされている unit を、`.intent-cli/issues/` 配下の全 packet
-directory を走査する fallback scan 経由で、queue-state エントリが
-一切無い場合も含めて既に正しく skip していました。しかし、
-`lifecycle.yaml` サイドカーが無く、`queue-state.json` の中だけで
-`Retired`(例えば `automation issue-retire` 経由、あるいは今回追加された
-`queue transition --to retired` 経由)になっている unit は除外して
-いませんでした: state-bucketing の switch に `QueueItemState.Retired`
-用の case が無かったため、そのような unit はどの bucket にも入らず、
-fallback loop の唯一の queue-state 由来の除外条件は `completed` だけ
-だったためです。retired な unit は completed な unit と同じ方法で
-追跡・除外されるようになったため、packet レベルの `lifecycle.yaml` と
-queue-state の `Retired` のどちらの retirement signal でも、その unit
-は next-slice の candidate selection から確実に除外され、代わりに次の
-本当の candidate が浮上するようになります。
+- `Completed` 以外のどの state からも legal です — completed な item
+  (merge 済み、あるいは何らかの形で完了済みの作業。linked PR を持つ
+  ものも含む)は、mutation も run event もゼロのまま retirement を
+  refuse します。retirement は authored 通りには決して完了できない作業
+  にのみ適用されるためです;
+- 既に `Retired` な item に対しては idempotent です — 何も変更しない
+  no-op であり、何度再実行しても重複した `retired` run event が追記
+  されることはありません;
+- 一度適用されると terminal です — retired な item は `queue
+  transition` を通じて他のどの state(`queued`、`active`、`completed`、
+  `blocked` など)にも二度と transition できません。汎用的な
+  non-blocking/blocking transition path は、現在の state が `Retired`
+  の場合には即座に refuse するようになり、以前は静かに許されていた
+  reactivation の抜け道を塞ぎました。
+
+item は queue-state に既に存在している必要があります(存在しなければ
+先に `queue enqueue` で作成してください)。サポートされていない target
+を指定した場合は引き続き refuse され、許可されている target の完全な
+一覧(今回 `retired` を含むようになったもの)が表示されます。
+
+**publish selector は queue-state と packet-lifecycle の evidence を
+明示的に組み合わせ、曖昧な lifecycle metadata に対しては fail closed
+する。** `intent next-slice` は各 candidate の `lifecycle.yaml`(存在
+すれば)を、4 つの明示的な state のいずれかとして読み取ります —
+absent(sidecar が無い。エラーではない)、valid-active
+(`lifecycle: ready`)、valid-retired
+(`absorbed`/`retired`/`superseded`)、invalid(unreadable、`lifecycle`
+key の欠落、blank、または未知の値)— そしてそれを queue-state の
+`Retired` signal と組み合わせます:
+
+- どちらか一方の signal だけでも retirement を記録していれば unit は
+  除外されます — これは queue-state エントリが一切無い場合(lifecycle
+  のみによる retirement)や、`lifecycle.yaml` が一切無い場合(例えば
+  `automation issue-retire` や `queue transition --to retired` 経由の
+  queue のみによる retirement)でも成り立ちます;
+- 明示的な `lifecycle: ready` は queue-state の `Retired` レコードを
+  上書き**しません** — その組み合わせは contradiction であり、それでも
+  除外され、actionable な diagnostic
+  (`lifecycle-metadata-diagnostic` warning。unit 名と sidecar path を
+  記した note 付き)として表示されます。どちらの方向にも黙って解決
+  されるのではなく、reconcile できるようにするためです;
+- invalid な lifecycle metadata(unreadable、blank、key の欠落、または
+  未知の値)は、queue state に関わらず unit を除外し、同じ diagnostic
+  を発生させます — 曖昧な retirement evidence は決して
+  「publishable」に解決されてはならないためです。したがって malformed
+  な sidecar は、それが唯一の packet directory であっても、次の
+  candidate として静かに浮上することは決してありません。
 
 これら 3 つの修正を組み合わせることで、repo は `queue enqueue` /
 `queue transition` / `intent next-slice` だけを使って、行き詰まった
