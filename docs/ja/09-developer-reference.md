@@ -594,6 +594,204 @@ facet 値（G529 の閉じた集合）だけです。
 
 ---
 
+### facet-check (G531)
+
+`intent-cli intent facet-check` は read-only な lexical scaffold で、
+変更提案を G530 が届けるようにした G529 の facet node に照らし
+チェックします — 提案が持つ候補の command/event 用語を、既存の
+`vocabulary`/`invariant` node と突き合わせることで、reviewer が命名の
+衝突やカバレッジの gap を早期に発見できるようにします（手作業での
+突き合わせの代わりに）。これは明示的に semantic verifier では
+**ありません**し、**決して** gate にもなりません: マッチングは
+lexical（両辺を case/`-`/`_` 正規化した後の完全一致）であり、
+false negative は起こり得るものとして許容されており、このコマンドは
+結果に関わらず常に exit code `0` を返します。
+
+```bash
+intent-cli intent facet-check --domain <d> --packet G531 --format json
+intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --format json
+```
+
+- `--packet <execution-unit>` か `--terms <カンマ区切り>` のどちらか
+  一方が必須です（互いに排他的。両方または どちらも無い場合は usage
+  error）。`--terms` は、他の箇所の `--facets`/`--scope` と同様に、
+  空の要素を拒否します。
+- **`--packet` モード**では、その packet の `github-body.md` と
+  `implementation.md`（連結。github-body が先）から候補の用語を
+  抽出します — 抽出されるのは、バッククォート内の裸の識別子（例:
+  `` `CreateOrder` `` — 空白や他の記号を含むバッククォートの範囲は、
+  コマンド例などであり用語ではないためスキップされます。バックスラッシュ
+  でエスケープされたバッククォート、例えば `` \` `` は、決して span を
+  開始しません）、内部に camelCase/PascalCase の境界を持つプレーン
+  テキストの単語（例: `CreateOrder`）、または `Command`・`Event`・
+  `Query` で終わるプレーンテキストの単語です。ノイズは、どちらの
+  ルールが走るより前に、Markdown を意識した形で除外されます:
+  - **fenced code block** はブランクされます（その中の識別子は決して
+    用語になりません）— 大まかな近似ではなく、CommonMark の実際の境界を
+    尊重します: フェンスの開始/終了は最大 3 スペースまでしかインデント
+    できません（4 スペース以上、またはタブでのインデントは、フェンス
+    としては全く認識されません — なぜそれが「ノイズではない」ことを
+    意味しないのかは、すぐ下の独立した indented code block パスを
+    参照してください）。tilde（`~~~`）フェンスと 4 個以上の
+    バッククォートのフェンスも認識されます。バッククォートのフェンスの
+    info string は、バッククォートを含んではいけません（CommonMark
+    ではこれをオープナーとして拒否します。インラインコードと曖昧になる
+    ためです）。閉じる行は開始行と同じフェンス文字を使い、開始行以上の
+    長さでなければなりません — 文字が違う、短すぎる、あるいはインデント
+    が深すぎる行は決して閉じ行とはみなされず、フェンスを早期に終了
+    させることはありません。CRLF と LF の両方の改行を扱い、閉じられて
+    いないフェンスは fail closed です: 開始フェンスから文書の末尾まで
+    がコードとしてマスクされ、識別子が漏れ出す余地を残しません。
+    インラインの単一バッククォートの範囲は別の、影響を受けない関心事
+    であり、バックスラッシュでエスケープされたバッククォートは決して
+    span を開始しません。
+  - **indented code block** — 上記のフェンス認識とは別の、独立した
+    マスキングパスです: 「この行はフェンスを開始しない」ことと
+    「この行はコードではない」ことは別の問いです。行は、先頭の
+    空白が視覚上の column 4 に達した時点で条件を満たします。この
+    計算は CommonMark 自身の計算方法と同じです — タブは「常に 4
+    column」ではなく、次の 4 の倍数の column stop まで進みます —
+    そのため、1 個のスペースの後にタブが続く場合（column 1 → タブで
+    column 4 まで進む）も、4 個のリテラルなスペースや先頭の 1 個の
+    タブとまったく同じように条件を満たします。1〜3 視覚 column は
+    通常の、単に揃えられただけの prose であり、意図的に除外されます。
+    連続する行のうち、各行が（上記の column ルールにより）インデント
+    されているか、または空行であるものの最大の連続範囲が、1 つの
+    block としてマスクされます。範囲の「内部」にある空行はそれを
+    終了させません（indented code block の内部にある空行の継続を
+    許容する CommonMark 自身の挙動を反映しています）。範囲は、本当に
+    非空・非インデントの行に達した時点で必ず終了し、そこから通常の
+    抽出がすぐに再開されます。このパスが持つ文書化された簡略化は
+    ちょうど 1 つです — CommonMark の完全な list-item-continuation
+    の判別（インデントを column 0 ではなく list マーカーからの相対位置
+    で測る）は再現しません。そのため、list item 内の 4 column
+    インデントされた継続行は、トップレベルの indented code と同様に
+    扱われます。これはこの scaffold の、受け入れられた・文書化された
+    制限であり、バグではありません。
+  - **インライン Markdown/image リンク** — `[label](destination title)`
+    / `![alt](destination title)` — は、小さな手書きのスキャナーに
+    よって選択的にマスクされます（最初の `)` で終わってしまう素朴な
+    正規表現ではありません）: destination と optional な title だけが
+    ブランクされ、角括弧のラベル/alt テキストはそのまま残ります。
+    可視のラベルは意図的に authored された提案テキストだからです
+    （例えば `` [CreateOrder](design.md) `` は依然として
+    `CreateOrder` という用語を生み出します）。destination は
+    angle-bracket 形式（`<...>`。スペースを含むことができます）か、
+    バランスの取れた、エスケープ可能な括弧を持つ bare 形式（
+    `docs/(v1)/x.md` は、最初の `)` までではなく、正しく全体が
+    マスクされます）のいずれかです。optional な title は、二重引用符、
+    単一引用符、または括弧で囲むことができます。
+  - **reference-style リンク** — リンクの「使用」側、`[label][ref]`・
+    `[label][]`・裸の `[label]` は、それ自身の destination を隣に
+    持たないため、ラベルだけが問題になり、そのまま触れられません
+    （他の可視テキストと同様に完全に抽出可能です）。リンクの
+    「定義」行（`[ref]: destination "title"`）は純粋な destination/
+    title のメタデータであり、行全体がブランクされます。
+  - **autolink**（`<scheme://...>`）は全体がブランクされます —
+    `[label](url)` と異なり、保持すべき別個の可視ラベルが無いためです。
+  - **裸の URL** と **複数セグメントのパス**（例:
+    `src/Commands/CreateOrder.cs`）は、そのままブランクされます。
+
+  抽出は、連結されたドキュメント全体を通じて「出現順」です（位置に
+  関係なく「まずバッククォートのヒットをすべて、その後にプレーン
+  ワードのヒットをすべて」ではありません — implementation.md 自身の
+  候補は、常に github-body.md のすべての候補より後にソートされます。
+  ここでの「ドキュメント順」を決めるのは連結の順序だからです）。
+  用語マッチングと同じ正規化で重複除去され、先に出現した表記が
+  保持されます — そのため `github-body.md` で言及された用語が、
+  （別の形で）`implementation.md` で再び言及されても、
+  `github-body.md` 側の出現の表記が保たれます。指定された
+  execution-unit の packet ディレクトリが存在しない場合は usage
+  error（exit `1`）になります。packet ディレクトリは存在するが
+  どちらのソースファイルも無い場合は、単に抽出される用語が 0 件に
+  なるだけです。
+- **`--terms` モード**では、用語リストを明示的に受け取ります —
+  packet も抽出も coverage セクションもありません（照合すべき packet
+  scope が無いため、`coverage` は `null` になります。作り物の gap には
+  なりません）。
+- すべての用語は、domain の facet node に対して lexical にチェック
+  されます。常に full-token の完全一致のみで（決して substring 検索
+  ではありません）、node が持つ 2 つの自己申告サーフェスと比較され
+  ます: node 自身の domain-relative な id の「最後のセグメント」
+  （ファイル名由来の名前。例えば `commands/create-order` なら
+  `create-order`）と、その title（抽出された `summary`。通常は
+  node の見出し）です。どちらも用語と同じ方法で正規化されてから
+  （小文字化、camelCase/PascalCase の境界、そして `-`/`_`/その他の
+  記号の連続を単一のハイフンに畳み込む）比較されます — そのため
+  `CreateOrder`・`create-order`・`create_order` はすべて「同じ用語」
+  として扱われ、"Create Order" という title を持つ node は、id が
+  一致しなくてもマッチします。複数の facet を持つ node は 1 回だけ
+  報告されます（順序付けは最優先の facet グループが勝ちます）。facet
+  の数だけ重複して報告されることはありません。
+  - `related_nodes`: マッチしたすべての node を、4 つの facet
+    すべてを対象に、正規の順序
+    `vocabulary → invariant → decider → acceptance-property` で。
+    各エントリは `{node: {id, facets, summary, path}, evidence}` の
+    形です — `evidence` は、マッチした node-authored サーフェスごとの
+    レコードのリストです: `{field: "id" | "title", value, match_kind}`。
+    `value` は実際に比較された生の authored テキスト（node 自身の
+    id の最後のセグメント、または title）、`match_kind` は、その
+    フィールド固有の生テキストが用語と完全に一致した場合 `"exact"`、
+    正規化した後にのみ一致した場合 `"normalized"` です。マッチ全体に
+    対する単一の集約 match-kind は意図的にありません — id が
+    normalized のみでマッチし、title が exact にマッチした node は、
+    1 つの混ぜ合わされたフラグにせず、両方の事実を別々に報告します。
+  - `collisions`: `related_nodes` のうち、node が `vocabulary` facet
+    を持つ部分集合 — 提案の用語が重複または衝突している、既存の
+    名前付き概念です。同じフィールドごとの `evidence` を持ちます。
+  - `unmatched`: `related_nodes` が空の場合に `true`（その用語には
+    facet によるカバレッジが全く無いということです）。
+- **`--packet` モードのみ**: `coverage` セクションが、packet 自身の
+  `implementation_issue_packet.intent_references` と overlap する
+  `acceptance-property` node を報告します — `context collect
+  --scope`/`packet draft` が使うのと全く同じ G530 の scope-overlap
+  ロジックです（個々の拒否された reference の `scope_warnings` の
+  可視化も含みます）。`acceptance-property` の node が packet の
+  scope と 1 つも overlap しない場合、`gap` は `true` になります。
+  `scope_status` フィールドは、その scope が「なぜ」そうなったかを
+  区別します — `"valid-empty"`（意図的に authored された空の
+  `intent_references: []`）、`"valid-non-empty"`、`"missing"`
+  （`packet.yaml` が無いか、`intent_references` キー自体が無い）、
+  `"malformed"`（ファイルが YAML としてパースできない）、
+  `"wrong-shape"`（キーは存在するがシーケンスではない）のいずれかで、
+  valid 以外の状態には `scope_status_detail` 文字列が付きます。
+  これが必要な理由は、missing/malformed/wrong-shape な packet scope
+  が、genuinely authored な空リストと「同じ」計算結果の `gap: true`
+  に degrade してしまうためです（空/壊れた scope hint も、coverage
+  を「何にもマッチしない」に絞り込みます）— `scope_status` が無ければ、
+  この 2 つのケースは見分けが付きません。既存の packet ソースファイル
+  — `github-body.md`、`implementation.md`、または `packet.yaml` —
+  を読む際の本物の I/O エラー（「無い」のではなく実際の読み取り
+  エラー）は本物の実行エラーとして扱われ（exit `1`、"Failed to read
+  packet source..."）、決して黙って空の scope や空の用語リストに
+  畳み込まれることはありません。
+- domain に facet-annotated な node が 1 つも無い場合は
+  `no_facet_data: true` になります（error ではありません — facets は
+  optional です）が、それでも各用語の抽出・マッチング結果は報告され
+  ます（当然すべて `unmatched` になります）— そのため呼び出し側は、
+  「そもそも照合対象が無い」場合と「照合はしたが何も見つからなかった」
+  場合を区別できます。このフィールドは JSON でも Markdown でも
+  無条件です — Markdown は常に明示的な `No facet data: yes|no` の
+  行をレンダリングし、`false` のときに省略することはありません。
+- 壊れた `facets:` 宣言や node 上の未知の facet 値は、G530 と同じ
+  `warnings` エントリ（`path`、`reason`）を生成します — 黙って
+  消えることはありません。
+- すべての結果は、lexical scaffold であり gate ではないという
+  position を明示する `disclaimer` フィールドを、JSON でも Markdown
+  でも持ちます。
+- JSON の形: `{domain, disclaimer, no_facet_data, terms: [{term,
+  related_nodes: [{node: {id, facets, summary, path}, evidence: [{field,
+  value, match_kind}]}], collisions: [...], unmatched}], coverage:
+  {nodes: [...], gap, scope_status, scope_status_detail,
+  scope_warnings: [{hint, reason}]} | null, warnings: [{path, reason}]}`。
+- この slice の Out of Scope（完全な境界は G531 issue を参照）:
+  semantic/embedding ベースのマッチング、あらゆる blocking/gating の
+  挙動、reviewer guidance や orchestrator delegation preflight への
+  組み込み、そしてどの domain tree への annotation も — このコマンドは
+  読み取りと報告のみを行います。
+
+---
+
 ## バージョンフロー
 
 リポジトリのバージョンポリシーは `eng/version.json` に記載されています。`stableVersion`
