@@ -399,6 +399,208 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         Assert.DoesNotContain("intent-pr-created", transition.RemoveLabels);
     }
 
+    // ─── G535 tests: request-update supersedes stale rereview-ready ─────────
+
+    [Fact]
+    public void Execute_RequestUpdate_DryRunNamesRereviewReadyAsSuperseded()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-rereview-ready", "rereview-ready" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "1760",
+                "--transition", "request-update",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.False(result.Applied);
+        Assert.Contains("intent-pr-request-update", result.AddLabels);
+        // Both the current and legacy rereview-ready forms are named as superseded.
+        Assert.Contains("intent-pr-rereview-ready", result.RemoveLabels);
+        Assert.Contains("rereview-ready", result.RemoveLabels);
+        Assert.Empty(mutator.AppliedTransitions);
+    }
+
+    [Fact]
+    public void Execute_RequestUpdate_SksG824_ClearsStaleRereviewReadyAndClaimSucceeds()
+    {
+        // G535 field finding #5 (SKS-G824 / PR #1760): a design amendment
+        // arrives while the PR is rereview-ready. request-update must clear
+        // rereview-ready in the SAME write, so worker claim can proceed
+        // afterwards instead of hitting the canonical-state deadlock
+        // (request-update present, but rereview-ready still refuses claim).
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-rereview-ready" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "1760",
+                "--transition", "request-update",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.True(result.Applied);
+        Assert.Contains("intent-pr-request-update", result.AddLabels);
+        Assert.Contains("intent-pr-rereview-ready", result.RemoveLabels);
+
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Contains("intent-pr-request-update", transition.AddLabels);
+        Assert.Contains("intent-pr-rereview-ready", transition.RemoveLabels);
+
+        // Simulate the resulting label set and prove `worker claim` now succeeds.
+        var postTransitionLabels = mutator.Labels
+            .Except(transition.RemoveLabels, StringComparer.Ordinal)
+            .Concat(transition.AddLabels)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var claimDecision = WorkerClaimAnalyzer.Analyze(GhCliGitHubLabelMutator.Kinds.Pr, postTransitionLabels);
+        Assert.True(claimDecision.Proceed);
+        Assert.Contains("intent-pr-update-in-progress", claimDecision.AddLabels);
+    }
+
+    [Fact]
+    public void Execute_RequestUpdate_ClaimStillRefusesUntransitionedRereviewReady()
+    {
+        // G535: unchanged behavior pin — a rereview-ready PR that has NOT
+        // been through request-update must still be refused by claim (it
+        // is the reviewer's to pick up, not the worker's).
+        var untransitionedLabels = new[] { "intent-target", "intent-pr-rereview-ready" };
+
+        var claimDecision = WorkerClaimAnalyzer.Analyze(GhCliGitHubLabelMutator.Kinds.Pr, untransitionedLabels);
+
+        Assert.False(claimDecision.Proceed);
+        Assert.Contains(claimDecision.Errors, e => e.Contains("already-rereview-ready", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_RequestUpdate_WriteIsIdempotent_WhenRereviewReadyAlreadyAbsent()
+    {
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            // Already transitioned once: rereview-ready is gone, request-update present.
+            Labels = new[] { "intent-target", "intent-pr-request-update" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "1760",
+                "--transition", "request-update",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var transition = Assert.Single(mutator.AppliedTransitions);
+        Assert.Contains("intent-pr-request-update", transition.AddLabels);
+        Assert.DoesNotContain("intent-pr-rereview-ready", transition.RemoveLabels);
+        Assert.DoesNotContain("rereview-ready", transition.RemoveLabels);
+        Assert.DoesNotContain("intent-pr-reviewing", transition.RemoveLabels);
+    }
+
+    [Fact]
+    public void Execute_RequestUpdate_ApiFailureAppliesNoPartialTransition()
+    {
+        // G535: the add+remove edit is a single gh call (already-atomic by
+        // construction) — a failure must leave the PR's labels completely
+        // untouched, never a half-applied state (request-update added but
+        // rereview-ready not yet cleared, or vice versa).
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new ThrowingMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-rereview-ready" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "1760",
+                "--transition", "request-update",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("failed to apply PR transition", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ReviewStartAndApproved_LabelSetsUnchanged_G535Regression()
+    {
+        // G535 must not touch any other transition's label set. Pins
+        // review-start and approved stay byte-identical to their
+        // pre-G535 plans.
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var reviewStartMutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-rereview-ready", "rereview-ready" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => reviewStartMutator;
+
+        using var reviewStartWriter = new StringWriter();
+        AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "542", "--transition", "review-start", "--write", "--format", "json" },
+            reviewStartWriter);
+        var reviewStartTransition = Assert.Single(reviewStartMutator.AppliedTransitions);
+        Assert.Equal(
+            new[] { "intent-target", "intent-pr-reviewing" },
+            reviewStartTransition.AddLabels);
+        Assert.Equal(
+            new[] { "intent-pr-rereview-ready", "rereview-ready" },
+            reviewStartTransition.RemoveLabels);
+
+        var approvedMutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-reviewing" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => approvedMutator;
+
+        using var approvedWriter = new StringWriter();
+        AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[] { "--repo", "J-Tech-Japan/intent-system", "--pr", "542", "--transition", "approved", "--write", "--format", "json" },
+            approvedWriter);
+        var approvedTransition = Assert.Single(approvedMutator.AppliedTransitions);
+        Assert.Equal(new[] { "intent-pr-approved" }, approvedTransition.AddLabels);
+        Assert.Equal(new[] { "intent-pr-reviewing" }, approvedTransition.RemoveLabels);
+    }
+
     // ─── G292 tests ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -641,6 +843,35 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         int Number,
         IReadOnlyList<string> AddLabels,
         IReadOnlyList<string> RemoveLabels);
+
+    /// <summary>
+    /// G535: fake mutator whose <see cref="ApplyLabelTransitions"/> always
+    /// throws, simulating a `gh` API failure, to prove the command reports
+    /// failure without claiming <c>applied: true</c> — no half-transition.
+    /// </summary>
+    private sealed class ThrowingMutator : IGitHubLabelMutator
+    {
+        public IReadOnlyList<string> Labels { get; init; } = Array.Empty<string>();
+
+        public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number) =>
+            Labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray();
+
+        public void ApplyLabelTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels) =>
+            throw new IOException("simulated gh API failure");
+
+        public void ApplyReconcileTransitions(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> addLabels,
+            IReadOnlyCollection<string> removeLabels) =>
+            throw new NotSupportedException("reconcile path not exercised by these tests");
+    }
 
     private sealed class AutomationPrTransitionWorkspace : IDisposable
     {

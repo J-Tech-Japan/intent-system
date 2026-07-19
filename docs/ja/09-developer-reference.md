@@ -626,6 +626,45 @@ retirement や queue tracking 以前の retirement から、`queue-state.json`
 
 ---
 
+### `request-update` が stale な `intent-pr-rereview-ready` を supersede する (G535)
+
+Field finding #5(SKS-G824 / PR #1760): `intent-cli automation pr-transition
+--transition request-update` は自身の repair label(`intent-pr-request-update`
+を追加し、`intent-pr-reviewing` を除去)を適用していましたが、既存の
+`intent-pr-rereview-ready` はそのまま残していました。`worker claim` は
+`intent-pr-rereview-ready` を持つ PR を正しく refuse します(rereview-ready
+な PR は reviewer が拾うべきものであり、worker のものではないため)—
+そのため、PR が rereview-ready の間に design amendment が到着すると、
+`request-update` によって repair 対象としてマークされたにもかかわらず
+`claim` が触れることを拒否する PR が生まれていました。2 つの canonical
+な rule 同士の deadlock であり、インストール済みのどのコマンドも先に
+進めない状態でした。唯一の脱出策は、`review-start` → `request-update`
+という非自明な迂回策でした。
+
+`request-update` は、`intent-pr-request-update` を追加し
+`intent-pr-reviewing` を除去するのと**同じ** label write の中で、
+`intent-pr-rereview-ready`(および legacy な `rereview-ready` 文字列
+形式)を除去するようになりました — repair request は常に pending な
+rereview-readiness を supersede するためです。複数の label を除去する
+他の transition(`review-start`、`approved`、`review-release`)と同様、
+`--write` mode は実際に存在する label のみを除去するため、再実行(や、
+一度も rereview-ready になったことのない PR)は idempotent なままです。
+`--dry-run` は既存の convention と同様、存在有無に関わらず完全な
+planned removal set を引き続き報告します。add/remove の edit は 1 回の
+`gh` 呼び出しとして発行されるため、transition は atomic のままです —
+失敗した場合、PR の label は完全に手つかずのまま残り、half-applied な
+状態には決してなりません。他のどの transition の label set も変更
+されていません。
+
+これが landed したことで、SKS-G824 の recovery sequence(行き詰まった
+rereview-ready を除去するための `review-start` の後の `request-update`)
+はもはや不要です — `request-update` 単体で、`worker claim` が受け入れる
+状態に PR を残すようになりました。`worker claim` 自体は変更ありません
+— `request-update` を経ていない rereview-ready な PR は引き続き
+refuse されます。
+
+---
+
 ### facet を意識した context 供給 (G530)
 
 G529 の 4 つの semantic facet（`vocabulary`、`invariant`、`decider`、

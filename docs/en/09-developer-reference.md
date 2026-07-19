@@ -598,6 +598,40 @@ edits.
 
 ---
 
+### `request-update` supersedes a stale `intent-pr-rereview-ready` (G535)
+
+Field finding #5 (SKS-G824 / PR #1760): `intent-cli automation pr-transition
+--transition request-update` added its repair labels (`intent-pr-request-update`,
+and cleared `intent-pr-reviewing`) but left a pre-existing
+`intent-pr-rereview-ready` in place. `worker claim` correctly refuses any PR
+still carrying `intent-pr-rereview-ready` (a rereview-ready PR is the
+reviewer's to pick up, not the worker's) — so a design amendment arriving
+while a PR was rereview-ready produced a PR that `request-update` marked for
+repair but `claim` refused to touch: a deadlock between two canonical rules,
+with no installed command able to proceed. The only escape was a non-obvious
+`review-start` → `request-update` detour.
+
+`request-update` now clears `intent-pr-rereview-ready` (and its legacy
+`rereview-ready` string form) in the **same** label write that adds
+`intent-pr-request-update` and removes `intent-pr-reviewing` — a repair
+request always supersedes pending rereview-readiness. As with the other
+transitions that clear multiple labels (`review-start`, `approved`,
+`review-release`), `--write` mode only removes labels that are actually
+present, so a rerun (or a PR that was never rereview-ready) stays
+idempotent; `--dry-run` still reports the full planned removal set
+regardless of presence, matching the existing convention. Because the
+add/remove edit is issued as a single `gh` call, the transition stays atomic
+— a failure leaves the PR's labels completely untouched, never a
+half-applied state. No other transition's label set changed.
+
+With this landed, the SKS-G824 recovery sequence (`review-start` then
+`request-update` to clear a stuck rereview-ready) is no longer necessary —
+`request-update` alone now leaves the PR in a state `worker claim` accepts.
+`worker claim` itself is unchanged: it still refuses a rereview-ready PR
+that has not been through `request-update`.
+
+---
+
 ### Facet-aware context supply (G530)
 
 Building on G529's four semantic facets (`vocabulary`, `invariant`,

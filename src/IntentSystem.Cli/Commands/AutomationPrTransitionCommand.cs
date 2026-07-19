@@ -183,6 +183,16 @@ internal static class AutomationPrTransitionCommand
                     WorkerPrReviewPreflightConstants.Labels.IntentPrRequestUpdate,
                     WorkerPrReviewPreflightConstants.Labels.IntentPrUpdateInProgress,
                 ]),
+            // G535: request-update supersedes a stale intent-pr-rereview-ready
+            // in the SAME write. Field finding #5 (SKS-G824 / PR #1760): a
+            // design amendment arriving while a PR is rereview-ready
+            // previously left rereview-ready in place after request-update,
+            // producing a PR `worker claim` correctly refuses (rereview-ready
+            // is the reviewer's to pick up) — a canonical-state deadlock with
+            // no installed command able to proceed. A repair request always
+            // supersedes pending rereview-readiness, so rereview-ready (and
+            // its legacy string form) is cleared alongside the pre-existing
+            // intent-pr-reviewing removal.
             TransitionRequestUpdate => new TransitionPlan(
                 AddLabels:
                 [
@@ -191,6 +201,8 @@ internal static class AutomationPrTransitionCommand
                 RemoveLabels:
                 [
                     WorkerPrReviewPreflightConstants.Labels.IntentPrReviewing,
+                    WorkerNextActionConstants.Labels.IntentPrRereviewReady,
+                    "rereview-ready",
                 ]),
             // G292: release the reviewer lease without claiming an
             // implementation-side repair is needed. Removes
@@ -218,10 +230,16 @@ internal static class AutomationPrTransitionCommand
         // G503: approved joins this set so clearing rereview-ready /
         // request-update / update-in-progress stays idempotent when those
         // labels are absent.
+        // G535: request-update joins this set too — the new
+        // intent-pr-rereview-ready / "rereview-ready" supersession removal
+        // must only be reported/applied when the label is actually present,
+        // so a rerun (or a PR that was never rereview-ready) stays
+        // idempotent and the reported plan matches what gh actually mutates.
         if (string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
             && (string.Equals(transition, TransitionReviewStart, StringComparison.Ordinal)
                 || string.Equals(transition, TransitionReviewRelease, StringComparison.Ordinal)
-                || string.Equals(transition, TransitionApproved, StringComparison.Ordinal)))
+                || string.Equals(transition, TransitionApproved, StringComparison.Ordinal)
+                || string.Equals(transition, TransitionRequestUpdate, StringComparison.Ordinal)))
         {
             var currentLabelSet = new HashSet<string>(currentLabels, StringComparer.Ordinal);
             return plannedRemoveLabels
