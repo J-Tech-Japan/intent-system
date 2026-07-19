@@ -108,11 +108,25 @@ internal static class PacketDraftCommand
             ? BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy)
             : CliRuntimeContracts.DirectMainBaseBranch;
 
+        // G530: review-context.md's generated "Facet context" section scopes
+        // to whatever `intent_references` an EXISTING packet.yaml on disk
+        // already declares — never the freshly-templated `[]` this same
+        // call may be about to write for packet.yaml itself (that write
+        // happens below, after this read). This is what makes
+        // "regenerating an existing packet" meaningful: packet.yaml can
+        // already carry hand-edited references (added after an earlier
+        // `packet draft` run) even though review-context.md does not yet
+        // exist, and the section reflects those real references.
+        var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+        var intentReferences = ReadIntentReferences(packetYamlPath);
+        var facetDomainRoot = ResolveFacetDomainRoot(context, domain);
+        var facetSelection = FacetContextSelector.Select(facetDomainRoot, domain, intentReferences, facetFilter: null);
+
         var planned = new[]
         {
             ("packet.yaml", BuildPacketYaml(executionUnit, domain, targetRepo)),
             ("implementation.md", BuildImplementationMd(executionUnit)),
-            ("review-context.md", BuildReviewContextMd(executionUnit)),
+            ("review-context.md", BuildReviewContextMd(executionUnit, facetSelection)),
             ("github-body.md", BuildGithubBodyMd(executionUnit, baseBranchPolicy, expectedBaseBranch))
         };
 
@@ -275,7 +289,7 @@ internal static class PacketDraftCommand
             """;
     }
 
-    private static string BuildReviewContextMd(string executionUnit)
+    private static string BuildReviewContextMd(string executionUnit, FacetContextSelection facetSelection)
     {
         return $"""
             # {executionUnit} Review Context
@@ -289,6 +303,10 @@ internal static class PacketDraftCommand
             - mutates GitHub or parent state when the issue is read-only;
             - skips required contract sections.
 
+            ## Facet context
+
+            {BuildFacetContextSection(facetSelection)}
+
             ## Knowledge Writeback Expectation (G461)
 
             If the packet's `closeout_learning.write_back_required` is `true`, confirm the
@@ -296,6 +314,98 @@ internal static class PacketDraftCommand
             captured as a follow-up packet. If the packet declined all knowledge maintenance,
             that is acceptable — note it rather than blocking.
             """;
+    }
+
+    /// <summary>
+    /// G530: the four G529 semantic-facet nodes (vocabulary/invariant/
+    /// decider/acceptance-property) overlapping this packet's own declared
+    /// `intent_references` — the semantic core the implementation must
+    /// respect, surfaced directly in the review contract rather than left
+    /// for a reviewer to reconstruct by hand.
+    /// </summary>
+    private static string BuildFacetContextSection(FacetContextSelection facetSelection)
+    {
+        if (!facetSelection.DomainHasAnyFacetNodes)
+        {
+            return "No facet-annotated nodes found for this domain — facets (G529) are optional and this is the norm before a tree adopts them.";
+        }
+
+        var lines = new List<string>();
+        foreach (var group in facetSelection.Groups)
+        {
+            lines.Add($"### {group.Facet}");
+            if (group.Nodes.Count == 0)
+            {
+                lines.Add("- (none overlapping this packet's intent_references)");
+                continue;
+            }
+
+            foreach (var node in group.Nodes)
+            {
+                lines.Add($"- `{node.Id}` [{string.Join(", ", node.Facets)}] {node.Summary} — `{node.Path}`");
+            }
+        }
+
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// G530: reads the `implementation_issue_packet.intent_references` list
+    /// from an EXISTING packet.yaml on disk (never the in-memory template
+    /// this same invocation may be about to write). Tolerant — a missing
+    /// file, missing section, or malformed YAML all degrade to an empty
+    /// list rather than an error, consistent with the rest of this
+    /// scaffolding command's never-fail posture.
+    /// </summary>
+    private static IReadOnlyList<string> ReadIntentReferences(string packetYamlPath)
+    {
+        if (!File.Exists(packetYamlPath))
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            var yaml = new YamlDotNet.RepresentationModel.YamlStream();
+            using var reader = new StringReader(File.ReadAllText(packetYamlPath));
+            yaml.Load(reader);
+
+            if (yaml.Documents.Count == 0
+                || yaml.Documents[0].RootNode is not YamlDotNet.RepresentationModel.YamlMappingNode root
+                || !root.Children.TryGetValue(
+                    new YamlDotNet.RepresentationModel.YamlScalarNode("implementation_issue_packet"), out var implementationNode)
+                || implementationNode is not YamlDotNet.RepresentationModel.YamlMappingNode implementationMapping
+                || !implementationMapping.Children.TryGetValue(
+                    new YamlDotNet.RepresentationModel.YamlScalarNode("intent_references"), out var referencesNode)
+                || referencesNode is not YamlDotNet.RepresentationModel.YamlSequenceNode referencesSequence)
+            {
+                return Array.Empty<string>();
+            }
+
+            return referencesSequence.Children
+                .OfType<YamlDotNet.RepresentationModel.YamlScalarNode>()
+                .Select(scalar => scalar.Value ?? string.Empty)
+                .Where(value => value.Length > 0)
+                .ToArray();
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// G530: same parent-host-aware domain root resolution
+    /// <c>context collect</c> already uses for clarification/automation-
+    /// bindings paths — a child implementation workspace's intent tree
+    /// (and therefore its facet nodes) lives under the PARENT host root
+    /// when one is configured, else the local repo.
+    /// </summary>
+    private static string ResolveFacetDomainRoot(CliContext context, string domain)
+    {
+        var parentRoot = context.ResolveParentIntentRepoRootPath();
+        var baseRoot = string.IsNullOrWhiteSpace(parentRoot) ? context.RepoRoot : parentRoot;
+        return Path.Combine(baseRoot!, "intents", domain);
     }
 
     private static string BuildGithubBodyMd(string executionUnit, string baseBranchPolicy, string expectedBaseBranch)

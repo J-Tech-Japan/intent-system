@@ -440,6 +440,71 @@ it — no separate code path needed.
 
 ---
 
+### Facet-aware context supply (G530)
+
+Building on G529's four semantic facets (`vocabulary`, `invariant`,
+`decider`, `acceptance-property`), two read-only surfaces now supply
+facet-classified nodes as the preferred, localized semantic context a
+change must respect — instead of an implement/review agent reconstructing
+that surface by hand.
+
+**`intent-cli context collect`** gains a `## Facet context` section,
+rendered AHEAD of the unclassified queue-state/clarification/automation-
+bindings/recent-events context below it (it is the semantic core, not an
+afterthought). The section holds one group per facet, always in the
+canonical order `vocabulary → invariant → decider → acceptance-property`,
+each node reported as `id`, `facets` (all of that node's facet values, not
+just the current group's), `summary` (first non-blank line after
+frontmatter), and `path` (`intents/<domain>/...`):
+
+```bash
+intent-cli context collect --domain <d> --format json
+intent-cli context collect --domain <d> --facets invariant,decider   # restrict to these facets only
+intent-cli context collect --domain <d> --scope intents/<d>/means,identity/mission.md  # narrow by overlap
+```
+
+- `--facets <comma-separated>` restricts which facet groups appear at all
+  (still rendered in canonical order); an unrecognized facet name is a
+  usage error (mirrors `intent search --facet`'s validation).
+- `--scope <comma-separated paths>` narrows every group to nodes whose path
+  overlaps a hint — an exact match, a hint naming an ancestor directory, or
+  the shorter domain-relative id form (no `intents/<domain>/` prefix, no
+  `.md`) all count as overlap. Omitting `--scope` returns every domain
+  facet node.
+- A domain with ZERO facet-annotated nodes at all (not merely a
+  `--scope`/`--facets` query that matched nothing) sets `facet_context_note`
+  and renders an explicit note instead of an empty section — graceful
+  degradation, never an error. Facets are optional; this is the norm before
+  a tree adopts them.
+- JSON shape: `facet_context: [{facet, nodes: [{id, facets, summary,
+  path}]}]` (always 4 entries, or fewer when `--facets` is passed),
+  `facet_context_note: string | null`.
+
+**`intent-cli packet draft`** generates a `## Facet context` section inside
+the scaffolded `review-context.md`, listing the facet nodes overlapping the
+packet's own `implementation_issue_packet.intent_references` — the exact
+same overlap logic `context collect`'s `--scope` uses, so the two surfaces
+can never disagree about what "overlaps". Because `packet draft` never
+overwrites an existing file, this only applies the first time
+`review-context.md` is written: if `packet.yaml` already exists (e.g. an
+operator hand-edited its `intent_references` after an earlier `packet
+draft` run, before `review-context.md` was ever generated), that packet.yaml
+ON DISK — never the freshly-templated empty `intent_references: []` this
+same invocation might otherwise write — is what gets read. Once
+`review-context.md` exists, re-running `packet draft` never touches it,
+preserving hand-edits exactly as it already does for the other three
+scaffold files.
+
+Both surfaces share one selector (`FacetContextSelector`) for scanning,
+classifying, grouping, and scope-overlap matching, so ordering, filtering,
+and degradation semantics can't drift apart between them. Only VALID facet
+values (the closed G529 set) are ever bucketed; a malformed `facets:`
+declaration is excluded from every group exactly like an absent one is —
+validating and reporting malformed/unknown values is `lint-layout`'s job,
+not these consumption surfaces'.
+
+---
+
 ## Version flow
 
 The repository version policy lives in `eng/version.json` — the single source of

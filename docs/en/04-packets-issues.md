@@ -6,7 +6,7 @@ This is **host/design** work. When your intent is clear enough to act on, the de
 
 ## What a packet is
 
-A **packet** is a focused, reviewable slice of intent that becomes an executable task. The design thread scaffolds a canonical set of files (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`) that describe exactly what needs to be built.
+A **packet** is a focused, reviewable slice of intent that becomes an executable task. The design thread scaffolds a canonical set of files (`packet.yaml`, `implementation.md`, `review-context.md`, `github-body.md`) that describe exactly what needs to be built. `review-context.md` includes a generated **Facet context** section listing the G529 semantic-facet nodes (vocabulary/invariant/decider/acceptance-property) overlapping the packet's `intent_references` — see [Facet-aware context supply (G530)](09-developer-reference.md#facet-aware-context-supply-g530).
 
 **Issue publish** turns a reviewed packet into a GitHub Issue with a **Standalone Child Issue Contract** — the only source of truth a child implementation agent needs to do the work. The child agent reads the issue body and the repository code; it does not access host metadata.
 

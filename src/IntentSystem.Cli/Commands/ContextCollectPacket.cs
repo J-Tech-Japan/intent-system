@@ -14,6 +14,26 @@ internal sealed record ContextCollectPacket
     [JsonPropertyName("domain")]
     public required string Domain { get; init; }
 
+    /// <summary>
+    /// G530: the four G529 semantic-facet groups (<c>vocabulary</c>,
+    /// <c>invariant</c>, <c>decider</c>, <c>acceptance-property</c>, in that
+    /// order), each carrying every domain node classified under it —
+    /// narrowed by <c>--scope</c> when passed, restricted to the requested
+    /// subset by <c>--facets</c> when passed. Rendered AHEAD of the
+    /// unclassified queue/clarification/automation-bindings/events context
+    /// below, since this is the semantic core a change must respect.
+    /// </summary>
+    [JsonPropertyName("facet_context")]
+    public required IReadOnlyList<FacetContextGroup> FacetContext { get; init; }
+
+    /// <summary>
+    /// G530: set only when the DOMAIN has zero facet-annotated nodes at all
+    /// (not merely when a <c>--scope</c>/<c>--facets</c> query matched
+    /// nothing) — explicit graceful-degradation note, never an error.
+    /// </summary>
+    [JsonPropertyName("facet_context_note")]
+    public string? FacetContextNote { get; init; }
+
     [JsonPropertyName("queue_state_path")]
     public required string QueueStatePath { get; init; }
 

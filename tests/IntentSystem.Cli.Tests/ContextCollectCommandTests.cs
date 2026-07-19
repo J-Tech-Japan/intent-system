@@ -178,6 +178,119 @@ public sealed class ContextCollectCommandTests
         Assert.Contains("Current Open Blockers", excerpt!, StringComparison.Ordinal);
     }
 
+    // ── G530: facet context section ─────────────────────────────────────
+
+    [Fact]
+    public void Execute_DomainWithFacetNodes_RendersFacetSectionAheadOfQueueStateInCanonicalOrder()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        workspace.WriteFacetNode("decisions/adr-1.md", ["decider"], "Decision One");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(workspace.Context, [], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("## Facet context", output, StringComparison.Ordinal);
+        var facetIndex = output.IndexOf("## Facet context", StringComparison.Ordinal);
+        var queueIndex = output.IndexOf("## Queue state", StringComparison.Ordinal);
+        Assert.True(facetIndex >= 0 && queueIndex > facetIndex, "Facet context must render ahead of Queue state.");
+        var vocabularyIndex = output.IndexOf("### vocabulary", StringComparison.Ordinal);
+        var deciderIndex = output.IndexOf("### decider", StringComparison.Ordinal);
+        Assert.True(vocabularyIndex >= 0 && deciderIndex > vocabularyIndex, "vocabulary must render before decider.");
+        Assert.Contains("identity/mission", output, StringComparison.Ordinal);
+        Assert.Contains("Mission", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_FacetsFilter_RestrictsSectionToRequestedFacetsOnly()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        workspace.WriteFacetNode("decisions/adr-1.md", ["decider"], "Decision One");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--facets", "decider"], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("### decider", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("### vocabulary", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_FacetsFilterUnknownValue_ReturnsErrorExitCode()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--facets", "not-a-real-facet"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--facets", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ScopeHint_NarrowsFacetSectionToOverlappingNodesOnly()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        workspace.WriteFacetNode("decisions/adr-1.md", ["vocabulary"], "Decision One");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--scope", "intents/intent-cli/identity"], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("identity/mission", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("decisions/adr-1", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_NoFacetAnnotatedNodesInDomain_EmitsGracefulDegradationNoteNeverAnError()
+    {
+        using var workspace = new ContextCollectWorkspace();
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(workspace.Context, [], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("## Facet context", output, StringComparison.Ordinal);
+        Assert.Contains("no facet-annotated nodes found", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_JsonFormat_FacetContextShapeIsStableSnakeCase()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary", "invariant"], "Mission");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        var facetContext = root.GetProperty("facet_context").EnumerateArray().ToArray();
+        Assert.Equal(4, facetContext.Length);
+        Assert.Equal("vocabulary", facetContext[0].GetProperty("facet").GetString());
+        var vocabularyNodes = facetContext[0].GetProperty("nodes").EnumerateArray().ToArray();
+        var node = Assert.Single(vocabularyNodes);
+        Assert.Equal("identity/mission", node.GetProperty("id").GetString());
+        Assert.Equal("intents/intent-cli/identity/mission.md", node.GetProperty("path").GetString());
+        Assert.Equal("Mission", node.GetProperty("summary").GetString());
+        var facets = node.GetProperty("facets").EnumerateArray().Select(f => f.GetString()).ToArray();
+        Assert.Equal(new[] { "vocabulary", "invariant" }, facets);
+        Assert.True(root.TryGetProperty("facet_context_note", out var note));
+        Assert.Equal(JsonValueKind.Null, note.ValueKind);
+    }
+
     [Fact]
     public void Execute_GivenUnknownArgument_ReturnsErrorExitCode()
     {
@@ -302,6 +415,15 @@ public sealed class ContextCollectCommandTests
             var path = Path.Combine(rootPath, "intents", Context.Config.Project.Domain, "automation");
             Directory.CreateDirectory(path);
             File.WriteAllText(Path.Combine(path, "bindings.md"), content);
+        }
+
+        /// <summary>G530: writes a facet-annotated intent-tree node under `intents/&lt;domain&gt;/&lt;relativePath&gt;`.</summary>
+        public void WriteFacetNode(string relativePath, IReadOnlyList<string> facets, string title)
+        {
+            var fullPath = Path.Combine(
+                rootPath, "intents", Context.Config.Project.Domain, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, $"---\nfacets: [{string.Join(", ", facets)}]\n---\n# {title}\n");
         }
 
         public void WritePacketFile(string executionUnit, string fileName, string content)

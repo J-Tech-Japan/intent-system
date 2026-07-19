@@ -15,7 +15,11 @@ internal static class ContextCollectAnalyzer
     private const int RecentEventLimit = 5;
     private const int MarkdownExcerptCharLimit = 1500;
 
-    public static ContextCollectPacket Analyze(CliContext context, string? domainOverride)
+    public static ContextCollectPacket Analyze(
+        CliContext context,
+        string? domainOverride,
+        IReadOnlyList<string>? scopeHints = null,
+        IReadOnlyCollection<string>? facetFilter = null)
     {
         ArgumentNullException.ThrowIfNull(context);
 
@@ -24,6 +28,19 @@ internal static class ContextCollectAnalyzer
             : domainOverride;
 
         var notes = new List<string>();
+
+        // G530: same domain-root resolution the rest of this analyzer
+        // already uses for clarification/automation-bindings paths (parent
+        // host root when configured, else the local repo) — a child
+        // implementation workspace's `intent_references`/`--scope` hints
+        // and facet nodes both live under the PARENT host's intent tree.
+        var facetDomainRoot = ResolveDomainPath(context, domain);
+        var facetSelection = facetDomainRoot is null
+            ? new FacetContextSelection { Groups = Array.Empty<FacetContextGroup>(), DomainHasAnyFacetNodes = false }
+            : FacetContextSelector.Select(facetDomainRoot, domain, scopeHints, facetFilter);
+        var facetContextNote = facetSelection.DomainHasAnyFacetNodes
+            ? null
+            : $"no facet-annotated nodes found under intents/{domain}/ — facets (G529) are optional and this is the norm before a tree adopts them.";
 
         var queueStatePath = context.GetQueueStatePath();
         var queueStatePresent = File.Exists(queueStatePath);
@@ -130,6 +147,8 @@ internal static class ContextCollectAnalyzer
         return new ContextCollectPacket
         {
             Domain = domain,
+            FacetContext = facetSelection.Groups,
+            FacetContextNote = facetContextNote,
             QueueStatePath = queueStatePath,
             QueueStatePresent = queueStatePresent,
             QueueStateReadable = queueStateReadable,
