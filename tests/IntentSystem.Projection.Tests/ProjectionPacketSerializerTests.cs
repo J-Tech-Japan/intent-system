@@ -147,6 +147,112 @@ public sealed class ProjectionPacketSerializerTests
     }
 
     [Fact]
+    public void Deserialize_GivenTwoSpaceListItemIndentation_ParsesSuccessfully()
+    {
+        // G534 field finding: a hand-authored packet using the common
+        // "list item at the SAME column as its parent key" YAML
+        // convention (2-space, not this renderer's own 4-space nested
+        // convention) previously threw "field line is missing ':''" on
+        // every list item — quoted or unquoted. Both forms are pinned
+        // here, mixed within the same packet, matching the real
+        // previously-failing shape.
+        var packet = ProjectionPacketSerializer.Deserialize(
+            """
+            implementation_issue_packet:
+              issue_title: "G2 Projection Generate Command"
+              issue_kind: "feature"
+              source_execution_unit: "G2"
+              goal: "goal"
+              in_scope:
+              - "quoted scope item"
+              out_of_scope:
+              - unquoted scope item
+              target_repo: "repo"
+              target_path: "."
+              target_part: "part"
+              dependencies:
+              - "G1"
+              technical_baseline: []
+              project_local_guide: []
+              intent_baseline: []
+              intent_references:
+              - intents/foo/bar.md
+              - "intents/baz/qux.md"
+              rules_and_specs: []
+              acceptance_criteria:
+              - unquoted criterion
+              verification_evidence: []
+              review_mode: "deterministic-review"
+              completion_action: "wait-for-deterministic-review"
+              landing_policy: "merge-after-review"
+
+            review_context_packet:
+              source_execution_unit: "G2"
+              parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+              intent_references:
+              - intents/foo/bar.md
+              - "intents/baz/qux.md"
+              rules_and_specs: []
+              acceptance_criteria:
+              - unquoted criterion
+              deterministic_review_checks: []
+              clarification_return_path: "path.md"
+            """);
+
+        Assert.Equal("G2", packet.ImplementationIssuePacket.SourceExecutionUnit);
+        Assert.Equal(["quoted scope item"], packet.ImplementationIssuePacket.InScope);
+        Assert.Equal(["unquoted scope item"], packet.ImplementationIssuePacket.OutOfScope);
+        Assert.Equal(["G1"], packet.ImplementationIssuePacket.Dependencies);
+        Assert.Equal(["intents/foo/bar.md", "intents/baz/qux.md"], packet.ImplementationIssuePacket.IntentReferences);
+        Assert.Equal(["unquoted criterion"], packet.ImplementationIssuePacket.AcceptanceCriteria);
+    }
+
+    [Fact]
+    public void Deserialize_GivenMixedTwoAndFourSpaceListIndentationAcrossFields_BothParseIdentically()
+    {
+        // Different fields in the SAME file may use either convention —
+        // the parser must not require file-wide consistency.
+        var packet = ProjectionPacketSerializer.Deserialize(
+            """
+            implementation_issue_packet:
+              issue_title: "G2 Projection Generate Command"
+              issue_kind: "feature"
+              source_execution_unit: "G2"
+              goal: "goal"
+              in_scope:
+                - "four-space item"
+              out_of_scope:
+              - "two-space item"
+              target_repo: "repo"
+              target_path: "."
+              target_part: "part"
+              dependencies: []
+              technical_baseline: []
+              project_local_guide: []
+              intent_baseline: []
+              intent_references: []
+              rules_and_specs: []
+              acceptance_criteria: []
+              verification_evidence: []
+              review_mode: "deterministic-review"
+              completion_action: "wait-for-deterministic-review"
+              landing_policy: "merge-after-review"
+
+            review_context_packet:
+              source_execution_unit: "G2"
+              parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+              intent_references: []
+              rules_and_specs: []
+              acceptance_criteria: []
+              deterministic_review_checks: []
+              clarification_return_path: "path.md"
+            """);
+
+        Assert.Equal(["four-space item"], packet.ImplementationIssuePacket.InScope);
+        Assert.Equal(["two-space item"], packet.ImplementationIssuePacket.OutOfScope);
+    }
+
+    [Fact]
     public void Deserialize_GivenMissingRequiredField_ThrowsInvalidOperationException()
     {
         var exception = Assert.Throws<InvalidOperationException>(

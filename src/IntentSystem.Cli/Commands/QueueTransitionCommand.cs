@@ -31,7 +31,7 @@ internal static class QueueTransitionCommand
         if (!TryParseTargetState(args[1], out var targetState))
         {
             writer.WriteLine(
-                "Unsupported queue transition target state. Supported states: queued, active, review, fixing, completed, blocked, clarify-blocked.");
+                "Unsupported queue transition target state. Supported states: queued, active, review, fixing, completed, retired, blocked, clarify-blocked.");
             return 1;
         }
 
@@ -100,6 +100,14 @@ internal static class QueueTransitionCommand
                 return true;
             case "completed":
                 state = QueueItemState.Completed;
+                return true;
+            case "retired":
+                // G534: backfill target for a packet already retired
+                // outside queue tracking (G525 lifecycle) — e.g. a packet
+                // predating queue-state that must be recorded without a
+                // hand-edit. QueueManager.MapNonBlockingEventName carries
+                // the matching "retired" run-event case.
+                state = QueueItemState.Retired;
                 return true;
             case "blocked":
                 state = QueueItemState.Blocked;

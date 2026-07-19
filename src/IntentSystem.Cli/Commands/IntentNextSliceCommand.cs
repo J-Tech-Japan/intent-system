@@ -227,6 +227,17 @@ internal static class IntentNextSliceCommand
         var wip = new List<string>();
         var queued = new List<string>();
         var completed = new HashSet<string>(StringComparer.Ordinal);
+        // G534 review repair: a unit already transitioned to Retired purely
+        // in queue-state.json (e.g. via `queue transition --to retired`,
+        // now that G534 makes that a valid target — or historically via
+        // `automation issue-retire`, which writes queue-state only, never
+        // packet.yaml's lifecycle.yaml sidecar) fell through this switch
+        // with NO bucket at all, so the fallback (all-directories) loop
+        // below — whose ONLY queue-state-derived exclusion check was
+        // `completed.Contains(...)` — never excluded it and could
+        // re-surface it as a next-slice candidate. Track retired units
+        // explicitly and exclude them the same way completed ones are.
+        var retired = new HashSet<string>(StringComparer.Ordinal);
         if (queueState is not null)
         {
             foreach (var item in queueState.Items)
@@ -256,6 +267,10 @@ internal static class IntentNextSliceCommand
 
                     case QueueItemState.Completed:
                         completed.Add(item.ExecutionUnit);
+                        break;
+
+                    case QueueItemState.Retired:
+                        retired.Add(item.ExecutionUnit);
                         break;
                 }
             }
@@ -365,7 +380,7 @@ internal static class IntentNextSliceCommand
                     .OrderBy(path => path, StringComparer.Ordinal))
                 {
                     var executionUnit = Path.GetFileName(directory)!;
-                    if (completed.Contains(executionUnit))
+                    if (completed.Contains(executionUnit) || retired.Contains(executionUnit))
                     {
                         continue;
                     }

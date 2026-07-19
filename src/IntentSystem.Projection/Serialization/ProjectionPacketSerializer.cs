@@ -137,7 +137,21 @@ public static class ProjectionPacketSerializer
                     "Projection packet YAML must declare a section before its fields.");
             }
 
-            if (line.StartsWith("    - ", StringComparison.Ordinal))
+            // G534 review repair: a YAML block-sequence item may be
+            // indented at the SAME column as its parent key (the common
+            // convention, e.g. "  intent_references:\n  - foo") or nested
+            // one level deeper (this project's own renderer convention,
+            // "    - foo") — both are valid YAML. Detect a list item by
+            // its CONTENT ("- " once leading spaces are stripped), not by
+            // a fixed column count, so either convention — and any mix of
+            // the two across different fields in the same file — parses
+            // identically. Previously only the 4-space form was accepted;
+            // a 2-space list item fell through to the generic field-line
+            // branch below and failed with "field line is missing ':'"
+            // (no colon in "- foo"), rejecting every hand-authored packet
+            // using the more common convention.
+            var listItemCandidate = line.TrimStart(' ');
+            if (listItemCandidate.StartsWith("- ", StringComparison.Ordinal) || listItemCandidate == "-")
             {
                 if (currentListKey is null
                     || !currentSection.TryGetValue(currentListKey, out var listValue)
@@ -147,7 +161,8 @@ public static class ProjectionPacketSerializer
                         $"Projection packet YAML contains list item without a list field: '{line.Trim()}'.");
                 }
 
-                list.Add(ParseScalar(line[6..]));
+                var itemText = listItemCandidate.Length > 1 ? listItemCandidate[2..] : string.Empty;
+                list.Add(ParseScalar(itemText));
                 continue;
             }
 

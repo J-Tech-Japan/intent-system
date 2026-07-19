@@ -499,6 +499,62 @@ it — no separate code path needed.
 
 ---
 
+### Queue robustness: list parsing, retired backfill, lifecycle-aware selection (G534)
+
+Three related field findings against real, hand-authored packets and queue
+state are fixed together here.
+
+**`queue enqueue` accepts both YAML list-item conventions.** The packet
+readers (`ProjectionPacketSerializer` for the current
+`implementation_issue_packet` / `review_context_packet` schema, and
+`ProjectionPacketRuntimeReader`'s legacy `execution_unit` /
+`implementation_issue` fallback) previously recognized a block-sequence list
+item only when indented with exactly 4 spaces plus `"- "` — the renderer's
+own self-generated convention. A hand-authored (or foreign-tool-authored)
+packet using the more common 2-space convention, where each list item sits
+at the same column as its parent key, was rejected outright with `field
+line is missing ':''` on every item, quoted or unquoted. Both readers now
+detect a list item by content (a line that, after stripping leading
+whitespace, starts with `"- "` or is exactly `"-"`) rather than by counting
+columns, so either convention parses — and the two conventions may even be
+mixed across different fields within the same file.
+
+**`queue transition --to retired` backfills a queue-state entry.** A packet
+retired via `intent-cli packet retire` (which writes only `lifecycle.yaml`,
+never touches `queue-state.json`) or via `automation issue-retire`
+predating queue tracking sometimes needs its queue-state item marked
+`retired` directly, without hand-editing the JSON file. `retired` is now
+accepted as a transition target — `queue transition <execution-unit>
+retired [--reason <text>]` — through the same generic, permissive
+transition path used by every other non-blocking target (`queued`,
+`active`, `review`, `fixing`, `completed`); the item must already exist in
+queue-state (create it first via `queue enqueue` if it doesn't). Naming an
+unsupported target still refuses and lists the full allowed set, which now
+includes `retired`.
+
+**The publish selector excludes units retired either way, even with no
+queue entry at all.** `intent next-slice` already correctly skipped a unit
+whose packet directory carries a `lifecycle.yaml` marking it
+`retired`/`absorbed`/`superseded` — including one with no queue-state entry
+whatsoever, via its fallback scan over every packet directory under
+`.intent-cli/issues/`. It did not, however, exclude a unit that was
+`Retired` purely in `queue-state.json` (e.g. via `automation issue-retire`,
+or now via `queue transition --to retired`) with no `lifecycle.yaml`
+sidecar: the state-bucketing switch had no case for `QueueItemState.Retired`,
+so such a unit fell into no bucket, and the fallback loop's only
+queue-state-derived exclusion was `completed`. Retired units are now
+tracked and excluded the same way completed ones are, so either retirement
+signal — packet-level `lifecycle.yaml` or queue-state `Retired` — reliably
+removes a unit from next-slice candidate selection and lets the next real
+candidate surface instead.
+
+Together, these three fixes let a repo recover from a stuck or
+pre-queue-tracking retirement entirely through `queue enqueue` / `queue
+transition` / `intent next-slice`, with zero manual `queue-state.json`
+edits.
+
+---
+
 ### Facet-aware context supply (G530)
 
 Building on G529's four semantic facets (`vocabulary`, `invariant`,

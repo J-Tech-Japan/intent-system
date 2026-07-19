@@ -110,6 +110,37 @@ public sealed class QueueTransitionCommandTests
     }
 
     [Fact]
+    public void Execute_GivenRetiredTarget_BackfillsRetiredStateWithoutHandEditingQueueState()
+    {
+        // G534 field finding: the SKS-G815 case — a packet retired outside
+        // queue tracking (G525 lifecycle) needed to be backfilled into
+        // queue-state.json, but `retired` was rejected as a transition
+        // target, forcing the field workaround of hand-editing
+        // queue-state.json directly (the exact mutation class this
+        // tooling exists to prevent).
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        using var writer = new StringWriter();
+
+        var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Transitioned A2 to retired", writer.ToString(), StringComparison.Ordinal);
+
+        var updatedState = QueueStateSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+        Assert.Equal(QueueItemState.Retired, updatedState.Items.Single(item => item.ExecutionUnit == "A2").State);
+
+        var runEvents = RunLogSerializer.DeserializeAll(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
+        Assert.Equal("retired", runEvents[^1].Event);
+        Assert.Equal("A2", runEvents[^1].ExecutionUnit);
+    }
+
+    [Fact]
     public void Execute_GivenMissingRunLog_CreatesRunLogFile()
     {
         using var tempDirectory = new TemporaryDirectory();

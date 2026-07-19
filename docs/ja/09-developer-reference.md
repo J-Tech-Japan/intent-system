@@ -516,6 +516,67 @@ retired になった item は自動的に WIP gating から外れます:
 
 ---
 
+### Queue の堅牢化: list parsing・retired backfill・lifecycle を考慮した selection (G534)
+
+実際の hand-authored な packet と queue state に対する、関連する 3 つの
+field finding をここでまとめて修正します。
+
+**`queue enqueue` が両方の YAML list-item convention を受け付ける。**
+packet reader(現行の `implementation_issue_packet` /
+`review_context_packet` schema 用の `ProjectionPacketSerializer`、および
+legacy な `execution_unit` / `implementation_issue` fallback 用の
+`ProjectionPacketRuntimeReader`)は、これまで block-sequence の list item
+を「4 スペース + `"- "`」というちょうど renderer 自身が生成する形式に
+インデントされている場合にのみ list item として認識していました。より
+一般的な、各 list item が親 key と同じカラムに置かれる 2 スペース
+convention を使う hand-authored(または他ツールが生成した)packet は、
+quoted / unquoted を問わずすべての item で `field line is missing ':''`
+として全面的に拒否されていました。両方の reader は、カラム数を数える
+のではなく内容(先頭の空白を除去した行が `"- "` で始まる、または
+ちょうど `"-"` である)で list item を検出するようになったため、どちら
+の convention でもパースできます — さらに同じファイル内で異なる field
+ごとに convention を混在させることも可能です。
+
+**`queue transition --to retired` が queue-state エントリを backfill
+する。** `intent-cli packet retire`(`lifecycle.yaml` のみを書き込み、
+`queue-state.json` には一切触れない)で retire された packet や、queue
+tracking より前に `automation issue-retire` で retire された packet は、
+JSON ファイルを手編集することなく、その queue-state item を直接
+`retired` としてマークする必要が生じることがあります。`retired` は
+transition target として受け付けられるようになりました —
+`queue transition <execution-unit> retired [--reason <text>]` — 他の
+すべての non-blocking target(`queued`、`active`、`review`、`fixing`、
+`completed`)と同じ、汎用的で許容的な transition path を通ります。item
+は queue-state に既に存在している必要があります(存在しなければ先に
+`queue enqueue` で作成してください)。サポートされていない target を
+指定した場合は引き続き refuse され、許可されている target の完全な一覧
+(今回 `retired` を含むようになったもの)が表示されます。
+
+**publish selector は、queue entry が一切無い場合も含め、どちらの方法で
+retire された unit も除外する。** `intent next-slice` は、packet
+directory が `lifecycle.yaml` を持ち `retired`/`absorbed`/`superseded`
+とマークされている unit を、`.intent-cli/issues/` 配下の全 packet
+directory を走査する fallback scan 経由で、queue-state エントリが
+一切無い場合も含めて既に正しく skip していました。しかし、
+`lifecycle.yaml` サイドカーが無く、`queue-state.json` の中だけで
+`Retired`(例えば `automation issue-retire` 経由、あるいは今回追加された
+`queue transition --to retired` 経由)になっている unit は除外して
+いませんでした: state-bucketing の switch に `QueueItemState.Retired`
+用の case が無かったため、そのような unit はどの bucket にも入らず、
+fallback loop の唯一の queue-state 由来の除外条件は `completed` だけ
+だったためです。retired な unit は completed な unit と同じ方法で
+追跡・除外されるようになったため、packet レベルの `lifecycle.yaml` と
+queue-state の `Retired` のどちらの retirement signal でも、その unit
+は next-slice の candidate selection から確実に除外され、代わりに次の
+本当の candidate が浮上するようになります。
+
+これら 3 つの修正を組み合わせることで、repo は `queue enqueue` /
+`queue transition` / `intent next-slice` だけを使って、行き詰まった
+retirement や queue tracking 以前の retirement から、`queue-state.json`
+を一切手編集することなく完全に復旧できます。
+
+---
+
 ### facet を意識した context 供給 (G530)
 
 G529 の 4 つの semantic facet（`vocabulary`、`invariant`、`decider`、

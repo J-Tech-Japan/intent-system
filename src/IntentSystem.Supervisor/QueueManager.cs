@@ -492,6 +492,10 @@ public static class QueueManager
             QueueItemState.Review => "review-started",
             QueueItemState.Fixing => "fix-requested",
             QueueItemState.Completed => "completed",
+            // G534: retired is a valid terminal transition target (G525
+            // lifecycle) — backfills a packet retired outside queue
+            // tracking without a hand-edited queue-state.json.
+            QueueItemState.Retired => "retired",
             _ => throw new InvalidOperationException(
                 $"Unsupported queue transition target state '{FormatState(targetState)}'.")
         };
