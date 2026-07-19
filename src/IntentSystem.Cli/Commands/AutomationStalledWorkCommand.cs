@@ -35,35 +35,42 @@ namespace IntentSystem.Cli.Commands;
 /// Strictly read-only: no GitHub mutation, no queue-state/runs.jsonl write,
 /// no label change.
 ///
-/// Execution-unit and domain identification (G532: replaces the PR #1148
-/// tightening, which excluded exactly the stalls this surface exists to
-/// find — see field findings against <c>ICL.M.SEMANTIC_FACETS</c>-adjacent
-/// production adoption, 2026-07-15 and 2026-07-18):
+/// Execution-unit and domain identification (G532, review-repaired):
 /// <list type="bullet">
 /// <item>the execution unit is the LEADING ID token of the title
 ///   (<see cref="ExecutionUnitFromTitle"/>), not everything before the
 ///   first colon — a title like <c>"SKS-G815 G812 sub-slice 1: ..."</c>
-///   resolves to <c>SKS-G815</c>, not the whole pre-colon phrase;</item>
-/// <item>when no leading ID token is found, the candidate is matched
+///   resolves to <c>SKS-G815</c>, not the whole pre-colon phrase — and only
+///   when a real packet.yaml corroborates it (a bare-looking match with no
+///   corresponding packet is NOT trusted, e.g. <c>"G12abc"</c> never yields
+///   unit <c>G12</c>);</item>
+/// <item>when no leading ID token is corroborated, the candidate is matched
 ///   against every packet under <c>.intent-cli/issues/*/packet.yaml</c> by
 ///   that packet's own declared <c>source_execution_unit</c> appearing as a
-///   token within the title (<see cref="MatchExecutionUnitBySourceExecutionUnit"/>)
-///   before giving up;</item>
+///   whole token within the title (<see cref="MatchExecutionUnitBySourceExecutionUnit"/>).
+///   Exactly one distinct matching packet is required — two or more
+///   different packets' declared units both appearing in the same title is
+///   reported as <see cref="ReasonExecutionUnitAmbiguous"/> rather than
+///   guessed at (e.g. by picking the longest match);</item>
 /// <item>domain is read from the packet's nested
 ///   <c>implementation_issue_packet.domain</c> field first, falling back to
 ///   a top-level <c>domain:</c> field as a compatibility alias (<see
 ///   cref="ReadPacketDeclaredDomain"/>);</item>
-/// <item>domain confirmation now uses the same G522 order as every other
-///   execution-unit-resolving surface (<see cref="PacketDomainResolution"/>):
-///   an explicit <c>--domain</c> (always present — it is a required
-///   argument here) wins whenever the packet is silent on domain, and is an
-///   error only when it actively CONTRADICTS a packet-declared domain. A
-///   candidate is excluded from <c>items[]</c> — and reported in
-///   <c>excluded[]</c> with reason <c>domain-contradiction</c> and the
-///   derivation attempted — only on a genuine contradiction; an
-///   underivable domain is no longer fail-closed for this surface, since
-///   <c>--domain</c> is mandatory and therefore always available to stand
-///   in for it.</item>
+/// <item>domain confirmation uses the same G522 order as every other
+///   execution-unit-resolving surface (<see cref="PacketDomainResolution"/>)
+///   — but ONLY for a candidate whose execution unit is itself corroborated
+///   by real packet/queue linkage (a matched packet.yaml, or — for
+///   <c>merged-not-closed-out</c> — an already-matched queue-state item).
+///   For such a candidate, an explicit <c>--domain</c> (always present — it
+///   is a required argument here) wins whenever that linkage is silent on
+///   domain, and is an error only when it actively CONTRADICTS a
+///   packet-declared domain. A candidate whose execution unit could NOT be
+///   corroborated at all is never assumed to belong to the requested
+///   <c>--domain</c> just because one was passed — <c>--domain</c> scopes
+///   the scan, it does not by itself identify an otherwise-unidentified
+///   candidate as a member of it. Every exclusion (contradiction,
+///   uncorroborated, or ambiguous) is reported in <c>excluded[]</c> with its
+///   reason and the derivation attempted, never silent.</item>
 /// </list>
 /// </summary>
 internal static class AutomationStalledWorkCommand
@@ -74,6 +81,14 @@ internal static class AutomationStalledWorkCommand
     public const string KindPublishedNotDelegated = "published-not-delegated";
     public const string KindPrCreatedNotReviewing = "pr-created-not-reviewing";
     public const string KindMergedNotClosedOut = "merged-not-closed-out";
+
+    /// <summary>
+    /// G532 review repair: a title matched more than one distinct packet's
+    /// declared <c>source_execution_unit</c> as a token — the execution unit
+    /// cannot be picked without guessing, so it is reported here instead of
+    /// silently choosing the longest (or first-sorted) match.
+    /// </summary>
+    public const string ReasonExecutionUnitAmbiguous = "execution-unit-ambiguous";
 
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
@@ -220,15 +235,15 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var executionUnit = ResolveExecutionUnit(context, issue.Title);
-            var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
-            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit, repo,
+            var resolution = ResolveExecutionUnit(context, issue.Title);
+            var packetDeclaredDomain = resolution.Corroborated ? ReadPacketDeclaredDomain(context, resolution.ExecutionUnit) : null;
+            if (!TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
                 {
                     Kind = KindPublishedNotDelegated,
-                    ExecutionUnit = executionUnit,
+                    ExecutionUnit = resolution.ExecutionUnit,
                     Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
                     Pr = null,
                     Reason = reason,
@@ -240,7 +255,7 @@ internal static class AutomationStalledWorkCommand
             items.Add(new StalledWorkItem
             {
                 Kind = KindPublishedNotDelegated,
-                ExecutionUnit = executionUnit,
+                ExecutionUnit = resolution.ExecutionUnit,
                 Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
                 Pr = null,
                 AgeMinutes = ComputeAgeMinutes(issue.CreatedAt, now),
@@ -301,15 +316,15 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var executionUnit = ResolveExecutionUnit(context, matchedIssue.Title);
-            var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
-            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit, repo,
+            var resolution = ResolveExecutionUnit(context, matchedIssue.Title);
+            var packetDeclaredDomain = resolution.Corroborated ? ReadPacketDeclaredDomain(context, resolution.ExecutionUnit) : null;
+            if (!TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
                 {
                     Kind = KindPrCreatedNotReviewing,
-                    ExecutionUnit = executionUnit,
+                    ExecutionUnit = resolution.ExecutionUnit,
                     Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
                     Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
                     Reason = reason,
@@ -321,7 +336,7 @@ internal static class AutomationStalledWorkCommand
             items.Add(new StalledWorkItem
             {
                 Kind = KindPrCreatedNotReviewing,
-                ExecutionUnit = executionUnit,
+                ExecutionUnit = resolution.ExecutionUnit,
                 Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
                 Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
                 AgeMinutes = ComputeAgeMinutes(pr.CreatedAt, now),
@@ -379,8 +394,15 @@ internal static class AutomationStalledWorkCommand
                 : null;
             var prRef = new StalledWorkRef { Number = pr.Number, Url = pr.Url };
 
+            // The queue-state match itself IS corroborating packet/queue
+            // linkage — this candidate's execution unit was not guessed
+            // from a title at all, it came from an already-matched queue
+            // item — so it is always treated as corroborated here, even if
+            // packet.yaml itself was since cleaned up from disk.
             var packetDeclaredDomain = ReadPacketDeclaredDomain(context, matchedItem.ExecutionUnit);
-            if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, matchedItem.ExecutionUnit, repo,
+            var resolution = new ExecutionUnitResolution(
+                matchedItem.ExecutionUnit, Corroborated: true, IsAmbiguous: false, CandidatePacketPaths: Array.Empty<string>());
+            if (!TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
@@ -431,14 +453,43 @@ internal static class AutomationStalledWorkCommand
     /// </summary>
     private static bool TryConfirmDomain(
         string domain,
+        ExecutionUnitResolution executionUnitResolution,
         string? packetDeclaredDomain,
         IReadOnlyList<string> candidateDomains,
-        string executionUnit,
         string repo,
         out string reason,
         out string detail)
     {
         var reinvocation = $"intent-cli automation stalled-work --domain <name> --repo {repo} --format json";
+
+        if (!executionUnitResolution.Corroborated)
+        {
+            var candidates = candidateDomains.Count > 0
+                ? string.Join(", ", candidateDomains)
+                : "(none found under intents/)";
+
+            if (executionUnitResolution.IsAmbiguous)
+            {
+                reason = ReasonExecutionUnitAmbiguous;
+                detail =
+                    "the execution unit is ambiguous: more than one packet's declared `source_execution_unit` "
+                    + $"matches this title as a token — candidate packets: {string.Join(", ", executionUnitResolution.CandidatePacketPaths)}. "
+                    + $"Candidate domains: {candidates}. Re-invoke with: {reinvocation}. "
+                    + "Not assumed to belong to any one of them without an unambiguous match.";
+                return false;
+            }
+
+            reason = PacketDomainResolution.ReasonUnderivable;
+            detail =
+                "the execution unit could not be corroborated by any packet: no leading ID token's packet.yaml "
+                + "exists, and no packet under `.intent-cli/issues/*/packet.yaml` declares a `source_execution_unit` "
+                + $"matching this title. Candidate domains: {candidates}. Re-invoke with: {reinvocation}. "
+                + "An explicit --domain scopes the scan; it does not by itself establish that an otherwise-"
+                + "unidentified candidate is a member of it, so this candidate is excluded rather than assumed.";
+            return false;
+        }
+
+        var executionUnit = executionUnitResolution.ExecutionUnit;
         var resolution = PacketDomainResolution.Resolve(domain, packetDeclaredDomain, candidateDomains, reinvocation);
         if (resolution.IsError)
         {
@@ -558,37 +609,60 @@ internal static class AutomationStalledWorkCommand
     }
 
     /// <summary>
-    /// G532: resolves the candidate execution unit from an issue/PR title —
-    /// first via the leading ID token (<see cref="ExecutionUnitFromTitle"/>),
-    /// falling back to a packet-directory scan matching by declared
-    /// <c>source_execution_unit</c> (<see cref="MatchExecutionUnitBySourceExecutionUnit"/>)
-    /// when no leading token is found. This string is used ONLY to locate
-    /// the candidate's packet.yaml — never as the domain-membership decision
-    /// itself (see <see cref="TryConfirmDomain"/>).
+    /// G532 review repair: resolves the candidate execution unit from an
+    /// issue/PR title, requiring CORROBORATION by a real packet before
+    /// trusting either identification path — first via the leading ID token
+    /// (<see cref="ExecutionUnitFromTitle"/>) when a matching packet.yaml
+    /// exists at that exact path, falling back to a packet-directory scan
+    /// matching by declared <c>source_execution_unit</c> (<see
+    /// cref="MatchExecutionUnitBySourceExecutionUnit"/>) otherwise. The
+    /// returned <see cref="ExecutionUnitResolution.ExecutionUnit"/> is used
+    /// ONLY to locate the candidate's packet.yaml — never as the
+    /// domain-membership decision itself (see <see cref="TryConfirmDomain"/>).
     /// </summary>
-    private static string ResolveExecutionUnit(CliContext context, string title)
+    private static ExecutionUnitResolution ResolveExecutionUnit(CliContext context, string title)
     {
         var leadingToken = ExecutionUnitFromTitle(title);
         if (!string.IsNullOrEmpty(leadingToken))
         {
-            return leadingToken;
+            var packetPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", leadingToken, "packet.yaml");
+            if (File.Exists(packetPath))
+            {
+                return new ExecutionUnitResolution(leadingToken, Corroborated: true, IsAmbiguous: false, CandidatePacketPaths: [packetPath]);
+            }
         }
 
-        return MatchExecutionUnitBySourceExecutionUnit(context, title);
+        // Leading token absent, OR present but uncorroborated by any real
+        // packet.yaml at that exact path — fall back to a full scan by
+        // declared source_execution_unit rather than trusting an unverified
+        // guess (e.g. "G12abc" must never yield unit "G12").
+        var fallback = MatchExecutionUnitBySourceExecutionUnit(context, title);
+        if (fallback.Corroborated || fallback.IsAmbiguous)
+        {
+            return fallback;
+        }
+
+        // Neither path corroborated anything. Still surface the leading
+        // token as a best-effort GUESS for human readability in an
+        // excluded[] entry — Corroborated stays false, so it is never
+        // trusted for a domain decision (see TryConfirmDomain).
+        return new ExecutionUnitResolution(leadingToken, Corroborated: false, IsAmbiguous: false, CandidatePacketPaths: Array.Empty<string>());
     }
 
     /// <summary>
     /// Extracts the LEADING ID token from a title — <c>^[A-Z]+-G?[0-9]+</c>
     /// (an optionally-alphanumeric prefix, a dash, an optional literal
     /// <c>G</c>, then digits — e.g. <c>SKS-G815</c>, <c>Z4R-G3</c>) or a
-    /// bare <c>^G[0-9]+</c> (e.g. <c>G523</c>). G532: replaces the prior
-    /// "everything before the first colon" rule, which broke on a title
-    /// whose ID is not immediately followed by a colon (e.g. <c>"SKS-G815
-    /// G812 sub-slice 1: ..."</c> used to resolve to the whole pre-colon
-    /// phrase instead of just <c>SKS-G815</c>).
+    /// bare <c>^G[0-9]+</c> (e.g. <c>G523</c>), with a mandatory RIGHT
+    /// boundary (no immediately-following letter/digit) so <c>"SKS-G815foo"</c>
+    /// or <c>"G12abc"</c> never yield a truncated <c>SKS-G815</c> / <c>G12</c>.
+    /// G532: replaces the prior "everything before the first colon" rule,
+    /// which broke on a title whose ID is not immediately followed by a
+    /// colon (e.g. <c>"SKS-G815 G812 sub-slice 1: ..."</c> used to resolve
+    /// to the whole pre-colon phrase instead of just <c>SKS-G815</c>).
     /// </summary>
     private static readonly System.Text.RegularExpressions.Regex LeadingExecutionUnitPattern = new(
-        @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)",
+        @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)(?![A-Za-z0-9])",
         System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static string ExecutionUnitFromTitle(string title)
@@ -602,31 +676,34 @@ internal static class AutomationStalledWorkCommand
     }
 
     /// <summary>
-    /// G532: fallback for a title with no leading ID token — scans every
-    /// packet under <c>.intent-cli/issues/*/packet.yaml</c> and matches the
-    /// title against each packet's own declared <c>source_execution_unit</c>
-    /// (nested <c>implementation_issue_packet.source_execution_unit</c>
-    /// first, bare <c>source_execution_unit</c> as alias) appearing as a
-    /// whole token anywhere in the title — not just as a leading prefix,
-    /// since by definition no leading token was found. When more than one
-    /// packet's declared unit matches, the longest (most specific) match
-    /// wins. Read-only; a missing or unreadable packet is skipped rather
-    /// than failing the whole scan.
+    /// G532 review repair: fallback for a title with no corroborated leading
+    /// ID token — scans every packet under
+    /// <c>.intent-cli/issues/*/packet.yaml</c> and matches the title against
+    /// each packet's own declared <c>source_execution_unit</c> (nested
+    /// <c>implementation_issue_packet.source_execution_unit</c> first, bare
+    /// <c>source_execution_unit</c> as alias) appearing as a whole token
+    /// anywhere in the title. Exactly one DISTINCT matching declared unit is
+    /// required to corroborate — zero matches is simply uncorroborated, and
+    /// two or more distinct matches is genuinely ambiguous (never resolved
+    /// by picking the longest or first-sorted match) and is reported as
+    /// such via <see cref="ExecutionUnitResolution.IsAmbiguous"/>. Read-only;
+    /// a missing or unreadable packet is skipped rather than failing the
+    /// whole scan.
     /// </summary>
-    private static string MatchExecutionUnitBySourceExecutionUnit(CliContext context, string title)
+    private static ExecutionUnitResolution MatchExecutionUnitBySourceExecutionUnit(CliContext context, string title)
     {
         if (string.IsNullOrWhiteSpace(title))
         {
-            return string.Empty;
+            return new ExecutionUnitResolution(string.Empty, Corroborated: false, IsAmbiguous: false, CandidatePacketPaths: Array.Empty<string>());
         }
 
         var issuesDir = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
         if (!Directory.Exists(issuesDir))
         {
-            return string.Empty;
+            return new ExecutionUnitResolution(string.Empty, Corroborated: false, IsAmbiguous: false, CandidatePacketPaths: Array.Empty<string>());
         }
 
-        string? bestMatch = null;
+        var matches = new List<(string Unit, string Path)>();
         foreach (var unitDir in Directory.EnumerateDirectories(issuesDir).OrderBy(p => p, StringComparer.Ordinal))
         {
             var packetYamlPath = Path.Combine(unitDir, "packet.yaml");
@@ -652,13 +729,25 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            if (bestMatch is null || declaredUnit.Length > bestMatch.Length)
-            {
-                bestMatch = declaredUnit;
-            }
+            matches.Add((declaredUnit, packetYamlPath));
         }
 
-        return bestMatch ?? string.Empty;
+        var distinctUnits = matches.Select(m => m.Unit).Distinct(StringComparer.Ordinal).ToArray();
+        if (distinctUnits.Length == 0)
+        {
+            return new ExecutionUnitResolution(string.Empty, Corroborated: false, IsAmbiguous: false, CandidatePacketPaths: Array.Empty<string>());
+        }
+
+        if (distinctUnits.Length == 1)
+        {
+            var paths = matches.Where(m => m.Unit == distinctUnits[0]).Select(m => m.Path).ToArray();
+            return new ExecutionUnitResolution(distinctUnits[0], Corroborated: true, IsAmbiguous: false, CandidatePacketPaths: paths);
+        }
+
+        // Two or more DISTINCT declared units both appear as tokens in this
+        // title — genuinely ambiguous. Fail closed rather than guessing.
+        var allPaths = matches.Select(m => m.Path).ToArray();
+        return new ExecutionUnitResolution(string.Empty, Corroborated: false, IsAmbiguous: true, CandidatePacketPaths: allPaths);
     }
 
     /// <summary>
@@ -834,6 +923,24 @@ internal static class AutomationStalledWorkCommand
         }
     }
 }
+
+/// <summary>
+/// G532 review repair: outcome of resolving a candidate's execution unit —
+/// carries whether that resolution is CORROBORATED by real packet/queue
+/// linkage (a matched packet.yaml, or an already-matched queue-state item),
+/// since only a corroborated candidate may have its domain confirmed by an
+/// explicit <c>--domain</c> alone when its packet is silent on domain (see
+/// <see cref="AutomationStalledWorkCommand.TryConfirmDomain"/>).
+/// <see cref="IsAmbiguous"/> distinguishes "no packet corroborates this at
+/// all" from "more than one distinct packet's declared unit matches" — both
+/// leave <see cref="Corroborated"/> false, but warrant different exclusion
+/// reasons and diagnostics.
+/// </summary>
+internal readonly record struct ExecutionUnitResolution(
+    string ExecutionUnit,
+    bool Corroborated,
+    bool IsAmbiguous,
+    IReadOnlyList<string> CandidatePacketPaths);
 
 internal sealed record AutomationStalledWorkResult
 {

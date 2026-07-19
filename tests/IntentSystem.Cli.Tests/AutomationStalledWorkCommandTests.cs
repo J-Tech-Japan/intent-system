@@ -7,6 +7,7 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(AutomationStalledWorkSharedStateCollection.Name)]
 public sealed class AutomationStalledWorkCommandTests : IDisposable
 {
     private static readonly DateTimeOffset FixedNow = new(2026, 7, 14, 12, 0, 0, TimeSpan.Zero);
@@ -311,22 +312,17 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_NoPacketYamlAtAll_ExplicitDomainIsAuthoritative_IncludesItemNotExcluded()
+    public void Execute_NoPacketYamlAtAll_UncorroboratedCandidate_StillFailsClosedAsUnderivable()
     {
-        // G532 supersedes the PR #1148 tightening tested here previously:
-        // that policy treated missing packet metadata as fail-closed even
-        // with an explicit --domain, on the theory that a broad
-        // multi-candidate scan cannot trust --domain alone for a candidate
-        // it cannot corroborate. In production that excluded exactly the
-        // stalls this surface exists to find (field findings SKS-G815 /
-        // SKS-G823), each papered over with a team workaround. G532 aligns
-        // stalled-work with the same G522 order every other
-        // execution-unit-resolving surface already uses: since --domain is
-        // a REQUIRED argument here, it is always available to stand in for
-        // a silent packet — a candidate is excluded only on a genuine
-        // domain CONTRADICTION (see
-        // Execute_PacketDeclaresContradictingDomain_ExcludesAsStructuredResult),
-        // never merely because domain could not be derived.
+        // G532 review repair: an explicit --domain SCOPES the scan; it does
+        // not by itself establish that an otherwise-unidentified candidate
+        // (no packet.yaml anywhere corroborates it) is a member of that
+        // domain. This is distinct from the case G532 actually fixed —
+        // Execute_PacketDeclaresDomainOnlyNested_NotDomainUnderivable_ConfirmsRequestedDomain
+        // below, where a REAL, corroborating packet exists but is merely
+        // silent on domain. Only a corroborated-but-silent candidate is
+        // rescued by an explicit --domain; a fully uncorroborated one
+        // remains fail-closed, exactly like the original PR #1148 policy.
         using var workspace = new StalledWorkWorkspace();
         // No packet.yaml written for this execution unit at all.
         var issue = BuildIssue(9999, "SKS-G512: From a different domain naming convention", FixedNow.AddHours(-26), "intent-target");
@@ -340,16 +336,23 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         using var doc = JsonDocument.Parse(writer.ToString());
-        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
-        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
-        Assert.Equal(AutomationStalledWorkCommand.KindPublishedNotDelegated, item.GetProperty("kind").GetString());
-        Assert.Equal("SKS-G512", item.GetProperty("execution_unit").GetString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        // The leading-token guess is still shown for human readability, but
+        // was never trusted for the domain decision.
+        Assert.Equal("SKS-G512", excludedItem.GetProperty("execution_unit").GetString());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+        Assert.Contains("could not be corroborated", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "Re-invoke with: intent-cli automation stalled-work --domain <name> --repo J-Tech-Japan/intent-system --format json",
+            excludedItem.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Execute_NoPacketYamlAtAll_Markdown_ReportsItemNotExclusion()
+    public void Execute_NoPacketYamlAtAll_Markdown_PinsUnderivableReasonAndReinvocation()
     {
-        // Same authoritative-domain fixture as above, rendered as markdown.
+        // Same uncorroborated fixture as above, rendered as markdown.
         using var workspace = new StalledWorkWorkspace();
         var issue = BuildIssue(9999, "SKS-G512: From a different domain naming convention", FixedNow.AddHours(-26), "intent-target");
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
@@ -363,8 +366,11 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.Equal(0, exitCode);
         var output = writer.ToString();
         Assert.Contains("SKS-G512", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("domain-underivable", output, StringComparison.Ordinal);
-        Assert.Contains("- excluded: 0", output, StringComparison.Ordinal);
+        Assert.Contains("domain-underivable", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "Re-invoke with: intent-cli automation stalled-work --domain <name> --repo J-Tech-Japan/intent-system --format json",
+            output,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -494,12 +500,14 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_TitleWithNoLeadingIdTokenAndNoMatchingPacketAnywhere_StillSurfacesItemNotSilentlyDropped()
+    public void Execute_TitleWithNoLeadingIdTokenAndNoMatchingPacketAnywhere_ReportedAsUnderivableNotSilentlyDropped()
     {
-        // Even the worst case (no leading token, no packet anywhere
-        // corroborates it) must still surface the item rather than
-        // silently disappearing — the requested --domain is authoritative
-        // and only an active packet-declared CONTRADICTION excludes.
+        // The worst case (no leading token, no packet anywhere corroborates
+        // it) must be REPORTED — in excluded[] with a structured reason and
+        // diagnostics — rather than silently disappearing. It must NOT be
+        // silently included either: an explicit --domain scopes the scan,
+        // it does not identify an otherwise-unidentified candidate as
+        // belonging to it.
         using var workspace = new StalledWorkWorkspace();
         var issue = BuildIssue(1901, "Completely freeform title with no identifiable unit", FixedNow.AddHours(-26), "intent-target");
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
@@ -512,9 +520,10 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
 
         Assert.Equal(0, exitCode);
         using var doc = JsonDocument.Parse(writer.ToString());
-        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
-        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
-        Assert.Equal(string.Empty, item.GetProperty("execution_unit").GetString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(string.Empty, excludedItem.GetProperty("execution_unit").GetString());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
     }
 
     [Fact]
@@ -538,6 +547,97 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.Contains("Derivation attempted", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
         Assert.Contains("implementation_issue_packet.domain", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
         Assert.Contains("top-level `domain:` alias", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PacketExistsButDeclaresNoDomainField_CorroboratedAndRescuedByExplicitDomain()
+    {
+        // G532's core fix, precisely scoped: a REAL, corroborating packet
+        // (folder exists, packet.yaml is readable, its own
+        // source_execution_unit matches) that simply never declares a
+        // domain — neither nested nor top-level — is rescued by an
+        // explicit --domain, unlike a fully uncorroborated candidate (see
+        // Execute_NoPacketYamlAtAll_UncorroboratedCandidate_StillFailsClosedAsUnderivable).
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketWithNoDomainField("G970");
+        var issue = BuildIssue(1970, "G970: Packet exists but is silent on domain", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal("G970", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_TitleWithLetterImmediatelyAfterLeadingIdDigits_NeverTruncatesToAShorterUnit()
+    {
+        // G532 review repair: the leading-token regex needs a right
+        // boundary. Without one, "G12abc" would wrongly parse as "G12" —
+        // here a packet for "G12" exists (and would confirm the requested
+        // domain if wrongly matched), but the title's real token "G12abc"
+        // does not correspond to it, and no packet declares
+        // source_execution_unit "G12abc" either — so this must stay
+        // uncorroborated and excluded, never silently included via the
+        // truncated "G12" guess.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G12", "intent-cli");
+        var issue = BuildIssue(1912, "G12abc: Looks like G12 but is not", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+        // Never the truncated guess — the boundary rejects it entirely, so
+        // there is no leading-token guess left to show either.
+        Assert.Equal(string.Empty, excludedItem.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_TitleMatchesTwoDistinctDeclaredExecutionUnits_ReportedAsAmbiguousNotGuessed()
+    {
+        // G532 review repair: when a freeform title (no leading ID token)
+        // contains tokens matching TWO different packets' declared
+        // source_execution_unit, the execution unit is genuinely ambiguous
+        // — it must never be resolved by picking the longest match or the
+        // first sorted directory.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteNestedPacket("G12", "intent-cli");
+        workspace.WriteNestedPacket("G34", "intent-cli");
+        var issue = BuildIssue(1934, "Combine G12 and G34 into one follow-up", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonExecutionUnitAmbiguous, excludedItem.GetProperty("reason").GetString());
+        Assert.Equal(string.Empty, excludedItem.GetProperty("execution_unit").GetString());
+        var detail = excludedItem.GetProperty("detail").GetString();
+        Assert.Contains("ambiguous", detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("G12", detail, StringComparison.Ordinal);
+        Assert.Contains("G34", detail, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -783,6 +883,23 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             File.WriteAllText(
                 Path.Combine(dir, "packet.yaml"),
                 $"domain: {topLevelDomain}\nimplementation_issue_packet:\n  source_execution_unit: {executionUnit}\n  domain: {nestedDomain}\n");
+        }
+
+        /// <summary>
+        /// G532 review repair: writes a packet.yaml that identifies the
+        /// execution unit (so it IS corroborated — the folder exists and
+        /// the packet is readable) but declares NO domain field anywhere,
+        /// neither nested nor top-level. This is the one case an explicit
+        /// --domain is still allowed to rescue: packet/queue linkage
+        /// identifies the candidate, it is simply silent on domain.
+        /// </summary>
+        public void WritePacketWithNoDomainField(string executionUnit)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                Path.Combine(dir, "packet.yaml"),
+                $"implementation_issue_packet:\n  source_execution_unit: {executionUnit}\n  target_repo: J-Tech-Japan/intent-system\n");
         }
 
         public void Dispose()

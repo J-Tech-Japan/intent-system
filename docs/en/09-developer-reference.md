@@ -239,11 +239,13 @@ All three surfaces apply the full order strictly — none of them fall back to
   Omitting `--domain` entirely does not request cross-candidate scoping, so
   multiple candidates with different (but each individually derivable)
   domains may still coexist in one broad-scan result.
-- `automation stalled-work` (G532) also applies the full order — see
-  below. Unlike `publish-recovery`, `--domain` is a REQUIRED argument for
-  `stalled-work`, so step 3 (fail loud) never triggers there in practice:
-  an explicit domain is always available to stand in for a candidate whose
-  own packet is silent on domain.
+- `automation stalled-work` (G532) also applies this order — see below —
+  but only once a candidate's execution unit is itself corroborated by real
+  packet/queue linkage. `--domain` is a REQUIRED argument for
+  `stalled-work`, so for a corroborated candidate it is always available to
+  stand in for linkage that is silent on domain; but `--domain` scopes the
+  scan, it does not by itself identify an otherwise-unidentified candidate
+  as a member of it — an uncorroborated candidate is still excluded.
 
 ### Stalled-work detection (G523)
 
@@ -284,14 +286,21 @@ false `worker claim` recommendation.
 
 The candidate execution unit is the LEADING ID token of the issue/PR title —
 `^[A-Z][A-Z0-9]*-G?[0-9]+` (an alphanumeric prefix, e.g. `SKS-G815` or
-`Z4R-G3`) or a bare `^G[0-9]+` (e.g. `G523`) — not everything before the
-first colon. A title like `"SKS-G815 G812 sub-slice 1: ..."` resolves to
-`SKS-G815`, never the whole pre-colon phrase. When a title has no leading ID
-token at all, the candidate is matched instead against every packet under
-`.intent-cli/issues/*/packet.yaml` by that packet's own declared
-`source_execution_unit` (nested `implementation_issue_packet.source_execution_unit`
-first, bare `source_execution_unit` as alias) appearing as a whole token
-anywhere in the title, before giving up.
+`Z4R-G3`) or a bare `^G[0-9]+` (e.g. `G523`), with a mandatory RIGHT boundary
+(no letter/digit immediately after) — not everything before the first colon.
+A title like `"SKS-G815 G812 sub-slice 1: ..."` resolves to `SKS-G815`,
+never the whole pre-colon phrase; a title like `"G12abc: ..."` never
+truncates to `G12`. This leading token is trusted only when a real
+`.intent-cli/issues/<token>/packet.yaml` corroborates it. When it is absent,
+or present but uncorroborated, the candidate is matched instead against
+every packet under `.intent-cli/issues/*/packet.yaml` by that packet's own
+declared `source_execution_unit` (nested
+`implementation_issue_packet.source_execution_unit` first, bare
+`source_execution_unit` as alias) appearing as a whole token anywhere in the
+title. Exactly one DISTINCT matching packet is required to corroborate —
+two or more different packets' declared units both appearing in the same
+title is reported as ambiguous (`execution-unit-ambiguous`) rather than
+resolved by guessing (e.g. picking the longest match).
 
 This execution-unit string is used ONLY to locate the candidate's
 `.intent-cli/issues/<unit>/packet.yaml` — never as the domain-membership
@@ -300,25 +309,35 @@ decision itself. Domain is read from that packet's nested
 top-level `domain:` field as a compatibility alias when the nested field is
 absent.
 
-**Domain confirmation now applies the same G522 order as every other
+**Domain confirmation applies the same G522 order as every other
 execution-unit-resolving surface** (`--domain` > packet-declared domain >
-fail-loud) — this supersedes an earlier (PR #1148) tightening that treated a
-missing/absent packet-declared domain as fail-closed even with an explicit
-`--domain`, on the theory that a broad multi-candidate scan could not trust
-`--domain` alone for a candidate it could not corroborate. In production
-that policy excluded exactly the stalls this surface exists to find (field
-findings against a downstream adopter, 2026-07-15 and 2026-07-18), each
-papered over with a team workaround instead of surfaced. Since `--domain` is
-a REQUIRED argument for `stalled-work`, it is always available to stand in
-for a candidate whose packet is silent on domain — a candidate is excluded
-from `items[]`, and reported instead in `excluded[]` (`kind`,
-`execution_unit`, `issue`/`pr`, `reason`, `detail`), ONLY on a genuine
-CONTRADICTION between `--domain` and a packet that actively declares a
-different domain. `reason` is `domain-contradiction`; `detail` names the
-specific conflicting packet-declared domain AND the derivation attempted
-(which of the nested field / top-level alias was checked, at which
-packet.yaml path) — every exclusion is reported with its reason and the
-derivation attempted, never silent.
+fail-loud) — but ONLY for a candidate whose execution unit is itself
+corroborated by real packet/queue linkage (a matched packet.yaml, or — for
+`merged-not-closed-out` — an already-matched queue-state item). For such a
+candidate, since `--domain` is a REQUIRED argument for `stalled-work`, it is
+always available to stand in for linkage that is silent on domain — the
+candidate is excluded from `items[]` only on a genuine CONTRADICTION between
+`--domain` and a packet that actively declares a different domain. This is
+narrower than an earlier (PR #1148) tightening that fail-closed on ANY
+missing/absent packet-declared domain, including cases where the candidate's
+execution unit itself was never corroborated by anything — that broader
+tightening excluded exactly the stalls this surface exists to find when the
+identification logic itself was wrong (field findings against a downstream
+adopter, 2026-07-15 and 2026-07-18), each papered over with a team
+workaround instead of surfaced.
+
+A candidate whose execution unit could NOT be corroborated at all — no
+leading token's packet.yaml exists, and no packet's declared
+`source_execution_unit` matches the title — is still excluded
+(`domain-underivable`): an explicit `--domain` SCOPES the scan, it does not
+by itself establish that an otherwise-unidentified candidate is a member of
+it. `excluded[]` (`kind`, `execution_unit`, `issue`/`pr`, `reason`,
+`detail`) reports every exclusion — `domain-contradiction` (naming the
+specific conflicting packet-declared domain and the derivation attempted:
+which of the nested field / top-level alias was checked, at which
+packet.yaml path), `domain-underivable` (uncorroborated execution unit), or
+`execution-unit-ambiguous` (naming every candidate packet path that matched)
+— always with its reason and the derivation attempted, never silent.
 
 This slice is detection only — consuming the surface from the orchestrator
 wake procedure and from an external heartbeat are separate follow-up slices.

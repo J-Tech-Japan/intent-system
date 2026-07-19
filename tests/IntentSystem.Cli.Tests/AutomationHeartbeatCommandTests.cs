@@ -10,6 +10,7 @@ namespace IntentSystem.Cli.Tests;
 /// wrapper around <see cref="AutomationStalledWorkCommand.Analyze"/> that
 /// additionally emits a ready-to-send reconcile message body when stale.
 /// </summary>
+[Collection(AutomationStalledWorkSharedStateCollection.Name)]
 public sealed class AutomationHeartbeatCommandTests : IDisposable
 {
     private static readonly DateTimeOffset FixedNow = new(2026, 7, 14, 12, 0, 0, TimeSpan.Zero);
