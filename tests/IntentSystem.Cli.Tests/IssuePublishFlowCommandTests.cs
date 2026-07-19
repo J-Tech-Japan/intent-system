@@ -17,7 +17,7 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         // the pre-existing create-path tests (which predate this check)
         // are unaffected; tests covering the new duplicate-refusal path
         // override this per-test.
-        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => new StubExistingIssueChecker(found: false);
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
     }
 
     public void Dispose()
@@ -441,15 +441,19 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         // `queue-state.json` exists but is MALFORMED (truncated
         // write, hand-edit typo, partial commit, etc.),
         // `QueueStateSerializer.Deserialize` throws `JsonException`.
-        // Before this fix the atomic-seed gate only caught
+        // Before that fix the atomic-seed gate only caught
         // `InvalidOperationException` and `IOException`, so the
         // exception bubbled up and crashed `issue publish-flow
-        // --write` instead of returning a structured stop. The fix
-        // adds `JsonException` to the catch list so malformed input
-        // falls through to "not present" → atomic-seed gate trips →
-        // operator sees the same structured stop and recovery
-        // command as the missing-file case. The CreatorFactory stub
-        // MUST NOT be invoked.
+        // --write` instead of returning a structured stop.
+        //
+        // G536 round-4 review repair: the SHARED
+        // `PublishDurableArtifactAnalyzer` now reads queue-state.json
+        // FIRST and fails closed on malformed input itself
+        // (`queue_state_malformed`) rather than silently treating it
+        // as absent — a surviving publish.yaml/runs.jsonl signal must
+        // never authorize restoration/repair around a queue-state.json
+        // this analyzer could not actually read. The CreatorFactory
+        // stub MUST NOT be invoked either way.
         using var workspace = new IssuePublishFlowWorkspace();
         workspace.WriteGithubBody("G278", BuildCompleteContractBody("G278 Fix issue publish-flow durable state synchronization"));
         // Write deliberately malformed queue-state.json (truncated
@@ -472,9 +476,8 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         var root = document.RootElement;
         Assert.False(root.GetProperty("created").GetBoolean());
         var error = root.GetProperty("error").GetString()!;
-        Assert.Contains("execution_unit `G278`", error, StringComparison.Ordinal);
-        Assert.Contains("atomic-seed gate", error, StringComparison.Ordinal);
-        Assert.Contains("queue-seed-from-packet", error, StringComparison.Ordinal);
+        Assert.Contains("queue_state_malformed", error, StringComparison.Ordinal);
+        Assert.Contains("failed closed", error, StringComparison.Ordinal);
         // Defensive: no GitHub mutation occurred.
         Assert.Equal(0, stub.CallCount);
     }
@@ -960,21 +963,21 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_GivenNoLocalSignalButGitHubIssueAlreadyExists_RefusesToCreateDuplicate()
+    public void Execute_GivenQueueLinkedIssueFromDifferentRepo_FailsClosedAsCrossRepoContradiction()
     {
-        // G536: when the analyzer finds NO identity across all three local
-        // artifacts (e.g. every one was reset/lost but the GitHub issue
-        // itself was never re-created), falling straight through to `gh
-        // issue create` would produce a genuine duplicate. The new
-        // GitHub-existence corroboration check must refuse instead.
+        // G536 round-4 review repair: queue-state's linked_issue naming a
+        // DIFFERENT repo than the confirmed `--repo` target — even with a
+        // matching issue number — is a genuine identity contradiction, not
+        // a same-number coincidence to silently accept.
         using var workspace = new IssuePublishFlowWorkspace();
         var title = "G278 Fix issue publish-flow durable state synchronization";
         workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
-        workspace.SeedQueueState("G278", title);
-        Assert.False(File.Exists(workspace.PublishYamlPath("G278")));
-        Assert.False(File.Exists(workspace.RunsLogPath));
+        workspace.SeedQueueStateWithLinkedIssue(
+            "G278", title,
+            repo: "some-other-org/unrelated-repo",
+            issueNumber: 659,
+            issueUrl: "https://github.com/some-other-org/unrelated-repo/issues/659");
 
-        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => new StubExistingIssueChecker(found: true);
         IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
 
         using var writer = new StringWriter();
@@ -986,8 +989,173 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
         Assert.Equal(1, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var error = document.RootElement.GetProperty("error").GetString();
-        Assert.Contains("already exists", error, StringComparison.Ordinal);
-        Assert.Contains("Refusing to create a duplicate", error, StringComparison.Ordinal);
+        Assert.Contains("cross_artifact_contradiction", error, StringComparison.Ordinal);
+
+        var queueStateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("some-other-org/unrelated-repo", queueStateAfter.Items.Single().LinkedIssue!.Repo);
+    }
+
+    [Fact]
+    public void Execute_GivenPublishYamlForDifferentExecutionUnit_FailsClosedNotTreatedAsMissing()
+    {
+        // G536 round-4 review repair: a publish.yaml whose own
+        // execution_unit field does not match the unit this path is
+        // scoped to is corrupted data (e.g. copied from another unit's
+        // packet) — must fail closed rather than being silently accepted
+        // because the issue number happened to look plausible.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G278", title);
+
+        var publishYamlPath = workspace.PublishYamlPath("G278");
+        Directory.CreateDirectory(Path.GetDirectoryName(publishYamlPath)!);
+        File.WriteAllText(
+            publishYamlPath,
+            IssuePublishArtifactYaml.Serialize(new IssuePublishArtifact
+            {
+                ExecutionUnit = "G999",
+                PublishStatus = "issue-created",
+                PacketPath = ".intent-cli/issues/G999",
+                IssueBodyPath = ".intent-cli/issues/G999/github-body.md",
+                CreatedIssueNumber = 659,
+                CreatedIssueUrl = "https://github.com/J-Tech-Japan/intent-system/issues/659",
+                PublishedLabelName = null,
+            }));
+
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("publish_yaml_malformed", error, StringComparison.Ordinal);
+        Assert.Contains("G999", error, StringComparison.Ordinal);
+
+        var queueStateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Null(queueStateAfter.Items.Single().LinkedIssue);
+    }
+
+    [Fact]
+    public void Execute_GivenRunsEventFromDifferentRepo_FailsClosedInsteadOfCollapsingToOneIdentity()
+    {
+        // G536 round-4 review repair: a runs.jsonl issue-created event
+        // whose linked_issue names a DIFFERENT repo than another present
+        // signal must be a genuine conflict, never silently collapsed into
+        // one "identical" identity just because the issue NUMBER matches.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+        workspace.SeedQueueStateWithLinkedIssue(
+            "G278", title,
+            repo: "J-Tech-Japan/intent-system",
+            issueNumber: 659,
+            issueUrl: "https://github.com/J-Tech-Japan/intent-system/issues/659");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        var crossRepoEvent = new RunEvent
+        {
+            Ts = new DateTimeOffset(2026, 5, 6, 12, 0, 0, TimeSpan.Zero),
+            ExecutionUnit = "G278",
+            Event = "issue-created",
+            By = "issue-publish-flow",
+            LinkedIssue = "some-other-org/unrelated-repo#659",
+        };
+        File.WriteAllText(workspace.RunsLogPath, RunLogSerializer.SerializeLine(crossRepoEvent) + "\n");
+
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("cross_artifact_contradiction", error, StringComparison.Ordinal);
+
+        var queueStateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal(659, queueStateAfter.Items.Single().LinkedIssue!.Number);
+    }
+
+    [Fact]
+    public void Execute_GivenNoLocalSignalButUniqueGitHubIssueAlreadyExists_RestoresWithoutCreatingDuplicate()
+    {
+        // G536 round-4 review repair: when the analyzer finds NO identity
+        // across all three local artifacts (e.g. every one was reset/lost
+        // but the GitHub issue itself was never re-created), falling
+        // straight through to `gh issue create` would produce a genuine
+        // duplicate. An exact title+body match on GitHub must instead feed
+        // that confirmed identity into the same restoration path — never a
+        // `gh issue create` call — restoring all three local artifacts.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        var body = BuildCompleteContractBody(title);
+        workspace.WriteGithubBody("G278", body);
+        workspace.SeedQueueState("G278", title);
+        Assert.False(File.Exists(workspace.PublishYamlPath("G278")));
+        Assert.False(File.Exists(workspace.RunsLogPath));
+
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => new StubExistingIssueChecker(
+            GitHubExistingIssueClassification.Unique,
+            issueNumber: 8080,
+            issueUrl: "https://github.com/J-Tech-Japan/intent-system/issues/8080");
+        // Never invoked if the fix holds — this path must restore, not create.
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("created").GetBoolean());
+        Assert.True(root.GetProperty("idempotent").GetBoolean());
+        Assert.True(root.GetProperty("durable_state_synced").GetBoolean());
+        Assert.Equal(8080, root.GetProperty("issue_number").GetInt32());
+
+        var queueStateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal(8080, queueStateAfter.Items.Single().LinkedIssue!.Number);
+        var restoredArtifact = IssuePublishArtifactYaml.Deserialize(File.ReadAllText(workspace.PublishYamlPath("G278")));
+        Assert.Equal(8080, restoredArtifact.CreatedIssueNumber);
+        Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath)));
+    }
+
+    [Fact]
+    public void Execute_GivenNoLocalSignalAndMultipleMatchingGitHubIssues_FailsClosedNonMutating()
+    {
+        // G536 round-4 review repair: an ambiguous GitHub-side match (more
+        // than one issue with the exact expected title and body) must never
+        // be resolved automatically — refuse, never create, never guess.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G278", title);
+
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => new StubExistingIssueChecker(
+            GitHubExistingIssueClassification.Multiple);
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("multiple issues", error, StringComparison.Ordinal);
 
         var queueStateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
         Assert.Null(queueStateAfter.Items.Single().LinkedIssue);
@@ -997,15 +1165,15 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     [Fact]
     public void Execute_GivenNoLocalSignalAndNoGitHubIssue_CreatesNormally()
     {
-        // Counterpart to the refusal test above: when the GitHub
-        // corroboration check genuinely finds nothing, the normal create
-        // path proceeds exactly as before G536.
+        // Counterpart to the tests above: when the GitHub corroboration
+        // check genuinely finds nothing, the normal create path proceeds
+        // exactly as before G536.
         using var workspace = new IssuePublishFlowWorkspace();
         var title = "G278 Fix issue publish-flow durable state synchronization";
         workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
         workspace.SeedQueueState("G278", title);
 
-        var checker = new StubExistingIssueChecker(found: false);
+        var checker = new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
         var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/659");
         IssuePublishFlowCommand.CreatorFactory = () => stub;
@@ -1565,31 +1733,40 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
 
     /// <summary>
     /// G536 review repair: replaces the real <c>gh issue list --search</c>
-    /// shell-out for tests. Defaults to "not found" so pre-existing tests
-    /// that exercise the normal create path are unaffected; tests covering
-    /// the duplicate-refusal path construct one with <c>found: true</c>.
+    /// shell-out for tests. Defaults to
+    /// <see cref="GitHubExistingIssueClassification.None"/> so pre-existing
+    /// tests that exercise the normal create path are unaffected; tests
+    /// covering the GitHub-restore or ambiguous-refusal paths construct one
+    /// with <see cref="GitHubExistingIssueClassification.Unique"/> or
+    /// <see cref="GitHubExistingIssueClassification.Multiple"/>.
     /// </summary>
     private sealed class StubExistingIssueChecker : IGitHubExistingIssueChecker
     {
-        private readonly bool found;
+        private readonly GitHubExistingIssueLookupResult result;
 
-        public StubExistingIssueChecker(bool found)
+        public StubExistingIssueChecker(
+            GitHubExistingIssueClassification classification, int? issueNumber = null, string? issueUrl = null)
         {
-            this.found = found;
+            result = new GitHubExistingIssueLookupResult
+            {
+                Classification = classification,
+                IssueNumber = issueNumber,
+                IssueUrl = issueUrl,
+            };
         }
 
         public int CallCount { get; private set; }
 
-        public bool ExistingIssueFound(string repo, string executionUnit)
+        public GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody)
         {
             CallCount++;
-            return found;
+            return result;
         }
     }
 
     private sealed class ThrowingExistingIssueChecker : IGitHubExistingIssueChecker
     {
-        public bool ExistingIssueFound(string repo, string executionUnit)
+        public GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody)
         {
             throw new InvalidOperationException("simulated gh failure");
         }

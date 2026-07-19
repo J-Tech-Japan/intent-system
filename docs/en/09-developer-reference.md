@@ -784,6 +784,63 @@ so an operator (or a test) can directly compare a `publish-recovery`
 unsafe stop against what `issue publish-flow`'s own rerun independently
 detects and restores for the identical durable state.
 
+**Round-4 review repair — the canonical identity is a full tuple, not just
+a number.** A subsequent review round found that treating "same issue
+number" as sufficient still let contradictory or self-inconsistent data
+through: two artifacts naming the same issue *number* but a different
+*repo*, or a single artifact whose own repo/number/URL fields disagreed
+with each other, were silently accepted. The analyzer now requires every
+present signal to be:
+
+- **Internally self-consistent** — `queue-state.json`'s `linked_issue`
+  (which carries `repo`, `number`, and `url` as three separate fields) and
+  each `runs.jsonl` event (which may carry both a `linked_issue`
+  `repo#number` descriptor and a `reason` issue URL) must agree with
+  themselves before they're even accepted as a signal at all.
+- **A canonical GitHub issue URL** — `https://github.com/<owner>/<repo>/issues/<number>`
+  exactly; any `/issues/`-containing string that doesn't match this shape
+  is no longer accepted as if it were canonical.
+- **Checked against the confirmed target repo directly**, not merely
+  pairwise between artifacts — a signal whose repo doesn't match the
+  `--repo` this command run is scoped to is a contradiction even when it's
+  the ONLY present signal.
+
+A malformed/unreadable `queue-state.json` now also fails closed exactly
+like `publish.yaml`/`runs.jsonl` already did (`queue_state_malformed`),
+rather than being silently treated as absent — a surviving `publish.yaml`
+or `runs.jsonl` signal must never authorize restoration around a
+`queue-state.json` this analyzer couldn't actually read. `publish.yaml`'s
+own `execution_unit` field is validated against the unit the packet path
+is scoped to (`publish_yaml_malformed` on mismatch — data copied from
+another unit's packet is corruption, not a signal for this unit).
+
+**The GitHub existence check is now a classification (zero / exactly-one /
+multiple), not a bare boolean, and requires exact title AND body
+linkage.** The prior round's `gh issue list --search ... --limit 20` with
+prefix-boundary title matching could both miss a real duplicate beyond the
+first 20 results and match a merely similarly-titled unrelated issue. The
+rewritten check:
+
+- Retrieves candidates with `--limit 1000` (vs. the prior round's 20) so a
+  legitimate duplicate is never silently dropped by client-side
+  truncation for any realistic repo's issue history — GitHub's own
+  `in:title` search is still used as a fast pre-filter, not the identity
+  decision itself.
+- Requires the candidate's title to equal the resolved expected title
+  **exactly** (no prefix/boundary heuristic — a similarly-titled unrelated
+  issue can never match).
+- Additionally requires the candidate's body to match the local packet's
+  `github-body.md` content byte-for-byte (normalized for line endings) —
+  the same content that was (or would be) posted via `gh issue create
+  --body-file`, giving a genuine content-linkage check rather than a title
+  guess alone.
+- Classifies the result: **zero** matches → safe to create; **exactly
+  one** → that confirmed GitHub identity is fed directly into the same
+  `PublishDurableArtifactAnalyzer`-backed restoration path used for a
+  local-signal rerun, restoring all three local artifacts **without ever
+  calling `gh issue create`**; **multiple** matches → fails closed,
+  non-mutating, exit 1 — ambiguity is never resolved automatically.
+
 ---
 
 ### Facet-aware context supply (G530)

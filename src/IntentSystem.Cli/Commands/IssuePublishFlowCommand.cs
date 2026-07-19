@@ -270,8 +270,7 @@ internal static class IssuePublishFlowCommand
         // create, corroborate against GitHub itself. If a matching issue
         // already exists there (e.g. every local artifact was reset/lost
         // but the GitHub issue itself was never re-created), creating here
-        // would produce a genuine duplicate. This check never reconstructs
-        // an identity from the GitHub-side match — it only ever REFUSES.
+        // would produce a genuine duplicate.
         IGitHubExistingIssueChecker existingIssueChecker;
         try
         {
@@ -298,15 +297,15 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
-        bool existingIssueFoundOnGitHub;
+        GitHubExistingIssueLookupResult lookup;
         try
         {
-            existingIssueFoundOnGitHub = existingIssueChecker.ExistingIssueFound(repo!, executionUnit!);
+            lookup = existingIssueChecker.FindExistingIssue(repo!, executionUnit!, title!, File.ReadAllText(githubBodyPath));
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
-            // Fail closed: an unresolvable corroboration check must never
-            // be treated as "no existing issue."
+            // Fail closed: an unresolvable corroboration check (a search
+            // failure) must never be treated as "no existing issue."
             var checkerFailedResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                 packetExists: true,
                 githubBodyPresent: true,
@@ -328,9 +327,9 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
-        if (existingIssueFoundOnGitHub)
+        if (lookup.Classification == GitHubExistingIssueClassification.Multiple)
         {
-            var duplicateGuardResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+            var ambiguousResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                 packetExists: true,
                 githubBodyPresent: true,
                 missingSections: Array.Empty<string>(),
@@ -343,14 +342,45 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: $"an issue whose title matches '{executionUnit}' already exists on {repo}, but no local "
-                    + "durable artifact (queue-state, publish.yaml, runs.jsonl) recorded it. Refusing to create a "
-                    + $"duplicate. Reconcile manually — confirm the exact issue number, then backfill via "
-                    + $"`intent-cli automation publish-recovery --repo {repo} --write` or a manual queue-state/"
-                    + "publish.yaml/runs.jsonl repair — before re-running.",
+                error: $"multiple issues on {repo} match both the exact expected title and body for '{executionUnit}'; "
+                    + "cannot deterministically pick which one is canonical. Refusing to create or restore around an "
+                    + "ambiguous match — reconcile the duplicate GitHub issues manually, then re-run.",
                 titleSource: titleSource);
-            EmitResult(writer, duplicateGuardResult, format);
+            EmitResult(writer, ambiguousResult, format);
             return 1;
+        }
+
+        if (lookup.Classification == GitHubExistingIssueClassification.Unique)
+        {
+            // G536 round-4 review repair: a unique, exact title+body match
+            // already exists on GitHub even though every local artifact was
+            // lost — feed that identity into the SAME shared analyzer/
+            // restoration path used for a local-signal rerun, so all three
+            // local artifacts are restored WITHOUT ever calling `gh issue
+            // create` (which would produce a genuine duplicate).
+            var githubSourcedAnalysis = PublishDurableArtifactAnalysis.ExistingIssue(
+                lookup.IssueNumber,
+                lookup.IssueUrl!,
+                new[]
+                {
+                    PublishDurableArtifactAnalyzer.GapQueueLinkedIssueMissing,
+                    PublishDurableArtifactAnalyzer.GapPublishYamlMissing,
+                    PublishDurableArtifactAnalyzer.GapRunsEventMissing,
+                });
+            return ExecuteIdempotentRerun(
+                writer,
+                format,
+                executionUnit!,
+                domain,
+                repo!,
+                packetDirectory,
+                githubBodyPath,
+                publishYamlPath,
+                queueStatePathForIdempotency,
+                runLogPathForIdempotency,
+                title,
+                titleSource,
+                githubSourcedAnalysis);
         }
 
         // G363 (PR #830 review repair): atomic-seed gate. The
@@ -1347,20 +1377,41 @@ internal interface IIssueCreator
 internal sealed record IssueCreateOutcome(string IssueUrl);
 
 /// <summary>
-/// G536 review repair: corroborates against GitHub itself, before the
-/// first-create path, that no issue for this execution unit already exists.
-/// This check only ever REFUSES (fails closed) — it never reconstructs a
-/// canonical identity from a fuzzy GitHub-side match; that stays the job of
-/// the local durable artifacts and <see cref="PublishDurableArtifactAnalyzer"/>.
+/// G536 round-4 review repair: corroborates against GitHub itself, before
+/// the first-create path, whether an issue for this execution unit already
+/// exists — classified zero / exactly-one / multiple, never a bare bool.
+/// Matching requires BOTH the exact expected issue title (not a prefix —
+/// "G53" must never match "G536 ...") AND the candidate's body matching
+/// the exact local packet body that would have been (or was) posted to
+/// GitHub, so a merely similarly-titled unrelated issue can never match.
+/// This check never GUESSES or reconstructs identity from a fuzzy match —
+/// zero classifies as "safe to create," exactly-one feeds the confirmed
+/// GitHub identity into the same <see cref="PublishDurableArtifactAnalyzer"/>-
+/// backed restoration path (never a `gh issue create`), and multiple fails
+/// closed, non-mutating.
 /// </summary>
 internal interface IGitHubExistingIssueChecker
 {
-    bool ExistingIssueFound(string repo, string executionUnit);
+    GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody);
+}
+
+internal enum GitHubExistingIssueClassification
+{
+    None,
+    Unique,
+    Multiple,
+}
+
+internal sealed record GitHubExistingIssueLookupResult
+{
+    public required GitHubExistingIssueClassification Classification { get; init; }
+    public int? IssueNumber { get; init; }
+    public string? IssueUrl { get; init; }
 }
 
 internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
 {
-    public bool ExistingIssueFound(string repo, string executionUnit)
+    public GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -1377,12 +1428,18 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
         startInfo.ArgumentList.Add(repo);
         startInfo.ArgumentList.Add("--state");
         startInfo.ArgumentList.Add("all");
+        // Narrows candidates via GitHub's own title search — a coarse,
+        // fast pre-filter, not the identity check itself (exact title+body
+        // matching below is what actually decides). 1000 (vs the prior
+        // round's 20) so a legitimate duplicate candidate is never
+        // silently dropped by client-side truncation for any realistic
+        // repo's issue history.
         startInfo.ArgumentList.Add("--search");
         startInfo.ArgumentList.Add($"{executionUnit} in:title");
         startInfo.ArgumentList.Add("--json");
-        startInfo.ArgumentList.Add("number,title");
+        startInfo.ArgumentList.Add("number,title,url,body");
         startInfo.ArgumentList.Add("--limit");
-        startInfo.ArgumentList.Add("20");
+        startInfo.ArgumentList.Add("1000");
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start gh process.");
@@ -1406,33 +1463,32 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
             throw new InvalidOperationException($"gh issue list returned unparseable JSON: {exception.Message}");
         }
 
-        if (entries is null)
-        {
-            return false;
-        }
+        var normalizedExpectedBody = NormalizeBody(expectedBody);
+        var candidates = (entries ?? new List<GhIssueListEntry>())
+            .Where(entry => string.Equals(entry.Title, expectedTitle, StringComparison.Ordinal))
+            .Where(entry => string.Equals(NormalizeBody(entry.Body ?? string.Empty), normalizedExpectedBody, StringComparison.Ordinal))
+            .ToArray();
 
-        // Same prefix convention as FormatIssueTitle: a matching issue's
-        // title starts with the execution-unit token followed by a
-        // non-alphanumeric boundary (space, colon, etc.), never a
-        // same-prefix-different-unit false positive like "G53" matching
-        // "G536 ...".
-        return entries.Any(entry => TitleStartsWithExecutionUnit(entry.Title, executionUnit));
+        return candidates.Length switch
+        {
+            0 => new GitHubExistingIssueLookupResult { Classification = GitHubExistingIssueClassification.None },
+            1 => new GitHubExistingIssueLookupResult
+            {
+                Classification = GitHubExistingIssueClassification.Unique,
+                IssueNumber = candidates[0].Number,
+                IssueUrl = candidates[0].Url,
+            },
+            _ => new GitHubExistingIssueLookupResult { Classification = GitHubExistingIssueClassification.Multiple },
+        };
     }
 
-    private static bool TitleStartsWithExecutionUnit(string? title, string executionUnit)
-    {
-        if (string.IsNullOrWhiteSpace(title) || !title.StartsWith(executionUnit, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return title.Length == executionUnit.Length
-            || !char.IsLetterOrDigit(title[executionUnit.Length]);
-    }
+    private static string NormalizeBody(string body) => body.Replace("\r\n", "\n").Trim();
 
     private sealed record GhIssueListEntry(
         [property: JsonPropertyName("number")] int Number,
-        [property: JsonPropertyName("title")] string Title);
+        [property: JsonPropertyName("title")] string Title,
+        [property: JsonPropertyName("url")] string Url,
+        [property: JsonPropertyName("body")] string? Body);
 }
 
 internal sealed class GhCliIssueCreator : IIssueCreator

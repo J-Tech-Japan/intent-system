@@ -832,6 +832,68 @@ analyzer の出力です。これにより operator(あるいは test)は、
 rerun が同一の durable state に対して独立に検出・復元するものとを、
 直接比較できます。
 
+**Round-4 review repair — canonical identity は number だけでなく完全な
+tuple です。** 後続の review round で、"issue number が同じ" だけを
+十分とみなすと、矛盾したデータや自己矛盾したデータをまだ通してしまう
+ことが判明しました: 2 つの artifact が同じ issue *number* を記録して
+いても *repo* が異なる場合や、単一の artifact 自身の repo/number/URL
+field が互いに食い違っている場合が、silently に受け入れられて
+いました。analyzer は今や、存在する各 signal に以下を要求します:
+
+- **内部的に自己矛盾がないこと** — `queue-state.json` の
+  `linked_issue`(`repo`、`number`、`url` を別々の field として持つ)や
+  各 `runs.jsonl` event(`linked_issue` の `repo#number` descriptor と
+  `reason` issue URL の両方を持ちうる)は、そもそも signal として
+  受け入れられる前に、自分自身と一致していなければなりません。
+- **canonical な GitHub issue URL であること** —
+  `https://github.com/<owner>/<repo>/issues/<number>` に正確に一致する
+  必要があります。この形に一致しない `/issues/` を含む文字列は、もはや
+  canonical として受け入れられません。
+- **確認済みの target repo と直接照合されること** — artifact 同士の
+  pairwise な比較だけでなく、この command run がスコープする `--repo`
+  と一致しない signal は、それが唯一の存在する signal であっても
+  contradiction になります。
+
+malformed / read 不能な `queue-state.json` も、`publish.yaml`/
+`runs.jsonl` と全く同じように fail closed するようになりました
+(`queue_state_malformed`)— 生き残った `publish.yaml` や `runs.jsonl` の
+signal が、この analyzer が実際には read できなかった
+`queue-state.json` の周りでの復元を authorize することは決してあり
+ません。`publish.yaml` 自身の `execution_unit` field も、packet path が
+スコープする unit と照合されます(不一致なら
+`publish_yaml_malformed` — 別 unit の packet からコピーされたデータは
+corruption であり、この unit の signal ではありません)。
+
+**GitHub existence check は今や bool ではなく分類
+(zero / exactly-one / multiple)であり、exact title と body の両方の
+linkage を要求します。** 前の round の
+`gh issue list --search ... --limit 20` と prefix-boundary な title
+matching は、20 件を超えた実際の duplicate を見逃す可能性と、単に
+似た title を持つだけの無関係な issue に一致する可能性の両方が
+ありました。書き直された check は:
+
+- `--limit 1000`(前 round の 20 に対して)で candidate を取得し、
+  現実的などのような repo の issue 履歴に対しても、client-side の
+  truncation によって本物の duplicate が silently に drop されない
+  ようにします — GitHub 自身の `in:title` search は、identity の
+  決定そのものではなく、高速な pre-filter として引き続き使用します。
+- candidate の title が resolved された expected title と**完全に**
+  一致することを要求します(prefix/boundary heuristic はもう
+  ありません — 似た title を持つだけの無関係な issue は決して一致
+  しません)。
+- さらに、candidate の body が local packet の `github-body.md` の
+  内容と(改行を normalize した上で)byte-for-byte 一致することを
+  要求します — これは `gh issue create --body-file` で post された
+  (あるいは post されるはずの)まさにその内容であり、title だけの
+  推測ではなく本物の content-linkage check になります。
+- 結果を分類します: **zero** 件の一致 → create しても安全、
+  **ちょうど 1 件** → その確認済みの GitHub identity が、local
+  signal による rerun と同じ `PublishDurableArtifactAnalyzer` ベースの
+  復元 path に直接 feed され、`gh issue create` を一切呼び出す
+  ことなく 3 つすべての local artifact を復元します。**multiple**
+  件の一致 → fail closed、non-mutating、exit 1 — 曖昧さが自動的に
+  解決されることは決してありません。
+
 ---
 
 ### facet を意識した context 供給 (G530)
