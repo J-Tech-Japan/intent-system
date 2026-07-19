@@ -22,20 +22,26 @@ internal static class FacetContextSelector
     /// frontmatter, and groups the result into one entry per facet in the
     /// canonical order (<see cref="IntentNodeFacets.AllowedValues"/>).
     ///
-    /// <paramref name="scopeHints"/> (paths, either the full displayed
-    /// <c>intents/&lt;domain&gt;/...</c> form or the shorter domain-relative
-    /// id form) narrow the result to nodes whose path equals a hint, sits
-    /// under a hint treated as a directory prefix, or vice versa. A null or
-    /// empty hint list applies no narrowing — every domain facet node is
-    /// returned. <paramref name="facetFilter"/> (a subset of
-    /// <see cref="IntentNodeFacets.AllowedValues"/>) restricts which facet
-    /// groups are returned at all; null/empty returns all four.
+    /// <paramref name="scopeHints"/> narrow the result to nodes overlapping
+    /// at least one hint (see <see cref="NormalizeHintSegments"/> for every
+    /// accepted hint form and <see cref="SegmentsOverlap"/> for the
+    /// symmetric overlap rule). A null or empty hint list applies no
+    /// narrowing — every domain facet node is returned. <paramref
+    /// name="facetFilter"/> (a subset of <see cref="IntentNodeFacets.AllowedValues"/>)
+    /// restricts which facet groups are returned at all; null/empty returns
+    /// all four.
     ///
     /// Only VALID facet values (per <see cref="IntentNodeFacets.IsAllowedValue"/>)
-    /// are ever bucketed — an unknown value on an otherwise-Present node is
-    /// silently excluded from the facet groups it doesn't belong to
-    /// (validating and reporting unknown values is `lint-layout`'s job, not
-    /// this consumption surface's). A node carrying more than one facet
+    /// are ever bucketed. Unlike the first G530 round, neither a malformed
+    /// <c>facets:</c> declaration nor an unknown facet value is silent: both
+    /// produce a <see cref="FacetContextWarning"/> (path + reason) so an
+    /// agent can tell "genuinely no facets here" apart from "facets were
+    /// present but excluded" — <see cref="FacetContextSelection.DomainHasAnyFacetNodes"/>
+    /// reflects only nodes that contributed at least one VALID facet: a
+    /// domain whose every facets: declaration is malformed or entirely
+    /// unknown-valued still reports <c>false</c>, but the accompanying
+    /// warnings explain why, rather than looking identical to a domain that
+    /// never adopted facets at all. A node carrying more than one facet
     /// appears once in each matching group.
     /// </summary>
     public static FacetContextSelection Select(
@@ -48,6 +54,7 @@ internal static class FacetContextSelector
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
 
         var nodes = new List<(string RepoRelativePath, string DomainRelativeId, IReadOnlyList<string> Facets, string Summary)>();
+        var warnings = new List<FacetContextWarning>();
 
         if (Directory.Exists(domainRoot))
         {
@@ -69,20 +76,43 @@ internal static class FacetContextSelector
                     continue;
                 }
 
+                var domainRelativeId = ToDomainRelativeId(domainRoot, file);
+                var repoRelativePath = $"intents/{domain}/{domainRelativeId}.md";
+
                 var parsed = IntentNodeFacets.ParseFacets(content);
+                if (parsed.Kind == FacetsParseKind.Malformed)
+                {
+                    warnings.Add(new FacetContextWarning
+                    {
+                        Path = repoRelativePath,
+                        Reason = $"malformed 'facets:' declaration excluded from facet context: {parsed.MalformedReason}",
+                    });
+                    continue;
+                }
+
                 if (parsed.Kind != FacetsParseKind.Present)
                 {
                     continue;
                 }
 
                 var validFacets = parsed.Values.Where(IntentNodeFacets.IsAllowedValue).ToArray();
+                var unknownFacets = parsed.Values.Where(value => !IntentNodeFacets.IsAllowedValue(value)).ToArray();
+                if (unknownFacets.Length > 0)
+                {
+                    warnings.Add(new FacetContextWarning
+                    {
+                        Path = repoRelativePath,
+                        Reason =
+                            $"unknown facet value(s) ignored: {string.Join(", ", unknownFacets)} "
+                            + $"(closed set: {string.Join(", ", IntentNodeFacets.AllowedValues)})",
+                    });
+                }
+
                 if (validFacets.Length == 0)
                 {
                     continue;
                 }
 
-                var domainRelativeId = ToDomainRelativeId(domainRoot, file);
-                var repoRelativePath = $"intents/{domain}/{domainRelativeId}.md";
                 var summary = ExtractSummary(content);
                 nodes.Add((repoRelativePath, domainRelativeId, validFacets, summary));
             }
@@ -90,8 +120,23 @@ internal static class FacetContextSelector
 
         var domainHasAnyFacetNodes = nodes.Count > 0;
 
-        var scoped = scopeHints is { Count: > 0 }
-            ? nodes.Where(node => scopeHints.Any(hint => HintOverlapsNode(hint, node.RepoRelativePath, node.DomainRelativeId))).ToArray()
+        var normalizedHints = (scopeHints ?? Array.Empty<string>())
+            .Select(hint => NormalizeHintSegments(hint, domain, domainRoot))
+            .Where(segments => segments is not null)
+            .Select(segments => segments!)
+            .ToArray();
+
+        // Narrowing is requested whenever the caller passed a scope-hint
+        // LIST AT ALL — including an EXPLICITLY EMPTY one (e.g. a packet
+        // that declares zero `intent_references`, which must scope to
+        // NOTHING, not to "no scoping requested" — a fresh, unreferenced
+        // packet is not entitled to the whole domain's facet nodes). Only
+        // a null scopeHints (the caller genuinely omitted --scope) applies
+        // no narrowing at all. Within a requested-but-empty-or-fully-
+        // invalid hint set, every node fails to match — matches nothing,
+        // never falls back to "show everything".
+        var scoped = scopeHints is not null
+            ? nodes.Where(node => normalizedHints.Any(hint => SegmentsOverlap(hint, node.DomainRelativeId.Split('/')))).ToArray()
             : nodes.ToArray();
 
         var groups = new List<FacetContextGroup>();
@@ -120,6 +165,7 @@ internal static class FacetContextSelector
         {
             Groups = groups,
             DomainHasAnyFacetNodes = domainHasAnyFacetNodes,
+            Warnings = warnings,
         };
     }
 
@@ -144,20 +190,137 @@ internal static class FacetContextSelector
         return firstLine.TrimStart('#').Trim();
     }
 
-    private static bool HintOverlapsNode(string hint, string repoRelativePath, string domainRelativeId) =>
-        HintMatchesPath(hint, repoRelativePath) || HintMatchesPath(hint, domainRelativeId);
-
-    private static bool HintMatchesPath(string hint, string candidate)
+    /// <summary>
+    /// Normalizes a scope hint into a domain-relative segment list, or
+    /// <see langword="null"/> when the hint is empty/whitespace, resolves
+    /// outside <paramref name="domainRoot"/> entirely, or attempts to
+    /// escape the domain via a <c>..</c> segment. Accepted hint forms —
+    /// all reduced to the SAME canonical segment list a node's own
+    /// domain-relative id already uses, so comparison is always
+    /// apples-to-apples:
+    /// <list type="bullet">
+    /// <item>an absolute filesystem path under <paramref name="domainRoot"/>
+    ///   (reduced by subtracting the domain root, exactly like a node's own
+    ///   path is derived);</item>
+    /// <item>the repo-relative <c>intents/&lt;domain&gt;/...</c> form (the
+    ///   prefix is stripped);</item>
+    /// <item>the short domain-relative id form with no prefix (e.g.
+    ///   <c>identity/mission</c>);</item>
+    /// <item>any of the above WITH a trailing <c>.md</c> (stripped, so the
+    ///   documented short file form <c>identity/mission.md</c> matches the
+    ///   extension-less node id <c>identity/mission</c>).</item>
+    /// </list>
+    /// A leading/trailing <c>/</c> and any <c>.</c> (no-op) segment are
+    /// tolerated and dropped; a <c>..</c> segment is rejected outright
+    /// (returns null) rather than silently resolved, since it could
+    /// otherwise walk a hint outside the domain it claims to scope.
+    /// Comparison is case-sensitive (<see cref="StringComparison.Ordinal"/>)
+    /// throughout, matching every other path-handling surface in this
+    /// codebase (case-sensitive filesystem semantics) — pinned explicitly
+    /// here since path overlap has no other natural default.
+    /// </summary>
+    private static IReadOnlyList<string>? NormalizeHintSegments(string hint, string domain, string domainRoot)
     {
-        var normalizedHint = hint.Replace('\\', '/').Trim().TrimEnd('/');
-        if (normalizedHint.Length == 0)
+        if (string.IsNullOrWhiteSpace(hint))
         {
-            return false;
+            return null;
         }
 
-        var normalizedCandidate = candidate.Replace('\\', '/');
-        return string.Equals(normalizedCandidate, normalizedHint, StringComparison.Ordinal)
-            || normalizedCandidate.StartsWith(normalizedHint + "/", StringComparison.Ordinal);
+        var normalized = hint.Trim().Replace('\\', '/');
+
+        if (Path.IsPathRooted(normalized))
+        {
+            string fullHintPath;
+            string fullDomainRoot;
+            try
+            {
+                fullHintPath = Path.GetFullPath(normalized).Replace('\\', '/');
+                fullDomainRoot = Path.GetFullPath(domainRoot).Replace('\\', '/').TrimEnd('/');
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return null;
+            }
+
+            if (string.Equals(fullHintPath, fullDomainRoot, StringComparison.Ordinal))
+            {
+                normalized = string.Empty;
+            }
+            else if (fullHintPath.StartsWith(fullDomainRoot + "/", StringComparison.Ordinal))
+            {
+                normalized = fullHintPath[(fullDomainRoot.Length + 1)..];
+            }
+            else
+            {
+                return null; // outside the domain root entirely — never matches
+            }
+        }
+        else
+        {
+            var domainPrefix = $"intents/{domain}/";
+            if (normalized.StartsWith(domainPrefix, StringComparison.Ordinal))
+            {
+                normalized = normalized[domainPrefix.Length..];
+            }
+            else if (string.Equals(normalized.TrimEnd('/'), $"intents/{domain}", StringComparison.Ordinal))
+            {
+                normalized = string.Empty;
+            }
+            // else: already the short domain-relative form — used as-is.
+        }
+
+        normalized = normalized.Trim('/');
+        if (normalized.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[..^3];
+        }
+
+        if (normalized.Length == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var segments = new List<string>();
+        foreach (var segment in normalized.Split('/'))
+        {
+            if (segment.Length == 0 || segment == ".")
+            {
+                continue;
+            }
+            if (segment == "..")
+            {
+                return null; // reject traversal outside the domain
+            }
+            segments.Add(segment);
+        }
+
+        return segments;
+    }
+
+    /// <summary>
+    /// Symmetric segment-boundary overlap: true when either segment list is
+    /// a whole-segment prefix of the other (covers an exact match, a hint
+    /// naming an ancestor directory of a node, AND the reverse — a node
+    /// whose own segments are a prefix of a more specific hint). An empty
+    /// segment list (a hint that normalized to the domain root itself) is a
+    /// prefix of everything, so it matches every node — a deliberate "scope
+    /// to the whole domain" hint, not a bug. Never a bare string-prefix
+    /// comparison, so a hint like <c>means</c> can never spuriously match a
+    /// node <c>means-2/flow</c> ("means" is not a whole segment of
+    /// "means-2").
+    /// </summary>
+    private static bool SegmentsOverlap(IReadOnlyList<string> a, IReadOnlyList<string> b)
+    {
+        var shorter = a.Count <= b.Count ? a : b;
+        var longer = a.Count <= b.Count ? b : a;
+        for (var i = 0; i < shorter.Count; i++)
+        {
+            if (!string.Equals(shorter[i], longer[i], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 }
 
@@ -166,13 +329,28 @@ internal sealed record FacetContextSelection
     public required IReadOnlyList<FacetContextGroup> Groups { get; init; }
 
     /// <summary>
-    /// True when the DOMAIN has at least one facet-annotated node, ignoring
-    /// any <c>--scope</c>/<c>--facets</c> narrowing — used to distinguish
-    /// "this domain has no facet nodes at all" (graceful-degradation note)
-    /// from "this query's filter/scope happened to match nothing" (an
-    /// ordinary empty result, not a degradation case).
+    /// True when the DOMAIN has at least one node contributing a VALID
+    /// facet, ignoring any <c>--scope</c>/<c>--facets</c> narrowing — used
+    /// to distinguish "this domain has no usable facet nodes at all"
+    /// (graceful-degradation note) from "this query's filter/scope happened
+    /// to match nothing" (an ordinary empty result, not a degradation
+    /// case). A domain whose only <c>facets:</c> declarations are malformed
+    /// or entirely unknown-valued is still <see langword="false"/> here —
+    /// check <see cref="Warnings"/> to tell that apart from a domain that
+    /// never adopted facets at all.
     /// </summary>
     public required bool DomainHasAnyFacetNodes { get; init; }
+
+    /// <summary>
+    /// G530 review repair: every node excluded from the facet groups
+    /// because its own <c>facets:</c> declaration was malformed, plus every
+    /// node whose Present declaration carried at least one unknown value
+    /// (that node may still appear in <see cref="Groups"/> under its OTHER
+    /// valid facets — the warning only concerns the unknown value itself).
+    /// Never silent: both JSON and Markdown renderers surface this list so
+    /// an agent can tell omitted-with-a-reason apart from never-existed.
+    /// </summary>
+    public required IReadOnlyList<FacetContextWarning> Warnings { get; init; }
 }
 
 internal sealed record FacetContextGroup
@@ -197,4 +375,13 @@ internal sealed record FacetContextNodeRef
 
     [JsonPropertyName("path")]
     public required string Path { get; init; }
+}
+
+internal sealed record FacetContextWarning
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("reason")]
+    public required string Reason { get; init; }
 }

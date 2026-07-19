@@ -34,6 +34,15 @@ internal sealed record ContextCollectPacket
     [JsonPropertyName("facet_context_note")]
     public string? FacetContextNote { get; init; }
 
+    /// <summary>
+    /// G530 review repair: every node excluded from <see cref="FacetContext"/>
+    /// because its own <c>facets:</c> declaration was malformed, or that
+    /// carried at least one unknown value — never silent, so an agent can
+    /// tell "omitted with a reason" apart from "never had facets at all".
+    /// </summary>
+    [JsonPropertyName("facet_context_warnings")]
+    public required IReadOnlyList<FacetContextWarning> FacetContextWarnings { get; init; }
+
     [JsonPropertyName("queue_state_path")]
     public required string QueueStatePath { get; init; }
 

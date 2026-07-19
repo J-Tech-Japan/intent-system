@@ -36,7 +36,7 @@ internal static class ContextCollectAnalyzer
         // and facet nodes both live under the PARENT host's intent tree.
         var facetDomainRoot = ResolveDomainPath(context, domain);
         var facetSelection = facetDomainRoot is null
-            ? new FacetContextSelection { Groups = Array.Empty<FacetContextGroup>(), DomainHasAnyFacetNodes = false }
+            ? new FacetContextSelection { Groups = Array.Empty<FacetContextGroup>(), DomainHasAnyFacetNodes = false, Warnings = Array.Empty<FacetContextWarning>() }
             : FacetContextSelector.Select(facetDomainRoot, domain, scopeHints, facetFilter);
         var facetContextNote = facetSelection.DomainHasAnyFacetNodes
             ? null
@@ -148,6 +148,7 @@ internal static class ContextCollectAnalyzer
         {
             Domain = domain,
             FacetContext = facetSelection.Groups,
+            FacetContextWarnings = facetSelection.Warnings,
             FacetContextNote = facetContextNote,
             QueueStatePath = queueStatePath,
             QueueStatePresent = queueStatePresent,

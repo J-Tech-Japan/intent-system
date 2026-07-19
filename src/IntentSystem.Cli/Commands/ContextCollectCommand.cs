@@ -96,7 +96,12 @@ internal static class ContextCollectCommand
                         return false;
                     }
 
-                    scopeHints = SplitCommaList(args[index + 1]);
+                    if (!TrySplitCommaList(args[index + 1], "--scope", out var splitScope, out error))
+                    {
+                        return false;
+                    }
+
+                    scopeHints = splitScope;
                     index++;
                     break;
 
@@ -109,7 +114,11 @@ internal static class ContextCollectCommand
                         return false;
                     }
 
-                    var requestedFacets = SplitCommaList(args[index + 1]);
+                    if (!TrySplitCommaList(args[index + 1], "--facets", out var requestedFacets, out error))
+                    {
+                        return false;
+                    }
+
                     var unknownFacet = requestedFacets.FirstOrDefault(facet => !IntentNodeFacets.IsAllowedValue(facet));
                     if (unknownFacet is not null)
                     {
@@ -130,6 +139,36 @@ internal static class ContextCollectCommand
         return true;
     }
 
-    private static IReadOnlyList<string> SplitCommaList(string value) =>
-        value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    /// <summary>
+    /// G530 review repair: a comma-separated option value must never
+    /// silently weaken narrowing — <c>--scope ","</c> or <c>--facets
+    /// "vocabulary,,decider"</c> (an empty element) is a usage error, not
+    /// "no scope"/"drop the empty one". Every element is trimmed; a
+    /// duplicate (after trimming) is kept only once, first-seen order
+    /// preserved.
+    /// </summary>
+    private static bool TrySplitCommaList(string value, string optionName, out IReadOnlyList<string> values, out string error)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<string>();
+        foreach (var rawElement in value.Split(','))
+        {
+            var element = rawElement.Trim();
+            if (element.Length == 0)
+            {
+                values = Array.Empty<string>();
+                error = $"{optionName} value '{value}' contains an empty element — every comma-separated value must be non-empty.";
+                return false;
+            }
+
+            if (seen.Add(element))
+            {
+                result.Add(element);
+            }
+        }
+
+        values = result;
+        error = string.Empty;
+        return true;
+    }
 }

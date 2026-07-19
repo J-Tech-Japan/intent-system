@@ -50,6 +50,19 @@ internal static class ContextCollectRenderer
                 }
             }
         }
+
+        // G530 review repair: malformed/unknown-value exclusions are never
+        // silent — surfaced regardless of whether the note above fired, so
+        // "genuinely no facets" and "facets excluded for a reason" never
+        // look identical.
+        if (packet.FacetContextWarnings.Count > 0)
+        {
+            writer.WriteLine("- Warnings (excluded from the facet context above):");
+            foreach (var warning in packet.FacetContextWarnings)
+            {
+                writer.WriteLine($"  - `{warning.Path}`: {warning.Reason}");
+            }
+        }
         writer.WriteLine();
 
         writer.WriteLine("## Queue state");

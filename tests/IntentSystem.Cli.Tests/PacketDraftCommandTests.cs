@@ -202,6 +202,188 @@ public sealed class PacketDraftCommandTests
             File.ReadAllText(Path.Combine(packetDir, "review-context.md")));
     }
 
+    // ── Review repair: the Facet context block stays current across the
+    // ── ordinary workflow (scaffold → add references → rerun) ──────────
+
+    [Fact]
+    public void Execute_OrdinaryWorkflow_ScaffoldThenAddReferencesThenRerun_RefreshesFacetContextBlock()
+    {
+        // The realistic sequence the first G530 round's positive test did
+        // NOT cover: a fresh `packet draft` scaffolds packet.yaml with
+        // EMPTY intent_references — the domain DOES have a facet node, but
+        // this packet references none of them yet, so the block correctly
+        // shows every facet group as empty (never the whole domain's facet
+        // nodes just because references happen to be empty — an empty
+        // scope is "scoped to nothing", not "no scoping requested"). The
+        // operator then edits packet.yaml to add a real reference;
+        // rerunning `packet draft` must refresh the block to reflect it,
+        // not skip the whole file because it already exists.
+        using var workspace = new PacketDraftWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G530");
+
+        using (var firstWriter = new StringWriter())
+        {
+            var firstExit = PacketDraftCommand.Execute(
+                workspace.Context, ["--execution-unit", "G530", "--target-repo", "J-Tech-Japan/intent-system"], firstWriter);
+            Assert.Equal(0, firstExit);
+            Assert.Contains("review-context.md: created", firstWriter.ToString(), StringComparison.Ordinal);
+        }
+
+        var initialReviewContext = File.ReadAllText(Path.Combine(packetDir, "review-context.md"));
+        Assert.Contains("(none overlapping this packet's intent_references)", initialReviewContext, StringComparison.Ordinal);
+        Assert.DoesNotContain("identity/mission", initialReviewContext, StringComparison.Ordinal);
+
+        // Operator hand-edits packet.yaml to add a real reference — append
+        // rather than replace, since packet.yaml itself must stay untouched
+        // by `packet draft` from this point on.
+        var packetYamlPath = Path.Combine(packetDir, "packet.yaml");
+        var packetYaml = File.ReadAllText(packetYamlPath)
+            .Replace("intent_references: []", "intent_references:\n  - intents/intent-cli/identity/mission.md", StringComparison.Ordinal);
+        File.WriteAllText(packetYamlPath, packetYaml);
+
+        using var secondWriter = new StringWriter();
+        var secondExit = PacketDraftCommand.Execute(
+            workspace.Context, ["--execution-unit", "G530"], secondWriter);
+
+        Assert.Equal(0, secondExit);
+        var secondOutput = secondWriter.ToString();
+        Assert.Contains("packet.yaml: skipped", secondOutput, StringComparison.Ordinal);
+        Assert.Contains("review-context.md: updated", secondOutput, StringComparison.Ordinal);
+
+        var refreshedReviewContext = File.ReadAllText(Path.Combine(packetDir, "review-context.md"));
+        Assert.Contains("### vocabulary", refreshedReviewContext, StringComparison.Ordinal);
+        Assert.Contains("identity/mission", refreshedReviewContext, StringComparison.Ordinal);
+        Assert.DoesNotContain("No facet-annotated nodes found", refreshedReviewContext, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RegenerationWithUnchangedReferences_StatusIsSkippedNotSpuriouslyUpdated()
+    {
+        using var workspace = new PacketDraftWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G530");
+        Directory.CreateDirectory(packetDir);
+        File.WriteAllText(
+            Path.Combine(packetDir, "packet.yaml"),
+            """
+            implementation_issue_packet:
+              source_execution_unit: G530
+              domain: intent-cli
+              intent_references:
+                - intents/intent-cli/identity/mission.md
+            """);
+
+        using (var firstWriter = new StringWriter())
+        {
+            PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], firstWriter);
+        }
+
+        using var secondWriter = new StringWriter();
+        PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], secondWriter);
+
+        Assert.Contains("review-context.md: skipped", secondWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RegenerationAfterReferenceRemoved_NodeNoLongerAppearsInFacetContextBlock()
+    {
+        using var workspace = new PacketDraftWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G530");
+        Directory.CreateDirectory(packetDir);
+        var packetYamlPath = Path.Combine(packetDir, "packet.yaml");
+        File.WriteAllText(
+            packetYamlPath,
+            """
+            implementation_issue_packet:
+              source_execution_unit: G530
+              domain: intent-cli
+              intent_references:
+                - intents/intent-cli/identity/mission.md
+            """);
+
+        using (var firstWriter = new StringWriter())
+        {
+            PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], firstWriter);
+        }
+        Assert.Contains(
+            "identity/mission",
+            File.ReadAllText(Path.Combine(packetDir, "review-context.md")),
+            StringComparison.Ordinal);
+
+        File.WriteAllText(
+            packetYamlPath,
+            """
+            implementation_issue_packet:
+              source_execution_unit: G530
+              domain: intent-cli
+              intent_references: []
+            """);
+
+        using var secondWriter = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], secondWriter);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("review-context.md: updated", secondWriter.ToString(), StringComparison.Ordinal);
+        var reviewContext = File.ReadAllText(Path.Combine(packetDir, "review-context.md"));
+        Assert.DoesNotContain("identity/mission", reviewContext, StringComparison.Ordinal);
+        // The domain still HAS a facet node — it is simply no longer
+        // referenced by this packet, so each group is empty ("scoped to
+        // nothing"), not the domain-wide "No facet-annotated nodes found"
+        // note (that note is reserved for a domain with zero facet nodes).
+        Assert.Contains("(none overlapping this packet's intent_references)", reviewContext, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_HandEditsBeforeAndAfterGeneratedBlock_PreservedAcrossRegeneration()
+    {
+        using var workspace = new PacketDraftWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G530");
+        Directory.CreateDirectory(packetDir);
+        File.WriteAllText(
+            Path.Combine(packetDir, "packet.yaml"),
+            """
+            implementation_issue_packet:
+              source_execution_unit: G530
+              domain: intent-cli
+              intent_references: []
+            """);
+
+        using (var firstWriter = new StringWriter())
+        {
+            PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], firstWriter);
+        }
+
+        var reviewContextPath = Path.Combine(packetDir, "review-context.md");
+        var scaffolded = File.ReadAllText(reviewContextPath);
+        var handEdited = "Reviewer note: pay close attention to the event ordering invariant.\n\n" + scaffolded
+            + "\n\nAppended reviewer note: also double-check the closeout learning writeback.\n";
+        File.WriteAllText(reviewContextPath, handEdited);
+
+        // Now the operator adds a real reference and reruns.
+        File.WriteAllText(
+            Path.Combine(packetDir, "packet.yaml"),
+            """
+            implementation_issue_packet:
+              source_execution_unit: G530
+              domain: intent-cli
+              intent_references:
+                - intents/intent-cli/identity/mission.md
+            """);
+
+        using var secondWriter = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], secondWriter);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("review-context.md: updated", secondWriter.ToString(), StringComparison.Ordinal);
+        var updated = File.ReadAllText(reviewContextPath);
+        Assert.StartsWith("Reviewer note: pay close attention to the event ordering invariant.", updated, StringComparison.Ordinal);
+        Assert.EndsWith("Appended reviewer note: also double-check the closeout learning writeback.\n", updated, StringComparison.Ordinal);
+        Assert.Contains("identity/mission", updated, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Execute_GivenDryRun_DoesNotWriteFilesAndReportsPlanned()
     {

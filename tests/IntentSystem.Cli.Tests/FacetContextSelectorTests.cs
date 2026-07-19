@@ -195,4 +195,170 @@ public sealed class FacetContextSelectorTests : IDisposable
         var node = selection.Groups.Single(g => g.Facet == "vocabulary").Nodes.Single();
         Assert.Equal("intents/intent-cli/identity/mission.md", node.Path);
     }
+
+    // ── Review repair: symmetric, normalized scope overlap ──────────────
+
+    [Fact]
+    public void Select_ScopeHintShortFormWithMdExtension_Matches()
+    {
+        // The documented short domain-relative FILE form carries ".md";
+        // the node's own id does not. Both must be recognized as the same
+        // logical path.
+        WriteNode("identity/mission.md", ["vocabulary"]);
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli", scopeHints: ["identity/mission.md"], facetFilter: null);
+
+        Assert.Single(selection.Groups.Single(g => g.Facet == "vocabulary").Nodes);
+    }
+
+    [Fact]
+    public void Select_ScopeHintAbsoluteFilesystemPath_ReducedToDomainRelativeForm()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        var absoluteHint = Path.Combine(domainRoot, "identity", "mission.md");
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli", scopeHints: [absoluteHint], facetFilter: null);
+
+        Assert.Single(selection.Groups.Single(g => g.Facet == "vocabulary").Nodes);
+    }
+
+    [Fact]
+    public void Select_ScopeHintAbsolutePathOutsideDomainRoot_NeverMatches()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        var outsideHint = Path.Combine(Path.GetTempPath(), "definitely-not-under-domain-root", "file.md");
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli", scopeHints: [outsideHint], facetFilter: null);
+
+        Assert.Empty(selection.Groups.Single(g => g.Facet == "vocabulary").Nodes);
+    }
+
+    [Fact]
+    public void Select_ScopeHintDeeperThanNodePath_ReverseAncestorOverlapMatches()
+    {
+        // Symmetric overlap: a hint MORE SPECIFIC than a node's own path
+        // (the node's segments are a prefix of the hint's) must also count
+        // as overlap, not just the already-covered "hint is an ancestor
+        // directory of the node" direction.
+        WriteNode("means/flow.md", ["decider"]);
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli", scopeHints: ["intents/intent-cli/means/flow/deeper-anchor"], facetFilter: null);
+
+        Assert.Single(selection.Groups.Single(g => g.Facet == "decider").Nodes);
+    }
+
+    [Fact]
+    public void Select_MultipleScopeHints_UnionsMatchingNodesAcrossAllHints()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        WriteNode("decisions/adr-1.md", ["vocabulary"]);
+        WriteNode("means/flow.md", ["vocabulary"]);
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli",
+            scopeHints: ["intents/intent-cli/identity", "intents/intent-cli/decisions"],
+            facetFilter: null);
+
+        var vocabularyGroup = selection.Groups.Single(g => g.Facet == "vocabulary");
+        Assert.Equal(2, vocabularyGroup.Nodes.Count);
+        Assert.DoesNotContain(vocabularyGroup.Nodes, n => n.Id == "means/flow");
+    }
+
+    [Fact]
+    public void Select_ScopeHintWithBackslashSeparators_NormalizedAndMatches()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli", scopeHints: [@"intents\intent-cli\identity\mission.md"], facetFilter: null);
+
+        Assert.Single(selection.Groups.Single(g => g.Facet == "vocabulary").Nodes);
+    }
+
+    [Fact]
+    public void Select_ScopeHintWithParentTraversalSegment_RejectedNeverMatches()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli", scopeHints: ["intents/intent-cli/identity/../identity/mission.md"], facetFilter: null);
+
+        Assert.Empty(selection.Groups.Single(g => g.Facet == "vocabulary").Nodes);
+    }
+
+    [Fact]
+    public void Select_ScopeHintCaseMismatch_NeverMatches_CaseSensitivePinned()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli", scopeHints: ["intents/intent-cli/IDENTITY/MISSION.md"], facetFilter: null);
+
+        Assert.Empty(selection.Groups.Single(g => g.Facet == "vocabulary").Nodes);
+    }
+
+    [Fact]
+    public void Select_ScopeHintPrefixCollision_DoesNotMatchSimilarlyNamedSibling()
+    {
+        // "means" must never match "means-2/flow" via a bare string-prefix
+        // check — only a whole path SEGMENT match counts.
+        WriteNode("means-2/flow.md", ["decider"]);
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli", scopeHints: ["intents/intent-cli/means"], facetFilter: null);
+
+        Assert.Empty(selection.Groups.Single(g => g.Facet == "decider").Nodes);
+    }
+
+    // ── Review repair: malformed/unknown-value visibility ───────────────
+
+    [Fact]
+    public void Select_MalformedFacetsDeclaration_ProducesWarningWithPathAndReason()
+    {
+        var path = Path.Combine(domainRoot, "identity", "mission.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "---\nfacets: not-a-list\n---\n# Mission\n");
+
+        var selection = FacetContextSelector.Select(domainRoot, "intent-cli", scopeHints: null, facetFilter: null);
+
+        var warning = Assert.Single(selection.Warnings);
+        Assert.Equal("intents/intent-cli/identity/mission.md", warning.Path);
+        Assert.Contains("malformed", warning.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Select_UnknownFacetValue_ProducesWarning_NodeStillAppearsUnderItsValidFacets()
+    {
+        WriteNode("identity/mission.md", ["vocabulary", "projection"]);
+
+        var selection = FacetContextSelector.Select(domainRoot, "intent-cli", scopeHints: null, facetFilter: null);
+
+        var warning = Assert.Single(selection.Warnings);
+        Assert.Equal("intents/intent-cli/identity/mission.md", warning.Path);
+        Assert.Contains("projection", warning.Reason, StringComparison.Ordinal);
+        Assert.Single(selection.Groups.Single(g => g.Facet == "vocabulary").Nodes);
+    }
+
+    [Fact]
+    public void Select_DomainWhereEveryDeclarationIsMalformedOrUnknownOnly_DistinguishableFromGenuinelyEmptyDomain()
+    {
+        // DomainHasAnyFacetNodes stays false (no VALID facet was ever
+        // bucketed), but Warnings is non-empty — this is what lets a
+        // consumer tell "excluded for a reason" apart from "never adopted
+        // facets at all", which look identical without the warnings list.
+        var malformedPath = Path.Combine(domainRoot, "identity", "mission.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(malformedPath)!);
+        File.WriteAllText(malformedPath, "---\nfacets: not-a-list\n---\n# Mission\n");
+        WriteNode("decisions/adr-1.md", ["projection"]); // unknown-only, nothing valid
+
+        var selection = FacetContextSelector.Select(domainRoot, "intent-cli", scopeHints: null, facetFilter: null);
+
+        Assert.False(selection.DomainHasAnyFacetNodes);
+        Assert.Equal(2, selection.Warnings.Count);
+        Assert.All(selection.Groups, group => Assert.Empty(group.Nodes));
+    }
 }

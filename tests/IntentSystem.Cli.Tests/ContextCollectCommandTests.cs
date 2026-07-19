@@ -291,6 +291,94 @@ public sealed class ContextCollectCommandTests
         Assert.Equal(JsonValueKind.Null, note.ValueKind);
     }
 
+    // ── Review repair: strict comma-list validation ─────────────────────
+
+    [Fact]
+    public void Execute_ScopeValueIsBareComma_ReturnsErrorRatherThanDisablingScope()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = ContextCollectCommand.Execute(workspace.Context, ["--scope", ","], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--scope", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("empty element", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_FacetsValueHasEmptyMiddleElement_ReturnsErrorRatherThanDiscardingIt()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--facets", "vocabulary,,decider"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--facets", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("empty element", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_FacetsDuplicateElements_DedupedFirstSeenOrder_StillValidatesAndFilters()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        workspace.WriteFacetNode("decisions/adr-1.md", ["decider"], "Decision One");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--facets", "decider,vocabulary,decider"], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("### vocabulary", output, StringComparison.Ordinal);
+        Assert.Contains("### decider", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("### invariant", output, StringComparison.Ordinal);
+    }
+
+    // ── Review repair: malformed/unknown-facet warning visibility ───────
+
+    [Fact]
+    public void Execute_MalformedFacetsNode_SurfacesWarningInMarkdown_NeverSilent()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteRawIntentFile("identity/mission.md", "---\nfacets: not-a-list\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(workspace.Context, [], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("no facet-annotated nodes found", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Warnings", output, StringComparison.Ordinal);
+        Assert.Contains("intents/intent-cli/identity/mission.md", output, StringComparison.Ordinal);
+        Assert.Contains("malformed", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_JsonFormat_FacetContextWarningsShapeIsStableSnakeCase()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary", "projection"], "Mission");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        var warnings = root.GetProperty("facet_context_warnings").EnumerateArray().ToArray();
+        var warning = Assert.Single(warnings);
+        Assert.Equal("intents/intent-cli/identity/mission.md", warning.GetProperty("path").GetString());
+        Assert.Contains("projection", warning.GetProperty("reason").GetString(), StringComparison.Ordinal);
+        // The node still appears under its own valid facet despite the warning.
+        var vocabularyNodes = root.GetProperty("facet_context")[0].GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.Single(vocabularyNodes);
+    }
+
     [Fact]
     public void Execute_GivenUnknownArgument_ReturnsErrorExitCode()
     {
@@ -424,6 +512,15 @@ public sealed class ContextCollectCommandTests
                 rootPath, "intents", Context.Config.Project.Domain, relativePath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
             File.WriteAllText(fullPath, $"---\nfacets: [{string.Join(", ", facets)}]\n---\n# {title}\n");
+        }
+
+        /// <summary>G530 review repair: writes arbitrary raw content under `intents/&lt;domain&gt;/&lt;relativePath&gt;` — used to pin a malformed `facets:` declaration.</summary>
+        public void WriteRawIntentFile(string relativePath, string content)
+        {
+            var fullPath = Path.Combine(
+                rootPath, "intents", Context.Config.Project.Domain, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, content);
         }
 
         public void WritePacketFile(string executionUnit, string fileName, string content)
