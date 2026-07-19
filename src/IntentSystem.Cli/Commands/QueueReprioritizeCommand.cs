@@ -166,12 +166,29 @@ internal static class QueueReprioritizeCommand
         //   fails, the audit trail already proves the attempted change
         //   and its reason even though the state file doesn't yet
         //   reflect it. Re-running this EXACT command detects the
-        //   already-recorded event (matched on execution unit + event
-        //   name + the deterministic reason text) and skips re-appending
-        //   — it only retries the queue-state write, so convergence never
-        //   produces a duplicate event.
+        //   already-recorded event and skips re-appending — it only
+        //   retries the queue-state write, so convergence never produces
+        //   a duplicate event.
+        //
+        // Round-2 review repair: execution unit + event name + the
+        // deterministic reason text ALONE is not enough to tell "the
+        // pending event from my own immediately-preceding failed attempt"
+        // apart from "a genuinely historical, fully-completed transition
+        // that happens to share the same old/new priority and reason"
+        // (e.g. normal->high reason R, then high->normal reason S, then
+        // normal->high reason R again — a real, distinct third mutation
+        // whose reason text collides byte-for-byte with the first). The
+        // match is now ALSO bound to `queueState.UpdatedAt` — the CURRENT,
+        // not-yet-mutated queue-state generation read at the top of this
+        // invocation: only an event timestamped AT OR AFTER that
+        // generation could possibly be the audit record from an attempt
+        // that started against this SAME unmutated state and then failed
+        // before the queue-state write landed. Any older event was
+        // necessarily superseded by at least one successful queue-state
+        // write since (this command always advances `UpdatedAt` on every
+        // successful write) and can never be mistaken for a pending retry.
         var expectedReason = $"priority changed from '{item.Priority}' to '{requestedPriority}': {reason}";
-        var alreadyAudited = RunsLogHasMatchingPriorityChangedEvent(runLogPath, executionUnit!, expectedReason);
+        var alreadyAudited = RunsLogHasMatchingPriorityChangedEvent(runLogPath, executionUnit!, expectedReason, queueState.UpdatedAt);
 
         if (!alreadyAudited)
         {
@@ -213,7 +230,8 @@ internal static class QueueReprioritizeCommand
         return 0;
     }
 
-    private static bool RunsLogHasMatchingPriorityChangedEvent(string runLogPath, string executionUnit, string expectedReason)
+    private static bool RunsLogHasMatchingPriorityChangedEvent(
+        string runLogPath, string executionUnit, string expectedReason, DateTimeOffset currentQueueStateGeneration)
     {
         if (!File.Exists(runLogPath))
         {
@@ -234,10 +252,20 @@ internal static class QueueReprioritizeCommand
             return false;
         }
 
+        // Round-2 review repair: `Ts >= currentQueueStateGeneration` is the
+        // binding that tells a genuine pending-retry event (recorded
+        // against THIS still-unmutated queue-state generation) apart from
+        // a stale, fully-historical event that happens to share the same
+        // execution unit/event name/reason text. Every successful write
+        // this command makes advances `queue-state.json`'s `UpdatedAt` to
+        // the SAME timestamp used for its own event's `Ts` — so an event
+        // from any PRIOR generation is necessarily older than the current
+        // `UpdatedAt` and can never satisfy this bound.
         return events.Any(runEvent =>
             string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
             && string.Equals(runEvent.Event, PriorityChangedEventName, StringComparison.Ordinal)
-            && string.Equals(runEvent.Reason, expectedReason, StringComparison.Ordinal));
+            && string.Equals(runEvent.Reason, expectedReason, StringComparison.Ordinal)
+            && runEvent.Ts >= currentQueueStateGeneration);
     }
 
     private static void AppendPriorityChangedEvent(string runLogPath, RunEvent runEvent)

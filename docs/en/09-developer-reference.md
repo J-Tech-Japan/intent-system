@@ -1015,9 +1015,27 @@ is reversed — the runs event is appended **first**, `queue-state.json`
   fails, the audit trail already proves the attempted change and its
   reason even though the state file doesn't yet reflect it — never a
   silent, unaudited mutation. Re-running the exact same command detects
-  the already-recorded event (matched on execution unit + event name +
-  the deterministic reason text) and retries **only** the `queue-state.json`
+  the already-recorded event and retries **only** the `queue-state.json`
   write, so convergence never produces a duplicate event.
+
+**Round-2 review repair — the dedup match is bound to the queue-state
+generation, not merely the reusable transition text.** Matching only on
+execution unit + event name + the deterministic reason text has a real
+collision: replaying the exact same transition later (e.g. `normal→high`
+reason `R`, then `high→normal` reason `S`, then `normal→high` reason `R`
+again — a genuine third mutation) produces a reason string
+byte-identical to the first event's, so the naive dedup would wrongly
+treat that stale historical event as the pending audit for the third
+mutation and skip appending its own — violating "one reasoned event per
+mutation." The match now additionally requires the candidate event's
+`Ts` to be **at or after** the `UpdatedAt` value read from
+`queue-state.json` at the top of the current invocation. Every successful
+write this command makes advances `UpdatedAt` to the same timestamp used
+for its own event — so an event from any prior generation is necessarily
+older than the current `UpdatedAt` and can never be mistaken for a
+pending retry, while an event genuinely written moments ago by an
+immediately-preceding failed attempt (against this same still-unmutated
+generation) always satisfies the bound.
 
 ---
 

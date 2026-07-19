@@ -301,12 +301,184 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         Assert.Single(events);
     }
 
-    private static string BuildQueueState((string ExecutionUnit, QueueItemState State, string Priority, LinkedIssue? LinkedIssue) item)
+    // ─── G537 round-2 review repair: dedup bound to queue-state generation ──
+
+    [Fact]
+    public void Execute_RoundTripStaleCollision_ThirdMutationGetsItsOwnEvent()
+    {
+        // The exact reproduction from review: normal->high reason R
+        // completes; high->normal reason S completes; normal->high reason
+        // R is requested AGAIN. The third request's expected reason text
+        // is BYTE-IDENTICAL to the first event's — but the first event is
+        // now stale (superseded by the second transition's queue-state
+        // write), so the third mutation must get its OWN new event, not
+        // be silently skipped as if it were a pending retry of the first.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+
+        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 1, 0, 0, TimeSpan.Zero);
+        Assert.Equal(0, QueueReprioritizeCommand.Execute(
+            workspace.Context, ["G537", "--priority", "high", "--reason", "R", "--write"], new StringWriter()));
+
+        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 2, 0, 0, TimeSpan.Zero);
+        Assert.Equal(0, QueueReprioritizeCommand.Execute(
+            workspace.Context, ["G537", "--priority", "normal", "--reason", "S", "--write"], new StringWriter()));
+
+        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 3, 0, 0, TimeSpan.Zero);
+        using var thirdWriter = new StringWriter();
+        var thirdExitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
+            thirdWriter);
+
+        Assert.Equal(0, thirdExitCode);
+        using var document = JsonDocument.Parse(thirdWriter.ToString());
+        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
+
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("high", stateAfter.Items.Single().Priority);
+
+        // THREE distinct mutations -> THREE events, one per mutation.
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        Assert.Equal(3, events.Count);
+        Assert.All(events, e => Assert.Equal("priority-changed", e.Event));
+        Assert.Equal(new DateTimeOffset(2026, 7, 19, 1, 0, 0, TimeSpan.Zero), events[0].Ts);
+        Assert.Equal(new DateTimeOffset(2026, 7, 19, 2, 0, 0, TimeSpan.Zero), events[1].Ts);
+        Assert.Equal(new DateTimeOffset(2026, 7, 19, 3, 0, 0, TimeSpan.Zero), events[2].Ts);
+    }
+
+    [Fact]
+    public void Execute_StaleHistoricalEventWithDifferentReasonText_NeverSuppressesTheNewEvent()
+    {
+        // "Wrong reason": a stale historical event whose reason text
+        // differs must never dedupe — this was already implicitly
+        // guaranteed (reason text is part of the match), pinned explicitly
+        // per review request.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        var eventTimestamp = new DateTimeOffset(2026, 7, 19, 0, 0, 0, TimeSpan.Zero);
+        SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': OLD_REASON", eventTimestamp);
+
+        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 5, 0, 0, TimeSpan.Zero);
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "NEW_REASON", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        Assert.Equal(2, events.Count);
+        Assert.Contains(events, e => e.Reason == "priority changed from 'normal' to 'high': NEW_REASON");
+    }
+
+    [Fact]
+    public void Execute_StaleHistoricalEventWithOppositeDirection_NeverSuppressesTheNewEvent()
+    {
+        // "Wrong direction": a stale event recording the OPPOSITE
+        // transition (high->normal) must never dedupe a normal->high
+        // request, even if it shares the same reason word.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        var eventTimestamp = new DateTimeOffset(2026, 7, 19, 0, 0, 0, TimeSpan.Zero);
+        SeedHistoricalEvent(workspace, "G537", "priority changed from 'high' to 'normal': R", eventTimestamp);
+
+        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 5, 0, 0, TimeSpan.Zero);
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        Assert.Equal(2, events.Count);
+        Assert.Contains(events, e => e.Reason == "priority changed from 'normal' to 'high': R");
+    }
+
+    [Fact]
+    public void Execute_StaleHistoricalEventForDifferentExecutionUnit_NeverSuppressesTheNewEvent()
+    {
+        // "Wrong unit": a stale event for a DIFFERENT execution unit must
+        // never dedupe this unit's request, even with identical reason text.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        var eventTimestamp = new DateTimeOffset(2026, 7, 19, 0, 0, 0, TimeSpan.Zero);
+        SeedHistoricalEvent(workspace, "G999", "priority changed from 'normal' to 'high': R", eventTimestamp);
+
+        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 5, 0, 0, TimeSpan.Zero);
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        Assert.Equal(2, events.Count);
+        Assert.Contains(events, e => e.ExecutionUnit == "G537" && e.Reason == "priority changed from 'normal' to 'high': R");
+    }
+
+    [Fact]
+    public void Execute_GenuinePendingEventAtOrAfterCurrentGeneration_IsDedupedAsRetry()
+    {
+        // Direct fixture for the genuine-retry path (complementary to the
+        // WriteQueueStateOverride fault-injection test above): an event
+        // already recorded at/after the CURRENT queue-state generation,
+        // exactly matching unit/event/reason, must be recognized as the
+        // pending audit for an in-progress attempt and never duplicated.
+        using var workspace = new ReprioritizeWorkspace();
+        var currentGeneration = new DateTimeOffset(2026, 7, 19, 2, 0, 0, TimeSpan.Zero);
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null), currentGeneration));
+        SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': R", currentGeneration);
+
+        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 5, 0, 0, TimeSpan.Zero);
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
+
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("high", stateAfter.Items.Single().Priority);
+
+        // Still exactly ONE event — recognized as the pending retry, not duplicated.
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        Assert.Single(events);
+    }
+
+    private static void SeedHistoricalEvent(ReprioritizeWorkspace workspace, string executionUnit, string reason, DateTimeOffset ts)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        var historicalEvent = new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "priority-changed",
+            By = "intent-cli",
+            Reason = reason,
+        };
+        File.AppendAllText(workspace.RunsLogPath, RunLogSerializer.SerializeLine(historicalEvent) + Environment.NewLine);
+    }
+
+    private static string BuildQueueState(
+        (string ExecutionUnit, QueueItemState State, string Priority, LinkedIssue? LinkedIssue) item,
+        DateTimeOffset? updatedAt = null)
     {
         var state = new QueueState
         {
             SchemaVersion = "1",
-            UpdatedAt = new DateTimeOffset(2026, 5, 8, 0, 0, 0, TimeSpan.Zero),
+            UpdatedAt = updatedAt ?? new DateTimeOffset(2026, 5, 8, 0, 0, 0, TimeSpan.Zero),
             Items = new[]
             {
                 new QueueItem

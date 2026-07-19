@@ -1080,10 +1080,29 @@ event を**先に**追記し、`queue-state.json` は**後で**書き込みま�
   場合、state file がまだそれを反映していなくても、audit trail は
   既に試みられた変更とその reason を証明します——silent で unaudited
   な mutation には決してなりません。全く同じコマンドを再実行すると、
-  既に記録されている event(execution unit + event name + 決定論的な
-  reason text で一致)を検出し、`queue-state.json` の書き込み**のみ**を
-  retry するため、convergence が duplicate な event を生成することは
-  決してありません。
+  既に記録されている event を検出し、`queue-state.json` の書き込み
+  **のみ**を retry するため、convergence が duplicate な event を
+  生成することは決してありません。
+
+**Round-2 review repair — dedup の match は、再利用可能な transition
+text だけでなく queue-state の generation に束縛されます。** execution
+unit + event name + 決定論的な reason text だけで match すると、本物の
+collision が起こります: 全く同じ transition を後で replay した場合
+(例えば `normal→high` reason `R`、続いて `high→normal` reason `S`、
+そして再び `normal→high` reason `R`——これは正当な 3 番目の mutation
+です)、生成される reason 文字列が最初の event と byte-identical に
+なるため、素朴な dedup はその stale な historical event を 3 番目の
+mutation の pending audit だと誤認し、自分自身の event の追記を
+skip してしまいます——「1 mutation につき 1 つの reasoned event」
+という原則に違反します。match は今や追加で、candidate event の `Ts`
+が、今回の invocation の先頭で `queue-state.json` から read した
+`UpdatedAt` の値**以降**であることを要求します。このコマンドが行う
+すべての成功した write は、`UpdatedAt` を自分自身の event と同じ
+timestamp に進めます——そのため、それより前の generation の event は
+必然的に現在の `UpdatedAt` より古く、pending retry と誤認される
+ことは決してありません。一方、直前の失敗した attempt によって、この
+同じ未 mutate な generation に対して実際にたった今書き込まれた event
+は、常にこの束縛を満たします。
 
 ---
 
