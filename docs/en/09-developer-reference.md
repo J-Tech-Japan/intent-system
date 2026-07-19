@@ -321,7 +321,14 @@ queue-state (a coincidental same-number PR in an unrelated repo). The queue
 item's own declared `linked_issue` (repo + number) must additionally match
 one of the merged PR's OWN GitHub-reported closing-issue references for the
 scanned repo — a missing, wrong-repo, or non-corresponding `linked_issue`
-fails closed into `excluded[]` rather than being assumed.
+fails closed into `excluded[]` rather than being assumed. Every ACTIVE
+(non-completed) queue item referencing the same merged PR is collected
+first — exactly one is required; two or more (whether they collapse to the
+same repo+issue with different execution units, or one validates while
+another does not) is ambiguous (`execution-unit-ambiguous`, naming every
+attempted queue item's unit, state, and linkage, plus the queue-state path)
+regardless of JSON ordering. A completed duplicate alongside one genuinely
+active item is NOT ambiguous — only active items compete for authority.
 
 **Domain confirmation applies the same G522 order as every other
 execution-unit-resolving surface** (`--domain` > packet-declared domain >

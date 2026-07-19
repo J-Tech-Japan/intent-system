@@ -319,7 +319,16 @@ PR が存在する可能性があるため）。queue item 自身が宣言する
 merged PR 自身が GitHub 上で報告する closing-issue reference の
 いずれかと一致することも追加で必要です — `linked_issue` が無い、
 repo が違う、対応する issue が無い場合は、単なる仮定ではなく
-`excluded[]` へ fail-closed します。
+`excluded[]` へ fail-closed します。同じ merged PR を参照する
+ACTIVE（非 Completed）な queue item は、まず全件を収集します —
+必要なのはちょうど 1 件のみで、2 件以上（同じ repo+issue に
+collapse するが execution unit が異なる場合も、一方だけが
+妥当性検証を通る場合も含む）は、JSON の並び順に関わらず ambiguous
+（`execution-unit-ambiguous`、試みたすべての queue item の unit・
+state・linkage と queue-state のパスを明示）になります。Completed
+になった重複が、本当に active な item 1 件と共存している場合は
+ambiguous とはみなされません — 権威を争うのは active な item
+同士のみです。
 
 **domain の確認は、他の execution-unit を解決するすべてのサーフェスと
 同じ G522 の順序（`--domain` > packet-declared domain > fail-loud）を

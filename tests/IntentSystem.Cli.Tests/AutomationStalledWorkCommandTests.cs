@@ -499,6 +499,108 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_MergedNotClosedOut_TwoActiveQueueItemsSameValidRepoIssueDifferentUnits_ReportedAsAmbiguous()
+    {
+        // G532 review repair: two active queue items both linked to the
+        // same merged PR — and both declaring the SAME valid repo+issue
+        // that genuinely appears in the PR's own closing references — must
+        // never be resolved by picking whichever is first in JSON order.
+        // Two different execution units both claiming the same issue is a
+        // data-integrity problem, not something --domain or corroboration
+        // logic should silently pick a winner for.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WritePacketDomain("G501", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            BuildQueueItem("G500", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199),
+            BuildQueueItem("G501", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199)));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonExecutionUnitAmbiguous, excludedItem.GetProperty("reason").GetString());
+        var detail = excludedItem.GetProperty("detail").GetString();
+        Assert.Contains("G500", detail, StringComparison.Ordinal);
+        Assert.Contains("G501", detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_TwoActiveQueueItemsOneValidOneInvalidLinkage_StillAmbiguousRegardlessOfOrder()
+    {
+        // Mixed valid/invalid linkage: one active item's linked_issue
+        // genuinely corroborates the merged PR, the other's does not. The
+        // mere presence of two ACTIVE matches is itself the ambiguity —
+        // it must not be resolved by silently preferring whichever item
+        // happens to validate, in either JSON order.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WritePacketDomain("G502", "intent-cli");
+        // G500 -> #1199 (matches the merged PR's own closing reference);
+        // G502 -> #9999 (does not).
+        workspace.WriteQueueState(BuildQueueStateJson(
+            BuildQueueItem("G502", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 9999),
+            BuildQueueItem("G500", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199)));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonExecutionUnitAmbiguous, excludedItem.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_OneActiveOneCompletedQueueItemForSamePr_UsesTheSoleActiveItem()
+    {
+        // A completed duplicate alongside one genuinely active item is NOT
+        // ambiguous — only ACTIVE (non-completed) items compete for
+        // authority; a stale/completed leftover must not block detection
+        // of the one real stall.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WritePacketDomain("G503", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            BuildQueueItem("G503", QueueItemState.Completed,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199),
+            BuildQueueItem("G500", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199)));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal("G500", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
     public void Execute_TitleWithSubSliceSuffixNotImmediatelyFollowedByColon_ResolvesLeadingIdTokenOnly()
     {
         // G532 regression fixture: field finding #1 (design@sekiban-as-a-
@@ -886,48 +988,61 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         QueueItemState state,
         string linkedPr,
         int? linkedIssueNumber,
-        string linkedIssueRepo = "J-Tech-Japan/intent-system")
+        string linkedIssueRepo = "J-Tech-Japan/intent-system") =>
+        BuildQueueStateJson(BuildQueueItem(executionUnit, state, linkedPr, linkedIssueNumber, linkedIssueRepo));
+
+    /// <summary>
+    /// G532 review repair: overload accepting multiple queue items, so a
+    /// fixture can pin the "two+ active queue items reference the same
+    /// merged PR" ambiguity — the prior FirstOrDefault selection picked
+    /// whichever item happened to be first in JSON order.
+    /// </summary>
+    private static string BuildQueueStateJson(params QueueItem[] items)
     {
         var queueState = new QueueState
         {
             SchemaVersion = "1",
             UpdatedAt = FixedNow,
-            Items = new[]
-            {
-                new QueueItem
-                {
-                    ExecutionUnit = executionUnit,
-                    Title = $"{executionUnit} title",
-                    State = state,
-                    Dependencies = Array.Empty<string>(),
-                    BlockedBy = Array.Empty<string>(),
-                    ClarificationReturnPath = string.Empty,
-                    PacketPaths = new PacketPaths
-                    {
-                        Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml",
-                        Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
-                        ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
-                    },
-                    // G532 review repair: nullable, so a fixture can pin
-                    // "no linked_issue at all" — the queue-linkage
-                    // corroboration check must fail closed for that case.
-                    LinkedIssue = linkedIssueNumber is int number
-                        ? new LinkedIssue
-                        {
-                            Repo = linkedIssueRepo,
-                            Number = number,
-                            Url = $"https://github.com/{linkedIssueRepo}/issues/{number}",
-                        }
-                        : null,
-                    LinkedPr = linkedPr,
-                    WorkerRole = "Claude",
-                    ReviewRole = "Codex",
-                    Priority = "normal",
-                },
-            },
+            Items = items,
         };
         return QueueStateSerializer.Serialize(queueState);
     }
+
+    private static QueueItem BuildQueueItem(
+        string executionUnit,
+        QueueItemState state,
+        string linkedPr,
+        int? linkedIssueNumber,
+        string linkedIssueRepo = "J-Tech-Japan/intent-system") => new()
+        {
+            ExecutionUnit = executionUnit,
+            Title = $"{executionUnit} title",
+            State = state,
+            Dependencies = Array.Empty<string>(),
+            BlockedBy = Array.Empty<string>(),
+            ClarificationReturnPath = string.Empty,
+            PacketPaths = new PacketPaths
+            {
+                Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
+                ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
+            },
+            // G532 review repair: nullable, so a fixture can pin "no
+            // linked_issue at all" — the queue-linkage corroboration check
+            // must fail closed for that case.
+            LinkedIssue = linkedIssueNumber is int number
+                ? new LinkedIssue
+                {
+                    Repo = linkedIssueRepo,
+                    Number = number,
+                    Url = $"https://github.com/{linkedIssueRepo}/issues/{number}",
+                }
+                : null,
+            LinkedPr = linkedPr,
+            WorkerRole = "Claude",
+            ReviewRole = "Codex",
+            Priority = "normal",
+        };
 
     private sealed class FakeLister : IGitHubAutomationCandidateLister
     {

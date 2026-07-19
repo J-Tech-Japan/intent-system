@@ -383,11 +383,48 @@ internal static class AutomationStalledWorkCommand
         foreach (var pr in mergedPrs)
         {
             var prToken = pr.Number.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var matchedItem = queueState.Items.FirstOrDefault(item => MatchesLinkedPr(item.LinkedPr, repo, prToken));
-            if (matchedItem is null || matchedItem.State == QueueItemState.Completed)
+
+            // G532 review repair: a merged PR can be referenced by MORE
+            // THAN ONE non-completed queue item (a stale duplicate, a
+            // data-entry mistake, or two execution units both mistakenly
+            // claiming the same issue/PR). The prior FirstOrDefault picked
+            // whichever item happened to be first in JSON order and
+            // silently ignored the rest — the selected execution unit
+            // depended on queue-state ordering, not on evidence. Collect
+            // every ACTIVE (non-completed) match first; more than one is
+            // never resolved by picking one, it is reported as ambiguous.
+            var activeMatches = queueState.Items
+                .Where(item => MatchesLinkedPr(item.LinkedPr, repo, prToken) && item.State != QueueItemState.Completed)
+                .ToArray();
+            if (activeMatches.Length == 0)
             {
                 continue;
             }
+
+            if (activeMatches.Length > 1)
+            {
+                var itemDescriptions = activeMatches.Select(item =>
+                {
+                    var linkedIssueDescription = item.LinkedIssue is { } li ? $"{li.Repo}#{li.Number}" : "(no linked_issue)";
+                    return $"`{item.ExecutionUnit}` (state={item.State}, linked_issue={linkedIssueDescription})";
+                });
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindMergedNotClosedOut,
+                    ExecutionUnit = string.Empty,
+                    Issue = null,
+                    Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
+                    Reason = ReasonExecutionUnitAmbiguous,
+                    Detail =
+                        $"{activeMatches.Length} active (non-completed) queue-state items reference merged PR "
+                        + $"#{pr.Number} via linked_pr `{prToken}`: {string.Join("; ", itemDescriptions)}. "
+                        + $"Queue-state path: `{queueStateLocation.Path}`. Exactly one authoritative queue item is "
+                        + "required; not resolved by selecting the first in JSON order.",
+                });
+                continue;
+            }
+
+            var matchedItem = activeMatches[0];
 
             var issueRef = matchedItem.LinkedIssue is { Number: { } linkedIssueNumber } linkedIssue
                 ? new StalledWorkRef { Number = linkedIssueNumber, Url = linkedIssue.Url ?? string.Empty }
