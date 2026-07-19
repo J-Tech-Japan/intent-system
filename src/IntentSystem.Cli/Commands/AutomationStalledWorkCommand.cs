@@ -35,17 +35,36 @@ namespace IntentSystem.Cli.Commands;
 /// Strictly read-only: no GitHub mutation, no queue-state/runs.jsonl write,
 /// no label change.
 ///
-/// Domain isolation (G522 direction, tightened per PR #1148 review): a
-/// title-derived execution-unit prefix is NOT sufficient routing evidence by
-/// itself — it is used only to locate
-/// <c>.intent-cli/issues/&lt;unit&gt;/packet.yaml</c>, and that packet's own
-/// declared <c>domain:</c> field is the authoritative source consulted
-/// against the requested <c>--domain</c>. A candidate whose packet-declared
-/// domain contradicts <c>--domain</c>, or whose domain cannot be derived at
-/// all (no packet.yaml, or no `domain:` field on it), is FAIL-CLOSED —
-/// excluded from <c>items[]</c> and reported instead in <c>excluded[]</c>
-/// with a structured reason. It never silently joins the scan and never
-/// silently disappears.
+/// Execution-unit and domain identification (G532: replaces the PR #1148
+/// tightening, which excluded exactly the stalls this surface exists to
+/// find — see field findings against <c>ICL.M.SEMANTIC_FACETS</c>-adjacent
+/// production adoption, 2026-07-15 and 2026-07-18):
+/// <list type="bullet">
+/// <item>the execution unit is the LEADING ID token of the title
+///   (<see cref="ExecutionUnitFromTitle"/>), not everything before the
+///   first colon — a title like <c>"SKS-G815 G812 sub-slice 1: ..."</c>
+///   resolves to <c>SKS-G815</c>, not the whole pre-colon phrase;</item>
+/// <item>when no leading ID token is found, the candidate is matched
+///   against every packet under <c>.intent-cli/issues/*/packet.yaml</c> by
+///   that packet's own declared <c>source_execution_unit</c> appearing as a
+///   token within the title (<see cref="MatchExecutionUnitBySourceExecutionUnit"/>)
+///   before giving up;</item>
+/// <item>domain is read from the packet's nested
+///   <c>implementation_issue_packet.domain</c> field first, falling back to
+///   a top-level <c>domain:</c> field as a compatibility alias (<see
+///   cref="ReadPacketDeclaredDomain"/>);</item>
+/// <item>domain confirmation now uses the same G522 order as every other
+///   execution-unit-resolving surface (<see cref="PacketDomainResolution"/>):
+///   an explicit <c>--domain</c> (always present — it is a required
+///   argument here) wins whenever the packet is silent on domain, and is an
+///   error only when it actively CONTRADICTS a packet-declared domain. A
+///   candidate is excluded from <c>items[]</c> — and reported in
+///   <c>excluded[]</c> with reason <c>domain-contradiction</c> and the
+///   derivation attempted — only on a genuine contradiction; an
+///   underivable domain is no longer fail-closed for this surface, since
+///   <c>--domain</c> is mandatory and therefore always available to stand
+///   in for it.</item>
+/// </list>
 /// </summary>
 internal static class AutomationStalledWorkCommand
 {
@@ -201,7 +220,7 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var executionUnit = ExecutionUnitFromTitle(issue.Title);
+            var executionUnit = ResolveExecutionUnit(context, issue.Title);
             var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
             if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit, repo,
                     out var reason, out var detail))
@@ -282,7 +301,7 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var executionUnit = ExecutionUnitFromTitle(matchedIssue.Title);
+            var executionUnit = ResolveExecutionUnit(context, matchedIssue.Title);
             var packetDeclaredDomain = ReadPacketDeclaredDomain(context, executionUnit);
             if (!TryConfirmDomain(domain, packetDeclaredDomain, candidateDomains, executionUnit, repo,
                     out var reason, out var detail))
@@ -393,15 +412,22 @@ internal static class AutomationStalledWorkCommand
     }
 
     /// <summary>
-    /// PR #1148 review repair: domain confirmation is now ALWAYS grounded in
-    /// the candidate's own packet-declared domain — never in a title-prefix
-    /// regex match, and never assumed from the explicit <c>--domain</c>
-    /// alone. Unlike <see cref="PacketDomainResolution"/> (tuned for a
-    /// single operator-named execution unit, where an explicit
-    /// <c>--domain</c> may stand alone), a broad multi-candidate scan like
-    /// this one cannot trust that the requested domain applies to a
-    /// candidate it cannot corroborate — so a missing/absent packet-declared
-    /// domain here is fail-closed (excluded), not accepted.
+    /// G532: aligns stalled-work's domain confirmation with the shared
+    /// <see cref="PacketDomainResolution"/> order already used by every
+    /// other execution-unit-resolving surface (explicit <c>--domain</c> >
+    /// packet-declared domain > fail-loud). This supersedes the PR #1148
+    /// tightening, which treated a missing/absent packet-declared domain as
+    /// fail-closed on the theory that a broad multi-candidate scan cannot
+    /// trust <c>--domain</c> alone for a candidate it cannot corroborate —
+    /// in production that policy excluded exactly the stalls this surface
+    /// exists to find (field findings against sekiban-as-a-service,
+    /// 2026-07-15 SKS-G815 and 2026-07-18 SKS-G823), each papered over with
+    /// a team workaround instead of surfaced. Since <c>--domain</c> is a
+    /// REQUIRED argument for this command, <see cref="PacketDomainResolution.Resolve"/>
+    /// always has an explicit domain to fall back on, so a candidate is
+    /// excluded only on a genuine CONTRADICTION between <c>--domain</c> and
+    /// a packet that actively declares a different domain — never merely
+    /// because the packet is silent on domain.
     /// </summary>
     private static bool TryConfirmDomain(
         string domain,
@@ -412,29 +438,15 @@ internal static class AutomationStalledWorkCommand
         out string reason,
         out string detail)
     {
-        if (string.IsNullOrWhiteSpace(packetDeclaredDomain))
+        var reinvocation = $"intent-cli automation stalled-work --domain <name> --repo {repo} --format json";
+        var resolution = PacketDomainResolution.Resolve(domain, packetDeclaredDomain, candidateDomains, reinvocation);
+        if (resolution.IsError)
         {
-            reason = PacketDomainResolution.ReasonUnderivable;
-            var candidates = candidateDomains.Count > 0
-                ? string.Join(", ", candidateDomains)
-                : "(none found under intents/)";
-            // PR #1148 review re-repair: the underivable detail must name an
-            // exact, runnable re-invocation (inherited from the G522
-            // underivable diagnostic contract), not just candidate domains.
+            reason = resolution.Reason!;
             detail =
-                $"domain could not be confirmed for `{executionUnit}`: no packet-declared `domain:` field was found "
-                + $"(expected at `.intent-cli/issues/{executionUnit}/packet.yaml`). Candidate domains: {candidates}. "
-                + $"Re-invoke with: intent-cli automation stalled-work --domain <name> --repo {repo} --format json. "
-                + "Excluded rather than assumed to belong to the requested --domain.";
-            return false;
-        }
-
-        if (!string.Equals(domain, packetDeclaredDomain, StringComparison.Ordinal))
-        {
-            reason = PacketDomainResolution.ReasonContradiction;
-            detail =
-                $"requested --domain '{domain}' does not match the packet-declared domain '{packetDeclaredDomain}' "
-                + $"for `{executionUnit}`.";
+                $"`{executionUnit}`: {resolution.ErrorMessage} Derivation attempted: checked nested "
+                + $"`implementation_issue_packet.domain` and top-level `domain:` alias at "
+                + $"`.intent-cli/issues/{executionUnit}/packet.yaml`.";
             return false;
         }
 
@@ -443,6 +455,16 @@ internal static class AutomationStalledWorkCommand
         return true;
     }
 
+    /// <summary>
+    /// G532: the nested <c>implementation_issue_packet.domain</c> field is
+    /// first-class; a top-level <c>domain:</c> field is accepted as a
+    /// compatibility alias when the nested field is absent. Checking the
+    /// nested path FIRST (rather than relying on the shared scalar parser's
+    /// bare-key fallback, which favors whichever `domain:` line appears
+    /// first in the file) avoids an unrelated same-named field elsewhere in
+    /// the packet — e.g. a `review_context_packet` section — silently
+    /// shadowing the real declaration.
+    /// </summary>
     private static string? ReadPacketDeclaredDomain(CliContext context, string executionUnit)
     {
         if (string.IsNullOrWhiteSpace(executionUnit))
@@ -456,13 +478,25 @@ internal static class AutomationStalledWorkCommand
         }
         try
         {
-            PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath)).TryGetValue("domain", out var declaredDomain);
-            return declaredDomain;
+            var fields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath));
+            return ReadFirstNonEmpty(fields, "implementation_issue_packet.domain", "domain");
         }
         catch (FormatException)
         {
             return null;
         }
+    }
+
+    private static string? ReadFirstNonEmpty(IReadOnlyDictionary<string, string> fields, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (fields.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+        return null;
     }
 
     private static bool HasOpenClosingPr(int issueNumber, IReadOnlyList<GitHubAutomationPrCandidate> openPrs, string repo)
@@ -524,20 +558,136 @@ internal static class AutomationStalledWorkCommand
     }
 
     /// <summary>
-    /// Derives the candidate execution unit from a title following the
-    /// established convention used across this repository's own issues/PRs
-    /// (e.g. <c>"G523: Add automation stalled-work surface..."</c>). This
-    /// string is used ONLY to locate the candidate's packet.yaml — never as
-    /// the domain-membership decision itself (see <see cref="TryConfirmDomain"/>).
+    /// G532: resolves the candidate execution unit from an issue/PR title —
+    /// first via the leading ID token (<see cref="ExecutionUnitFromTitle"/>),
+    /// falling back to a packet-directory scan matching by declared
+    /// <c>source_execution_unit</c> (<see cref="MatchExecutionUnitBySourceExecutionUnit"/>)
+    /// when no leading token is found. This string is used ONLY to locate
+    /// the candidate's packet.yaml — never as the domain-membership decision
+    /// itself (see <see cref="TryConfirmDomain"/>).
     /// </summary>
+    private static string ResolveExecutionUnit(CliContext context, string title)
+    {
+        var leadingToken = ExecutionUnitFromTitle(title);
+        if (!string.IsNullOrEmpty(leadingToken))
+        {
+            return leadingToken;
+        }
+
+        return MatchExecutionUnitBySourceExecutionUnit(context, title);
+    }
+
+    /// <summary>
+    /// Extracts the LEADING ID token from a title — <c>^[A-Z]+-G?[0-9]+</c>
+    /// (an optionally-alphanumeric prefix, a dash, an optional literal
+    /// <c>G</c>, then digits — e.g. <c>SKS-G815</c>, <c>Z4R-G3</c>) or a
+    /// bare <c>^G[0-9]+</c> (e.g. <c>G523</c>). G532: replaces the prior
+    /// "everything before the first colon" rule, which broke on a title
+    /// whose ID is not immediately followed by a colon (e.g. <c>"SKS-G815
+    /// G812 sub-slice 1: ..."</c> used to resolve to the whole pre-colon
+    /// phrase instead of just <c>SKS-G815</c>).
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex LeadingExecutionUnitPattern = new(
+        @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private static string ExecutionUnitFromTitle(string title)
     {
         if (string.IsNullOrWhiteSpace(title))
         {
             return string.Empty;
         }
-        var colonIndex = title.IndexOf(':');
-        return (colonIndex > 0 ? title[..colonIndex] : title).Trim();
+        var match = LeadingExecutionUnitPattern.Match(title.TrimStart());
+        return match.Success ? match.Value : string.Empty;
+    }
+
+    /// <summary>
+    /// G532: fallback for a title with no leading ID token — scans every
+    /// packet under <c>.intent-cli/issues/*/packet.yaml</c> and matches the
+    /// title against each packet's own declared <c>source_execution_unit</c>
+    /// (nested <c>implementation_issue_packet.source_execution_unit</c>
+    /// first, bare <c>source_execution_unit</c> as alias) appearing as a
+    /// whole token anywhere in the title — not just as a leading prefix,
+    /// since by definition no leading token was found. When more than one
+    /// packet's declared unit matches, the longest (most specific) match
+    /// wins. Read-only; a missing or unreadable packet is skipped rather
+    /// than failing the whole scan.
+    /// </summary>
+    private static string MatchExecutionUnitBySourceExecutionUnit(CliContext context, string title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return string.Empty;
+        }
+
+        var issuesDir = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
+        if (!Directory.Exists(issuesDir))
+        {
+            return string.Empty;
+        }
+
+        string? bestMatch = null;
+        foreach (var unitDir in Directory.EnumerateDirectories(issuesDir).OrderBy(p => p, StringComparer.Ordinal))
+        {
+            var packetYamlPath = Path.Combine(unitDir, "packet.yaml");
+            if (!File.Exists(packetYamlPath))
+            {
+                continue;
+            }
+
+            IReadOnlyDictionary<string, string> fields;
+            try
+            {
+                fields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath));
+            }
+            catch (FormatException)
+            {
+                continue;
+            }
+
+            var declaredUnit = ReadFirstNonEmpty(
+                fields, "implementation_issue_packet.source_execution_unit", "source_execution_unit");
+            if (string.IsNullOrWhiteSpace(declaredUnit) || !TitleContainsUnitToken(title, declaredUnit))
+            {
+                continue;
+            }
+
+            if (bestMatch is null || declaredUnit.Length > bestMatch.Length)
+            {
+                bestMatch = declaredUnit;
+            }
+        }
+
+        return bestMatch ?? string.Empty;
+    }
+
+    /// <summary>
+    /// True when <paramref name="unit"/> appears in <paramref name="title"/>
+    /// as a whole token — bounded by a non-alphanumeric character (or the
+    /// string edge) on both sides — so a short unit like <c>G1</c> never
+    /// spuriously matches inside a longer one like <c>G15</c>.
+    /// </summary>
+    private static bool TitleContainsUnitToken(string title, string unit)
+    {
+        var searchStart = 0;
+        while (true)
+        {
+            var index = title.IndexOf(unit, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            var beforeOk = index == 0 || !char.IsLetterOrDigit(title[index - 1]);
+            var afterIndex = index + unit.Length;
+            var afterOk = afterIndex >= title.Length || !char.IsLetterOrDigit(title[afterIndex]);
+            if (beforeOk && afterOk)
+            {
+                return true;
+            }
+
+            searchStart = index + 1;
+        }
     }
 
     private static int ComputeAgeMinutes(string timestamp, DateTimeOffset now)

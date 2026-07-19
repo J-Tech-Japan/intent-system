@@ -230,6 +230,11 @@ binding fallback は、packet 自身の `domain:` フィールドが別の値を
   cross-candidate なスコープを要求したことにはならないため、
   （個別に導出可能な）異なる domain を持つ複数の候補が 1 回の broad-scan
   結果に共存することがあります。
+- `automation stalled-work`（G532）もこの順序をフルに適用します — 詳細は
+  後述。`publish-recovery` と異なり、`stalled-work` では `--domain` が
+  必須引数のため、ステップ 3（fail loud）が実際に発動することはありません
+  — 候補自身の packet が domain について沈黙していても、明示的な domain が
+  常に代わりに使えるからです。
 
 ### stalled-work 検出 (G523)
 
@@ -267,30 +272,47 @@ completion label が実態とずれてしまっていても（intent-pr-created 
 既にその issue を close している場合）、誤って `worker claim` を推奨する
 ことはありません。
 
-**domain isolation は（title-prefix の正規表現一致ではなく）G522 と同様に
-packet/queue metadata に基づきます。** すべての GitHub issue/PR candidate
-について `<unit>: ...` というタイトル prefix を導出しますが、これは
-その candidate の `.intent-cli/issues/<unit>/packet.yaml` を特定するため
-だけに使われます — 要求された `--domain` と照合する唯一の権威は、
-その packet 自身が宣言する `domain:` フィールドです。candidate が
-`items[]` に含まれるのは、packet が宣言する domain が要求された
-`--domain` と完全に一致する場合のみです。packet が宣言する domain が
-`--domain` と矛盾する candidate、あるいは domain を全く導出できない
-candidate（packet.yaml が無い、またはそれに `domain:` フィールドが
-無い）は FAIL-CLOSED になります: `items[]` から除外され、代わりに
-`excluded[]`（`kind`、`execution_unit`、`issue`/`pr`、`reason`、
-`detail`）に報告されます。`reason` は `domain-contradiction`
-（`detail` に矛盾している具体的な packet-declared domain を明示）
-または `domain-underivable`（`detail` に `intents/*/` からスキャンした
-候補 domain **と** 正確に実行可能な再実行コマンド —
-`intent-cli automation stalled-work --domain <name> --repo <owner/repo>
---format json` — の両方を明示。G522 の underivable diagnostic 契約を
-継承）のいずれかです。（単一の operator 指定 execution unit に対しては
-明示的な `--domain` 単独で成立する）他の G522 サーフェスとは異なり、
-これは共有 repo の issue/PR にまたがる broad multi-candidate scan です
-— 明示的な `--domain` だけでは、自身のメタデータで裏付けが取れない
-candidate に適用されると信頼することはありません。したがって
-candidate が黙って scan に紛れ込むことも、黙って消えることもありません。
+**execution unit と domain の特定 (G532)**
+
+candidate の execution unit は、issue/PR タイトルの先頭 ID トークン —
+`^[A-Z][A-Z0-9]*-G?[0-9]+`（英数字の prefix。例: `SKS-G815`、`Z4R-G3`）
+または単純な `^G[0-9]+`（例: `G523`）— であり、最初のコロンより前すべて
+ではありません。`"SKS-G815 G812 sub-slice 1: ..."` のようなタイトルは
+`SKS-G815` に解決され、コロン前のフレーズ全体にはなりません。先頭に ID
+トークンが全く無いタイトルの場合は、`.intent-cli/issues/*/packet.yaml`
+の各 packet が宣言する `source_execution_unit`（nested の
+`implementation_issue_packet.source_execution_unit` を優先し、bare な
+`source_execution_unit` を alias として使用）がタイトル中の独立した
+トークンとして現れるかどうかで candidate を照合してから、諦めます。
+
+この execution-unit 文字列は candidate の
+`.intent-cli/issues/<unit>/packet.yaml` を特定するためだけに使われます
+— domain 所属の判定そのものには使いません。domain は、その packet の
+nested `implementation_issue_packet.domain` フィールドを最初に読み、
+それが無い場合のみ top-level `domain:` フィールドを互換 alias として
+使用します。
+
+**domain の確認は、他の execution-unit を解決するすべてのサーフェスと
+同じ G522 の順序（`--domain` > packet-declared domain > fail-loud）を
+適用するようになりました。** これは PR #1148 での従来の締め付け —
+packet-declared domain が無い/導出できない場合を、明示的な `--domain` が
+あっても fail-closed とする方針 — に代わるものです。従来の方針は、
+「broad multi-candidate scan は、自身のメタデータで裏付けが取れない
+candidate に対して `--domain` 単独を信頼できない」という理屈でしたが、
+本番運用ではこの方針が、まさにこのサーフェスが見つけるべき stall を
+除外してしまいました（下流 adopter に対する field finding、
+2026-07-15 と 2026-07-18。いずれも表面化されずチームの workaround で
+覆い隠されていました）。`stalled-work` では `--domain` が必須引数のため、
+packet が domain について沈黙している candidate には常に明示的な
+`--domain` が代わりに使えます — candidate が `items[]` から除外され、
+代わりに `excluded[]`（`kind`、`execution_unit`、`issue`/`pr`、
+`reason`、`detail`）に報告されるのは、`--domain` と、実際に別の domain を
+宣言している packet とが本当に矛盾する場合のみです。`reason` は
+`domain-contradiction` になり、`detail` には矛盾している具体的な
+packet-declared domain **と** 試みた derivation（nested フィールドと
+top-level alias のどちらを、どの packet.yaml パスで確認したか）の両方が
+明示されます — すべての除外は、理由と試みた derivation とともに報告され、
+黙って消えることはありません。
 
 このスライスは検出のみです — orchestrator wake procedure や外部
 heartbeat からこのサーフェスを利用する部分は、別の後続スライスです。

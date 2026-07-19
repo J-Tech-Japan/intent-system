@@ -239,6 +239,11 @@ All three surfaces apply the full order strictly — none of them fall back to
   Omitting `--domain` entirely does not request cross-candidate scoping, so
   multiple candidates with different (but each individually derivable)
   domains may still coexist in one broad-scan result.
+- `automation stalled-work` (G532) also applies the full order — see
+  below. Unlike `publish-recovery`, `--domain` is a REQUIRED argument for
+  `stalled-work`, so step 3 (fail loud) never triggers there in practice:
+  an explicit domain is always available to stand in for a candidate whose
+  own packet is silent on domain.
 
 ### Stalled-work detection (G523)
 
@@ -275,28 +280,45 @@ drifted out of sync with reality (an open PR already closes the issue, but
 `intent-pr-created` was never applied or was removed) never produces a
 false `worker claim` recommendation.
 
-**Domain isolation is grounded in packet/queue metadata, consistent with
-G522 — never in a title-prefix regex match.** A `<unit>: ...` title prefix
-is derived for every GitHub issue/PR candidate, but it is used ONLY to
-locate that candidate's `.intent-cli/issues/<unit>/packet.yaml` — the
-packet's own declared `domain:` field is the sole authority consulted
-against the requested `--domain`. A candidate is included in `items[]` only
-when its packet-declared domain matches the requested `--domain` exactly. A
-candidate whose packet-declared domain contradicts `--domain`, or whose
-domain cannot be derived at all (no packet.yaml, or no `domain:` field on
-it), is FAIL-CLOSED: excluded from `items[]` and reported instead in
-`excluded[]` (`kind`, `execution_unit`, `issue`/`pr`, `reason`, `detail`).
-`reason` is `domain-contradiction` (with `detail` naming the specific
-conflicting packet-declared domain) or `domain-underivable` (with `detail`
-naming the candidate domains scanned from `intents/*/` AND the exact,
-runnable re-invocation — `intent-cli automation stalled-work --domain <name>
---repo <owner/repo> --format json` — inherited from the G522 underivable
-diagnostic contract). Unlike the other G522 surfaces (where an explicit
-`--domain` can stand alone for a single operator-named execution unit), this
-is a broad multi-candidate scan over a shared repo's issues/PRs — an
-explicit `--domain` alone is never trusted to apply to a candidate whose own
-metadata cannot corroborate it, so a candidate never silently joins the scan
-and never silently disappears.
+**Execution-unit and domain identification (G532)**
+
+The candidate execution unit is the LEADING ID token of the issue/PR title —
+`^[A-Z][A-Z0-9]*-G?[0-9]+` (an alphanumeric prefix, e.g. `SKS-G815` or
+`Z4R-G3`) or a bare `^G[0-9]+` (e.g. `G523`) — not everything before the
+first colon. A title like `"SKS-G815 G812 sub-slice 1: ..."` resolves to
+`SKS-G815`, never the whole pre-colon phrase. When a title has no leading ID
+token at all, the candidate is matched instead against every packet under
+`.intent-cli/issues/*/packet.yaml` by that packet's own declared
+`source_execution_unit` (nested `implementation_issue_packet.source_execution_unit`
+first, bare `source_execution_unit` as alias) appearing as a whole token
+anywhere in the title, before giving up.
+
+This execution-unit string is used ONLY to locate the candidate's
+`.intent-cli/issues/<unit>/packet.yaml` — never as the domain-membership
+decision itself. Domain is read from that packet's nested
+`implementation_issue_packet.domain` field first, falling back to a
+top-level `domain:` field as a compatibility alias when the nested field is
+absent.
+
+**Domain confirmation now applies the same G522 order as every other
+execution-unit-resolving surface** (`--domain` > packet-declared domain >
+fail-loud) — this supersedes an earlier (PR #1148) tightening that treated a
+missing/absent packet-declared domain as fail-closed even with an explicit
+`--domain`, on the theory that a broad multi-candidate scan could not trust
+`--domain` alone for a candidate it could not corroborate. In production
+that policy excluded exactly the stalls this surface exists to find (field
+findings against a downstream adopter, 2026-07-15 and 2026-07-18), each
+papered over with a team workaround instead of surfaced. Since `--domain` is
+a REQUIRED argument for `stalled-work`, it is always available to stand in
+for a candidate whose packet is silent on domain — a candidate is excluded
+from `items[]`, and reported instead in `excluded[]` (`kind`,
+`execution_unit`, `issue`/`pr`, `reason`, `detail`), ONLY on a genuine
+CONTRADICTION between `--domain` and a packet that actively declares a
+different domain. `reason` is `domain-contradiction`; `detail` names the
+specific conflicting packet-declared domain AND the derivation attempted
+(which of the nested field / top-level alias was checked, at which
+packet.yaml path) — every exclusion is reported with its reason and the
+derivation attempted, never silent.
 
 This slice is detection only — consuming the surface from the orchestrator
 wake procedure and from an external heartbeat are separate follow-up slices.
