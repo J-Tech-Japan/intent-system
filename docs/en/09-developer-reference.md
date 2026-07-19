@@ -593,17 +593,40 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   ending in `Command`, `Event`, or `Query`. Noise is excluded BEFORE either
   rule runs, Markdown-aware:
   - **Fenced code blocks** are blanked (a class name inside one is never a
-    term) — indented fences, tilde (`~~~`) fences, and 4-or-more-backtick
-    fences are all recognized (not just a bare column-zero ` ``` `), CRLF
-    and LF line endings are both handled, and an UNCLOSED fence fails
+    term) — honoring CommonMark's actual boundary, not a loose
+    approximation: a fence opener/closer may be indented AT MOST 3 spaces
+    (4+ spaces, or any leading tab, is a different construct — an indented
+    code block — and is NOT recognized as a fence, so its content is
+    scanned normally); tilde (`~~~`) fences and 4-or-more-backtick fences
+    are recognized; a backtick fence's info string may never itself contain
+    a backtick (CommonMark rejects that as an opener, ambiguous with inline
+    code); a closer must use the SAME fence character and be at least as
+    long as the opener — a wrong-character, too-short, or over-indented
+    line is never mistaken for a closer and does not end the fence early;
+    CRLF and LF line endings are both handled; and an UNCLOSED fence fails
     CLOSED: everything from the opening fence to end-of-document is masked
     as code rather than left free to leak identifiers. Inline
-    single-backtick spans are a separate, unaffected concern.
-  - **Markdown/image links** — `[label](target)` / `![alt](target)` — are
-    masked SELECTIVELY: only the parenthesized target (path/URL noise) is
-    blanked, while the bracketed label survives untouched, since a visible
-    label is intentional authored proposal text (e.g. `` [CreateOrder]
-    (design.md) `` still yields the term `CreateOrder`).
+    single-backtick spans are a separate, unaffected concern, and a
+    backslash-escaped backtick never opens one.
+  - **Inline Markdown/image links** — `[label](destination title)` /
+    `![alt](destination title)` — are masked SELECTIVELY via a small
+    hand-written scanner (not a naive first-`)`-wins regex): only the
+    destination and optional title are blanked, while the bracketed label/
+    alt text survives untouched, since it is intentional authored proposal
+    text (e.g. `` [CreateOrder](design.md) `` still yields the term
+    `CreateOrder`). The destination may be an angle-bracketed form
+    (`<...>`, may contain spaces) or a bare form with BALANCED, escapable
+    parentheses (`docs/(v1)/x.md` masks correctly in full, not just up to
+    the first `)`); the optional title may be double-quoted, single-
+    quoted, or parenthesized.
+  - **Reference-style links** — a link's USAGE, `[label][ref]`/
+    `[label][]`/a bare `[label]`, has no adjacent destination of its own,
+    so only its label is ever at stake and it is left untouched (fully
+    extractable, same as any other visible text). A link's DEFINITION line
+    (`[ref]: destination "title"`) is pure destination/title metadata —
+    the WHOLE line is blanked.
+  - **Autolinks** (`<scheme://...>`) are blanked in their entirety — unlike
+    `[label](url)` there is no separate visible label to preserve.
   - **Bare URLs** and **multi-segment paths** (e.g.
     `src/Commands/CreateOrder.cs`) are blanked outright.
 

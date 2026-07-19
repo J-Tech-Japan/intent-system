@@ -58,24 +58,37 @@ internal static class IntentFacetCheckCommand
     private static readonly Regex CaseTransitionRegex = new(@"[a-z][A-Z]", RegexOptions.Compiled);
     private static readonly string[] CommandEventSuffixes = { "Command", "Event", "Query" };
 
-    // G531 review repair: a fenced code block's OPENING line — leading
-    // whitespace (indented fences), 3+ of the SAME fence character
-    // (backtick or tilde, so 4+-backtick and tilde fences are covered, not
-    // just a bare column-zero ``` ), then the rest of the line (a language
-    // tag or nothing). The matching CLOSE line is found procedurally in
-    // <see cref="MaskFencedCodeBlocks"/> (same char, count >= the opener's,
-    // CRLF/LF-tolerant) — a single static regex can't express "closing
-    // fence length >= this specific opening fence's length" without a
+    // G531 review repair round 4: a fenced code block's OPENING line, per
+    // CommonMark's actual boundary — AT MOST 3 leading spaces (a tab, or 4+
+    // spaces, is never a fence; that is either plain prose or a DIFFERENT
+    // construct, an indented code block, which this scaffold does not
+    // attempt to mask), then 3+ of the SAME fence character (backtick or
+    // tilde), then the rest of the line as the info string. A backtick
+    // fence's info string additionally may never itself contain a backtick
+    // (ambiguous with inline code) — that extra check happens in code (see
+    // <see cref="MaskFencedCodeBlocks"/>) since it depends on WHICH fence
+    // character matched. The matching CLOSE line is found procedurally
+    // (same char, count >= the opener's, same 0-3-space rule, CRLF/LF-
+    // tolerant) — a single static regex can't express "closing fence
+    // length >= this specific opening fence's length" without a
     // dynamically-sized quantifier, so that part is built per fence found.
-    private static readonly Regex FenceOpenRegex = new(@"(?m)^[ \t]*(`{3,}|~{3,})[^\r\n]*(?:\r?\n|$)", RegexOptions.Compiled);
+    private static readonly Regex FenceOpenRegex = new(@"(?m)^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n|$)", RegexOptions.Compiled);
 
-    // G531 review repair: captures a Markdown/image link's VISIBLE label
-    // (group 1) separately from its parenthesized TARGET (group 2) — only
-    // the target is path/URL noise; the label is intentional, authored
-    // proposal text and must survive masking untouched (see
-    // <see cref="MaskLinkTargets"/>). Matches "[label](target)" regardless
-    // of a leading "!" (so an image's alt text is preserved the same way).
-    private static readonly Regex MarkdownLinkRegex = new(@"\[([^\]\n]*)\]\(([^)\n]*)\)", RegexOptions.Compiled);
+    // G531 review repair round 4: a "link reference definition" line (e.g.
+    // `[ref]: docs/path.md "title"`) — pure destination/title metadata,
+    // never proposal prose, so the WHOLE line is noise. This is distinct
+    // from a reference-style link's USAGE (`[label][ref]`, `[label][]`, or
+    // a bare `[label]`), which has no adjacent `(...)`/`: ...` destination
+    // of its own and is therefore left untouched — its label is exactly as
+    // extractable as any other visible text.
+    private static readonly Regex ReferenceDefinitionRegex = new(@"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*\S[^\r\n]*(?:\r?\n|$)", RegexOptions.Compiled);
+
+    // G531 review repair round 4: a CommonMark autolink, `<scheme://...>` —
+    // unlike `[label](url)`, an autolink has no separate visible label; the
+    // whole angle-bracketed span IS the destination, so it is noise in its
+    // entirety (not "target masked, label preserved").
+    private static readonly Regex AutolinkRegex = new(@"<[a-zA-Z][a-zA-Z0-9+.-]*://[^<>\s]*>", RegexOptions.Compiled);
+
     private static readonly Regex UrlRegex = new(@"https?://\S+", RegexOptions.Compiled);
     private static readonly Regex PathLikeRegex = new(@"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", RegexOptions.Compiled);
 
@@ -458,38 +471,46 @@ internal static class IntentFacetCheckCommand
     /// <summary>
     /// G531 review repair: blanks every noise region in document order —
     /// fenced code blocks first (<see cref="MaskFencedCodeBlocks"/>), then
-    /// Markdown/image link TARGETS only (label preserved,
-    /// <see cref="MaskLinkTargets"/>), then bare URLs, then any remaining
-    /// multi-segment path-like run (e.g. <c>src/Commands/CreateOrder.cs</c>)
-    /// — so neither extraction regex can see identifier-shaped noise living
-    /// inside any of them. Order matters: each pass only ever operates on
-    /// text the PRIOR pass already left alone or blanked, so nothing is
-    /// double-processed.
+    /// reference-style link DEFINITION lines, then autolinks, then inline
+    /// Markdown/image link/image TARGETS only (label/alt preserved,
+    /// <see cref="MaskInlineLinksAndImages"/>), then bare URLs, then any
+    /// remaining multi-segment path-like run (e.g.
+    /// <c>src/Commands/CreateOrder.cs</c>) — so neither extraction regex
+    /// can see identifier-shaped noise living inside any of them. Order
+    /// matters: each pass only ever operates on text the PRIOR pass already
+    /// left alone or blanked, so nothing is double-processed.
     /// </summary>
     private static string MaskNoise(string text)
     {
         var masked = text;
         masked = MaskFencedCodeBlocks(masked);
-        masked = MaskLinkTargets(masked);
+        masked = MaskRegionsOf(masked, ReferenceDefinitionRegex);
+        masked = MaskRegionsOf(masked, AutolinkRegex);
+        masked = MaskInlineLinksAndImages(masked);
         masked = MaskRegionsOf(masked, UrlRegex);
         masked = MaskRegionsOf(masked, PathLikeRegex);
         return masked;
     }
 
     /// <summary>
-    /// G531 review repair: a Markdown-aware fenced-code masker, replacing
-    /// the prior single "column-zero, LF-only, exactly-```" regex that
-    /// missed indented fences, tilde fences, 4+-backtick fences, CRLF line
-    /// endings, and unclosed fences. Scans procedurally: find the next
-    /// OPENING fence line (<see cref="FenceOpenRegex"/> — leading
-    /// whitespace, 3+ of the same fence char), then search FORWARD from
-    /// there for the first line that closes it (same character, run length
-    /// &gt;= the opener's — CommonMark permits a longer closer, so does
-    /// this). If no closing line exists before end-of-document, the fence
-    /// is UNCLOSED and the command fails closed: everything from the
-    /// opening fence to end-of-document is masked as code, rather than
-    /// leaving an unbounded, unclosed "code" region free to leak
-    /// identifiers as false proposal terms.
+    /// G531 review repair round 4: a Markdown-aware fenced-code masker
+    /// honoring CommonMark's ACTUAL fence boundary, replacing a prior
+    /// scanner that over-accepted unlimited leading whitespace and any
+    /// backtick-fence info string. Scans procedurally: find the next
+    /// OPENING fence line (<see cref="FenceOpenRegex"/> — at most 3 leading
+    /// spaces, 3+ of the same fence char). A backtick-fenced opener whose
+    /// info string itself contains a backtick is REJECTED (ambiguous with
+    /// inline code per CommonMark) — that candidate is copied through as
+    /// plain text and scanning resumes just past it, so a false/malformed
+    /// "opener" line never swallows real proposal text after it. For a
+    /// genuine opener, search FORWARD for the first line that closes it —
+    /// at most 3 leading spaces, the SAME fence character, run length
+    /// &gt;= the opener's (CommonMark permits a longer closer), and nothing
+    /// but trailing whitespace after the run. A wrong-character, too-short,
+    /// or over-indented "closer" is not recognized and does not end the
+    /// fence early. If no valid closing line exists before end-of-document,
+    /// the fence is UNCLOSED and the command fails closed: everything from
+    /// the opening fence to end-of-document is masked as code.
     /// </summary>
     private static string MaskFencedCodeBlocks(string text)
     {
@@ -506,14 +527,26 @@ internal static class IntentFacetCheckCommand
                 break;
             }
 
-            builder.Append(text, cursor, openMatch.Index - cursor);
-
             var fenceRun = openMatch.Groups[1].Value;
             var fenceChar = fenceRun[0];
             var fenceLength = fenceRun.Length;
-            var contentStart = openMatch.Index + openMatch.Length;
+            var infoString = openMatch.Groups[2].Value;
 
-            var closePattern = $@"(?m)^[ \t]*{Regex.Escape(fenceChar.ToString())}{{{fenceLength},}}[ \t]*(?:\r?\n|$)";
+            if (fenceChar == '`' && infoString.Contains('`'))
+            {
+                // Not a valid opener — a backtick fence's info string can
+                // never itself contain a backtick. Copy this line through
+                // untouched and keep scanning from just past it.
+                var throughLine = openMatch.Index + openMatch.Length;
+                builder.Append(text, cursor, throughLine - cursor);
+                cursor = throughLine;
+                continue;
+            }
+
+            builder.Append(text, cursor, openMatch.Index - cursor);
+
+            var contentStart = openMatch.Index + openMatch.Length;
+            var closePattern = $@"(?m)^ {{0,3}}{Regex.Escape(fenceChar.ToString())}{{{fenceLength},}}[ \t]*(?:\r?\n|$)";
             var closeMatch = contentStart < text.Length
                 ? Regex.Match(text[contentStart..], closePattern)
                 : Match.Empty;
@@ -534,21 +567,164 @@ internal static class IntentFacetCheckCommand
     }
 
     /// <summary>
-    /// G531 review repair: blanks ONLY the parenthesized target of a
-    /// Markdown/image link, leaving the bracketed label text exactly as
-    /// authored — a visible label like <c>[CreateOrder](design.md)</c> is
-    /// intentional proposal text (and must remain extractable), while
-    /// <c>design.md</c> is path noise (and must not).
+    /// G531 review repair round 4: a hand-written scanner for inline
+    /// Markdown/image links — <c>[label](destination title)</c> /
+    /// <c>![alt](destination title)</c> — replacing a naive regex that
+    /// stopped a destination at the FIRST <c>)</c>, leaking the remainder
+    /// of a destination containing balanced parentheses (plus any optional
+    /// title) back into plain-word extraction. Only the destination/title
+    /// is blanked; the bracketed label/alt text survives untouched, since
+    /// it is intentional authored proposal text. A malformed/unparseable
+    /// candidate (no matching closing paren, etc.) is left completely
+    /// untouched rather than guessing.
     /// </summary>
-    private static string MaskLinkTargets(string text)
+    private static string MaskInlineLinksAndImages(string text)
     {
-        return MarkdownLinkRegex.Replace(text, match =>
+        var builder = new System.Text.StringBuilder(text.Length);
+        var cursor = 0;
+
+        while (cursor < text.Length)
         {
-            var label = match.Groups[1].Value;
-            var target = match.Groups[2].Value;
-            var maskedTarget = new string(target.Select(c => c == '\n' ? '\n' : ' ').ToArray());
-            return $"[{label}]({maskedTarget})";
-        });
+            var bracketStart = text.IndexOf('[', cursor);
+            if (bracketStart < 0)
+            {
+                builder.Append(text, cursor, text.Length - cursor);
+                cursor = text.Length;
+                break;
+            }
+
+            builder.Append(text, cursor, bracketStart - cursor);
+
+            var labelEnd = -1;
+            for (var i = bracketStart + 1; i < text.Length; i++)
+            {
+                if (text[i] == '\\' && i + 1 < text.Length) { i++; continue; }
+                if (text[i] == ']') { labelEnd = i; break; }
+                if (text[i] == '\n') { break; }
+            }
+
+            if (labelEnd < 0)
+            {
+                builder.Append(text[bracketStart]);
+                cursor = bracketStart + 1;
+                continue;
+            }
+
+            var afterLabel = labelEnd + 1;
+            if (afterLabel >= text.Length || text[afterLabel] != '(')
+            {
+                // Not an inline link/image — e.g. a reference-style
+                // [label][ref] or shortcut [label] — copy the label
+                // through untouched; its text remains fully extractable.
+                builder.Append(text, bracketStart, afterLabel - bracketStart);
+                cursor = afterLabel;
+                continue;
+            }
+
+            var parsed = TryParseLinkDestinationAndTitle(text, afterLabel + 1);
+            if (parsed is null)
+            {
+                builder.Append(text, bracketStart, afterLabel + 1 - bracketStart);
+                cursor = afterLabel + 1;
+                continue;
+            }
+
+            builder.Append(text, bracketStart, afterLabel + 1 - bracketStart); // "[label]("
+            for (var i = afterLabel + 1; i < parsed.Value.MatchEnd - 1; i++)
+            {
+                builder.Append(text[i] == '\n' ? '\n' : ' ');
+            }
+            builder.Append(')');
+            cursor = parsed.Value.MatchEnd;
+        }
+
+        return builder.ToString();
+    }
+
+    private readonly record struct LinkDestinationParse(int MatchEnd);
+
+    /// <summary>
+    /// Parses a link destination + optional title starting right after the
+    /// opening <c>(</c> (i.e. <paramref name="start"/> points at the first
+    /// character of the destination), returning the index one PAST the
+    /// closing <c>)</c> on success, or <see langword="null"/> if the
+    /// syntax is not well-formed (no matching close found before EOF/
+    /// newline). Handles: an angle-bracket destination <c>&lt;...&gt;</c>
+    /// (may contain spaces, ends at the first unescaped <c>&gt;</c>); a
+    /// bare destination with BALANCED, escapable parentheses (an unescaped
+    /// <c>(</c> increases nesting depth, a matching <c>)</c> decreases it —
+    /// only a <c>)</c> at depth 0 ends the destination) and ending at the
+    /// first depth-0 whitespace or the closing <c>)</c>; and an optional
+    /// title in double quotes, single quotes, or parentheses (each may
+    /// contain an escaped instance of its own delimiter).
+    /// </summary>
+    private static LinkDestinationParse? TryParseLinkDestinationAndTitle(string text, int start)
+    {
+        var i = start;
+
+        if (i < text.Length && text[i] == '<')
+        {
+            i++;
+            while (i < text.Length && text[i] != '>' && text[i] != '\n')
+            {
+                if (text[i] == '\\' && i + 1 < text.Length) { i += 2; continue; }
+                i++;
+            }
+            if (i >= text.Length || text[i] != '>')
+            {
+                return null;
+            }
+            i++;
+        }
+        else
+        {
+            var depth = 0;
+            while (i < text.Length)
+            {
+                var ch = text[i];
+                if (ch == '\\' && i + 1 < text.Length) { i += 2; continue; }
+                if (ch == '(') { depth++; i++; continue; }
+                if (ch == ')')
+                {
+                    if (depth == 0) { break; }
+                    depth--; i++; continue;
+                }
+                if (ch == '\n') { break; }
+                if (char.IsWhiteSpace(ch) && depth == 0) { break; }
+                i++;
+            }
+        }
+
+        while (i < text.Length && text[i] is ' ' or '\t') { i++; }
+
+        if (i < text.Length && text[i] is '"' or '\'' or '(')
+        {
+            var quote = text[i];
+            var close = quote == '(' ? ')' : quote;
+            i++;
+            var titleClosed = false;
+            while (i < text.Length)
+            {
+                var ch = text[i];
+                if (ch == '\\' && i + 1 < text.Length) { i += 2; continue; }
+                if (ch == close) { i++; titleClosed = true; break; }
+                if (ch == '\n') { break; }
+                i++;
+            }
+            if (!titleClosed)
+            {
+                return null;
+            }
+            while (i < text.Length && text[i] is ' ' or '\t') { i++; }
+        }
+
+        if (i >= text.Length || text[i] != ')')
+        {
+            return null;
+        }
+        i++;
+
+        return new LinkDestinationParse(i);
     }
 
     private static string MaskRegionsOf(string text, Regex noiseRegex)

@@ -220,6 +220,123 @@ public sealed class IntentFacetCheckCommandTests
         Assert.DoesNotContain("NoiseFromUnclosedFence", terms);
     }
 
+    // ── Extraction: fence boundary correctness (review repair round 4) ────
+
+    [Fact]
+    public void ExtractCandidateTerms_FourSpaceIndentedFenceLike_NotRecognizedAsFence_ContentFlowsThrough()
+    {
+        // CommonMark: a fence may be indented AT MOST 3 spaces. Four or
+        // more spaces is a DIFFERENT construct (an indented code block,
+        // out of scope for this scaffold's masking) — the ``` here must
+        // NOT be treated as a fence opener, so the CamelCase identifier
+        // inside is picked up normally.
+        var text = "Intro.\n    ```\n    class NoiseNotMasked { }\n    ```\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.Contains("NoiseNotMasked", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_TabIndentedFenceLike_NotRecognizedAsFence_ContentFlowsThrough()
+    {
+        var text = "Intro.\n\t```\n\tclass NoiseNotMaskedTab { }\n\t```\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.Contains("NoiseNotMaskedTab", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_BacktickFenceInfoStringContainsBacktick_NotRecognizedAsOpener()
+    {
+        // CommonMark: a backtick fence's info string must never itself
+        // contain a backtick (ambiguous with inline code) — this line is
+        // NOT a valid opener, so the content after it is scanned normally.
+        var text = "```info`withbacktick\nclass NoiseInfoStringBacktick { }\n```\n";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.Contains("NoiseInfoStringBacktick", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_TildeFenceInfoStringWithBacktick_StillRecognizedAsOpener_NoRestrictionForTilde()
+    {
+        // Only BACKTICK fences carry the no-backtick-in-info-string rule —
+        // a tilde fence's info string has no such restriction.
+        var text = "~~~info`withbacktick\nclass NoiseTildeInfoAllowed { }\n~~~\n";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseTildeInfoAllowed", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_WrongCharacterCloser_DoesNotEndFenceEarly()
+    {
+        // Opened with backticks; a tilde run mid-block must NOT be treated
+        // as a closer (wrong character) — masking continues past it to the
+        // TRUE backtick closer.
+        var text = "```csharp\nclass NoiseBeforeFalseCloser { }\n~~~~\nclass NoiseAfterFalseCloser { }\n```\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseBeforeFalseCloser", terms);
+        Assert.DoesNotContain("NoiseAfterFalseCloser", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_ShorterCloser_DoesNotEndFenceEarly()
+    {
+        // Opened with 4 backticks; a 3-backtick line is too SHORT to close
+        // it (CommonMark requires closer length >= opener length) — masking
+        // continues past it to the true 4-backtick closer.
+        var text = "````csharp\nclass NoiseBeforeShortCloser { }\n```\nclass NoiseAfterShortCloser { }\n````\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseBeforeShortCloser", terms);
+        Assert.DoesNotContain("NoiseAfterShortCloser", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_LongerCloser_ValidlyEndsFence()
+    {
+        // Opened with 3 backticks, closed with 4 — CommonMark permits a
+        // closer at least as long as the opener.
+        var text = "```csharp\nclass NoiseLongerCloser { }\n````\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseLongerCloser", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_MultipleIndependentFences_EachMaskedSeparately()
+    {
+        var text =
+            "```\nclass NoiseFenceOne { }\n```\n"
+            + "Between the fences, mentions CreateOrder normally.\n"
+            + "~~~\nclass NoiseFenceTwo { }\n~~~\n";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseFenceOne", terms);
+        Assert.DoesNotContain("NoiseFenceTwo", terms);
+        Assert.Contains("CreateOrder", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_UnclosedFence_StillFailsClosedUnderNewFenceRules()
+    {
+        var text = "Intro.\n```csharp\nclass NoiseUnclosedStillFailsClosed {}\nNo closing fence follows.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseUnclosedStillFailsClosed", terms);
+    }
+
     // ── Extraction: link/URL/path noise, label preservation (review repair round 3) ──
 
     [Fact]
@@ -263,6 +380,103 @@ public sealed class IntentFacetCheckCommandTests
 
         Assert.Contains("CreateOrder", terms);
         Assert.DoesNotContain("NoiseFromImagePath", terms);
+    }
+
+    // ── Extraction: link-destination parsing correctness (review repair round 4) ──
+
+    [Fact]
+    public void ExtractCandidateTerms_NestedBalancedParensInDestination_FullyMasked()
+    {
+        // A destination containing a BALANCED nested "(v1)" must not
+        // truncate masking at the first ")" — everything through the
+        // TRUE closing paren (including any title) is destination/title
+        // noise, only the label survives.
+        var text = "[CreateOrder](docs/(v1)/NoiseTarget.md \"NoiseTitle\")";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.Contains("CreateOrder", terms);
+        Assert.DoesNotContain("NoiseTarget", terms);
+        Assert.DoesNotContain("NoiseTitle", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_EscapedParensInDestination_FullyMasked()
+    {
+        var text = @"[CreateOrder](docs/file\(NoiseInParens\).md)";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.Contains("CreateOrder", terms);
+        Assert.DoesNotContain("NoiseInParens", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_AngleBracketDestinationWithSpaces_FullyMasked()
+    {
+        var text = "[CreateOrder](<docs/Some Path/NoiseAngleDestination.md>)";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.Contains("CreateOrder", terms);
+        Assert.DoesNotContain("NoiseAngleDestination", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_DoubleQuotedTitle_Masked()
+    {
+        var text = "[CreateOrder](docs/x.md \"NoiseDoubleQuotedTitle\")";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseDoubleQuotedTitle", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_SingleQuotedTitle_Masked()
+    {
+        var text = "[CreateOrder](docs/x.md 'NoiseSingleQuotedTitle')";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseSingleQuotedTitle", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_ParenthesizedTitle_Masked()
+    {
+        var text = "[CreateOrder](docs/x.md (NoiseParenthesizedTitle))";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseParenthesizedTitle", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_ReferenceStyleLinkUsage_LabelPreserved()
+    {
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms("Introduces [CreateOrder][order-ref] here.");
+
+        Assert.Contains("CreateOrder", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_ReferenceStyleLinkDefinition_UrlAndTitleMasked()
+    {
+        var text = "[order-ref]: docs/NoiseRefDefinitionTarget.md \"NoiseRefDefinitionTitle\"\n";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseRefDefinitionTarget", terms);
+        Assert.DoesNotContain("NoiseRefDefinitionTitle", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_Autolink_FullyMasked()
+    {
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms("<https://example.com/NoiseFromAutolink>");
+
+        Assert.DoesNotContain("NoiseFromAutolink", terms);
     }
 
     // ── --terms mode: matching / evidence / collision / unmatched ────
