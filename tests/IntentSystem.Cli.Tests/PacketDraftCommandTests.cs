@@ -384,6 +384,153 @@ public sealed class PacketDraftCommandTests
         Assert.Contains("identity/mission", updated, StringComparison.Ordinal);
     }
 
+    // ── Review repair: fail-closed marker classification, never a silent
+    // ── partial/arbitrary update on a malformed marker shape ────────────
+
+    private const string BeginMarker = "<!-- BEGIN GENERATED FACET CONTEXT (G530) -->";
+    private const string EndMarker = "<!-- END GENERATED FACET CONTEXT (G530) -->";
+
+    private static (PacketDraftWorkspace Workspace, string PacketDir, string ReviewContextPath) SetUpPacketWithRawReviewContext(
+        string reviewContextContent)
+    {
+        var workspace = new PacketDraftWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G530");
+        Directory.CreateDirectory(packetDir);
+        File.WriteAllText(
+            Path.Combine(packetDir, "packet.yaml"),
+            """
+            implementation_issue_packet:
+              source_execution_unit: G530
+              domain: intent-cli
+              intent_references:
+                - intents/intent-cli/identity/mission.md
+            """);
+        var reviewContextPath = Path.Combine(packetDir, "review-context.md");
+        File.WriteAllText(reviewContextPath, reviewContextContent);
+        return (workspace, packetDir, reviewContextPath);
+    }
+
+    [Fact]
+    public void Execute_DuplicateBeginMarkers_ReportsMarkersMalformed_FileUntouched()
+    {
+        var original = $"Intro\n{BeginMarker}\nold A\n{EndMarker}\nMiddle\n{BeginMarker}\nold B\n{EndMarker}\nOutro\n";
+        var (workspace, _, reviewContextPath) = SetUpPacketWithRawReviewContext(original);
+        using var workspaceDisposable = workspace;
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("review-context.md: markers-malformed", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("expected exactly one", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(original, File.ReadAllText(reviewContextPath));
+    }
+
+    [Fact]
+    public void Execute_ReversedMarkerOrder_ReportsMarkersMalformed_FileUntouched()
+    {
+        var original = $"Intro\n{EndMarker}\nstray content\n{BeginMarker}\nOutro\n";
+        var (workspace, _, reviewContextPath) = SetUpPacketWithRawReviewContext(original);
+        using var workspaceDisposable = workspace;
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("review-context.md: markers-malformed", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("before the begin marker", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(original, File.ReadAllText(reviewContextPath));
+    }
+
+    [Fact]
+    public void Execute_BeginMarkerOnlyNoEndMarker_ReportsMarkersMalformed_FileUntouched()
+    {
+        var original = $"Intro\n{BeginMarker}\nold content with no closing marker\nOutro\n";
+        var (workspace, _, reviewContextPath) = SetUpPacketWithRawReviewContext(original);
+        using var workspaceDisposable = workspace;
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("review-context.md: markers-malformed", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("no end marker", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(original, File.ReadAllText(reviewContextPath));
+    }
+
+    [Fact]
+    public void Execute_EndMarkerOnlyNoBeginMarker_ReportsMarkersMalformed_FileUntouched()
+    {
+        var original = $"Intro\n{EndMarker}\nOutro\n";
+        var (workspace, _, reviewContextPath) = SetUpPacketWithRawReviewContext(original);
+        using var workspaceDisposable = workspace;
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("review-context.md: markers-malformed", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("no begin marker", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(original, File.ReadAllText(reviewContextPath));
+    }
+
+    [Fact]
+    public void Execute_MalformedMarkers_DryRun_ReportsSameStatus_NeverWrites()
+    {
+        var original = $"Intro\n{BeginMarker}\nold\n{BeginMarker}\nold2\n{EndMarker}\nOutro\n";
+        var (workspace, _, reviewContextPath) = SetUpPacketWithRawReviewContext(original);
+        using var workspaceDisposable = workspace;
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530", "--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("review-context.md: markers-malformed", writer.ToString(), StringComparison.Ordinal);
+        Assert.Equal(original, File.ReadAllText(reviewContextPath));
+    }
+
+    [Fact]
+    public void Execute_ZeroMarkers_StillPlainSkipped_NotMarkersMalformed()
+    {
+        // A genuinely healthy legacy file (no markers at all) must remain
+        // distinguishable from the malformed-marker-shape case — plain
+        // "skipped", never "markers-malformed".
+        var original = "hand-edited review context with no generated block markers at all\n";
+        var (workspace, _, reviewContextPath) = SetUpPacketWithRawReviewContext(original);
+        using var workspaceDisposable = workspace;
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("review-context.md: skipped", writer.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("markers-malformed", writer.ToString(), StringComparison.Ordinal);
+        Assert.Equal(original, File.ReadAllText(reviewContextPath));
+    }
+
+    [Fact]
+    public void Execute_ExistingFileUsesCrlf_RegeneratedBlockUsesCrlfNotMixedLineEndings()
+    {
+        var original =
+            $"Intro\r\n{BeginMarker}\r\n### vocabulary\r\n- (none overlapping this packet's intent_references)\r\n{EndMarker}\r\nOutro\r\n";
+        var (workspace, packetDir, reviewContextPath) = SetUpPacketWithRawReviewContext(original);
+        using var workspaceDisposable = workspace;
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("review-context.md: updated", writer.ToString(), StringComparison.Ordinal);
+        var updated = File.ReadAllText(reviewContextPath);
+        Assert.Contains("identity/mission", updated, StringComparison.Ordinal);
+        // No bare LF anywhere — every line ending is CRLF, matching the
+        // file's own pre-existing convention.
+        var withoutCrlf = updated.Replace("\r\n", string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', withoutCrlf);
+        Assert.DoesNotContain('\r', withoutCrlf);
+    }
+
     [Fact]
     public void Execute_GivenDryRun_DoesNotWriteFilesAndReportsPlanned()
     {

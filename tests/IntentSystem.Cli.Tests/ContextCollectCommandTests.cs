@@ -379,6 +379,73 @@ public sealed class ContextCollectCommandTests
         Assert.Single(vocabularyNodes);
     }
 
+    // ── Review repair: rejected --scope hints are never silent ──────────
+
+    [Fact]
+    public void Execute_ScopeHintOutsideDomainRoot_SurfacesScopeWarningInMarkdown()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var outsideHint = Path.Combine(Path.GetTempPath(), "definitely-outside", "file.md");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--scope", outsideHint], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Scope warnings", output, StringComparison.Ordinal);
+        Assert.Contains("ALL requested --scope hints were rejected", output, StringComparison.Ordinal);
+        Assert.Contains(outsideHint, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_JsonFormat_FacetContextScopeWarningsShapeIsStableSnakeCase()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var outsideHint = Path.Combine(Path.GetTempPath(), "definitely-outside", "file.md");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--scope", outsideHint, "--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        var scopeWarnings = root.GetProperty("facet_context_scope_warnings").EnumerateArray().ToArray();
+        var warning = Assert.Single(scopeWarnings);
+        Assert.Equal(outsideHint, warning.GetProperty("hint").GetString());
+        Assert.Contains("outside", warning.GetProperty("reason").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.True(root.GetProperty("facet_context_all_scope_hints_rejected").GetBoolean());
+        // Rejected, so the node never appears — never silently "shown anyway".
+        var vocabularyNodes = root.GetProperty("facet_context")[0].GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.Empty(vocabularyNodes);
+    }
+
+    [Fact]
+    public void Execute_MixedValidAndInvalidScopeHints_NotAllRejected_ValidHintStillApplied()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var outsideHint = Path.Combine(Path.GetTempPath(), "definitely-outside", "file.md");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context,
+            ["--scope", $"intents/intent-cli/identity,{outsideHint}", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("facet_context_all_scope_hints_rejected").GetBoolean());
+        var scopeWarnings = root.GetProperty("facet_context_scope_warnings").EnumerateArray().ToArray();
+        Assert.Single(scopeWarnings);
+        var vocabularyNodes = root.GetProperty("facet_context")[0].GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.Single(vocabularyNodes);
+    }
+
     [Fact]
     public void Execute_GivenUnknownArgument_ReturnsErrorExitCode()
     {

@@ -35,6 +35,17 @@ internal static class PacketDraftCommand
     private const string FileUpdated = "updated";
 
     /// <summary>
+    /// G530 review repair: distinct from <see cref="FileSkipped"/> (which
+    /// also covers the genuinely healthy "no markers at all, a legacy file"
+    /// case). This status means the file HAS marker text but not in the one
+    /// safe shape (exactly one begin, exactly one end, begin before end) —
+    /// fail-closed: the file is never mutated, but the caller must be able
+    /// to tell "untouched because healthy" apart from "untouched because
+    /// something is wrong with the markers" (see <see cref="PacketDraftFile.Detail"/>).
+    /// </summary>
+    private const string FileMarkersMalformed = "markers-malformed";
+
+    /// <summary>
     /// G530 review repair: delimits the machine-owned Facet context block
     /// inside review-context.md. Content between these markers is fully
     /// regenerated on every `packet draft` run (never hand-edited content —
@@ -403,6 +414,23 @@ internal static class PacketDraftCommand
             }
         }
 
+        // G530 review repair: an intent_references entry that could not be
+        // resolved to a domain-relative path must never look like "this
+        // packet simply references nothing overlapping" — it is reported
+        // exactly like context collect's rejected --scope hints.
+        if (facetSelection.ScopeWarnings.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add(
+                facetSelection.AllScopeHintsRejected
+                    ? "Scope warnings (ALL of this packet's intent_references were rejected — nothing was scoped in):"
+                    : "Scope warnings (these intent_references entries were rejected; other valid entries were still applied):");
+            foreach (var warning in facetSelection.ScopeWarnings)
+            {
+                lines.Add($"- `{warning.Hint}`: {warning.Reason}");
+            }
+        }
+
         return string.Join('\n', lines);
     }
 
@@ -410,13 +438,21 @@ internal static class PacketDraftCommand
     /// G530 review repair: creates review-context.md fresh (matching the
     /// other three scaffold files' first-write behavior) when it does not
     /// yet exist. When it DOES exist, the file as a whole is never
-    /// overwritten — but if it carries the generated-block markers (see
-    /// <see cref="FacetContextBeginMarker"/>), the content strictly BETWEEN
-    /// them is replaced with a freshly-computed <see cref="FacetContextSelection"/>
-    /// while everything before/after the markers (all hand-owned content)
-    /// is preserved byte-for-byte. A review-context.md with no recognizable
-    /// markers (predates this feature, or an operator removed them) is left
-    /// completely untouched — the markers are never retroactively injected.
+    /// overwritten — but if it carries EXACTLY ONE correctly-ordered pair of
+    /// generated-block markers (see <see cref="FacetContextBeginMarker"/>),
+    /// the content strictly BETWEEN them is replaced with a
+    /// freshly-computed <see cref="FacetContextSelection"/> while
+    /// everything before/after the markers (all hand-owned content) is
+    /// preserved byte-for-byte, using the FILE'S OWN existing newline style
+    /// (CRLF or LF) rather than hardcoding one. A review-context.md with NO
+    /// markers at all (predates this feature, or an operator removed them)
+    /// is left completely untouched — <see cref="FileSkipped"/>, the
+    /// markers are never retroactively injected. A review-context.md with
+    /// markers in any OTHER shape (duplicates, reversed order, only a begin
+    /// or only an end) is ALSO left completely untouched — but reported
+    /// distinctly as <see cref="FileMarkersMalformed"/> with a diagnostic
+    /// <see cref="PacketDraftFile.Detail"/>, so that state is never
+    /// indistinguishable from the genuinely healthy no-markers-at-all case.
     /// </summary>
     private static PacketDraftFile WriteOrUpdateReviewContext(
         string packetDirectory, string executionUnit, FacetContextSelection facetSelection, bool dryRun)
@@ -435,19 +471,39 @@ internal static class PacketDraftCommand
         }
 
         var existing = File.ReadAllText(path);
-        var beginIndex = existing.IndexOf(FacetContextBeginMarker, StringComparison.Ordinal);
-        var endIndex = beginIndex < 0
-            ? -1
-            : existing.IndexOf(FacetContextEndMarker, beginIndex, StringComparison.Ordinal);
+        var markerShape = ClassifyGeneratedBlockMarkers(existing);
 
-        if (beginIndex < 0 || endIndex < 0)
+        if (markerShape.Kind == GeneratedBlockMarkerKind.None)
         {
             return new PacketDraftFile { Name = name, Path = path, Status = FileSkipped };
         }
 
-        var beforeAndBeginMarker = existing[..(beginIndex + FacetContextBeginMarker.Length)];
-        var endMarkerOnward = existing[endIndex..];
-        var updatedContent = $"{beforeAndBeginMarker}\n{BuildFacetContextBlockContent(facetSelection)}\n{endMarkerOnward}";
+        if (markerShape.Kind == GeneratedBlockMarkerKind.Malformed)
+        {
+            return new PacketDraftFile
+            {
+                Name = name,
+                Path = path,
+                Status = FileMarkersMalformed,
+                Detail = markerShape.Diagnostic,
+            };
+        }
+
+        // Preserve the FILE'S OWN newline convention for both the newly
+        // inserted separators and the block content's internal newlines —
+        // never hardcode "\n", which would mix line-ending styles into an
+        // existing CRLF file.
+        var usesCrlf = existing.Contains("\r\n", StringComparison.Ordinal);
+        var newline = usesCrlf ? "\r\n" : "\n";
+        var blockContent = BuildFacetContextBlockContent(facetSelection);
+        if (usesCrlf)
+        {
+            blockContent = blockContent.Replace("\n", "\r\n", StringComparison.Ordinal);
+        }
+
+        var beforeAndBeginMarker = existing[..(markerShape.BeginIndex + FacetContextBeginMarker.Length)];
+        var endMarkerOnward = existing[markerShape.EndIndex..];
+        var updatedContent = $"{beforeAndBeginMarker}{newline}{blockContent}{newline}{endMarkerOnward}";
 
         if (string.Equals(updatedContent, existing, StringComparison.Ordinal))
         {
@@ -460,6 +516,83 @@ internal static class PacketDraftCommand
             File.WriteAllText(path, updatedContent);
         }
         return new PacketDraftFile { Name = name, Path = path, Status = updateStatus };
+    }
+
+    private enum GeneratedBlockMarkerKind
+    {
+        /// <summary>No begin marker and no end marker anywhere — a healthy legacy file (or one never scaffolded by this feature).</summary>
+        None,
+
+        /// <summary>Exactly one begin marker, exactly one end marker, begin strictly before end — safe to regenerate.</summary>
+        ValidPair,
+
+        /// <summary>Any other shape: duplicates, reversed order, or only one of the two markers present.</summary>
+        Malformed,
+    }
+
+    private readonly record struct GeneratedBlockMarkerShape(
+        GeneratedBlockMarkerKind Kind, int BeginIndex, int EndIndex, string? Diagnostic);
+
+    /// <summary>
+    /// G530 review repair: classifies review-context.md's marker state
+    /// before any mutation is attempted — fail-closed. Only the single
+    /// unambiguous "exactly one begin, exactly one end, begin before end"
+    /// shape is safe to regenerate; every other shape (duplicate markers of
+    /// either kind, an end appearing before its begin, or only one of the
+    /// two present) is reported as <see cref="GeneratedBlockMarkerKind.Malformed"/>
+    /// with a human-readable diagnostic rather than silently doing nothing
+    /// OR silently picking an arbitrary pair.
+    /// </summary>
+    private static GeneratedBlockMarkerShape ClassifyGeneratedBlockMarkers(string content)
+    {
+        var beginPositions = AllIndicesOf(content, FacetContextBeginMarker);
+        var endPositions = AllIndicesOf(content, FacetContextEndMarker);
+
+        if (beginPositions.Count == 0 && endPositions.Count == 0)
+        {
+            return new GeneratedBlockMarkerShape(GeneratedBlockMarkerKind.None, -1, -1, null);
+        }
+
+        if (beginPositions.Count == 1 && endPositions.Count == 1 && endPositions[0] > beginPositions[0])
+        {
+            return new GeneratedBlockMarkerShape(GeneratedBlockMarkerKind.ValidPair, beginPositions[0], endPositions[0], null);
+        }
+
+        string diagnostic;
+        if (beginPositions.Count == 0)
+        {
+            diagnostic = $"found {endPositions.Count} end marker(s) but no begin marker — expected exactly one of each.";
+        }
+        else if (endPositions.Count == 0)
+        {
+            diagnostic = $"found {beginPositions.Count} begin marker(s) but no end marker — expected exactly one of each.";
+        }
+        else if (beginPositions.Count > 1 || endPositions.Count > 1)
+        {
+            diagnostic = $"found {beginPositions.Count} begin marker(s) and {endPositions.Count} end marker(s) — expected exactly one of each.";
+        }
+        else
+        {
+            diagnostic = "the end marker appears before the begin marker.";
+        }
+
+        return new GeneratedBlockMarkerShape(GeneratedBlockMarkerKind.Malformed, -1, -1, diagnostic);
+    }
+
+    private static List<int> AllIndicesOf(string content, string marker)
+    {
+        var indices = new List<int>();
+        var searchStart = 0;
+        while (true)
+        {
+            var index = content.IndexOf(marker, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+            {
+                return indices;
+            }
+            indices.Add(index);
+            searchStart = index + marker.Length;
+        }
     }
 
     /// <summary>
@@ -632,6 +765,10 @@ internal static class PacketDraftCommand
         foreach (var file in result.Files)
         {
             writer.WriteLine($"- {file.Name}: {file.Status}");
+            if (file.Detail is not null)
+            {
+                writer.WriteLine($"  - {file.Detail}");
+            }
         }
         writer.WriteLine();
 
@@ -801,4 +938,14 @@ internal sealed record PacketDraftFile
 
     [JsonPropertyName("status")]
     public required string Status { get; init; }
+
+    /// <summary>
+    /// G530 review repair: set only for review-context.md's <c>markers-malformed</c>
+    /// status — a human-readable diagnostic explaining exactly what shape
+    /// the generated-block markers were found in (duplicates, reversed
+    /// order, one-sided), so the fail-closed "left untouched" outcome is
+    /// actionable rather than a bare status string.
+    /// </summary>
+    [JsonPropertyName("detail")]
+    public string? Detail { get; init; }
 }

@@ -361,4 +361,93 @@ public sealed class FacetContextSelectorTests : IDisposable
         Assert.Equal(2, selection.Warnings.Count);
         Assert.All(selection.Groups, group => Assert.Empty(group.Nodes));
     }
+
+    // ── Review repair: rejected scope hints are never silent ────────────
+
+    [Fact]
+    public void Select_ScopeHintOutsideDomainRoot_ProducesScopeWarningNamingHintAndReason()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        var outsideHint = Path.Combine(Path.GetTempPath(), "definitely-not-under-domain-root", "file.md");
+
+        var selection = FacetContextSelector.Select(domainRoot, "intent-cli", scopeHints: [outsideHint], facetFilter: null);
+
+        var warning = Assert.Single(selection.ScopeWarnings);
+        Assert.Equal(outsideHint, warning.Hint);
+        Assert.Contains("outside the domain root", warning.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(selection.AllScopeHintsRejected);
+    }
+
+    [Fact]
+    public void Select_ScopeHintWithTraversalSegment_ProducesScopeWarning()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        const string hint = "intents/intent-cli/identity/../identity/mission.md";
+
+        var selection = FacetContextSelector.Select(domainRoot, "intent-cli", scopeHints: [hint], facetFilter: null);
+
+        var warning = Assert.Single(selection.ScopeWarnings);
+        Assert.Equal(hint, warning.Hint);
+        Assert.Contains("traversal", warning.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(selection.AllScopeHintsRejected);
+    }
+
+    [Fact]
+    public void Select_MixedSeparatorsWithTraversal_StillDetectedAndRejected()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        const string hint = @"intents\intent-cli\identity\..\..\etc";
+
+        var selection = FacetContextSelector.Select(domainRoot, "intent-cli", scopeHints: [hint], facetFilter: null);
+
+        var warning = Assert.Single(selection.ScopeWarnings);
+        Assert.Equal(hint, warning.Hint);
+        Assert.Contains("traversal", warning.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Select_MixedValidAndInvalidScopeHints_UsesValidOnes_ReportsOnlyTheRejectedOnes()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        WriteNode("decisions/adr-1.md", ["vocabulary"]);
+        const string invalidHint = "intents/intent-cli/identity/../../outside";
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli",
+            scopeHints: ["intents/intent-cli/identity", invalidHint],
+            facetFilter: null);
+
+        var scopeWarning = Assert.Single(selection.ScopeWarnings);
+        Assert.Equal(invalidHint, scopeWarning.Hint);
+        Assert.False(selection.AllScopeHintsRejected);
+        var vocabularyGroup = selection.Groups.Single(g => g.Facet == "vocabulary");
+        var node = Assert.Single(vocabularyGroup.Nodes);
+        Assert.Equal("identity/mission", node.Id);
+    }
+
+    [Fact]
+    public void Select_AllScopeHintsInvalid_AllScopeHintsRejectedTrue_MatchesNothing()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        var outsideHint1 = Path.Combine(Path.GetTempPath(), "outside-one", "a.md");
+        var outsideHint2 = Path.Combine(Path.GetTempPath(), "outside-two", "b.md");
+
+        var selection = FacetContextSelector.Select(
+            domainRoot, "intent-cli", scopeHints: [outsideHint1, outsideHint2], facetFilter: null);
+
+        Assert.True(selection.AllScopeHintsRejected);
+        Assert.Equal(2, selection.ScopeWarnings.Count);
+        Assert.All(selection.Groups, group => Assert.Empty(group.Nodes));
+    }
+
+    [Fact]
+    public void Select_NoScopeHintsPassed_NoScopeWarnings_NotAllRejected()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+
+        var selection = FacetContextSelector.Select(domainRoot, "intent-cli", scopeHints: null, facetFilter: null);
+
+        Assert.Empty(selection.ScopeWarnings);
+        Assert.False(selection.AllScopeHintsRejected);
+    }
 }

@@ -500,6 +500,16 @@ intent-cli context collect --domain <d> --scope intents/<d>/means,identity/missi
   すべてのヒントが無効または domain 外だった場合は、何にもマッチ
   しません — 黙って「scope 要求なし」にフォールバックすることは
   ありません。
+- 拒否された `--scope` ヒントも、決して黙って消えることはありません:
+  `facet_context_scope_warnings` エントリ（`hint`、`reason`）を生成し、
+  どのヒントが・なぜ拒否されたか（domain root の外側、`..` トラバーサル
+  など）を正確に示します — そのため「すべてのヒントが無効だったので
+  何にもマッチしなかった」場合と、「本物の有効なヒントがたまたま
+  どの node とも overlap しなかった」場合が、区別できないまま同じに
+  見えることがなくなります。混在したリストでも、有効なヒントは
+  そのまま適用されつつ、拒否されたヒントはすべて報告されます。
+  `facet_context_all_scope_hints_rejected` は、要求されたヒントが
+  すべて拒否された場合にのみ `true` になります。
 - domain に facet-annotated な node が 1 つも無い場合（`--scope`/
   `--facets` のクエリがたまたま何にもマッチしなかっただけの場合とは
   異なります）は、`facet_context_note` が設定され、空のセクションの
@@ -517,18 +527,23 @@ intent-cli context collect --domain <d> --scope intents/<d>/means,identity/missi
 - JSON の形: `facet_context: [{facet, nodes: [{id, facets, summary,
   path}]}]`（常に 4 要素。`--facets` を渡した場合はそれより少なくなる
   こともあります）、`facet_context_note: string | null`、
-  `facet_context_warnings: [{path, reason}]`。
+  `facet_context_warnings: [{path, reason}]`、
+  `facet_context_scope_warnings: [{hint, reason}]`、
+  `facet_context_all_scope_hints_rejected: bool`。
 
 **`intent-cli packet draft`** は、scaffold される `review-context.md`
 の中に `## Facet context` セクションを生成するようになりました。
 これは、その packet 自身の
 `implementation_issue_packet.intent_references` と overlap する
 facet node を一覧化します — `context collect` の `--scope` が使うのと
-全く同じ overlap ロジックなので、2 つのサーフェスが「overlap」の
-意味について食い違うことはありません。生成される内容は、2 つの
-HTML コメントマーカー（`<!-- BEGIN/END GENERATED FACET CONTEXT
-(G530) -->`）の間に存在します。`review-context.md` の残りの部分は
-手による所有物であり、一切触れられません:
+全く同じ overlap ロジック（上記の拒否ヒントの可視化を含む）なので、
+2 つのサーフェスが「overlap」の意味について食い違うことはありません。
+生成される内容は、2 つの HTML コメントマーカー（`<!-- BEGIN/END
+GENERATED FACET CONTEXT (G530) -->`）の間に存在します。
+`review-context.md` の残りの部分は手による所有物であり、一切触れられ
+ません。マーカーの扱いは fail-closed です — 変更が試みられるのは、
+ファイルが「開始マーカー 1 つ、終了マーカー 1 つ、その順序」を
+正確に持つ場合のみです:
 
 - **ファイルがまだ存在しない場合**: 現在の `intent_references`
   （既に `packet.yaml` が存在していれば、そのディスク上の値を
@@ -536,23 +551,33 @@ HTML コメントマーカー（`<!-- BEGIN/END GENERATED FACET CONTEXT
   手で編集していた場合。この同じ呼び出しが別途書き込むかもしれない、
   テンプレートの空の `[]` では決してありません）を使って、ファイル
   全体が新規に書き込まれます。`created` として報告されます。
-- **ファイルが存在し、かつ両方のマーカーを持つ場合**: マーカーの
-  「間」にある内容だけが、packet の現在の `intent_references` から
-  再計算され、置き換えられます — これにより、通常のワークフロー
-  （空の references で scaffold → operator が `packet.yaml` に
-  本物の references を追加 → `packet draft` を再実行 → block に
-  それが反映される）を通して、セクションが最新に保たれます。
-  開始マーカーより前、終了マーカーより後のすべて（block の周りに
-  手で書かれた文章を含む）は、バイト単位でそのまま保持されます。
-  再計算された内容が既存のものと異なる場合は `updated`、異ならない
-  場合は `skipped`（本物の no-op であり、見せかけの update では
-  ない）として報告されます。
-- **ファイルが存在するが、認識できるマーカーが無い場合**（この機能
-  より前に作られたか、operator がマーカーを削除した場合）: 他の
-  3 つの scaffold ファイルの、単純な「存在すればスキップ」の挙動と
-  全く同じように、完全に触れられないままになります。マーカーが
-  手による所有物の中に後から注入されることは決してありません。
-  `skipped` として報告されます。
+- **ファイルが存在し、かつ正確に 1 組の正しい順序のマーカーを持つ
+  場合**: マーカーの「間」にある内容だけが、packet の現在の
+  `intent_references` から再計算され、ファイル自身の既存の改行規則
+  （CRLF か LF か — 決してハードコードしません。既存の CRLF ファイルが
+  改行スタイル混在になることはありません）を使って置き換えられます —
+  これにより、通常のワークフロー（空の references で scaffold →
+  operator が `packet.yaml` に本物の references を追加 → `packet
+  draft` を再実行 → block にそれが反映される）を通して、セクションが
+  最新に保たれます。開始マーカーより前、終了マーカーより後のすべて
+  （block の周りに手で書かれた文章を含む）は、バイト単位でそのまま
+  保持されます。再計算された内容が既存のものと異なる場合は
+  `updated`、異ならない場合は `skipped`（本物の no-op であり、
+  見せかけの update ではない）として報告されます。
+- **ファイルが存在するが、マーカーが全く無い場合**（この機能より前に
+  作られたか、operator がマーカーを削除した場合）: 他の 3 つの
+  scaffold ファイルの、単純な「存在すればスキップ」の挙動と全く
+  同じように、完全に触れられないままになります。マーカーが手による
+  所有物の中に後から注入されることは決してありません。`skipped`
+  として報告されます。
+- **ファイルが存在し、マーカーが他のいずれかの形（開始・終了の
+  どちらか、または両方が重複している、終了マーカーがその開始マーカー
+  より前に現れる、どちらか片方しか無い）である場合**: これも完全に
+  触れられないままになります（黙った部分的な update や、「どちらが
+  本物のペアか」を勝手に推測することは決してありません）が、
+  `markers-malformed` として明確に区別して報告され、正確にどのような
+  形が見つかったかを示す `detail` 文字列が付きます — この状態が、
+  健全な「マーカーが全く無い」場合と同じに見えることはありません。
 
 空の `intent_references` リストそれ自体が、意味のある scope です —
 「この packet は（今のところ）何も参照していない」— そのため block は

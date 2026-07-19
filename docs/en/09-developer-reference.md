@@ -484,6 +484,14 @@ intent-cli context collect --domain <d> --scope intents/<d>/means,identity/missi
   entirely returns every domain facet node; passing `--scope` with hints
   that all turn out invalid or outside the domain matches NOTHING — it
   never silently falls back to "no scoping requested".
+- A rejected `--scope` hint is never silent either: it produces a
+  `facet_context_scope_warnings` entry (`hint`, `reason`) naming the exact
+  hint and why it was rejected (outside the domain root, a `..` traversal,
+  etc.) — so "matched nothing because every hint was invalid" is never
+  indistinguishable from "matched nothing because a genuinely valid hint
+  just didn't overlap any node". A mixed list still applies the valid
+  hints while reporting every rejected one; `facet_context_all_scope_hints_rejected`
+  is `true` only when every requested hint was rejected.
 - A domain with ZERO facet-annotated nodes at all (not merely a
   `--scope`/`--facets` query that matched nothing) sets `facet_context_note`
   and renders an explicit note instead of an empty section — graceful
@@ -498,16 +506,19 @@ intent-cli context collect --domain <d> --scope intents/<d>/means,identity/missi
 - JSON shape: `facet_context: [{facet, nodes: [{id, facets, summary,
   path}]}]` (always 4 entries, or fewer when `--facets` is passed),
   `facet_context_note: string | null`, `facet_context_warnings: [{path,
-  reason}]`.
+  reason}]`, `facet_context_scope_warnings: [{hint, reason}]`,
+  `facet_context_all_scope_hints_rejected: bool`.
 
 **`intent-cli packet draft`** generates a `## Facet context` section inside
 the scaffolded `review-context.md`, listing the facet nodes overlapping the
 packet's own `implementation_issue_packet.intent_references` — the exact
-same overlap logic `context collect`'s `--scope` uses, so the two surfaces
-can never disagree about what "overlaps". The generated content lives
-between two HTML-comment markers
-(`<!-- BEGIN/END GENERATED FACET CONTEXT (G530) -->`); the rest of
-`review-context.md` is hand-owned and untouched:
+same overlap logic `context collect`'s `--scope` uses (including the same
+rejected-reference visibility above), so the two surfaces can never
+disagree about what "overlaps". The generated content lives between two
+HTML-comment markers (`<!-- BEGIN/END GENERATED FACET CONTEXT (G530) -->`);
+the rest of `review-context.md` is hand-owned and untouched. Marker
+handling is fail-closed — mutation is attempted ONLY when the file carries
+EXACTLY one begin marker and one end marker in that order:
 
 - **File does not exist yet**: written fresh, in full, with the current
   `intent_references` (read from an EXISTING `packet.yaml` on disk if one
@@ -515,21 +526,30 @@ between two HTML-comment markers
   `packet draft` run — never the freshly-templated empty `[]` this same
   invocation might otherwise write for `packet.yaml` itself). Reported as
   `created`.
-- **File exists AND carries both markers**: only the content strictly
-  BETWEEN them is recomputed from the packet's CURRENT `intent_references`
-  and replaced — this is what keeps the section current through the
-  ordinary workflow (scaffold with empty references → operator adds real
-  references to `packet.yaml` → rerun `packet draft` → the block reflects
-  them). Everything before the begin marker and after the end marker,
-  including any hand-written prose around the block, is preserved
-  byte-for-byte. Reported as `updated` when the recomputed content differs
-  from what is already there, `skipped` when it doesn't (a genuine no-op,
-  not a spurious update).
-- **File exists but has no recognizable markers** (predates this feature,
-  or an operator removed them): left completely untouched, exactly like
-  the other three scaffold files' plain skip-if-exists behavior. The
-  markers are never retroactively injected into hand-owned content.
-  Reported as `skipped`.
+- **File exists AND carries exactly one correctly-ordered marker pair**:
+  only the content strictly BETWEEN them is recomputed from the packet's
+  CURRENT `intent_references` and replaced, using the FILE'S OWN existing
+  newline convention (CRLF or LF — never hardcoded, so an existing CRLF
+  file is never left with mixed line endings) — this is what keeps the
+  section current through the ordinary workflow (scaffold with empty
+  references → operator adds real references to `packet.yaml` → rerun
+  `packet draft` → the block reflects them). Everything before the begin
+  marker and after the end marker, including any hand-written prose around
+  the block, is preserved byte-for-byte. Reported as `updated` when the
+  recomputed content differs from what is already there, `skipped` when it
+  doesn't (a genuine no-op, not a spurious update).
+- **File exists but has NO markers at all** (predates this feature, or an
+  operator removed them): left completely untouched, exactly like the
+  other three scaffold files' plain skip-if-exists behavior. The markers
+  are never retroactively injected into hand-owned content. Reported as
+  `skipped`.
+- **File exists with markers in any OTHER shape** — duplicate begin and/or
+  end markers, an end marker appearing before its begin, or only one of the
+  two present: also left completely untouched (never a silent partial
+  update, never guessing which pair is "the real one"), but reported
+  distinctly as `markers-malformed` with a `detail` string naming exactly
+  what shape was found — this state must never look like the healthy
+  no-markers-at-all case.
 
 An empty `intent_references` list is itself a meaningful scope — "this
 packet references nothing (yet)" — so the block shows every facet group as

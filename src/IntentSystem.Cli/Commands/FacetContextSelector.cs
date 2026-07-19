@@ -120,11 +120,23 @@ internal static class FacetContextSelector
 
         var domainHasAnyFacetNodes = nodes.Count > 0;
 
-        var normalizedHints = (scopeHints ?? Array.Empty<string>())
-            .Select(hint => NormalizeHintSegments(hint, domain, domainRoot))
-            .Where(segments => segments is not null)
-            .Select(segments => segments!)
-            .ToArray();
+        // G530 review repair: a hint that NormalizeHintSegments rejects
+        // (outside the domain root, a `..` traversal, or otherwise
+        // unresolvable) still safely matches nothing — but that must never
+        // look identical to a valid scope that simply matched no nodes.
+        // Every rejected hint is captured here, verbatim, with the reason.
+        var scopeWarnings = new List<FacetScopeWarning>();
+        var normalizedHints = new List<IReadOnlyList<string>>();
+        foreach (var hint in scopeHints ?? Array.Empty<string>())
+        {
+            var segments = NormalizeHintSegments(hint, domain, domainRoot, out var rejectionReason);
+            if (segments is null)
+            {
+                scopeWarnings.Add(new FacetScopeWarning { Hint = hint, Reason = rejectionReason! });
+                continue;
+            }
+            normalizedHints.Add(segments);
+        }
 
         // Narrowing is requested whenever the caller passed a scope-hint
         // LIST AT ALL — including an EXPLICITLY EMPTY one (e.g. a packet
@@ -138,6 +150,13 @@ internal static class FacetContextSelector
         var scoped = scopeHints is not null
             ? nodes.Where(node => normalizedHints.Any(hint => SegmentsOverlap(hint, node.DomainRelativeId.Split('/')))).ToArray()
             : nodes.ToArray();
+
+        // "All requested hints were rejected" is only true, by definition,
+        // when the caller requested at least one hint AND every one of
+        // them ended up in scopeWarnings (none survived into
+        // normalizedHints) — computed rather than tracked separately so it
+        // can never drift out of sync with the two lists above.
+        var allScopeHintsRejected = scopeHints is { Count: > 0 } && normalizedHints.Count == 0;
 
         var groups = new List<FacetContextGroup>();
         foreach (var facet in IntentNodeFacets.AllowedValues)
@@ -166,6 +185,8 @@ internal static class FacetContextSelector
             Groups = groups,
             DomainHasAnyFacetNodes = domainHasAnyFacetNodes,
             Warnings = warnings,
+            ScopeWarnings = scopeWarnings,
+            AllScopeHintsRejected = allScopeHintsRejected,
         };
     }
 
@@ -192,12 +213,18 @@ internal static class FacetContextSelector
 
     /// <summary>
     /// Normalizes a scope hint into a domain-relative segment list, or
-    /// <see langword="null"/> when the hint is empty/whitespace, resolves
-    /// outside <paramref name="domainRoot"/> entirely, or attempts to
-    /// escape the domain via a <c>..</c> segment. Accepted hint forms —
-    /// all reduced to the SAME canonical segment list a node's own
-    /// domain-relative id already uses, so comparison is always
-    /// apples-to-apples:
+    /// <see langword="null"/> (with <paramref name="rejectionReason"/> set)
+    /// when the hint is empty/whitespace, resolves outside
+    /// <paramref name="domainRoot"/> entirely, or attempts to escape the
+    /// domain via a <c>..</c> segment. G530 review repair: a rejection is
+    /// NEVER silent — the caller (<see cref="Select"/>) surfaces every
+    /// rejected hint, verbatim, with this reason, as a
+    /// <see cref="FacetScopeWarning"/>, so "--scope matched nothing because
+    /// every hint was invalid" is never indistinguishable from "--scope
+    /// matched nothing because no node happened to overlap a genuinely
+    /// valid hint". Accepted hint forms — all reduced to the SAME canonical
+    /// segment list a node's own domain-relative id already uses, so
+    /// comparison is always apples-to-apples:
     /// <list type="bullet">
     /// <item>an absolute filesystem path under <paramref name="domainRoot"/>
     ///   (reduced by subtracting the domain root, exactly like a node's own
@@ -219,10 +246,13 @@ internal static class FacetContextSelector
     /// codebase (case-sensitive filesystem semantics) — pinned explicitly
     /// here since path overlap has no other natural default.
     /// </summary>
-    private static IReadOnlyList<string>? NormalizeHintSegments(string hint, string domain, string domainRoot)
+    private static IReadOnlyList<string>? NormalizeHintSegments(string hint, string domain, string domainRoot, out string? rejectionReason)
     {
+        rejectionReason = null;
+
         if (string.IsNullOrWhiteSpace(hint))
         {
+            rejectionReason = "hint is empty or whitespace-only";
             return null;
         }
 
@@ -239,6 +269,7 @@ internal static class FacetContextSelector
             }
             catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
             {
+                rejectionReason = $"could not be resolved as a filesystem path: {exception.Message}";
                 return null;
             }
 
@@ -252,7 +283,9 @@ internal static class FacetContextSelector
             }
             else
             {
-                return null; // outside the domain root entirely — never matches
+                // outside the domain root entirely — never matches
+                rejectionReason = $"resolves to '{fullHintPath}', which is outside the domain root '{fullDomainRoot}'";
+                return null;
             }
         }
         else
@@ -289,7 +322,9 @@ internal static class FacetContextSelector
             }
             if (segment == "..")
             {
-                return null; // reject traversal outside the domain
+                // reject traversal outside the domain — never silently resolved
+                rejectionReason = "contains a '..' traversal segment, which is rejected rather than resolved";
+                return null;
             }
             segments.Add(segment);
         }
@@ -351,6 +386,26 @@ internal sealed record FacetContextSelection
     /// an agent can tell omitted-with-a-reason apart from never-existed.
     /// </summary>
     public required IReadOnlyList<FacetContextWarning> Warnings { get; init; }
+
+    /// <summary>
+    /// G530 review repair: every requested <c>--scope</c>/<c>intent_references</c>
+    /// hint that <see cref="FacetContextSelector.NormalizeHintSegments"/>
+    /// rejected (outside the domain root, a <c>..</c> traversal, or
+    /// otherwise unresolvable), verbatim, with the reason. A rejected hint
+    /// still safely contributes zero matches — but never silently, so
+    /// "matched nothing because every hint was invalid" is distinguishable
+    /// from "matched nothing because a valid hint just didn't overlap any
+    /// node".
+    /// </summary>
+    public required IReadOnlyList<FacetScopeWarning> ScopeWarnings { get; init; }
+
+    /// <summary>
+    /// True only when the caller requested at least one scope hint AND
+    /// every single one of them was rejected (none survived into the
+    /// actual narrowing) — lets a renderer say so explicitly rather than
+    /// leaving the reader to infer it by counting <see cref="ScopeWarnings"/>.
+    /// </summary>
+    public required bool AllScopeHintsRejected { get; init; }
 }
 
 internal sealed record FacetContextGroup
@@ -381,6 +436,15 @@ internal sealed record FacetContextWarning
 {
     [JsonPropertyName("path")]
     public required string Path { get; init; }
+
+    [JsonPropertyName("reason")]
+    public required string Reason { get; init; }
+}
+
+internal sealed record FacetScopeWarning
+{
+    [JsonPropertyName("hint")]
+    public required string Hint { get; init; }
 
     [JsonPropertyName("reason")]
     public required string Reason { get; init; }

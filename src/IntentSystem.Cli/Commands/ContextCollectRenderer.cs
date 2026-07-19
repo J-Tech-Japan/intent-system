@@ -63,6 +63,20 @@ internal static class ContextCollectRenderer
                 writer.WriteLine($"  - `{warning.Path}`: {warning.Reason}");
             }
         }
+
+        // G530 review repair: a rejected --scope hint must never look like
+        // a valid scope that simply matched nothing.
+        if (packet.FacetContextScopeWarnings.Count > 0)
+        {
+            writer.WriteLine(
+                packet.FacetContextAllScopeHintsRejected
+                    ? "- Scope warnings (ALL requested --scope hints were rejected — nothing was scoped in):"
+                    : "- Scope warnings (these --scope hints were rejected; other valid hints were still applied):");
+            foreach (var warning in packet.FacetContextScopeWarnings)
+            {
+                writer.WriteLine($"  - `{warning.Hint}`: {warning.Reason}");
+            }
+        }
         writer.WriteLine();
 
         writer.WriteLine("## Queue state");

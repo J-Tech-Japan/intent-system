@@ -43,6 +43,25 @@ internal sealed record ContextCollectPacket
     [JsonPropertyName("facet_context_warnings")]
     public required IReadOnlyList<FacetContextWarning> FacetContextWarnings { get; init; }
 
+    /// <summary>
+    /// G530 review repair: every requested <c>--scope</c> hint that was
+    /// rejected (outside the domain root, a <c>..</c> traversal, or
+    /// otherwise unresolvable), verbatim, with the reason — never silent,
+    /// so "matched nothing because every hint was invalid" is
+    /// distinguishable from "matched nothing because a valid hint just
+    /// didn't overlap any node".
+    /// </summary>
+    [JsonPropertyName("facet_context_scope_warnings")]
+    public required IReadOnlyList<FacetScopeWarning> FacetContextScopeWarnings { get; init; }
+
+    /// <summary>
+    /// G530 review repair: true only when every <c>--scope</c> hint the
+    /// caller passed was rejected — an explicit summary flag so a renderer
+    /// doesn't have to infer it by comparing counts.
+    /// </summary>
+    [JsonPropertyName("facet_context_all_scope_hints_rejected")]
+    public required bool FacetContextAllScopeHintsRejected { get; init; }
+
     [JsonPropertyName("queue_state_path")]
     public required string QueueStatePath { get; init; }
 
