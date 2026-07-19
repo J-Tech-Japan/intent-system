@@ -1018,24 +1018,44 @@ is reversed — the runs event is appended **first**, `queue-state.json`
   the already-recorded event and retries **only** the `queue-state.json`
   write, so convergence never produces a duplicate event.
 
-**Round-2 review repair — the dedup match is bound to the queue-state
-generation, not merely the reusable transition text.** Matching only on
-execution unit + event name + the deterministic reason text has a real
-collision: replaying the exact same transition later (e.g. `normal→high`
-reason `R`, then `high→normal` reason `S`, then `normal→high` reason `R`
-again — a genuine third mutation) produces a reason string
-byte-identical to the first event's, so the naive dedup would wrongly
-treat that stale historical event as the pending audit for the third
-mutation and skip appending its own — violating "one reasoned event per
-mutation." The match now additionally requires the candidate event's
-`Ts` to be **at or after** the `UpdatedAt` value read from
-`queue-state.json` at the top of the current invocation. Every successful
-write this command makes advances `UpdatedAt` to the same timestamp used
-for its own event — so an event from any prior generation is necessarily
-older than the current `UpdatedAt` and can never be mistaken for a
-pending retry, while an event genuinely written moments ago by an
-immediately-preceding failed attempt (against this same still-unmutated
-generation) always satisfies the bound.
+**Round-2 review repair (superseded by round 3 below) — the dedup match
+was first bound to `queue-state.json`'s `UpdatedAt` timestamp,** to fix a
+real collision: replaying the exact same transition later (e.g.
+`normal→high` reason `R`, then `high→normal` reason `S`, then
+`normal→high` reason `R` again — a genuine third mutation) produces a
+reason string byte-identical to the first event's, so a naive dedup on
+execution unit + event name + reason text alone would wrongly treat that
+stale historical event as the pending audit for the third mutation.
+
+**Round-3 review repair — wall-clock ordering is not a safe generation
+marker; the dedup match is now a content fingerprint, not a timestamp
+comparison.** The round-2 `Ts >= UpdatedAt` bound breaks in three ways: at
+timestamp equality (`UtcNowFactory` fixed to one value across several
+operations — or genuine same-tick production writes) it cannot
+distinguish "my own immediately-preceding failed attempt" from an older,
+unrelated transition; a clock rollback can move a later write's
+`UpdatedAt` *behind* an earlier one; and the write path never guaranteed
+`changedAt` strictly advances past the current `UpdatedAt` in the first
+place. The generation marker is now a **SHA-256 digest of the exact
+pre-mutation `queue-state.json` bytes**, read at the top of the current
+invocation, appended to the recorded reason (e.g. `... (generation
+3f9a2b7c1d4e5f60)`). This needs no clock at all:
+
+- A genuine retry (failed attempt, then re-run) starts from the
+  IDENTICAL un-mutated file — the failed attempt never wrote it — so the
+  retry computes the exact same fingerprint and finds its own
+  already-recorded event, regardless of what any clock did in between.
+- Any other, older transition necessarily read `queue-state.json`
+  *before* at least one subsequent successful write changed its content
+  (this command's own transitions always change the item's `priority`
+  field, and typically `updated_at` too) — so its fingerprint differs
+  and can never collide with the current generation's fingerprint. Same-
+  tick collisions and clock rollback/future-skew are structurally
+  impossible to trigger, since no timestamp is compared at all.
+- A historical event with no fingerprint tag at all (data predating this
+  fix, or hand-edited) can never exact-match a freshly-computed tagged
+  reason, so it is correctly treated as unrelated history rather than a
+  pending retry.
 
 ---
 

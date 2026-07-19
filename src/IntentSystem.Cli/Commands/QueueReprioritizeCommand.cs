@@ -82,10 +82,11 @@ internal static class QueueReprioritizeCommand
             return 1;
         }
 
+        var queueStateRawText = File.ReadAllText(queueStatePath);
         QueueState queueState;
         try
         {
-            queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            queueState = QueueStateSerializer.Deserialize(queueStateRawText);
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
         {
@@ -170,25 +171,33 @@ internal static class QueueReprioritizeCommand
         //   retries the queue-state write, so convergence never produces
         //   a duplicate event.
         //
-        // Round-2 review repair: execution unit + event name + the
-        // deterministic reason text ALONE is not enough to tell "the
-        // pending event from my own immediately-preceding failed attempt"
-        // apart from "a genuinely historical, fully-completed transition
-        // that happens to share the same old/new priority and reason"
-        // (e.g. normal->high reason R, then high->normal reason S, then
-        // normal->high reason R again — a real, distinct third mutation
-        // whose reason text collides byte-for-byte with the first). The
-        // match is now ALSO bound to `queueState.UpdatedAt` — the CURRENT,
-        // not-yet-mutated queue-state generation read at the top of this
-        // invocation: only an event timestamped AT OR AFTER that
-        // generation could possibly be the audit record from an attempt
-        // that started against this SAME unmutated state and then failed
-        // before the queue-state write landed. Any older event was
-        // necessarily superseded by at least one successful queue-state
-        // write since (this command always advances `UpdatedAt` on every
-        // successful write) and can never be mistaken for a pending retry.
+        // Round-3 review repair: wall-clock ordering (`Ts >= UpdatedAt`)
+        // is not a safe generation marker — at timestamp equality
+        // (`UtcNowFactory` fixed to one value across several operations,
+        // or genuine same-tick production writes) it cannot tell "my own
+        // immediately-preceding failed attempt" apart from an older,
+        // fully-completed transition, and a clock rollback/future-skewed
+        // `UpdatedAt` can invalidate the bound entirely in either
+        // direction. The generation marker is now a content fingerprint —
+        // a SHA-256 digest of the EXACT pre-mutation `queue-state.json`
+        // bytes read at the top of THIS invocation, appended to the
+        // recorded reason. This needs no clock at all:
+        //
+        // - A genuine retry (failed attempt, then re-run) starts from the
+        //   IDENTICAL un-mutated file — the failed attempt never wrote it
+        //   — so the retry computes the SAME fingerprint and finds its
+        //   own already-recorded event.
+        // - Any other, older transition necessarily read queue-state.json
+        //   BEFORE at least one subsequent successful write changed its
+        //   content (this command's own transitions always change the
+        //   item's `priority` field, and typically `updated_at` too) — so
+        //   its fingerprint differs and can never collide with the
+        //   current generation's fingerprint, regardless of what any
+        //   clock did in between.
+        var generationId = ComputeGenerationId(queueStateRawText);
         var expectedReason = $"priority changed from '{item.Priority}' to '{requestedPriority}': {reason}";
-        var alreadyAudited = RunsLogHasMatchingPriorityChangedEvent(runLogPath, executionUnit!, expectedReason, queueState.UpdatedAt);
+        var taggedReason = $"{expectedReason} (generation {generationId})";
+        var alreadyAudited = RunsLogHasMatchingPriorityChangedEvent(runLogPath, executionUnit!, taggedReason);
 
         if (!alreadyAudited)
         {
@@ -198,7 +207,7 @@ internal static class QueueReprioritizeCommand
                 ExecutionUnit = executionUnit!,
                 Event = PriorityChangedEventName,
                 By = ReprioritizeActor,
-                Reason = expectedReason,
+                Reason = taggedReason,
             };
 
             try
@@ -230,8 +239,7 @@ internal static class QueueReprioritizeCommand
         return 0;
     }
 
-    private static bool RunsLogHasMatchingPriorityChangedEvent(
-        string runLogPath, string executionUnit, string expectedReason, DateTimeOffset currentQueueStateGeneration)
+    private static bool RunsLogHasMatchingPriorityChangedEvent(string runLogPath, string executionUnit, string taggedReason)
     {
         if (!File.Exists(runLogPath))
         {
@@ -252,20 +260,34 @@ internal static class QueueReprioritizeCommand
             return false;
         }
 
-        // Round-2 review repair: `Ts >= currentQueueStateGeneration` is the
-        // binding that tells a genuine pending-retry event (recorded
-        // against THIS still-unmutated queue-state generation) apart from
-        // a stale, fully-historical event that happens to share the same
-        // execution unit/event name/reason text. Every successful write
-        // this command makes advances `queue-state.json`'s `UpdatedAt` to
-        // the SAME timestamp used for its own event's `Ts` — so an event
-        // from any PRIOR generation is necessarily older than the current
-        // `UpdatedAt` and can never satisfy this bound.
+        // Round-3 review repair: the match is now purely content-based —
+        // an EXACT match on `taggedReason` (which embeds the current
+        // pre-mutation queue-state content fingerprint) is both necessary
+        // and sufficient. No timestamp/ordering comparison is involved at
+        // all, so clock behavior (same-tick collisions, rollback,
+        // future-skew) cannot affect this decision either way. An older
+        // event lacking a fingerprint tag entirely (pre-round-3 data) or
+        // carrying a DIFFERENT fingerprint never matches and is correctly
+        // treated as unrelated history, not a pending retry.
         return events.Any(runEvent =>
             string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
             && string.Equals(runEvent.Event, PriorityChangedEventName, StringComparison.Ordinal)
-            && string.Equals(runEvent.Reason, expectedReason, StringComparison.Ordinal)
-            && runEvent.Ts >= currentQueueStateGeneration);
+            && string.Equals(runEvent.Reason, taggedReason, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// G537 round-3 review repair: a strictly content-addressed,
+    /// clock-independent generation identity for the pre-mutation
+    /// <c>queue-state.json</c> bytes — a SHA-256 digest (hex, truncated to
+    /// 16 characters; 64 bits of entropy is ample for this narrow,
+    /// same-file-scoped disambiguation purpose). Always computable and
+    /// never malformed/missing, since it is a pure function of the exact
+    /// text already successfully read and parsed earlier in <see cref="Execute"/>.
+    /// </summary>
+    internal static string ComputeGenerationId(string queueStateRawText)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(queueStateRawText));
+        return Convert.ToHexString(hash)[..16];
     }
 
     private static void AppendPriorityChangedEvent(string runLogPath, RunEvent runEvent)

@@ -1084,25 +1084,49 @@ event を**先に**追記し、`queue-state.json` は**後で**書き込みま�
   **のみ**を retry するため、convergence が duplicate な event を
   生成することは決してありません。
 
-**Round-2 review repair — dedup の match は、再利用可能な transition
-text だけでなく queue-state の generation に束縛されます。** execution
-unit + event name + 決定論的な reason text だけで match すると、本物の
-collision が起こります: 全く同じ transition を後で replay した場合
-(例えば `normal→high` reason `R`、続いて `high→normal` reason `S`、
-そして再び `normal→high` reason `R`——これは正当な 3 番目の mutation
-です)、生成される reason 文字列が最初の event と byte-identical に
-なるため、素朴な dedup はその stale な historical event を 3 番目の
-mutation の pending audit だと誤認し、自分自身の event の追記を
-skip してしまいます——「1 mutation につき 1 つの reasoned event」
-という原則に違反します。match は今や追加で、candidate event の `Ts`
-が、今回の invocation の先頭で `queue-state.json` から read した
-`UpdatedAt` の値**以降**であることを要求します。このコマンドが行う
-すべての成功した write は、`UpdatedAt` を自分自身の event と同じ
-timestamp に進めます——そのため、それより前の generation の event は
-必然的に現在の `UpdatedAt` より古く、pending retry と誤認される
-ことは決してありません。一方、直前の失敗した attempt によって、この
-同じ未 mutate な generation に対して実際にたった今書き込まれた event
-は、常にこの束縛を満たします。
+**Round-2 review repair(round 3 で置き換え済み)— dedup の match は
+まず `queue-state.json` の `UpdatedAt` timestamp に束縛されました。**
+これは本物の collision を修正するためでした: 全く同じ transition を
+後で replay した場合(例えば `normal→high` reason `R`、続いて
+`high→normal` reason `S`、そして再び `normal→high` reason `R`——これは
+正当な 3 番目の mutation です)、生成される reason 文字列が最初の
+event と byte-identical になるため、execution unit + event name +
+reason text だけに頼る素朴な dedup は、その stale な historical event
+を 3 番目の mutation の pending audit だと誤認してしまいます。
+
+**Round-3 review repair — wall-clock ordering は安全な generation
+marker ではありません。dedup の match は今や timestamp 比較ではなく
+content fingerprint です。** round 2 の `Ts >= UpdatedAt` という束縛は
+3 つの方法で破綻します: timestamp が等しい場合(`UtcNowFactory` が
+複数の operation にわたって同じ値を返す場合——あるいは本物の
+production での同一 tick write の場合)、「自分自身の直前の失敗した
+attempt」と、無関係な古い transition とを区別できません。clock
+rollback は、より後の write の `UpdatedAt` を、より前の write よりも
+**前**に動かしてしまう可能性があります。そして write path は、そもそも
+`changedAt` が現在の `UpdatedAt` を厳密に上回ることを保証していません
+でした。generation marker は今や、**現在の invocation の先頭で read
+した、mutation 前の `queue-state.json` の正確な bytes の SHA-256
+digest** であり、記録される reason に追記されます(例:
+`... (generation 3f9a2b7c1d4e5f60)`)。これは一切 clock を必要と
+しません:
+
+- 本物の retry(失敗した attempt の後の re-run)は、全く同じ
+  未 mutate な file から始まります——失敗した attempt はそれを
+  書き込んでいません——そのため retry は全く同じ fingerprint を
+  計算し、間で clock が何をしていたかに関わらず、自分自身の既に
+  記録された event を見つけます。
+- 他の、より古い transition は、必然的に、その後 少なくとも 1 回の
+  成功した write がその内容を変更する**前**に `queue-state.json` を
+  read しています(このコマンド自身の transition は常に item の
+  `priority` field を、多くの場合 `updated_at` も変更します)——その
+  ため fingerprint が異なり、現在の generation の fingerprint と
+  衝突することは決してありません。同一 tick の collision や clock
+  rollback/future-skew は、そもそも timestamp を一切比較しないため、
+  構造的に発生し得ません。
+- fingerprint tag を全く持たない historical event(この fix より前の
+  データ、あるいは手作業で編集されたもの)は、新たに計算された tagged
+  reason と exact-match することは決してないため、pending retry では
+  なく無関係な履歴として正しく扱われます。
 
 ---
 
