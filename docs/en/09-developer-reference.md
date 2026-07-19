@@ -283,10 +283,14 @@ is reported for visibility only:
   state (PR #1750) was previously misreported as `pr-created-not-reviewing`
   with a `review-start` recommendation — semantically wrong mid-repair; a
   detector whose recommendation must be second-guessed loses its value.
-  `age_minutes` is measured from the PR's own `updatedAt` (since entering
-  the repair state), not from PR creation.
+  `age_minutes` is measured from the PR's own `updatedAt` rather than PR
+  creation — a CONSERVATIVE approximation of "since entering the repair
+  state", not the exact label-application moment: GitHub does not expose
+  per-label-application timestamps, and `updatedAt` reflects the PR's most
+  recent modification of any kind (which may postdate the specific label
+  change) unless a dedicated label-event fetch is added.
 - `rereview-pending` — a PR carrying `intent-pr-rereview-ready` (repair
-  pushed, awaiting re-review). Same `updatedAt`-based age convention as
+  pushed, awaiting re-review). Same `updatedAt`-based age approximation as
   `repair-pending`.
 - `claimed-but-silent` — an issue carrying `intent-issue-in-progress` with
   **no PR created yet** and no observable activity for longer than
@@ -297,7 +301,15 @@ is reported for visibility only:
   closest available proxy without a dedicated per-issue timeline-events
   fetch) and the `updatedAt` of any open PR whose closing references name
   the issue (a linked PR's own activity counts too, even before
-  `intent-pr-created` is applied). `recommended_action` always reads as a
+  `intent-pr-created` is applied). A missing or malformed `updatedAt` — on
+  the issue OR a linked PR — is NEVER treated as "old activity" by falling
+  back to `createdAt` (which measures issue/PR OPEN time, not claim
+  acquisition or last touch, and could manufacture a misleadingly old
+  silence interval); it fails closed into `excluded[]`
+  (`activity-data-unusable`, naming exactly which timestamp was unusable)
+  instead. A parsed timestamp somehow in the future (clock skew) is
+  clamped to "now" rather than trusted, which can only ever make a
+  candidate look less silent. `recommended_action` always reads as a
   status-check request to the assigned worker — it never assumes
   completion, failure, or any transition from silence alone. Once a PR
   exists for the issue (`intent-pr-created`), the PR-lifecycle kinds take

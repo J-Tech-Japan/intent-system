@@ -279,11 +279,15 @@ age は可視性のためだけに報告されます:
   として誤報告され、`review-start` が推奨されていました — repair の
   最中としては意味的に間違っています。推奨を毎回疑ってかからなければ
   ならない detector は、その価値を失います。`age_minutes` は、PR の
-  作成時刻ではなく PR 自身の `updatedAt`（repair 状態に入った時点）から
-  計測されます。
+  作成時刻ではなく PR 自身の `updatedAt` から計測されます — これは
+  「repair 状態に入った時点」の CONSERVATIVE な近似であり、正確な
+  label 付与の瞬間ではありません: GitHub は per-label-application の
+  タイムスタンプを公開しておらず、`updatedAt` は（専用の label-event
+  fetch を追加しない限り）その label の変更より後になり得る、PR への
+  あらゆる種類の最新の変更を反映します。
 - `rereview-pending` — `intent-pr-rereview-ready` を持つ PR（repair が
   push され、re-review 待ち）。`repair-pending` と同じ `updatedAt` ベース
-  の age 規約です。
+  の age 近似です。
 - `claimed-but-silent` — `intent-issue-in-progress` を持つが **まだ PR が
   作成されていない** issue で、`--claimed-silent-minutes`（デフォルトは
   **720** 分 / 12 時間 — 通常の作業セッションでは決して発火しないよう
@@ -294,11 +298,20 @@ age は可視性のためだけに報告されます:
   proxy です）と、その issue を close する closing reference を持つ
   OPEN な PR の `updatedAt`（`intent-pr-created` が付与される前でも、
   紐づく PR 自身の活動はカウントされます）の、より新しい方として
-  近似されます。`recommended_action` は常に、assigned worker への
-  status check request として読めるテキストです — 沈黙だけから
-  completion・failure・いかなる transition も決して仮定しません。
-  issue に PR が作成されると（`intent-pr-created`）、代わりに
-  PR-lifecycle の kind が引き継ぎます。repair 状態の PR 自体が
+  近似されます。issue または紐づく PR の `updatedAt` が欠落・不正な
+  場合、それを「古い活動」として `createdAt`（claim 取得時刻や最終
+  タッチ時刻ではなく、issue/PR が開かれた時刻を表す）にフォールバック
+  することは決してありません — 誤解を招くほど古い silence interval を
+  作り出してしまう可能性があるためです。代わりに、`excluded[]`
+  （`activity-data-unusable`、どのタイムスタンプが使用不能だったかを
+  明示）に入り fail closed します。パースされたタイムスタンプが
+  （clock skew などで）未来の時刻になっている場合は、そのまま信頼せず
+  「今」にクランプされます — これは candidate をより silent でなく
+  見せる方向にしか作用しません。`recommended_action` は常に、
+  assigned worker への status check request として読めるテキストです
+  — 沈黙だけから completion・failure・いかなる transition も決して
+  仮定しません。issue に PR が作成されると（`intent-pr-created`）、
+  代わりに PR-lifecycle の kind が引き継ぎます。repair 状態の PR 自体が
   閾値を超えて stale であることを検出するのは、明示的に out-of-scope の
   follow-up です。
 

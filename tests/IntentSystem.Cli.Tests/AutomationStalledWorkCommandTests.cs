@@ -390,6 +390,171 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindClaimedButSilent);
     }
 
+    // ── G533 review repair: fail closed on unusable activity data ────
+
+    [Fact]
+    public void Execute_ClaimedButSilent_MissingUpdatedAt_NeverFallsBackToOldCreatedAt_ExcludedNotFired()
+    {
+        // The core defect: an old createdAt must NEVER be substituted for
+        // a missing updatedAt — that would manufacture a silence interval
+        // that begins long before the claim was ever made. Excluded, not
+        // reported as a finding.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G540", "intent-cli");
+        var issue = new GitHubAutomationIssueCandidate
+        {
+            Number = 1200,
+            Title = "G540: Old issue, missing updatedAt",
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/1200",
+            CreatedAt = FixedNow.AddDays(-100).ToString("O"),
+            UpdatedAt = string.Empty,
+            State = "OPEN",
+            Labels = [new GitHubAutomationLabel { Name = "intent-target" }, new GitHubAutomationLabel { Name = "intent-issue-in-progress" }],
+        };
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(
+            doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindClaimedButSilent);
+        Assert.Equal(AutomationStalledWorkCommand.ReasonActivityDataUnusable, excludedItem.GetProperty("reason").GetString());
+        Assert.Contains("missing", excludedItem.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1200", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ClaimedButSilent_MalformedUpdatedAt_NeverFallsBackToOldCreatedAt_ExcludedNotFired()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G540", "intent-cli");
+        var issue = new GitHubAutomationIssueCandidate
+        {
+            Number = 1200,
+            Title = "G540: Old issue, malformed updatedAt",
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/1200",
+            CreatedAt = FixedNow.AddDays(-100).ToString("O"),
+            UpdatedAt = "not-a-real-timestamp",
+            State = "OPEN",
+            Labels = [new GitHubAutomationLabel { Name = "intent-target" }, new GitHubAutomationLabel { Name = "intent-issue-in-progress" }],
+        };
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(
+            doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindClaimedButSilent);
+        Assert.Equal(AutomationStalledWorkCommand.ReasonActivityDataUnusable, excludedItem.GetProperty("reason").GetString());
+        Assert.Contains("malformed", excludedItem.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_ClaimedButSilent_LinkedPrMissingUpdatedAt_ConservativelyExcluded()
+    {
+        // Same fail-closed treatment for a linked PR's own activity
+        // timestamp — never risk under-counting real (unverifiable) PR
+        // activity as silence.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G540", "intent-cli");
+        var issue = BuildIssue(1200, "G540: Linked PR has bad updatedAt", FixedNow.AddDays(-100),
+            updatedAt: FixedNow.AddDays(-100), labels: ["intent-target", "intent-issue-in-progress"]);
+        var pr = new GitHubAutomationPrCandidate
+        {
+            Number = 1201,
+            Title = "G540: Linked PR has bad updatedAt",
+            Url = "https://github.com/J-Tech-Japan/intent-system/pull/1201",
+            CreatedAt = FixedNow.AddDays(-99).ToString("O"),
+            UpdatedAt = string.Empty,
+            State = "OPEN",
+            IsDraft = false,
+            ClosingIssuesReferences =
+            [
+                new GitHubPrClosingIssueReference
+                {
+                    Number = 1200,
+                    Repository = new GitHubPrClosingIssueRepository
+                    {
+                        Name = "intent-system",
+                        Owner = new GitHubPrClosingIssueRepositoryOwner { Login = "J-Tech-Japan" },
+                    },
+                },
+            ],
+        };
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(
+            doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindClaimedButSilent);
+        Assert.Equal(AutomationStalledWorkCommand.ReasonActivityDataUnusable, excludedItem.GetProperty("reason").GetString());
+        Assert.Contains("1201", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ClaimedButSilent_OldCreatedAtButRecentUpdatedAt_PostClaimActivityResetsThreshold()
+    {
+        // Proves createdAt is NEVER consulted for this kind: an issue open
+        // for 100 days, but its updatedAt (the ONLY signal this kind uses)
+        // is recent — must not fire.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G540", "intent-cli");
+        var issue = BuildIssue(1200, "G540: Old issue, recently active", FixedNow.AddDays(-100),
+            updatedAt: FixedNow.AddMinutes(-10), labels: ["intent-target", "intent-issue-in-progress"]);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindClaimedButSilent);
+    }
+
+    [Fact]
+    public void Execute_ClaimedButSilent_FutureUpdatedAt_ClampedToNow_NeverFires()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G540", "intent-cli");
+        var issue = BuildIssue(1200, "G540: Clock-skewed future updatedAt", FixedNow.AddDays(-100),
+            updatedAt: FixedNow.AddHours(2), labels: ["intent-target", "intent-issue-in-progress"]);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+    }
+
     [Fact]
     public void Execute_MergedPr_NeverTreatedAsPrCreatedNotReviewingOrClaimedButSilent()
     {

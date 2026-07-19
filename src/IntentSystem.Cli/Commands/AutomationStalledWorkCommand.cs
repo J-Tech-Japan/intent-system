@@ -152,6 +152,16 @@ internal static class AutomationStalledWorkCommand
     /// </summary>
     public const string ReasonExecutionUnitAmbiguous = "execution-unit-ambiguous";
 
+    /// <summary>
+    /// G533 review repair: <see cref="KindClaimedButSilent"/>'s own
+    /// last-activity timestamp (the issue's own <c>updatedAt</c>, or a
+    /// linked open PR's <c>updatedAt</c>) is missing or malformed —
+    /// silence can never be reliably established, so the candidate is
+    /// excluded rather than substituting a different field (e.g.
+    /// <c>createdAt</c>) that measures a different event entirely.
+    /// </summary>
+    public const string ReasonActivityDataUnusable = "activity-data-unusable";
+
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
@@ -436,12 +446,16 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            // G533: repair-pending/rereview-pending age is best approximated
-            // by the PR's own `updatedAt` (bumped when the request-update/
-            // update-in-progress/rereview-ready label was applied) rather
-            // than `createdAt` — these are POST-creation lifecycle states,
-            // so "how long has this been pending" means "since entering
-            // this state", not "since the PR was opened".
+            // G533 review repair: repair-pending/rereview-pending age uses
+            // the PR's own `updatedAt` rather than `createdAt` — these are
+            // POST-creation lifecycle states, so "how long has this been
+            // pending" should mean "since entering this state", not "since
+            // the PR was opened". `updatedAt` is only a CONSERVATIVE
+            // approximation of that, though, not the exact label-application
+            // moment: GitHub does not expose per-label-application
+            // timestamps, and `updatedAt` reflects the PR's most recent
+            // modification of ANY kind (which may postdate the specific
+            // label change) unless a dedicated label-event fetch is added.
             var ageSource = isInformational ? pr.UpdatedAt : pr.CreatedAt;
 
             items.Add(new StalledWorkItem
@@ -632,6 +646,22 @@ internal static class AutomationStalledWorkCommand
     /// <c>intent-pr-created</c> is applied — e.g. a freshly-opened draft).
     /// Conservative by construction: the default 720-minute threshold means
     /// an ordinary work session never fires this kind.
+    ///
+    /// G533 review repair: a missing or malformed <c>updatedAt</c> — on
+    /// either the issue OR a linked PR — is never silently treated as "old
+    /// activity" by falling back to <c>createdAt</c>. <c>createdAt</c>
+    /// measures a DIFFERENT event (issue open time / PR open time, not
+    /// claim acquisition or the linked PR's own last touch) and could
+    /// manufacture a silence interval that begins long before the claim
+    /// was ever made, firing this kind on unusable evidence rather than
+    /// genuine silence. Unusable activity data fails closed into
+    /// <c>excluded[]</c> (never <c>items[]</c>) with a structured
+    /// diagnostic naming exactly which timestamp was unusable and why. A
+    /// parsed timestamp that is somehow in the future relative to
+    /// <paramref name="now"/> (clock skew, bad data) is clamped to
+    /// <paramref name="now"/> — conservative in the same direction as
+    /// everything else here: it can only ever make the candidate look
+    /// LESS silent, never manufacture a false positive.
     /// </summary>
     private static void CollectClaimedButSilent(
         CliContext context,
@@ -668,7 +698,35 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var lastActivity = ParseTimestampOrFallback(issue.UpdatedAt, issue.CreatedAt);
+            // Best-effort execution-unit naming for diagnostics below —
+            // used regardless of whether corroboration/domain confirmation
+            // ultimately succeeds, matching the pattern every other
+            // collector in this file already follows.
+            var resolution = ResolveExecutionUnit(context, issue.Title);
+            var issueRef = new StalledWorkRef { Number = issue.Number, Url = issue.Url };
+
+            if (!TryParseActivityTimestamp(issue.UpdatedAt, out var issueActivity, out var issueProblem))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindClaimedButSilent,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = issueRef,
+                    Pr = null,
+                    Reason = ReasonActivityDataUnusable,
+                    Detail =
+                        $"issue #{issue.Number}'s updatedAt is {issueProblem} — claimed-but-silent requires a "
+                        + "valid last-activity timestamp and never substitutes createdAt (issue OPEN time, not "
+                        + "claim acquisition time) as a stand-in, since that could manufacture a misleadingly old "
+                        + "silence interval.",
+                });
+                continue;
+            }
+
+            var lastActivity = ClampToNow(issueActivity, now);
+            var linkedPrActivityUnusable = false;
+            string? linkedPrProblemDetail = null;
+
             foreach (var pr in openPrs)
             {
                 if (!IsOpen(pr.State))
@@ -679,14 +737,39 @@ internal static class AutomationStalledWorkCommand
                 {
                     if (reference.Number == issue.Number && ReferenceMatchesRepo(reference, repo))
                     {
-                        var prActivity = ParseTimestampOrFallback(pr.UpdatedAt, pr.CreatedAt);
-                        if (prActivity > lastActivity)
+                        if (!TryParseActivityTimestamp(pr.UpdatedAt, out var prActivity, out var prProblem))
                         {
-                            lastActivity = prActivity;
+                            linkedPrActivityUnusable = true;
+                            linkedPrProblemDetail =
+                                $"linked PR #{pr.Number}'s updatedAt is {prProblem} — its real activity could not "
+                                + "be verified, so this candidate is conservatively excluded rather than risking "
+                                + "an under-counted (falsely silent) result.";
+                        }
+                        else
+                        {
+                            var clampedPrActivity = ClampToNow(prActivity, now);
+                            if (clampedPrActivity > lastActivity)
+                            {
+                                lastActivity = clampedPrActivity;
+                            }
                         }
                         break;
                     }
                 }
+            }
+
+            if (linkedPrActivityUnusable)
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindClaimedButSilent,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = issueRef,
+                    Pr = null,
+                    Reason = ReasonActivityDataUnusable,
+                    Detail = linkedPrProblemDetail!,
+                });
+                continue;
             }
 
             var silentMinutes = ComputeAgeMinutesFromInstant(lastActivity, now);
@@ -695,7 +778,6 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            var resolution = ResolveExecutionUnit(context, issue.Title);
             var packetDeclaredDomain = resolution.Corroborated ? ReadPacketDeclaredDomain(context, resolution.ExecutionUnit) : null;
             if (!TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo,
                     out var reason, out var detail))
@@ -704,7 +786,7 @@ internal static class AutomationStalledWorkCommand
                 {
                     Kind = KindClaimedButSilent,
                     ExecutionUnit = resolution.ExecutionUnit,
-                    Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
+                    Issue = issueRef,
                     Pr = null,
                     Reason = reason,
                     Detail = detail,
@@ -716,7 +798,7 @@ internal static class AutomationStalledWorkCommand
             {
                 Kind = KindClaimedButSilent,
                 ExecutionUnit = resolution.ExecutionUnit,
-                Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
+                Issue = issueRef,
                 Pr = null,
                 AgeMinutes = silentMinutes,
                 IsInformational = true,
@@ -1125,36 +1207,52 @@ internal static class AutomationStalledWorkCommand
     }
 
     /// <summary>
-    /// G533: parses <paramref name="primary"/> (typically an entity's own
-    /// <c>updatedAt</c>), falling back to <paramref name="fallback"/>
-    /// (typically its <c>createdAt</c>) when <paramref name="primary"/> is
-    /// missing/unparseable — callers that pre-date the <c>updatedAt</c>
-    /// field, or a genuinely empty value, still get a usable "last known
-    /// activity" instant rather than an epoch-zero distortion.
+    /// G533 review repair: parses <paramref name="timestamp"/> (an entity's
+    /// own <c>updatedAt</c>) for <see cref="KindClaimedButSilent"/>'s
+    /// activity determination — deliberately NEVER falls back to a
+    /// different field (e.g. <c>createdAt</c>) on failure, unlike
+    /// <see cref="ComputeAgeMinutes"/>'s "unparseable means age zero"
+    /// convention used by the other (actionable) kinds. Those other kinds
+    /// treat a missing timestamp as "just happened" (age 0, never
+    /// over-reports staleness); doing the same here — or worse, falling
+    /// back to <c>createdAt</c> — would let claimed-but-silent fire (or
+    /// under-fire) on evidence that was never actually observed. Returns
+    /// <see langword="false"/> with a human-readable <paramref name="problem"/>
+    /// string ("missing" or "malformed (could not parse '...')") on
+    /// failure, so the caller can fail closed with a structured diagnostic
+    /// instead of guessing.
     /// </summary>
-    private static DateTimeOffset ParseTimestampOrFallback(string primary, string fallback)
+    private static bool TryParseActivityTimestamp(string timestamp, out DateTimeOffset instant, out string? problem)
     {
-        if (!string.IsNullOrWhiteSpace(primary)
-            && DateTimeOffset.TryParse(primary, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AssumeUniversal, out var parsedPrimary))
+        if (string.IsNullOrWhiteSpace(timestamp))
         {
-            return parsedPrimary;
+            instant = default;
+            problem = "missing";
+            return false;
         }
-        if (!string.IsNullOrWhiteSpace(fallback)
-            && DateTimeOffset.TryParse(fallback, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AssumeUniversal, out var parsedFallback))
+        if (!DateTimeOffset.TryParse(timestamp, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out instant))
         {
-            return parsedFallback;
+            problem = $"malformed (could not parse '{timestamp}')";
+            return false;
         }
-        return DateTimeOffset.MinValue;
+        problem = null;
+        return true;
     }
+
+    /// <summary>
+    /// G533 review repair: a parsed activity timestamp that is somehow in
+    /// the future relative to <paramref name="now"/> (clock skew, bad
+    /// data) is clamped to <paramref name="now"/> rather than trusted
+    /// verbatim — this can only ever make a candidate look LESS silent
+    /// (conservative), never manufacture a false <see cref="KindClaimedButSilent"/>
+    /// positive from an implausible timestamp.
+    /// </summary>
+    private static DateTimeOffset ClampToNow(DateTimeOffset instant, DateTimeOffset now) =>
+        instant > now ? now : instant;
 
     private static int ComputeAgeMinutesFromInstant(DateTimeOffset instant, DateTimeOffset now)
     {
-        if (instant == DateTimeOffset.MinValue)
-        {
-            return 0;
-        }
         var minutes = (now - instant).TotalMinutes;
         return minutes > 0 ? (int)minutes : 0;
     }
