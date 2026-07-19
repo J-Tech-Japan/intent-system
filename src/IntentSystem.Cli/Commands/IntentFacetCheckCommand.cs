@@ -499,27 +499,31 @@ internal static class IntentFacetCheckCommand
     }
 
     /// <summary>
-    /// G531 review repair round 5: an independent noise pass for
-    /// CommonMark INDENTED code blocks — a line beginning with a literal
-    /// tab, or with 4+ literal leading spaces, is code (a wholly separate
-    /// construct from a fenced block; recognizing "this isn't a fence" does
-    /// NOT mean "this isn't noise"). A maximal run of consecutive lines
-    /// that are each either indented (per the rule above) or BLANK
-    /// (whitespace-only) is masked as one block — blank lines may appear
-    /// WITHIN the block as continuation without ending it, mirroring
-    /// CommonMark's own tolerance for blank lines inside an indented code
-    /// block. The run always terminates at the first genuinely non-blank,
-    /// non-indented line (real prose resumes normal extraction from
-    /// there) or end-of-document. 1–3 space indentation is deliberately
-    /// NOT enough to qualify — that is ordinary, merely-aligned prose and
-    /// must never be over-masked. This pass runs on whatever
-    /// <see cref="MaskFencedCodeBlocks"/> already left alone, and is a
-    /// SIMPLIFIED approximation: it does not attempt CommonMark's full
-    /// list-item-continuation disambiguation (indentation measured
-    /// relative to a list marker rather than column 0), so a 4-space-
-    /// indented continuation line inside a list item is treated the same
-    /// as top-level indented code — an accepted, documented limitation of
-    /// this scaffold, not a bug.
+    /// G531 review repair round 6: an independent noise pass for
+    /// CommonMark INDENTED code blocks — a line whose leading whitespace
+    /// reaches VISUAL COLUMN 4 or more is code (a wholly separate construct
+    /// from a fenced block; recognizing "this isn't a fence" does NOT mean
+    /// "this isn't noise"). Leading columns are computed with tabs
+    /// advancing to the NEXT multiple-of-4 column stop (CommonMark's own
+    /// rule — not "count literal characters"), so mixed leading whitespace
+    /// like a single space then a tab (column 1 → tab advances to column 4)
+    /// reaches the threshold exactly the same as 4 literal spaces or one
+    /// leading tab does; only 1–3 VISUAL columns is ordinary, merely-
+    /// aligned prose and is deliberately excluded. A maximal run of
+    /// consecutive lines that are each either indented (per the column
+    /// rule above) or BLANK (whitespace-only) is masked as one block —
+    /// blank lines may appear WITHIN the block as continuation without
+    /// ending it, mirroring CommonMark's own tolerance for blank lines
+    /// inside an indented code block. The run always terminates at the
+    /// first genuinely non-blank, non-indented line (real prose resumes
+    /// normal extraction from there) or end-of-document. This pass runs on
+    /// whatever <see cref="MaskFencedCodeBlocks"/> already left alone, and
+    /// carries exactly ONE documented simplification: it does not attempt
+    /// CommonMark's full list-item-continuation disambiguation
+    /// (indentation measured relative to a list marker rather than column
+    /// 0), so a 4-column-indented continuation line inside a list item is
+    /// treated the same as top-level indented code — an accepted,
+    /// documented limitation of this scaffold, not a bug.
     /// </summary>
     private static string MaskIndentedCodeBlocks(string text)
     {
@@ -542,6 +546,30 @@ internal static class IntentFacetCheckCommand
 
         static bool IsBlank(string line) => line.All(ch => ch is ' ' or '\t' or '\r' or '\n');
 
+        // CommonMark tab-stop expansion: a tab advances to the next column
+        // that is a multiple of 4 (always at least 1 column, even when
+        // already sitting exactly on a stop) — NOT "4 columns flat".
+        static int LeadingIndentColumn(string content)
+        {
+            var column = 0;
+            foreach (var ch in content)
+            {
+                if (ch == ' ')
+                {
+                    column++;
+                }
+                else if (ch == '\t')
+                {
+                    column += 4 - (column % 4);
+                }
+                else
+                {
+                    break;
+                }
+            }
+            return column;
+        }
+
         static bool IsIndented(string line)
         {
             if (IsBlank(line))
@@ -549,8 +577,7 @@ internal static class IntentFacetCheckCommand
                 return false;
             }
             var content = line.TrimEnd('\r', '\n');
-            return content[0] == '\t'
-                || (content.Length >= 4 && content[0] == ' ' && content[1] == ' ' && content[2] == ' ' && content[3] == ' ');
+            return LeadingIndentColumn(content) >= 4;
         }
 
         var builder = new System.Text.StringBuilder(text.Length);

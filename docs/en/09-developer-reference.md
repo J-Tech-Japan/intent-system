@@ -610,20 +610,25 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
     unaffected concern, and a backslash-escaped backtick never opens one.
   - **Indented code blocks** — a SEPARATE, independent masking pass from
     fence recognition above: "this line does not open a fence" and "this
-    line is not code" are different questions. A maximal run of
-    consecutive lines that are each either indented (a literal tab, or 4+
-    literal leading spaces — 1–3 spaces is ordinary, merely-aligned prose
-    and is deliberately NOT enough to qualify) or blank is masked as one
-    block; a blank line WITHIN the run does not end it (mirroring
-    CommonMark's own tolerance for blank continuation lines inside an
-    indented code block), and the run always terminates at the first
-    genuinely non-blank, non-indented line, where ordinary extraction
-    resumes immediately. This is a SIMPLIFIED approximation — it does not
-    replicate CommonMark's full list-item-continuation disambiguation
-    (indentation measured relative to a list marker rather than column 0),
-    so a 4-space-indented continuation line inside a list item is treated
-    the same as top-level indented code; an accepted, documented
-    limitation of this scaffold, not a bug.
+    line is not code" are different questions. A line qualifies once its
+    leading whitespace reaches VISUAL COLUMN 4, computed the way
+    CommonMark itself computes it — a tab advances to the NEXT multiple-
+    of-4 column stop, not "4 columns flat" — so a single space followed by
+    a tab (column 1 → tab advances to column 4) qualifies exactly the same
+    as 4 literal spaces or one leading tab does; only 1–3 VISUAL columns
+    is ordinary, merely-aligned prose and is deliberately excluded. A
+    maximal run of consecutive lines that are each either indented (per
+    the column rule above) or blank is masked as one block; a blank line
+    WITHIN the run does not end it (mirroring CommonMark's own tolerance
+    for blank continuation lines inside an indented code block), and the
+    run always terminates at the first genuinely non-blank, non-indented
+    line, where ordinary extraction resumes immediately. This pass
+    carries exactly ONE documented simplification — it does not replicate
+    CommonMark's full list-item-continuation disambiguation (indentation
+    measured relative to a list marker rather than column 0), so a
+    4-column-indented continuation line inside a list item is treated the
+    same as top-level indented code; an accepted, documented limitation of
+    this scaffold, not a bug.
   - **Inline Markdown/image links** — `[label](destination title)` /
     `![alt](destination title)` — are masked SELECTIVELY via a small
     hand-written scanner (not a naive first-`)`-wins regex): only the

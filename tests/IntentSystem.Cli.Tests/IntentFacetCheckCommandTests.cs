@@ -333,6 +333,106 @@ public sealed class IntentFacetCheckCommandTests
         Assert.DoesNotContain("NestedListContinuationNoise", terms);
     }
 
+    // ── Extraction: indented-code tab-stop column computation (review repair round 6) ──
+
+    [Fact]
+    public void ExtractCandidateTerms_OneSpaceThenTab_ReachesColumnFour_MaskedAsIndentedCode()
+    {
+        // CommonMark tab-stop expansion: 1 space (column 0->1), then a tab
+        // advances to the next multiple-of-4 column (column 4) — this
+        // reaches the indented-code threshold even though there are only
+        // 2 literal leading whitespace characters, not 4.
+        var text = "Intro.\n\n \tNoiseCommand\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseCommand", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_TwoSpacesThenTab_ReachesColumnFour_MaskedAsIndentedCode()
+    {
+        var text = "Intro.\n\n  \tNoiseEvent\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseEvent", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_ThreeSpacesThenTab_ReachesColumnFour_MaskedAsIndentedCode()
+    {
+        var text = "Intro.\n\n   \tCreateOrder\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("CreateOrder", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_TabAfterAFullTabStop_StillMaskedAsIndentedCode()
+    {
+        // Two consecutive tabs: column 0 -> 4 (first tab) -> 8 (second
+        // tab, advancing PAST an already-reached stop, never stalling).
+        var text = "Intro.\n\n\t\tNoiseTabAfterTabStop\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseTabAfterTabStop", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_MixedWhitespaceBelowColumnFour_NotMasked()
+    {
+        // 1 literal space, no tab — column 1, below the threshold.
+        var text = "Intro.\n\n Mentions BelowColumnFour with one leading space.\n";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.Contains("BelowColumnFour", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_MixedWhitespaceExactlyColumnFour_Masked()
+    {
+        var text = "Intro.\n\n    ExactlyColumnFour\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("ExactlyColumnFour", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_MixedWhitespaceAboveColumnFour_Masked()
+    {
+        var text = "Intro.\n\n     AboveColumnFour\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("AboveColumnFour", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_MixedWhitespaceIndentedCode_CrlfLineEndings_Masked()
+    {
+        var text = "Intro.\r\n\r\n \tNoiseCrlfMixedWhitespace\r\n\r\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseCrlfMixedWhitespace", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_MixedWhitespaceIndentedCode_ResumesOrdinaryExtractionAfterward()
+    {
+        var text = "Intro.\n\n \tNoiseMixedWhitespace\n\nMentions OrderPlaced afterward in ordinary prose.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseMixedWhitespace", terms);
+        Assert.Contains("OrderPlaced", terms);
+    }
+
     [Fact]
     public void ExtractCandidateTerms_BacktickFenceInfoStringContainsBacktick_NotRecognizedAsOpener()
     {
