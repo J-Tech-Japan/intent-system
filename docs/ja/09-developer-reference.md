@@ -1183,6 +1183,32 @@ concurrent writer に対する保護が必要でした。**
   他の field や item への無関係な concurrent change は、上書きされる
   のではなく保持されます。
 
+**Round-6 review repair — round 5 の「re-read + compare」は依然として
+TOCTOU check であり、authoritative な mutual exclusion ではありません
+でした。** 2 つの concurrent な invocation が、両方とも同じ
+`priority_revision` を read し、両方とも event claim ゼロを classify
+し、両方とも自分自身の event を追記し、両方とも re-read してまだ
+変わっていない revision を見て、両方ともそのまま commit してしまう
+可能性がありました——同一の request であれば audit trail が
+duplicate し、異なる request であれば silently に last-writer-wins な
+state と conflicting な orphaned event が残ってしまいます。
+
+`--write` は今や、authoritative な queue-state/runs.jsonl の read
+**より前**に **non-blocking な OS-level exclusive lock**
+(`queue-state.json` の隣に置く stable な sibling file、例えば
+`queue-state.reprioritize.lock` に対する `FileShare.None`)を取得し、
+revision validation、event-claim の classification/追記、fresh な
+re-read、そして最終的な commit にわたってそれを保持し続けます——解放
+されるのは、この invocation が完全に完了した時だけです。同じ lock を
+取得できなかった 2 つ目の concurrent な invocation は、compare point
+に到達することすらなく、**即座に** fail closed します(wait も retry
+もありません)。dry-run は決して mutate せず、決して lock を取得
+しません。round 5 の fresh-re-read-and-rebuild は、その lock の
+**内側**に維持されます——これは、この lock を経由しない non-cooperating
+な writer(`queue-state.json` を直接 mutate する任意の tool)に対する
+保護であり続けます。一方、lock 自体が、2 つの **cooperating** な
+`queue reprioritize` invocation を互いに排他的にするものです。
+
 ---
 
 ### facet を意識した context 供給 (G530)

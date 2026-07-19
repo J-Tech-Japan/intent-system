@@ -14,6 +14,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         QueueReprioritizeCommand.UtcNowFactory = null;
         QueueReprioritizeCommand.AppendPriorityChangedEventOverride = null;
         QueueReprioritizeCommand.WriteQueueStateOverride = null;
+        QueueReprioritizeCommand.OnLockAcquiredForTest = null;
     }
 
     public void Dispose()
@@ -21,6 +22,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         QueueReprioritizeCommand.UtcNowFactory = null;
         QueueReprioritizeCommand.AppendPriorityChangedEventOverride = null;
         QueueReprioritizeCommand.WriteQueueStateOverride = null;
+        QueueReprioritizeCommand.OnLockAcquiredForTest = null;
     }
 
     [Fact]
@@ -661,6 +663,102 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
 
         // The audit event for OUR attempt was still durably recorded.
         Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath)));
+    }
+
+    // ─── G537 round-6 review repair: authoritative interprocess lock ───────
+
+    [Fact]
+    public void Execute_ConcurrentInvocationWhileLockHeld_LoserFailsClosed_WinnerAppliesExactlyOneMutation()
+    {
+        // Round-6 review: the round-5 "re-read + compare" was still a
+        // TOCTOU check, not authoritative mutual exclusion — two
+        // concurrent invocations could both pass the compare before
+        // either commits. This deterministically proves the fix: while
+        // the OUTER invocation holds the lock (via OnLockAcquiredForTest,
+        // fired synchronously right after lock acquisition), a SECOND,
+        // fully independent Execute call for the SAME repo/execution unit
+        // is attempted. It must fail to acquire the same OS-level lock
+        // and fail closed immediately — never racing, never silently
+        // partially applying. After the outer call completes, exactly
+        // ONE mutation and ONE event must exist.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+
+        int? innerExitCode = null;
+        string? innerOutput = null;
+        QueueReprioritizeCommand.OnLockAcquiredForTest = () =>
+        {
+            // Prevent recursion: the inner call must NOT itself try to
+            // spawn a third concurrent attempt.
+            QueueReprioritizeCommand.OnLockAcquiredForTest = null;
+
+            using var innerWriter = new StringWriter();
+            innerExitCode = QueueReprioritizeCommand.Execute(
+                workspace.Context,
+                ["G537", "--priority", "high", "--reason", "R (inner, concurrent)", "--write", "--format", "json"],
+                innerWriter);
+            innerOutput = innerWriter.ToString();
+        };
+
+        using var outerWriter = new StringWriter();
+        var outerExitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R (outer, winner)", "--write", "--format", "json"],
+            outerWriter);
+
+        // The outer (lock-holding) invocation wins and succeeds.
+        Assert.Equal(0, outerExitCode);
+        using var outerDoc = JsonDocument.Parse(outerWriter.ToString());
+        Assert.True(outerDoc.RootElement.GetProperty("changed").GetBoolean());
+
+        // The inner (concurrent) invocation could not acquire the same
+        // lock and failed closed immediately — it never raced, never
+        // partially wrote anything.
+        Assert.NotNull(innerExitCode);
+        Assert.Equal(1, innerExitCode);
+        Assert.NotNull(innerOutput);
+        using var innerDoc = JsonDocument.Parse(innerOutput!);
+        var innerError = innerDoc.RootElement.GetProperty("error").GetString();
+        Assert.Contains("holds the exclusive lock", innerError, StringComparison.Ordinal);
+        Assert.False(innerDoc.RootElement.GetProperty("changed").GetBoolean());
+
+        // Exactly ONE mutation, ONE event — the outer winner's, never a
+        // duplicate or a conflicting write from the inner loser.
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("high", stateAfter.Items.Single().Priority);
+        Assert.Equal(1, stateAfter.Items.Single().PriorityRevision);
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        var runEvent = Assert.Single(events);
+        Assert.Contains("outer, winner", runEvent.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_DryRunNeverAcquiresLock_ConcurrentWriteStillProceedsUnaffected()
+    {
+        // Dry-run never mutates, so it must never contend for the lock —
+        // a concurrent --write invocation must be able to proceed
+        // normally even while a dry-run preview is (conceptually)
+        // in-flight. Since dry-run doesn't hold the lock at all, this is
+        // really just confirming dry-run doesn't regress: it must still
+        // succeed even with the lock file already present/created by a
+        // prior write.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+
+        // A prior --write created (and released) the lock file; it stays
+        // on disk afterward (never deleted — only ever held/released).
+        Assert.Equal(0, QueueReprioritizeCommand.Execute(
+            workspace.Context, ["G537", "--priority", "high", "--reason", "R", "--write"], new StringWriter()));
+
+        using var dryRunWriter = new StringWriter();
+        var dryRunExitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "normal", "--reason", "S", "--format", "json"],
+            dryRunWriter);
+
+        Assert.Equal(0, dryRunExitCode);
+        using var document = JsonDocument.Parse(dryRunWriter.ToString());
+        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
     }
 
     [Fact]

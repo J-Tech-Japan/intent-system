@@ -57,6 +57,17 @@ internal static class QueueReprioritizeCommand
     /// </summary>
     internal static Action<string, QueueState>? WriteQueueStateOverride { get; set; }
 
+    /// <summary>
+    /// G537 round-6 review repair test seam: invoked synchronously,
+    /// exactly once, immediately after this invocation successfully
+    /// acquires the interprocess lock — while it is still held. Tests use
+    /// this to deterministically run a SECOND concurrent
+    /// <c>Execute</c> call (which must fail to acquire the same lock and
+    /// fail closed) without depending on genuine OS-thread-scheduling
+    /// nondeterminism.
+    /// </summary>
+    internal static Action? OnLockAcquiredForTest { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -76,6 +87,54 @@ internal static class QueueReprioritizeCommand
         }
 
         var queueStatePath = context.GetQueueStatePath();
+
+        // G537 round-6 review repair: a fresh re-read + compare immediately
+        // before the final write (round 5) is still a TOCTOU check, not
+        // authoritative mutual exclusion — two concurrent invocations can
+        // both pass that compare before either commits. Write mode now
+        // acquires an OS-level interprocess exclusive lock (an
+        // OpenOrCreate + FileShare.None handle on a stable sibling path)
+        // BEFORE the authoritative queue-state/runs.jsonl read, and holds
+        // it across revision validation, event-claim classification and
+        // append, the fresh re-read, and the final commit — releasing it
+        // only once this invocation is completely done, success or
+        // failure. A concurrent second invocation that cannot acquire the
+        // lock fails closed immediately (no retry/wait) rather than
+        // racing; dry-run never mutates and never takes the lock.
+        FileStream? lockStream = null;
+        if (write)
+        {
+            var lockPath = GetLockPath(queueStatePath);
+            if (!TryAcquireLock(lockPath, out lockStream))
+            {
+                EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: null, requestedPriority!, reason!, changed: false,
+                    error: $"another 'queue reprioritize' invocation currently holds the exclusive lock at {lockPath}; refusing to proceed concurrently (avoids a lost-update race). Retry once it completes."));
+                return 1;
+            }
+
+            OnLockAcquiredForTest?.Invoke();
+        }
+
+        try
+        {
+            return ExecuteUnderLock(context, queueStatePath, executionUnit!, requestedPriority!, reason!, write, format, writer);
+        }
+        finally
+        {
+            lockStream?.Dispose();
+        }
+    }
+
+    private static int ExecuteUnderLock(
+        CliContext context,
+        string queueStatePath,
+        string executionUnit,
+        string requestedPriority,
+        string reason,
+        bool write,
+        string format,
+        TextWriter writer)
+    {
         if (!File.Exists(queueStatePath))
         {
             writer.WriteLine($"No queue state found at {queueStatePath}");
@@ -422,6 +481,47 @@ internal static class QueueReprioritizeCommand
         }
 
         File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(state));
+    }
+
+    /// <summary>
+    /// G537 round-6 review repair: a stable sibling path to
+    /// <c>queue-state.json</c> — one lock file per repo/host, so
+    /// concurrent <c>queue reprioritize</c> invocations against the SAME
+    /// queue-state.json (and only that one) mutually exclude, regardless
+    /// of which execution unit each targets (a global-per-repo lock is
+    /// the simplest correct scope; this command's critical section is
+    /// already brief).
+    /// </summary>
+    private static string GetLockPath(string queueStatePath) =>
+        Path.Combine(Path.GetDirectoryName(queueStatePath) ?? ".", "queue-state.reprioritize.lock");
+
+    /// <summary>
+    /// G537 round-6 review repair: a non-blocking, OS-enforced exclusive
+    /// lock — <see cref="FileShare.None"/> means any other process (or,
+    /// for tests, any other open handle to the same path) attempting the
+    /// same open fails immediately with <see cref="IOException"/> rather
+    /// than blocking. This command never waits/retries for the lock: the
+    /// loser of a contention race fails closed immediately, and the
+    /// operator/orchestrator decides whether and when to retry.
+    /// </summary>
+    private static bool TryAcquireLock(string lockPath, out FileStream? lockStream)
+    {
+        try
+        {
+            var lockDirectory = Path.GetDirectoryName(lockPath);
+            if (!string.IsNullOrEmpty(lockDirectory))
+            {
+                Directory.CreateDirectory(lockDirectory);
+            }
+
+            lockStream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            return true;
+        }
+        catch (IOException)
+        {
+            lockStream = null;
+            return false;
+        }
     }
 
     private static bool TryParseArguments(

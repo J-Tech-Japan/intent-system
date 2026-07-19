@@ -1107,6 +1107,29 @@ against a concurrent writer.**
   copy from the top of `Execute`), so an unrelated concurrent change to
   any *other* field or item is preserved rather than clobbered.
 
+**Round-6 review repair — the round-5 "re-read + compare" was still a
+TOCTOU check, not authoritative mutual exclusion.** Two concurrent
+invocations could both read the same `priority_revision`, both classify
+zero event claims, both append their own event, both re-read and see the
+still-unchanged revision, and both then commit — with identical requests
+that duplicates the audit trail; with different requests it silently
+produces last-writer-wins state with a conflicting orphaned event.
+
+`--write` now acquires a **non-blocking, OS-level exclusive lock**
+(`FileShare.None` on a stable sibling file next to `queue-state.json`,
+e.g. `queue-state.reprioritize.lock`) **before** the authoritative
+queue-state/runs.jsonl read, and holds it across revision validation,
+event-claim classification/append, the fresh re-read, and the final
+commit — released only once the invocation is completely done. A second,
+concurrent invocation that cannot acquire the same lock fails closed
+**immediately** (no wait, no retry) rather than racing to the compare
+point at all. Dry-run never mutates and never takes the lock. The
+round-5 fresh-re-read-and-rebuild is retained *underneath* the lock — it
+still protects against a non-cooperating writer (any tool that mutates
+`queue-state.json` without going through this lock), while the lock
+itself is what makes two *cooperating* `queue reprioritize` invocations
+mutually exclusive.
+
 ---
 
 ### Facet-aware context supply (G530)
