@@ -66,17 +66,126 @@ internal interface IGitHubLabelSetReplacer
     /// <summary>
     /// Replace the entire current label set on the issue/PR with
     /// <paramref name="desiredLabels"/> via one GitHub API request. The
-    /// caller is responsible for computing the full desired set (current
-    /// labels minus superseded ones, plus new ones) so unrelated labels
-    /// are preserved. Must throw without any partial effect on failure —
-    /// see <see cref="GhCliGitHubLabelMutator.ReplaceLabelSet"/> for the
+    /// caller passes <paramref name="currentLabels"/> (already fetched)
+    /// alongside the full desired set (current labels minus superseded
+    /// ones, plus new ones) so unrelated labels are preserved AND so the
+    /// implementation can detect an already-converged request and perform
+    /// a genuine no-op — zero GitHub calls — without an extra read.
+    ///
+    /// Returns <see cref="LabelSetReplacementCertainty"/> on a KNOWN good
+    /// outcome (converged no-op, or applied-and-verified). On any failure
+    /// whose outcome on GitHub is not certain, throws
+    /// <see cref="LabelSetReplacementException"/> carrying a
+    /// <see cref="LabelSetReplacementFailureCertainty"/> — implementations
+    /// must never claim "nothing changed" once a mutation request may
+    /// have reached GitHub. See
+    /// <see cref="GhCliGitHubLabelMutator.ReplaceLabelSet"/> for the
     /// production adapter's documented atomicity/concurrency model.
     /// </summary>
-    void ReplaceLabelSet(
+    LabelSetReplacementCertainty ReplaceLabelSet(
         string repo,
         string kind,
         int number,
+        IReadOnlyCollection<string> currentLabels,
         IReadOnlyCollection<string> desiredLabels);
+}
+
+/// <summary>
+/// G535 review repair: the KNOWN-good outcomes of
+/// <see cref="IGitHubLabelSetReplacer.ReplaceLabelSet"/>. Ambiguous/failed
+/// outcomes are never represented here — they throw
+/// <see cref="LabelSetReplacementException"/> instead, so a caller can
+/// never mistake "I don't know what happened" for a success value.
+/// </summary>
+internal enum LabelSetReplacementCertainty
+{
+    /// <summary>The desired set already equaled the current set (order-insensitive) — no GitHub call was made.</summary>
+    NoOpAlreadyConverged,
+
+    /// <summary>The PUT was transmitted and the post-write verification read confirmed the desired set landed exactly.</summary>
+    AppliedAndVerified,
+}
+
+/// <summary>
+/// G535 review repair: classifies a <see cref="LabelSetReplacementException"/>
+/// by what is actually knowable about whether the mutation reached GitHub —
+/// never conflating "we don't know" with "it definitely didn't happen".
+/// </summary>
+internal enum LabelSetReplacementFailureCertainty
+{
+    /// <summary>
+    /// The failure occurred before any request was transmitted (e.g. the
+    /// `gh` process itself never started). GitHub was never contacted —
+    /// safe to report that nothing changed.
+    /// </summary>
+    KnownUnapplied,
+
+    /// <summary>
+    /// The `gh` process for the PUT call started, but something failed
+    /// before its outcome could be confirmed (non-zero exit, a write/read
+    /// error mid-transmission, a timeout). The request may already have
+    /// been transmitted and applied by GitHub — the caller must re-read
+    /// current labels rather than assume either outcome.
+    /// </summary>
+    MayHaveApplied,
+
+    /// <summary>
+    /// The PUT call itself reported success, but the post-write
+    /// verification read failed, so the resulting label state could not be
+    /// confirmed. The mutation most likely applied.
+    /// </summary>
+    AppliedButVerificationReadFailed,
+
+    /// <summary>
+    /// The PUT call reported success and the verification read succeeded,
+    /// but the labels read back did not match the desired set. This
+    /// generally means a concurrent change raced the write — but note the
+    /// bounded limitation documented on
+    /// <see cref="GhCliGitHubLabelMutator.ReplaceLabelSet"/>: a concurrent
+    /// label added BEFORE this method's PUT (and therefore invisible to
+    /// its <c>desiredLabels</c> computation) may have been silently
+    /// overwritten by the PUT and is UNDETECTABLE by this check, since the
+    /// verification read would then equal <c>desiredLabels</c> exactly.
+    /// </summary>
+    AppliedButMismatchedOrConcurrentlyChanged,
+}
+
+/// <summary>
+/// G535 review repair: thrown by <see cref="IGitHubLabelSetReplacer.ReplaceLabelSet"/>
+/// for any outcome that is not a KNOWN success. <see cref="Certainty"/>
+/// tells the caller exactly how much (or how little) is knowable about
+/// whether the mutation reached GitHub.
+/// </summary>
+internal sealed class LabelSetReplacementException : InvalidOperationException
+{
+    public LabelSetReplacementException(
+        string message,
+        LabelSetReplacementFailureCertainty certainty,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Certainty = certainty;
+    }
+
+    public LabelSetReplacementFailureCertainty Certainty { get; }
+}
+
+/// <summary>
+/// G535 review repair: thrown specifically when the `gh` process for a
+/// label-set-replacing PUT call never actually started (e.g. the
+/// executable could not be launched) — the one case where a subsequent
+/// failure can be confidently classified as
+/// <see cref="LabelSetReplacementFailureCertainty.KnownUnapplied"/> rather
+/// than <see cref="LabelSetReplacementFailureCertainty.MayHaveApplied"/>.
+/// Once a process has started, ANY failure is ambiguous — see
+/// <see cref="GhCliGitHubLabelMutator.RunGhWithInput"/>.
+/// </summary>
+internal sealed class GhProcessNotStartedException : IOException
+{
+    public GhProcessNotStartedException(string message, Exception? innerException = null)
+        : base(message, innerException)
+    {
+    }
 }
 
 /// <summary>
@@ -284,32 +393,77 @@ internal sealed class GhCliGitHubLabelMutator : IGitHubLabelMutator, IGitHubLabe
     /// <paramref name="desiredLabels"/> via ONE GitHub REST call (<c>PUT
     /// /repos/{repo}/issues/{number}/labels</c>), instead of the sequential
     /// add/remove calls <see cref="ApplyLabelTransitions"/> issues through
-    /// <c>gh &lt;kind&gt; edit</c>. A single HTTP call means a failure can
-    /// never leave a half-applied state (e.g. remove succeeded but add
-    /// failed, or vice versa) — the request either fully lands or the call
-    /// throws and nothing on GitHub has changed.
+    /// <c>gh &lt;kind&gt; edit</c>. A single HTTP call means there is no
+    /// window where one label lands and another doesn't from THIS call's
+    /// own actions — but it does NOT mean every failure is knowably
+    /// harmless; see the phase-aware failure semantics below.
     ///
-    /// Bounded concurrency model: GitHub's "Set labels" endpoint has no
-    /// conditional/If-Match support for optimistic concurrency, so a label
-    /// change racing between the caller's label read (before it computed
-    /// <paramref name="desiredLabels"/>) and this write cannot be prevented
-    /// outright. Instead, after the PUT this method re-reads the labels and
-    /// fails loudly — throws — if the result does not match
-    /// <paramref name="desiredLabels"/> exactly, rather than silently
-    /// claiming success on a lost update.
+    /// <para><b>Already-converged no-op:</b> if <paramref name="currentLabels"/>
+    /// already equals <paramref name="desiredLabels"/> (order-insensitive),
+    /// this returns <see cref="LabelSetReplacementCertainty.NoOpAlreadyConverged"/>
+    /// immediately — zero GitHub calls, genuinely idempotent, not merely
+    /// non-erroring.</para>
+    ///
+    /// <para><b>Phase-aware failure semantics — this is the part that must
+    /// never overclaim safety:</b></para>
+    /// <list type="bullet">
+    /// <item>If the `gh` process for the PUT never starts (e.g. the
+    /// executable can't be launched), NOTHING was transmitted — throws
+    /// with <see cref="LabelSetReplacementFailureCertainty.KnownUnapplied"/>.</item>
+    /// <item>Once that process HAS started, ANY failure (non-zero exit, a
+    /// write/read error, a timeout) is ambiguous: `gh` may have already
+    /// transmitted the request and GitHub may have already applied it
+    /// before the failure surfaced. Throws with
+    /// <see cref="LabelSetReplacementFailureCertainty.MayHaveApplied"/> —
+    /// never claims the mutation did not happen.</item>
+    /// <item>If the PUT itself reports success but the post-write
+    /// verification read fails, the mutation MOST LIKELY applied but its
+    /// resulting state is unconfirmed — throws with
+    /// <see cref="LabelSetReplacementFailureCertainty.AppliedButVerificationReadFailed"/>.</item>
+    /// <item>If the PUT reports success and the verification read
+    /// succeeds but the labels don't match, throws with
+    /// <see cref="LabelSetReplacementFailureCertainty.AppliedButMismatchedOrConcurrentlyChanged"/>
+    /// — this is NOT a rollback signal, the PUT itself still very likely
+    /// applied.</item>
+    /// </list>
+    ///
+    /// <para><b>Bounded concurrency model — stated honestly:</b> GitHub's
+    /// "Set labels" endpoint has no conditional/If-Match support for
+    /// optimistic concurrency, so a label change racing between the
+    /// caller's initial label read (used to compute <paramref
+    /// name="desiredLabels"/>) and this method's PUT cannot be prevented.
+    /// The post-write verification read only detects a mismatch that is
+    /// STILL PRESENT at the moment of that read. A label added by another
+    /// process AFTER the caller's initial read but BEFORE this PUT — and
+    /// therefore never reflected in <paramref name="desiredLabels"/> — can
+    /// be silently overwritten by the PUT; if nothing ELSE changes labels
+    /// between the PUT and the verification read, that read will equal
+    /// <paramref name="desiredLabels"/> exactly and this method will
+    /// report <see cref="LabelSetReplacementCertainty.AppliedAndVerified"/>
+    /// even though a concurrent addition was just lost. This race is
+    /// fundamentally undetectable by a read-after-write check alone —
+    /// verification proves "the state now matches what we intended," not
+    /// "no concurrent change occurred at any point."</para>
     /// </summary>
-    public void ReplaceLabelSet(
+    public LabelSetReplacementCertainty ReplaceLabelSet(
         string repo,
         string kind,
         int number,
+        IReadOnlyCollection<string> currentLabels,
         IReadOnlyCollection<string> desiredLabels)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+        ArgumentNullException.ThrowIfNull(currentLabels);
         ArgumentNullException.ThrowIfNull(desiredLabels);
 
         // Policy guard: intent-pr-created is issue-only, mirroring
-        // ApplyLabelTransitions' equivalent check.
+        // ApplyLabelTransitions' equivalent check. This is a pure
+        // validation refusal before any GitHub interaction — genuinely
+        // known-unapplied, so it stays a plain InvalidOperationException
+        // rather than a LabelSetReplacementException; the command layer
+        // treats any non-LabelSetReplacementException failure as
+        // known-unapplied by construction.
         if (string.Equals(kind, Kinds.Pr, StringComparison.Ordinal)
             && desiredLabels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated, StringComparer.Ordinal))
         {
@@ -317,24 +471,73 @@ internal sealed class GhCliGitHubLabelMutator : IGitHubLabelMutator, IGitHubLabe
                 $"label policy violation: '{WorkerNextActionConstants.Labels.IntentPrCreated}' is issue-only and must not be applied to a PR.");
         }
 
+        var normalizedCurrent = NormalizeLabelSet(currentLabels);
         var normalizedDesired = NormalizeLabelSet(desiredLabels);
+
+        if (normalizedCurrent.SequenceEqual(normalizedDesired, StringComparer.Ordinal))
+        {
+            return LabelSetReplacementCertainty.NoOpAlreadyConverged;
+        }
+
         var putArguments = BuildReplaceLabelsArguments(repo, kind, number);
         var requestBody = BuildReplaceLabelsRequestBody(normalizedDesired);
 
-        InvokeGh(putArguments, requestBody, $"replace label set on {kind} #{number} in {repo}");
+        try
+        {
+            InvokeGh(putArguments, requestBody, $"replace label set on {kind} #{number} in {repo}");
+        }
+        catch (GhProcessNotStartedException exception)
+        {
+            throw new LabelSetReplacementException(
+                $"the label-set replacement request for {kind} #{number} in {repo} was never transmitted: "
+                + $"{exception.Message}",
+                LabelSetReplacementFailureCertainty.KnownUnapplied,
+                exception);
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+            or IOException)
+        {
+            throw new LabelSetReplacementException(
+                $"the label-set replacement request for {kind} #{number} in {repo} may already have reached "
+                + $"GitHub before this failure occurred: {exception.Message}. The mutation's outcome is UNKNOWN — "
+                + $"re-read current labels (`gh {kind} view {number} --repo {repo} --json labels`) before "
+                + "retrying or assuming any state.",
+                LabelSetReplacementFailureCertainty.MayHaveApplied,
+                exception);
+        }
 
-        var verifyArguments = BuildViewArguments(repo, kind, number);
-        var verifyStdout = InvokeGh(verifyArguments, null, $"verify replaced label set on {kind} #{number} in {repo}");
-        var actualLabels = NormalizeLabelSet(
-            DeserializeLabels(verifyStdout, $"`gh {kind} view #{number}` for {repo}").Select(label => label.Name));
+        IReadOnlyList<GitHubAutomationLabel> actual;
+        try
+        {
+            var verifyArguments = BuildViewArguments(repo, kind, number);
+            var verifyStdout = InvokeGh(verifyArguments, null, $"verify replaced label set on {kind} #{number} in {repo}");
+            actual = DeserializeLabels(verifyStdout, $"`gh {kind} view #{number}` for {repo}");
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+            or IOException)
+        {
+            throw new LabelSetReplacementException(
+                $"the label-set replacement request for {kind} #{number} in {repo} was transmitted, but the "
+                + $"post-write verification read failed: {exception.Message}. The mutation LIKELY applied but its "
+                + "exact resulting state is unconfirmed — re-read current labels before assuming any state.",
+                LabelSetReplacementFailureCertainty.AppliedButVerificationReadFailed,
+                exception);
+        }
 
+        var actualLabels = NormalizeLabelSet(actual.Select(label => label.Name));
         if (!actualLabels.SequenceEqual(normalizedDesired, StringComparer.Ordinal))
         {
-            throw new InvalidOperationException(
-                $"label replacement on {kind} #{number} in {repo} could not be verified: expected "
-                + $"[{string.Join(", ", normalizedDesired)}] but read back [{string.Join(", ", actualLabels)}] "
-                + "after the write (possible concurrent label change); refusing to claim success.");
+            throw new LabelSetReplacementException(
+                $"the label-set replacement request for {kind} #{number} in {repo} was transmitted, but the "
+                + $"post-write read-back does not match the intended set: expected [{string.Join(", ", normalizedDesired)}] "
+                + $"but read [{string.Join(", ", actualLabels)}]. The write itself very likely applied — this most "
+                + "often means a concurrent label change followed it — re-read current labels before assuming any state.",
+                LabelSetReplacementFailureCertainty.AppliedButMismatchedOrConcurrentlyChanged);
         }
+
+        return LabelSetReplacementCertainty.AppliedAndVerified;
     }
 
     public void ApplyLabelTransitions(
@@ -420,6 +623,16 @@ internal sealed class GhCliGitHubLabelMutator : IGitHubLabelMutator, IGitHubLabe
             : RunGhWithInput(arguments, standardInput, description);
     }
 
+    /// <summary>
+    /// G535 review repair: used exclusively by <see cref="ReplaceLabelSet"/>'s
+    /// PUT call, where the distinction between "never started" (safe to
+    /// call known-unapplied) and "started but failed" (ambiguous — may
+    /// have transmitted/applied) is load-bearing. <see cref="Process.Start(ProcessStartInfo)"/>
+    /// failing or returning null throws <see cref="GhProcessNotStartedException"/>;
+    /// any failure after that point (writing stdin, reading stdout, a
+    /// non-zero exit) throws a plain <see cref="InvalidOperationException"/>
+    /// so the caller cannot mistake it for the known-unapplied case.
+    /// </summary>
     private static string RunGhWithInput(IReadOnlyList<string> arguments, string standardInput, string description)
     {
         var startInfo = new ProcessStartInfo
@@ -438,28 +651,52 @@ internal sealed class GhCliGitHubLabelMutator : IGitHubLabelMutator, IGitHubLabe
             startInfo.ArgumentList.Add(argument);
         }
 
+        Process process;
+        try
+        {
+            process = Process.Start(startInfo)
+                ?? throw new GhProcessNotStartedException(
+                    $"failed to start `gh` process to {description}");
+        }
+        catch (GhProcessNotStartedException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is System.ComponentModel.Win32Exception
+            or IOException)
+        {
+            // Process.Start itself threw before any process exists — still
+            // definitively "never started."
+            throw new GhProcessNotStartedException(
+                $"could not start `gh` to {description}: {exception.Message}",
+                exception);
+        }
+
         string stdout;
         string stderr;
         int exitCode;
         try
         {
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException(
-                    $"failed to start `gh` process to {description}");
-            process.StandardInput.Write(standardInput);
-            process.StandardInput.Close();
-            stdout = process.StandardOutput.ReadToEnd();
-            stderr = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            exitCode = process.ExitCode;
+            using (process)
+            {
+                process.StandardInput.Write(standardInput);
+                process.StandardInput.Close();
+                stdout = process.StandardOutput.ReadToEnd();
+                stderr = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                exitCode = process.ExitCode;
+            }
         }
         catch (Exception exception) when (
-            exception is System.ComponentModel.Win32Exception
-            or InvalidOperationException
+            exception is InvalidOperationException
             or IOException)
         {
+            // The process DID start — from here on, any failure is
+            // ambiguous: `gh` may already have transmitted (and GitHub
+            // already applied) the request before this exception surfaced.
             throw new InvalidOperationException(
-                $"could not invoke `gh` to {description}: {exception.Message}",
+                $"`gh` process for '{description}' started but failed before completion: {exception.Message}",
                 exception);
         }
 
@@ -467,7 +704,8 @@ internal sealed class GhCliGitHubLabelMutator : IGitHubLabelMutator, IGitHubLabe
         {
             var errorBody = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
             throw new InvalidOperationException(
-                $"`gh` failed to {description} with exit {exitCode}: {errorBody.Trim()}");
+                $"`gh` exited {exitCode} to {description}: {errorBody.Trim()} (the process started, so the "
+                + "underlying request may already have reached GitHub)");
         }
 
         return stdout;

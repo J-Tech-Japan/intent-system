@@ -9,15 +9,37 @@ namespace IntentSystem.Cli.Tests;
 /// pr-transition</c>'s <c>request-update</c> path. These exercise the real
 /// adapter class (not a fake <see cref="IGitHubLabelMutator"/>), injecting
 /// <see cref="GhCliGitHubLabelMutator.GhInvokerOverride"/> to simulate the
-/// underlying `gh` process without spawning one, so the atomicity and
-/// bounded-concurrency (re-read-and-verify) contract is actually proven
-/// rather than merely asserted at the command layer.
+/// underlying `gh` process without spawning one, so the atomicity,
+/// idempotent-no-op, and phase-aware failure-certainty contract is
+/// actually proven rather than merely asserted at the command layer.
 /// </summary>
 public sealed class GhCliGitHubLabelMutatorReplaceLabelSetTests : IDisposable
 {
     public void Dispose()
     {
         GhCliGitHubLabelMutator.GhInvokerOverride = null;
+    }
+
+    [Fact]
+    public void ReplaceLabelSet_AlreadyConverged_ReturnsNoOpAndMakesZeroGhCalls()
+    {
+        var invocations = 0;
+        var mutator = new GhCliGitHubLabelMutator();
+        GhCliGitHubLabelMutator.GhInvokerOverride = (_, _, _) =>
+        {
+            invocations++;
+            return string.Empty;
+        };
+
+        var certainty = mutator.ReplaceLabelSet(
+            "org/repo",
+            GhCliGitHubLabelMutator.Kinds.Pr,
+            1760,
+            currentLabels: new[] { "intent-target", "intent-pr-request-update" },
+            desiredLabels: new[] { "intent-pr-request-update", "intent-target" }); // same set, different order
+
+        Assert.Equal(LabelSetReplacementCertainty.NoOpAlreadyConverged, certainty);
+        Assert.Equal(0, invocations);
     }
 
     [Fact]
@@ -36,12 +58,14 @@ public sealed class GhCliGitHubLabelMutatorReplaceLabelSetTests : IDisposable
             return """{"labels":[{"name":"intent-target"},{"name":"intent-pr-request-update"}]}""";
         };
 
-        mutator.ReplaceLabelSet(
+        var certainty = mutator.ReplaceLabelSet(
             "org/repo",
             GhCliGitHubLabelMutator.Kinds.Pr,
             1760,
-            new[] { "intent-pr-request-update", "intent-target" });
+            currentLabels: new[] { "intent-target", "intent-pr-rereview-ready" },
+            desiredLabels: new[] { "intent-pr-request-update", "intent-target" });
 
+        Assert.Equal(LabelSetReplacementCertainty.AppliedAndVerified, certainty);
         Assert.Equal(2, invocations.Count);
 
         var put = invocations[0];
@@ -62,34 +86,61 @@ public sealed class GhCliGitHubLabelMutatorReplaceLabelSetTests : IDisposable
     }
 
     [Fact]
-    public void ReplaceLabelSet_MutationFailure_ThrowsAndNeverAttemptsVerifyRead()
+    public void ReplaceLabelSet_GhProcessNeverStarts_ThrowsKnownUnapplied()
     {
-        // "Mutation HTTP failure" — the PUT call itself throws. No
-        // half-transition: since it's the first and only call attempted,
-        // nothing on GitHub could have changed, and the adapter must not
-        // even attempt the verification re-read.
+        // "Pre-send failure" — the gh process itself never started, so
+        // nothing was transmitted to GitHub. Safe to report known-unapplied.
+        var mutator = new GhCliGitHubLabelMutator();
+        GhCliGitHubLabelMutator.GhInvokerOverride = (_, _, description) =>
+            throw new GhProcessNotStartedException($"simulated launch failure: {description}");
+
+        var exception = Assert.Throws<LabelSetReplacementException>(
+            () => mutator.ReplaceLabelSet(
+                "org/repo",
+                GhCliGitHubLabelMutator.Kinds.Pr,
+                1760,
+                currentLabels: new[] { "intent-target" },
+                desiredLabels: new[] { "intent-target", "intent-pr-request-update" }));
+
+        Assert.Equal(LabelSetReplacementFailureCertainty.KnownUnapplied, exception.Certainty);
+        Assert.Contains("never transmitted", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReplaceLabelSet_MutationTransmissionAmbiguous_ThrowsMayHaveApplied()
+    {
+        // "Post-send nonzero/timeout" — the gh process for the PUT started
+        // but failed afterward (e.g. non-zero exit, mid-transmission
+        // error). We cannot know whether GitHub already applied it.
         var invocations = 0;
         var mutator = new GhCliGitHubLabelMutator();
         GhCliGitHubLabelMutator.GhInvokerOverride = (_, _, description) =>
         {
             invocations++;
-            throw new InvalidOperationException($"simulated `gh` failure: {description}");
+            throw new InvalidOperationException($"simulated post-send failure: {description}");
         };
 
-        var exception = Assert.Throws<InvalidOperationException>(
+        var exception = Assert.Throws<LabelSetReplacementException>(
             () => mutator.ReplaceLabelSet(
-                "org/repo", GhCliGitHubLabelMutator.Kinds.Pr, 1760, new[] { "intent-target" }));
+                "org/repo",
+                GhCliGitHubLabelMutator.Kinds.Pr,
+                1760,
+                currentLabels: new[] { "intent-target" },
+                desiredLabels: new[] { "intent-target", "intent-pr-request-update" }));
 
-        Assert.Contains("simulated `gh` failure", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(LabelSetReplacementFailureCertainty.MayHaveApplied, exception.Certainty);
+        Assert.Contains("may already have reached", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("UNKNOWN", exception.Message, StringComparison.Ordinal);
+        // Never even attempts the verify re-read once the PUT's own outcome is ambiguous.
         Assert.Equal(1, invocations);
     }
 
     [Fact]
-    public void ReplaceLabelSet_VerifyReadFailure_Throws()
+    public void ReplaceLabelSet_VerifyReadFailure_ThrowsAppliedButVerificationReadFailed()
     {
-        // "Current-label fetch failure" on the post-write verification
-        // re-read — the PUT succeeded but we can no longer confirm it, so
-        // the adapter must fail loudly rather than silently claim success.
+        // "Verify failure" — the PUT succeeded, but the post-write
+        // verification read itself failed (e.g. current-label fetch
+        // failure). The mutation LIKELY applied; must not report rollback.
         var invocations = 0;
         var mutator = new GhCliGitHubLabelMutator();
         GhCliGitHubLabelMutator.GhInvokerOverride = (_, _, description) =>
@@ -103,37 +154,42 @@ public sealed class GhCliGitHubLabelMutatorReplaceLabelSetTests : IDisposable
             throw new InvalidOperationException($"simulated re-read failure: {description}");
         };
 
-        var exception = Assert.Throws<InvalidOperationException>(
-            () => mutator.ReplaceLabelSet(
-                "org/repo", GhCliGitHubLabelMutator.Kinds.Pr, 1760, new[] { "intent-target" }));
-
-        Assert.Contains("simulated re-read failure", exception.Message, StringComparison.Ordinal);
-        Assert.Equal(2, invocations);
-    }
-
-    [Fact]
-    public void ReplaceLabelSet_VerifyReadMismatch_ThrowsConcurrentChangeError()
-    {
-        // "Response mismatch/concurrent-change failure" — the PUT call
-        // reports success but the re-read shows a DIFFERENT set than what
-        // was requested (e.g. another process changed labels in between).
-        // The adapter must fail loudly, never claim atomic success on a
-        // lost update.
-        var mutator = new GhCliGitHubLabelMutator();
-        GhCliGitHubLabelMutator.GhInvokerOverride = (_, _, _) =>
-        {
-            return """{"labels":[{"name":"intent-target"},{"name":"some-other-label"}]}""";
-        };
-
-        var exception = Assert.Throws<InvalidOperationException>(
+        var exception = Assert.Throws<LabelSetReplacementException>(
             () => mutator.ReplaceLabelSet(
                 "org/repo",
                 GhCliGitHubLabelMutator.Kinds.Pr,
                 1760,
-                new[] { "intent-target", "intent-pr-request-update" }));
+                currentLabels: new[] { "intent-target" },
+                desiredLabels: new[] { "intent-target", "intent-pr-request-update" }));
 
-        Assert.Contains("could not be verified", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("concurrent", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(LabelSetReplacementFailureCertainty.AppliedButVerificationReadFailed, exception.Certainty);
+        Assert.Contains("LIKELY applied", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, invocations);
+    }
+
+    [Fact]
+    public void ReplaceLabelSet_VerifyReadMismatch_ThrowsAppliedButMismatchedOrConcurrentlyChanged()
+    {
+        // "Mismatch" — the PUT call reports success and the re-read
+        // succeeds, but shows a DIFFERENT set than requested. Must not be
+        // reported as a rollback/no-mutation — the write itself very
+        // likely applied.
+        var mutator = new GhCliGitHubLabelMutator();
+        GhCliGitHubLabelMutator.GhInvokerOverride = (_, _, _) =>
+            """{"labels":[{"name":"intent-target"},{"name":"some-other-label"}]}""";
+
+        var exception = Assert.Throws<LabelSetReplacementException>(
+            () => mutator.ReplaceLabelSet(
+                "org/repo",
+                GhCliGitHubLabelMutator.Kinds.Pr,
+                1760,
+                currentLabels: new[] { "intent-target" },
+                desiredLabels: new[] { "intent-target", "intent-pr-request-update" }));
+
+        Assert.Equal(
+            LabelSetReplacementFailureCertainty.AppliedButMismatchedOrConcurrentlyChanged,
+            exception.Certainty);
+        Assert.Contains("very likely applied", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -147,13 +203,17 @@ public sealed class GhCliGitHubLabelMutatorReplaceLabelSetTests : IDisposable
             return string.Empty;
         };
 
-        Assert.Throws<InvalidOperationException>(
+        var exception = Assert.Throws<InvalidOperationException>(
             () => mutator.ReplaceLabelSet(
                 "org/repo",
                 GhCliGitHubLabelMutator.Kinds.Pr,
                 1760,
-                new[] { "intent-target", "intent-pr-created" }));
+                currentLabels: new[] { "intent-target" },
+                desiredLabels: new[] { "intent-target", "intent-pr-created" }));
 
+        // A pure validation refusal, not a phase-aware ambiguity — never
+        // reached GitHub at all.
+        Assert.IsNotType<LabelSetReplacementException>(exception);
         Assert.Equal(0, invocations);
     }
 

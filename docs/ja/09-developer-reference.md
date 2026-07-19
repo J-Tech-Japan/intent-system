@@ -667,17 +667,50 @@ desired label set(現在の label のうち supersede される label を除い�
 もの、プラス `intent-pr-request-update`)を計算し、内部の
 `IGitHubLabelSetReplacer.ReplaceLabelSet` seam 経由で、**1 回**の
 GitHub REST call — `PUT /repos/{repo}/issues/{number}/labels` — として
-置き換えます。この単一の call が失敗した場合、PR の label は完全に
-手つかずのまま残ります — 一方の label は反映され他方は反映されない、
-という window は存在しません。GitHub の「Set labels」endpoint には
-optimistic concurrency 用の conditional/If-Match support が無いため、
-read してから write するまでの間の並行した label 変更を完全に防ぐ
-ことはできません — その代わり、adapter は PUT 直後に label を
-re-read し、結果が desired set と完全に一致しない場合は throw します。
-lost update に対して黙って success を claim することは決してありません。
-この atomic-replace path を使うのは `request-update` のみであり、他の
-すべての transition は既存の `ApplyLabelTransitions` による add/remove
-path を変更なく使い続けます。
+置き換えます。desired set が current set と(順序を問わず)既に一致
+している場合は、真の no-op です — 単に removal list が空になるだけで
+はなく、GitHub 呼び出しがゼロになります。この atomic-replace path を
+使うのは `request-update` のみであり、他のすべての transition は既存の
+`ApplyLabelTransitions` による add/remove path を変更なく使い続けます。
+
+**Phase-aware な failure report — safety を過大に主張しない、正直な
+記述。** 1 回の HTTP call であるということは、*この call 自身の action*
+が中途半端に反映される window は無い、という意味であり、すべての
+failure が「無害だと分かっている」という意味では**ありません**。
+コマンドの error report はこの違いを正確に反映します:
+
+- PUT 用の `gh` process 自体が起動しなかった場合(例えば実行ファイルを
+  起動できない)、何も送信されていません — 単純な failure として、
+  `applied: false`、`may_have_applied: false` で報告されます;
+- その process が起動した後は、いかなる failure(non-zero exit、
+  write/read error、timeout)も曖昧です — `gh` は既に request を
+  送信済みで、GitHub は failure が表面化する前に既に適用済みかも
+  しれません。`applied: false`、**`may_have_applied: true`** として
+  報告され、mutation が確立しようとしていた `intended_labels` と、
+  曖昧さを解消するための正確な `recovery_command`(`gh <kind> view
+  <n> --repo <repo> --json labels`)が付きます — 「何も変わらな
+  かった」という誤った claim は決してしません;
+- PUT 自体は success を報告したが post-write の verification read が
+  失敗した場合、あるいは success したが read back した set が一致
+  しない場合、どちらも同じく `may_have_applied: true` と同じ recovery
+  情報として報告されます — rollback や「no mutation」の signal として
+  では**ありません**。どちらの場合も PUT 自体はかなりの確率で適用
+  されているためです。
+
+**Bounded concurrency model — post-write verification の正直な限界。**
+GitHub の「Set labels」endpoint には optimistic concurrency 用の
+conditional/If-Match support が無いため、caller の初回 read(desired
+set の計算に使われる)と PUT の間で競合する label 変更を完全に防ぐ
+ことはできません。post-write の verification read は、*その read の
+瞬間にまだ残っている*不一致だけを検出します。初回 read の**後**、
+PUT の**前**に別プロセスが追加した label は — desired set には決して
+反映されないため — PUT によって黙って上書きされる可能性があります。
+PUT と verification read の間に他に何も label を変更しなければ、その
+read は intended set と完全に一致し、コマンドは concurrent な追加が
+まさに失われたにもかかわらず success を報告します。この race は
+read-after-write check だけでは原理的に検出不能であり、doc とコード
+はそれを「完全に保護されている」かのように暗示するのではなく、明示的
+にそう述べています。
 
 これが landed したことで、SKS-G824 の recovery sequence(行き詰まった
 rereview-ready を除去するための `review-start` の後の `request-update`)

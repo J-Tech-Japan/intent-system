@@ -634,16 +634,49 @@ path instead computes the full desired label set (every current label
 minus the ones being superseded, plus `intent-pr-request-update`) and
 replaces it in **one** GitHub REST call — `PUT
 /repos/{repo}/issues/{number}/labels` — via the internal
-`IGitHubLabelSetReplacer.ReplaceLabelSet` seam. A failure in that single
-call leaves the PR's labels completely untouched; there is no window where
-one label lands and another doesn't. GitHub's "Set labels" endpoint has no
-conditional/If-Match support for optimistic concurrency, so a concurrent
-label change racing the read-then-write cannot be prevented outright —
-instead, the adapter re-reads the labels immediately after the PUT and
-throws if the result doesn't match the desired set exactly, rather than
-silently claiming success on a lost update. This atomic-replace path is
+`IGitHubLabelSetReplacer.ReplaceLabelSet` seam. If the desired set already
+equals the current set (order-insensitive), this is a genuine no-op — zero
+GitHub calls, not merely an empty removal list. This atomic-replace path is
 used only by `request-update`; every other transition keeps using the
 pre-existing `ApplyLabelTransitions` add/remove path, unchanged.
+
+**Phase-aware failure reporting — stated honestly, never overclaiming
+safety.** A single HTTP call means there is no window where *this call's
+own actions* land half-applied — but that is not the same as every failure
+being known-harmless, and the command's error reporting reflects that
+distinction precisely:
+
+- if the `gh` process for the PUT never starts (e.g. the executable can't
+  be launched), nothing was transmitted — reported as a plain failure,
+  `applied: false`, `may_have_applied: false`;
+- once that process has started, ANY failure (non-zero exit, a
+  write/read error, a timeout) is ambiguous — `gh` may already have
+  transmitted the request and GitHub may already have applied it before
+  the failure surfaced. Reported as `applied: false`, **`may_have_applied:
+  true`**, with the `intended_labels` the mutation was attempting to
+  establish and an exact `recovery_command` (`gh <kind> view <n> --repo
+  <repo> --json labels`) to resolve the ambiguity — never a false "nothing
+  changed" claim;
+- if the PUT itself reports success but the post-write verification read
+  fails, or succeeds but reads back a mismatched set, both are *also*
+  reported as `may_have_applied: true` with the same recovery info — never
+  as a rollback or "no mutation" signal, since the PUT very likely applied
+  in both cases.
+
+**Bounded concurrency model — the honest limit of the post-write
+verification.** GitHub's "Set labels" endpoint has no conditional/If-Match
+support for optimistic concurrency, so a label change racing between the
+caller's initial read (used to compute the desired set) and the PUT cannot
+be prevented outright. The post-write verification read only detects a
+mismatch that is *still present at the moment of that read*. A label added
+by another process **after** the initial read but **before** the PUT — and
+therefore never reflected in the desired set — can be silently overwritten
+by the PUT; if nothing else changes labels between the PUT and the
+verification read, that read will equal the intended set exactly and the
+command will report success even though a concurrent addition was just
+lost. This race is fundamentally undetectable by a read-after-write check
+alone, and the docs and code say so explicitly rather than implying full
+protection.
 
 With this landed, the SKS-G824 recovery sequence (`review-start` then
 `request-update` to clear a stuck rereview-ready) is no longer necessary —

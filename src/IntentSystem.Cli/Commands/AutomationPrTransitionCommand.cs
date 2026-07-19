@@ -104,38 +104,75 @@ internal static class AutomationPrTransitionCommand
         var removeLabels = ResolveRemoveLabelsForMode(transition!, mode, plan.RemoveLabels, currentLabels);
 
         var applied = false;
+        var mayHaveApplied = false;
+        IReadOnlyList<string>? intendedLabels = null;
+        string? recoveryCommand = null;
+        string? failureMessage = null;
+
         if (string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
         {
-            try
+            if (string.Equals(transition, TransitionRequestUpdate, StringComparison.Ordinal))
             {
-                if (string.Equals(transition, TransitionRequestUpdate, StringComparison.Ordinal))
+                // G535 review repair: request-update must never apply as
+                // sequential add/remove gh calls — a failure between the
+                // two would leave a half-transitioned PR (e.g. rereview-ready
+                // removed but request-update not yet added, or vice versa).
+                // Compute the full desired label set (every current label
+                // minus the ones actually being superseded, plus the ones
+                // being added) and replace it atomically in one GitHub
+                // request via IGitHubLabelSetReplacer.
+                if (mutator is not IGitHubLabelSetReplacer replacer)
                 {
-                    // G535 review repair: request-update must never apply as
-                    // sequential add/remove gh calls — a failure between the
-                    // two would leave a half-transitioned PR (e.g. rereview-ready
-                    // removed but request-update not yet added, or vice versa).
-                    // Compute the full desired label set (every current label
-                    // minus the ones actually being superseded, plus the ones
-                    // being added) and replace it atomically in one GitHub
-                    // request via IGitHubLabelSetReplacer.
-                    if (mutator is not IGitHubLabelSetReplacer replacer)
-                    {
-                        writer.WriteLine(
-                            "the configured GitHub mutator does not support atomic label-set replacement, "
-                            + "required for the request-update transition (G535).");
-                        return 1;
-                    }
-
-                    var removeLabelSet = new HashSet<string>(removeLabels, StringComparer.Ordinal);
-                    var desiredLabels = currentLabels
-                        .Where(label => !removeLabelSet.Contains(label))
-                        .Concat(plan.AddLabels)
-                        .Distinct(StringComparer.Ordinal)
-                        .ToArray();
-
-                    replacer.ReplaceLabelSet(repo!, GhCliGitHubLabelMutator.Kinds.Pr, pr!.Value, desiredLabels);
+                    writer.WriteLine(
+                        "the configured GitHub mutator does not support atomic label-set replacement, "
+                        + "required for the request-update transition (G535).");
+                    return 1;
                 }
-                else
+
+                var removeLabelSet = new HashSet<string>(removeLabels, StringComparer.Ordinal);
+                var desiredLabels = currentLabels
+                    .Where(label => !removeLabelSet.Contains(label))
+                    .Concat(plan.AddLabels)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                intendedLabels = desiredLabels.OrderBy(label => label, StringComparer.Ordinal).ToArray();
+
+                try
+                {
+                    // The replacer itself treats an already-converged desired
+                    // set as a genuine no-op (zero GitHub calls) — see
+                    // GhCliGitHubLabelMutator.ReplaceLabelSet.
+                    replacer.ReplaceLabelSet(
+                        repo!, GhCliGitHubLabelMutator.Kinds.Pr, pr!.Value, currentLabels, desiredLabels);
+                    applied = true;
+                }
+                catch (LabelSetReplacementException replacementException)
+                {
+                    failureMessage = replacementException.Message;
+                    if (replacementException.Certainty != LabelSetReplacementFailureCertainty.KnownUnapplied)
+                    {
+                        // G535 review repair: once the request may have
+                        // reached GitHub (transmitted, or the PUT itself
+                        // succeeded but verification could not confirm the
+                        // result), this is NOT a "nothing changed" failure —
+                        // report it as ambiguous and tell the operator
+                        // exactly how to resolve it, never a false "safe"
+                        // claim.
+                        mayHaveApplied = true;
+                        recoveryCommand =
+                            $"gh {GhCliGitHubLabelMutator.Kinds.Pr} view {pr} --repo {repo} --json labels";
+                    }
+                }
+                catch (Exception exception) when (
+                    exception is InvalidOperationException
+                    or IOException)
+                {
+                    failureMessage = exception.Message;
+                }
+            }
+            else
+            {
+                try
                 {
                     mutator.ApplyLabelTransitions(
                         repo!,
@@ -143,17 +180,48 @@ internal static class AutomationPrTransitionCommand
                         pr!.Value,
                         plan.AddLabels,
                         removeLabels);
+                    applied = true;
                 }
+                catch (Exception exception) when (
+                    exception is InvalidOperationException
+                    or IOException)
+                {
+                    failureMessage = exception.Message;
+                }
+            }
+        }
 
-                applied = true;
-            }
-            catch (Exception exception) when (
-                exception is InvalidOperationException
-                or IOException)
+        if (failureMessage is not null)
+        {
+            var failureResult = new AutomationPrTransitionResult
             {
-                writer.WriteLine($"failed to apply PR transition on PR #{pr} in {repo}: {exception.Message}");
-                return 1;
+                Repo = repo!,
+                Pr = pr!.Value,
+                Transition = transition!,
+                Mode = mode,
+                Applied = false,
+                AddLabels = plan.AddLabels,
+                RemoveLabels = removeLabels,
+                CurrentLabels = currentLabels,
+                Summary = BuildSummary(transition!, plan.AddLabels, removeLabels),
+                MayHaveApplied = mayHaveApplied,
+                IntendedLabels = mayHaveApplied ? intendedLabels : null,
+                RecoveryCommand = recoveryCommand,
+                Error = mayHaveApplied
+                    ? $"failed to confirm PR transition on PR #{pr} in {repo} (the mutation may already have applied — do not assume it did not): {failureMessage}"
+                    : $"failed to apply PR transition on PR #{pr} in {repo}: {failureMessage}",
+            };
+
+            if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+            {
+                writer.WriteLine(JsonSerializer.Serialize(failureResult, JsonOptions));
             }
+            else
+            {
+                WriteText(writer, failureResult);
+            }
+
+            return 1;
         }
 
         var result = new AutomationPrTransitionResult
@@ -453,11 +521,21 @@ internal static class AutomationPrTransitionCommand
 
     private static void WriteText(TextWriter writer, AutomationPrTransitionResult result)
     {
-        writer.WriteLine(result.Summary);
+        writer.WriteLine(result.Error ?? result.Summary);
         writer.WriteLine($"mode: {result.Mode}");
         writer.WriteLine($"repo: {result.Repo}");
         writer.WriteLine($"pr: {result.Pr.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         writer.WriteLine($"applied: {result.Applied.ToString().ToLowerInvariant()}");
+
+        // G535 review repair: phase-aware ambiguity reporting — only ever
+        // emitted for a failed mutation whose outcome on GitHub is unknown.
+        if (result.MayHaveApplied)
+        {
+            writer.WriteLine("may_have_applied: true");
+            writer.WriteLine(
+                $"intended_labels: {string.Join(", ", result.IntendedLabels ?? Array.Empty<string>())}");
+            writer.WriteLine($"recovery_command: {result.RecoveryCommand}");
+        }
     }
 
     private static void WriteHelp(TextWriter writer)
@@ -513,4 +591,46 @@ internal sealed record AutomationPrTransitionResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    /// <summary>
+    /// G535 review repair: true when a mutation attempt failed at a point
+    /// where GitHub may already have applied it (the request was
+    /// transmitted, or a post-write verification read failed/mismatched) —
+    /// distinct from a failure known to have applied nothing at all (e.g.
+    /// the `gh` process never started). Always false when <see cref="Applied"/>
+    /// is true. Never omitted so callers can distinguish "definitely safe"
+    /// (both false) from "must re-check" (this true).
+    /// </summary>
+    [JsonPropertyName("may_have_applied")]
+    public bool MayHaveApplied { get; init; }
+
+    [JsonPropertyName("mayHaveApplied")]
+    public bool MayHaveAppliedCamel => MayHaveApplied;
+
+    /// <summary>
+    /// G535 review repair: the full label set the failed mutation was
+    /// attempting to establish, so an operator re-reading current labels
+    /// knows exactly what to compare against. Populated only alongside
+    /// <see cref="MayHaveApplied"/>.
+    /// </summary>
+    [JsonPropertyName("intended_labels")]
+    public IReadOnlyList<string>? IntendedLabels { get; init; }
+
+    [JsonPropertyName("intendedLabels")]
+    public IReadOnlyList<string>? IntendedLabelsCamel => IntendedLabels;
+
+    /// <summary>
+    /// G535 review repair: the exact command an operator should run to
+    /// read the PR's actual current labels and resolve the ambiguity.
+    /// Populated only alongside <see cref="MayHaveApplied"/>.
+    /// </summary>
+    [JsonPropertyName("recovery_command")]
+    public string? RecoveryCommand { get; init; }
+
+    [JsonPropertyName("recoveryCommand")]
+    public string? RecoveryCommandCamel => RecoveryCommand;
+
+    /// <summary>G535 review repair: the failure message, populated only when <see cref="Applied"/> is false.</summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
 }
