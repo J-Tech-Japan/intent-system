@@ -364,4 +364,97 @@ public sealed class IntentNodeFacetsTests
         Assert.True(IntentNodeFacets.IsAllowedValue("vocabulary"));
         Assert.False(IntentNodeFacets.IsAllowedValue("projection"));
     }
+
+    // ── Second rereview repair: narrow in both directions, duplicate keys ──
+
+    [Fact]
+    public void ParseFacets_MalformedUnrelatedFieldBeforeFacets_DoesNotAffectFacetsParsing()
+    {
+        // The malformed field is entirely excluded from the fed fragment —
+        // parsing starts at the "facets:" line itself, by construction.
+        var content = "---\nother_field: [unterminated\nfacets: [vocabulary]\n---\n";
+
+        var result = IntentNodeFacets.ParseFacets(content);
+
+        Assert.Equal(FacetsParseKind.Present, result.Kind);
+        Assert.Equal(new[] { "vocabulary" }, result.Values);
+    }
+
+    [Fact]
+    public void ParseFacets_MalformedUnrelatedFieldAfterFacets_DoesNotAffectFacetsParsing()
+    {
+        // The low-level streaming parser stops consuming events the moment
+        // the facets value (and its one-line trailing-junk check) is done —
+        // a later key's own malformed VALUE is never tokenized at all.
+        var content = "---\nfacets: [vocabulary]\nother_field: \"unterminated\n---\n";
+
+        var result = IntentNodeFacets.ParseFacets(content);
+
+        Assert.Equal(FacetsParseKind.Present, result.Kind);
+        Assert.Equal(new[] { "vocabulary" }, result.Values);
+    }
+
+    [Fact]
+    public void ParseFacets_MalformedUnrelatedFieldAfterFacets_BlockForm_DoesNotAffectFacetsParsing()
+    {
+        var content = "---\nfacets:\n  - vocabulary\nother_field: [unterminated\n---\n";
+
+        var result = IntentNodeFacets.ParseFacets(content);
+
+        Assert.Equal(FacetsParseKind.Present, result.Kind);
+        Assert.Equal(new[] { "vocabulary" }, result.Values);
+    }
+
+    [Fact]
+    public void ParseFacets_NestedFacetsKeyUnderAnotherKey_IsNotCaptured_IsAbsent()
+    {
+        // Indented "facets:" is not a top-level key — the narrow reader
+        // only recognizes column-0 declarations, so this node has no
+        // top-level facets: at all.
+        var content = "---\nmetadata:\n  facets: [vocabulary]\n---\n";
+
+        var result = IntentNodeFacets.ParseFacets(content);
+
+        Assert.Equal(FacetsParseKind.Absent, result.Kind);
+    }
+
+    [Fact]
+    public void ParseFacets_DuplicateTopLevelFacetsKeys_IsMalformed()
+    {
+        var content = "---\nfacets: [vocabulary]\nfacets: [invariant]\n---\n";
+
+        var result = IntentNodeFacets.ParseFacets(content);
+
+        Assert.Equal(FacetsParseKind.Malformed, result.Kind);
+        Assert.Contains("multiple", result.MalformedReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("facets:", result.MalformedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseFacets_DuplicateTopLevelFacetsKeys_BlockForm_IsMalformed()
+    {
+        var content = "---\nfacets:\n  - vocabulary\nfacets:\n  - invariant\n---\n";
+
+        var result = IntentNodeFacets.ParseFacets(content);
+
+        Assert.Equal(FacetsParseKind.Malformed, result.Kind);
+        Assert.Contains("multiple", result.MalformedReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ParseFacets_MalformedYamlDiagnostic_IsSanitizedAndBounded()
+    {
+        // A large, genuinely invalid fragment must still produce a
+        // Malformed result with a bounded, non-empty diagnostic — never an
+        // unbounded dump of parser-internal detail.
+        var junk = new string('"', 5000);
+        var content = $"---\nfacets: [{junk}\n---\n";
+
+        var result = IntentNodeFacets.ParseFacets(content);
+
+        Assert.Equal(FacetsParseKind.Malformed, result.Kind);
+        Assert.NotNull(result.MalformedReason);
+        Assert.True(result.MalformedReason!.Length <= 320, $"diagnostic was {result.MalformedReason.Length} chars: {result.MalformedReason}");
+        Assert.DoesNotContain("/Users", result.MalformedReason, StringComparison.Ordinal);
+    }
 }

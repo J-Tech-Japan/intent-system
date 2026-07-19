@@ -1,5 +1,6 @@
+using System.Text.RegularExpressions;
 using YamlDotNet.Core;
-using YamlDotNet.RepresentationModel;
+using YamlDotNet.Core.Events;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -29,11 +30,19 @@ namespace IntentSystem.Cli.Commands;
 ///
 /// <see cref="ParseFacets"/> hands the <c>facets:</c> value off to
 /// <b>YamlDotNet</b> — a real YAML parser — rather than a hand-rolled
-/// scanner. Two prior repair rounds each found a fresh correctness gap in a
-/// bespoke tokenizer (single-line-only flow, then unescaped/non-trailing-
-/// junk-aware scanning); a real parser resolves escaping, doubled-single-
-/// quote semantics, comments, multi-line flow, and trailing-content
-/// rejection correctly by construction instead of by ad hoc patching.
+/// scanner. Prior repair rounds each found a fresh correctness gap in a
+/// bespoke tokenizer; a real parser resolves escaping, doubled-single-quote
+/// semantics, comments, multi-line flow, and trailing-content rejection
+/// correctly by construction instead of by ad hoc patching.
+///
+/// Extraction is narrow in BOTH directions: content before the top-level
+/// <c>facets:</c> line is never fed to the parser at all (excluded from the
+/// input text), and parsing STOPS the instant the facets value itself is
+/// fully consumed — YamlDotNet's low-level event parser is lazy/streaming,
+/// so a later, unrelated key's own malformed value is never even
+/// tokenized, let alone attributed to <c>facets:</c>. (A duplicate
+/// top-level <c>facets:</c> key is instead detected up front via a cheap
+/// line-level scan, deterministically, before any parsing is attempted.)
 ///
 /// A <c>facets:</c> declaration that is present but does not parse as a
 /// YAML list (a bare scalar, an unterminated flow list, an unbalanced
@@ -43,12 +52,11 @@ namespace IntentSystem.Cli.Commands;
 /// (or no frontmatter block at all) is <see cref="FacetsParseKind.Absent"/>,
 /// which is fully backward compatible: the node is simply unannotated.
 ///
-/// This reader is intentionally narrow: it locates and validates ONLY the
-/// top-level <c>facets:</c> key (and, from that line onward, hands YamlDotNet
-/// just enough of the frontmatter to resolve that one key — never the
-/// portion before it). Any other frontmatter fields a node file may carry
-/// (e.g. <c>intent_id</c>, <c>intent_type</c>) are untouched — parsing and
-/// validating those is out of scope for this slice.
+/// This reader is intentionally narrow in scope too: it locates and
+/// validates ONLY the top-level <c>facets:</c> key. Any other frontmatter
+/// fields a node file may carry (e.g. <c>intent_id</c>, <c>intent_type</c>)
+/// are untouched — parsing and validating those is out of scope for this
+/// slice, and (per the above) their own syntax is never even inspected.
 /// </summary>
 internal static class IntentNodeFacets
 {
@@ -90,8 +98,16 @@ internal static class IntentNodeFacets
         // indentation is out of scope (narrow reader) — UNLESS it was
         // clearly intended as the top-level declaration but mis-indented
         // with a tab, which is never silently absent (see below).
-        var facetsLineIndex = Array.FindIndex(lines, line => line.StartsWith(FacetsKeyPrefix, StringComparison.Ordinal));
-        if (facetsLineIndex < 0)
+        var facetsLineIndices = new List<int>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].StartsWith(FacetsKeyPrefix, StringComparison.Ordinal))
+            {
+                facetsLineIndices.Add(i);
+            }
+        }
+
+        if (facetsLineIndices.Count == 0)
         {
             if (Array.Exists(lines, LooksLikeTabIndentedFacetsDeclaration))
             {
@@ -100,13 +116,24 @@ internal static class IntentNodeFacets
             return FacetsParseResult.AbsentResult;
         }
 
+        if (facetsLineIndices.Count > 1)
+        {
+            // Deterministic, cheap, and parser-independent: a second
+            // top-level "facets:" key is unambiguously a contract
+            // violation regardless of whether either declaration is
+            // otherwise well-formed YAML.
+            return FacetsParseResult.Malformed(
+                $"multiple top-level 'facets:' keys found in frontmatter (lines {string.Join(", ", facetsLineIndices.Select(i => i + 1))}); only one is allowed");
+        }
+
         // Hand YamlDotNet everything from the "facets:" line to the end of
-        // the frontmatter block — real block/flow-list boundary resolution,
-        // multi-line flow, quoting/escaping, and comments, all per actual
-        // YAML grammar. Content BEFORE this line (other fields) is excluded
-        // so an unrelated field's own syntax issue can never masquerade as
-        // a facets: problem.
-        var fragment = string.Join('\n', lines[facetsLineIndex..]);
+        // the frontmatter block as the INPUT TEXT — but the low-level event
+        // parser below only reads as far as needed to fully consume the
+        // facets value itself, then stops. Content before this line (other
+        // fields) is excluded from the input text entirely; content after
+        // it is included in the input text but is never actually parsed,
+        // so neither can surface as a facets: problem.
+        var fragment = string.Join('\n', lines[facetsLineIndices[0]..]);
         return ParseFacetsFragment(fragment);
     }
 
@@ -115,18 +142,43 @@ internal static class IntentNodeFacets
 
     private static FacetsParseResult ParseFacetsFragment(string fragment)
     {
-        YamlMappingNode mapping;
         try
         {
-            var yaml = new YamlStream();
             using var reader = new StringReader(fragment);
-            yaml.Load(reader);
+            IParser parser = new Parser(reader);
 
-            if (yaml.Documents.Count == 0 || yaml.Documents[0].RootNode is not YamlMappingNode rootMapping)
+            parser.Consume<StreamStart>();
+            parser.Consume<DocumentStart>();
+            if (!parser.TryConsume<MappingStart>(out _))
             {
                 return FacetsParseResult.Malformed("'facets:' did not parse as a YAML mapping entry");
             }
-            mapping = rootMapping;
+
+            var key = parser.Consume<Scalar>();
+            if (!string.Equals(key.Value, FacetsKeyName, StringComparison.Ordinal))
+            {
+                // Should not happen — the caller only reaches here after
+                // locating a "facets:" line itself — but stay defensive.
+                return FacetsParseResult.AbsentResult;
+            }
+
+            var result = ConsumeFacetsValue(parser);
+
+            // One more look-ahead only: confirm the value's own line ends
+            // cleanly (either the mapping ends here, or a new key starts).
+            // This is what catches non-comment trailing content on the
+            // SAME declaration (e.g. "facets: [a] junk") without ever
+            // parsing — or risking an exception from — anything belonging
+            // to a genuinely separate, later key.
+            if (result.Kind == FacetsParseKind.Present
+                && !parser.Accept<MappingEnd>(out _)
+                && !parser.Accept<Scalar>(out _))
+            {
+                parser.MoveNext(); // force tokenization to surface the real diagnostic
+                return FacetsParseResult.Malformed("unexpected content immediately after the 'facets:' declaration");
+            }
+
+            return result;
         }
         catch (YamlException exception)
         {
@@ -134,42 +186,61 @@ internal static class IntentNodeFacets
             // free: unterminated flow lists, unbalanced/unescaped quotes,
             // non-comment trailing content after a flow list's closing
             // bracket, and tab indentation — all genuine YAML syntax
-            // errors that a real parser rejects by construction.
-            return FacetsParseResult.Malformed($"invalid YAML: {exception.Message}");
+            // errors that a real parser rejects by construction. The
+            // message is sanitized: no absolute paths (none are ever
+            // legitimately present, parsing an in-memory fragment, but
+            // this is defense in depth against library internals) and
+            // capped in length so a pathological input can't flood output.
+            return FacetsParseResult.Malformed($"invalid YAML: {SanitizeYamlDiagnostic(exception)}");
         }
+    }
 
-        if (!mapping.Children.TryGetValue(new YamlScalarNode(FacetsKeyName), out var facetsNode))
-        {
-            // Should not happen — the caller only reaches here after
-            // locating a "facets:" line itself — but stay defensive.
-            return FacetsParseResult.AbsentResult;
-        }
-
-        if (facetsNode is YamlSequenceNode sequence)
+    private static FacetsParseResult ConsumeFacetsValue(IParser parser)
+    {
+        if (parser.TryConsume<SequenceStart>(out _))
         {
             var items = new List<string>();
-            foreach (var child in sequence.Children)
+            while (!parser.Accept<SequenceEnd>(out _))
             {
-                if (child is not YamlScalarNode { Value: { Length: > 0 } scalarValue })
+                if (!parser.TryConsume<Scalar>(out var itemScalar) || itemScalar.Value.Length == 0)
                 {
                     return FacetsParseResult.Malformed("'facets:' list contains a non-scalar or empty item");
                 }
-                items.Add(scalarValue);
+                items.Add(itemScalar.Value);
             }
+            parser.Consume<SequenceEnd>();
             return FacetsParseResult.Present(Deduplicate(items));
         }
 
-        if (facetsNode is YamlScalarNode { Value: null or "" })
+        if (parser.TryConsume<Scalar>(out var scalar))
         {
-            // "facets:" with nothing after it and no block items either
-            // (YAML null) — use "[]" for an intentionally empty list.
+            if (scalar.Value.Length == 0)
+            {
+                // "facets:" with nothing after it and no block items either
+                // (YAML null) — use "[]" for an intentionally empty list.
+                return FacetsParseResult.Malformed(
+                    "'facets:' has no value — use '[]' for an explicitly empty list, or list values with '- item' entries");
+            }
             return FacetsParseResult.Malformed(
-                "'facets:' has no value — use '[]' for an explicitly empty list, or list values with '- item' entries");
+                $"expected a YAML list after 'facets:' (flow '[item, ...]' or block '- item' form), found scalar '{scalar.Value}'");
         }
 
-        var foundValue = facetsNode is YamlScalarNode scalarNode ? scalarNode.Value : facetsNode.ToString();
-        return FacetsParseResult.Malformed(
-            $"expected a YAML list after 'facets:' (flow '[item, ...]' or block '- item' form), found scalar '{foundValue}'");
+        return FacetsParseResult.Malformed("'facets:' value did not parse as a YAML list or scalar");
+    }
+
+    private static readonly Regex PathLikeFragmentPattern = new(
+        @"[A-Za-z]:\\[^\s""']+|/(?:[^\s""'/]+/)+[^\s""']*",
+        RegexOptions.Compiled);
+
+    private const int MaxDiagnosticLength = 300;
+
+    private static string SanitizeYamlDiagnostic(YamlException exception)
+    {
+        var message = string.IsNullOrWhiteSpace(exception.Message) ? "malformed YAML" : exception.Message;
+        message = PathLikeFragmentPattern.Replace(message, "<redacted>");
+        return message.Length > MaxDiagnosticLength
+            ? message[..MaxDiagnosticLength] + "…"
+            : message;
     }
 
     /// <summary>Stable dedup: first-seen order preserved, ordinal comparison — the single dedup point every caller shares.</summary>

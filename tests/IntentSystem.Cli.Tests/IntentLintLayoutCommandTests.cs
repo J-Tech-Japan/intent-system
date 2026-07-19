@@ -413,6 +413,48 @@ public sealed class IntentLintLayoutCommandTests
     }
 
     [Fact]
+    public void Execute_NodeWithValidFacets_UnrelatedMalformedFieldAfterFacets_DoesNotReportMalformedFacets_ExitsZero()
+    {
+        // Second rereview repair: an unrelated field's own YAML syntax
+        // error, appearing AFTER a perfectly well-formed facets: value,
+        // must never be misattributed to facets: — the streaming parser
+        // stops reading once the facets value is consumed.
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets: [vocabulary]\nother_field: \"unterminated\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.DoesNotContain("MALFORMED-FACETS", output, StringComparison.Ordinal);
+        Assert.Contains("clean", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_NodeWithDuplicateTopLevelFacetsKeys_ReportsMalformedFacetsAndExitsNonzero()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets: [vocabulary]\nfacets: [invariant]\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.NotEqual(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("MALFORMED-FACETS", output, StringComparison.Ordinal);
+        Assert.Contains("multiple", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Execute_NodeWithTabIndentedFacetsDeclaration_ReportsErrorNeverSilentlyClean()
     {
         using var tmp = new TemporaryDirectory();
