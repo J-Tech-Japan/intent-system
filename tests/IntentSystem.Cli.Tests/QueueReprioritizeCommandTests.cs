@@ -12,11 +12,15 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     public QueueReprioritizeCommandTests()
     {
         QueueReprioritizeCommand.UtcNowFactory = null;
+        QueueReprioritizeCommand.AppendPriorityChangedEventOverride = null;
+        QueueReprioritizeCommand.WriteQueueStateOverride = null;
     }
 
     public void Dispose()
     {
         QueueReprioritizeCommand.UtcNowFactory = null;
+        QueueReprioritizeCommand.AppendPriorityChangedEventOverride = null;
+        QueueReprioritizeCommand.WriteQueueStateOverride = null;
     }
 
     [Fact]
@@ -189,6 +193,112 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         using var document = JsonDocument.Parse(writer.ToString());
         Assert.False(document.RootElement.GetProperty("changed").GetBoolean());
         Assert.False(File.Exists(workspace.RunsLogPath));
+    }
+
+    // ─── G537 review repair: fail-closed, repairable write strategy ────────
+
+    [Fact]
+    public void Execute_RunsEventAppendFails_QueueStateNeverTouched_FailsLoud()
+    {
+        // The audit event is written FIRST; if that fails, queue-state.json
+        // must never be mutated at all — no silent, unaudited change.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        var queueStateBefore = File.ReadAllText(workspace.QueueStatePath);
+        QueueReprioritizeCommand.AppendPriorityChangedEventOverride = (_, _) =>
+            throw new IOException("simulated disk failure appending runs.jsonl");
+
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "publish ahead", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("queue-state.json was NOT touched", error, StringComparison.Ordinal);
+        Assert.Contains("no durable change was made", error, StringComparison.Ordinal);
+
+        // Byte-for-byte: nothing was mutated.
+        Assert.Equal(queueStateBefore, File.ReadAllText(workspace.QueueStatePath));
+        Assert.False(File.Exists(workspace.RunsLogPath));
+    }
+
+    [Fact]
+    public void Execute_QueueStateWriteFailsAfterEventAppended_FailsLoudNamingTheHalfTransition()
+    {
+        // The event append succeeds (durable audit trail exists — this is
+        // NOT a silent unaudited mutation), but the queue-state write then
+        // fails. Must fail loud and explain exactly what state the
+        // operator is in.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        QueueReprioritizeCommand.WriteQueueStateOverride = (_, _) =>
+            throw new IOException("simulated disk failure writing queue-state.json");
+
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "publish ahead", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("priority-changed runs event was recorded", error, StringComparison.Ordinal);
+        Assert.Contains("still shows the OLD priority", error, StringComparison.Ordinal);
+
+        // The audit event WAS durably recorded, proving this is not silent.
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        var runEvent = Assert.Single(events);
+        Assert.Equal("priority-changed", runEvent.Event);
+
+        // queue-state genuinely was not updated (the write failed).
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("normal", stateAfter.Items.Single().Priority);
+    }
+
+    [Fact]
+    public void Execute_RetryAfterQueueStateWriteFailure_ConvergesWithoutDuplicateEvent()
+    {
+        // Idempotent retry: the SAME command, re-run after the queue-state
+        // write failure above, must detect the already-recorded event
+        // (skip re-appending — no duplicate), retry ONLY the queue-state
+        // write, and converge to a fully consistent, singly-audited state.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        QueueReprioritizeCommand.WriteQueueStateOverride = (_, _) =>
+            throw new IOException("simulated disk failure writing queue-state.json");
+
+        using (var firstAttempt = new StringWriter())
+        {
+            var firstExitCode = QueueReprioritizeCommand.Execute(
+                workspace.Context,
+                ["G537", "--priority", "high", "--reason", "publish ahead", "--write", "--format", "json"],
+                firstAttempt);
+            Assert.Equal(1, firstExitCode);
+        }
+
+        // Fault resolved — retry with the real write path restored.
+        QueueReprioritizeCommand.WriteQueueStateOverride = null;
+
+        using var retryWriter = new StringWriter();
+        var retryExitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "publish ahead", "--write", "--format", "json"],
+            retryWriter);
+
+        Assert.Equal(0, retryExitCode);
+        using var document = JsonDocument.Parse(retryWriter.ToString());
+        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
+
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("high", stateAfter.Items.Single().Priority);
+
+        // Exactly ONE event — the retry did not append a duplicate.
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        Assert.Single(events);
     }
 
     private static string BuildQueueState((string ExecutionUnit, QueueItemState State, string Priority, LinkedIssue? LinkedIssue) item)

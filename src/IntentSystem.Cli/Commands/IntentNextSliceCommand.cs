@@ -249,10 +249,12 @@ internal static class IntentNextSliceCommand
         var retired = new HashSet<string>(StringComparer.Ordinal);
         // G537: priority only ORDERS the queued bucket below — every gate
         // (domain/repo, execution-unit namespace, WIP, clarification,
-        // lifecycle) is still evaluated per-candidate in the loop at the
-        // `queued` foreach exactly as before; priority never lets a
-        // candidate skip a gate it would otherwise fail.
+        // lifecycle, and — per review repair — dependency/blocked-by) is
+        // still evaluated per-candidate in the loop at the `queued`
+        // foreach exactly as before; priority never lets a candidate skip
+        // a gate it would otherwise fail.
         var priorityByUnit = new Dictionary<string, string>(StringComparer.Ordinal);
+        var queuedItemByUnit = new Dictionary<string, QueueItem>(StringComparer.Ordinal);
         if (queueState is not null)
         {
             foreach (var item in queueState.Items)
@@ -279,6 +281,7 @@ internal static class IntentNextSliceCommand
                     case QueueItemState.Queued:
                         queued.Add(item.ExecutionUnit);
                         priorityByUnit[item.ExecutionUnit] = item.Priority;
+                        queuedItemByUnit[item.ExecutionUnit] = item;
                         break;
 
                     case QueueItemState.Completed:
@@ -387,6 +390,20 @@ internal static class IntentNextSliceCommand
                 }
 
                 if (!MatchesDomainAndRepoFilter(domain, targetRepo, queueState, executionUnit, directory))
+                {
+                    continue;
+                }
+
+                // G537 review repair: dependency/blocked-by is an
+                // authoritative eligibility gate exactly like the domain/
+                // repo filter and lifecycle exclusion above/below it — it
+                // must dominate priority. A high-priority queued item with
+                // an incomplete dependency or a non-empty `blocked_by` is
+                // never selected; the loop simply tries the next
+                // candidate in priority/authoring order, same as any
+                // other gate failure.
+                if (queuedItemByUnit.TryGetValue(executionUnit, out var queuedItem)
+                    && !IsDependencyAndBlockedByEligible(queuedItem, completed))
                 {
                     continue;
                 }
@@ -756,6 +773,33 @@ internal static class IntentNextSliceCommand
         QueueReprioritizeCommand.PriorityLow => 2,
         _ => 1,
     };
+
+    /// <summary>
+    /// G537 review repair: the authoritative dependency/blocked-by
+    /// eligibility gate for the `queued` candidate loop — mirrors
+    /// <see cref="IntentSystem.Supervisor.QueueSelection.SelectNext"/>'s
+    /// semantics (empty <c>blocked_by</c>, every <c>dependencies</c> entry
+    /// already in the completed set) so the SAME rule that gates the
+    /// legacy queue selector also gates next-slice, and dominates
+    /// priority exactly like every other gate here.
+    /// </summary>
+    private static bool IsDependencyAndBlockedByEligible(QueueItem item, HashSet<string> completed)
+    {
+        if (item.BlockedBy.Count > 0)
+        {
+            return false;
+        }
+
+        foreach (var dependency in item.Dependencies)
+        {
+            if (!completed.Contains(dependency))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static bool MatchesExecutionUnitRegex(Regex? regex, string executionUnit)
     {

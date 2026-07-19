@@ -42,6 +42,21 @@ internal static class QueueReprioritizeCommand
     /// <summary>G537 test seam: overrides the recorded event timestamp.</summary>
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
+    /// <summary>
+    /// G537 review repair test seam: replaces the real
+    /// <c>runs.jsonl</c> append. Throwing simulates an append failure so
+    /// tests can prove the fail-closed/repairable write strategy without
+    /// depending on real filesystem-permission tricks.
+    /// </summary>
+    internal static Action<string, RunEvent>? AppendPriorityChangedEventOverride { get; set; }
+
+    /// <summary>
+    /// G537 review repair test seam: replaces the real
+    /// <c>queue-state.json</c> write. Throwing simulates a write failure
+    /// AFTER the runs event has already been durably recorded.
+    /// </summary>
+    internal static Action<string, QueueState>? WriteQueueStateOverride { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -137,26 +152,117 @@ internal static class QueueReprioritizeCommand
         var newItems = queueState.Items.ToArray();
         newItems[index0] = updatedItem;
         var updatedState = queueState with { Items = newItems, UpdatedAt = changedAt };
-
-        var runEvent = new RunEvent
-        {
-            Ts = changedAt,
-            ExecutionUnit = executionUnit!,
-            Event = PriorityChangedEventName,
-            By = ReprioritizeActor,
-            Reason = $"priority changed from '{item.Priority}' to '{requestedPriority}': {reason}",
-        };
-
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
-
         var runLogPath = context.GetRunLogPath();
+
+        // G537 review repair: fail-closed, repairable write strategy. The
+        // audit event is written FIRST, queue-state SECOND — the reverse
+        // of the naive ordering — so a failure at either step never
+        // produces a silent, unaudited priority mutation:
+        //
+        // - If the event append fails, queue-state is never touched: no
+        //   durable change happened at all, and a plain retry starts
+        //   fresh.
+        // - If the event append succeeds but the queue-state write then
+        //   fails, the audit trail already proves the attempted change
+        //   and its reason even though the state file doesn't yet
+        //   reflect it. Re-running this EXACT command detects the
+        //   already-recorded event (matched on execution unit + event
+        //   name + the deterministic reason text) and skips re-appending
+        //   — it only retries the queue-state write, so convergence never
+        //   produces a duplicate event.
+        var expectedReason = $"priority changed from '{item.Priority}' to '{requestedPriority}': {reason}";
+        var alreadyAudited = RunsLogHasMatchingPriorityChangedEvent(runLogPath, executionUnit!, expectedReason);
+
+        if (!alreadyAudited)
+        {
+            var runEvent = new RunEvent
+            {
+                Ts = changedAt,
+                ExecutionUnit = executionUnit!,
+                Event = PriorityChangedEventName,
+                By = ReprioritizeActor,
+                Reason = expectedReason,
+            };
+
+            try
+            {
+                AppendPriorityChangedEvent(runLogPath, runEvent);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: false,
+                    error: $"failed to append the required priority-changed runs event ({exception.Message}); queue-state.json was NOT touched — no durable change was made. Retry once the failure is resolved."));
+                return 1;
+            }
+        }
+
+        try
+        {
+            WriteQueueState(queueStatePath, updatedState);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: false,
+                error: $"the priority-changed runs event was recorded, but queue-state.json could not be updated ({exception.Message}); "
+                    + $"queue-state on disk still shows the OLD priority '{item.Priority}'. Re-run this exact command to retry — it will "
+                    + "detect the already-recorded event and only retry the queue-state write, without appending a duplicate event."));
+            return 1;
+        }
+
+        EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: true, error: null));
+        return 0;
+    }
+
+    private static bool RunsLogHasMatchingPriorityChangedEvent(string runLogPath, string executionUnit, string expectedReason)
+    {
+        if (!File.Exists(runLogPath))
+        {
+            return false;
+        }
+
+        IReadOnlyList<RunEvent> events;
+        try
+        {
+            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
+        {
+            // Fail OPEN here: an unreadable/malformed runs.jsonl must never
+            // suppress recording a genuinely-needed audit event. Worst
+            // case on this path is a redundant append once the file is
+            // repaired, which is far preferable to a silently missing one.
+            return false;
+        }
+
+        return events.Any(runEvent =>
+            string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+            && string.Equals(runEvent.Event, PriorityChangedEventName, StringComparison.Ordinal)
+            && string.Equals(runEvent.Reason, expectedReason, StringComparison.Ordinal));
+    }
+
+    private static void AppendPriorityChangedEvent(string runLogPath, RunEvent runEvent)
+    {
+        if (AppendPriorityChangedEventOverride is not null)
+        {
+            AppendPriorityChangedEventOverride(runLogPath, runEvent);
+            return;
+        }
+
         var runLogDirectory = Path.GetDirectoryName(runLogPath)
             ?? throw new InvalidOperationException("Run log path did not contain a directory.");
         Directory.CreateDirectory(runLogDirectory);
         File.AppendAllText(runLogPath, RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
+    }
 
-        EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: true, error: null));
-        return 0;
+    private static void WriteQueueState(string queueStatePath, QueueState state)
+    {
+        if (WriteQueueStateOverride is not null)
+        {
+            WriteQueueStateOverride(queueStatePath, state);
+            return;
+        }
+
+        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(state));
     }
 
     private static bool TryParseArguments(

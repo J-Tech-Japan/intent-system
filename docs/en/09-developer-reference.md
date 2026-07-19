@@ -979,12 +979,19 @@ transition that closes this gap:
 (high > normal > low), with authoring order (queue-state array order) as
 the in-class tiebreak.** Every existing eligibility gate — packet
 directory presence, execution-unit namespace regex, domain/repo filter,
-G534's lifecycle-aware exclusion, and the legacy-retirement-marker check
-— still runs exactly as before, per candidate, inside the same loop;
-priority never lets a candidate skip a gate it would otherwise fail. It
-only reorders which already-eligible candidate is tried, and in which
-order, before that per-candidate gate loop runs. Because the reorder uses
-a **stable** sort, a host where every item carries the enqueue default
+**dependency completeness / non-empty `blocked_by`** (review repair: the
+same rule `QueueSelection.SelectNext` already enforces — every
+`dependencies` entry must be `completed`, and `blocked_by` must be
+empty), G534's lifecycle-aware exclusion, and the legacy-retirement-marker
+check — still runs exactly as before, per candidate, inside the same
+loop; priority never lets a candidate skip a gate it would otherwise
+fail. A "high" priority queued unit with an incomplete dependency or a
+non-empty `blocked_by` is never selected ahead of an eligible
+lower-priority unit — the loop simply tries the next candidate in
+priority/authoring order, same as any other gate failure. Priority only
+reorders which already-eligible candidate is tried, and in which order,
+before that per-candidate gate loop runs. Because the reorder uses a
+**stable** sort, a host where every item carries the enqueue default
 (`"normal"`) — i.e. no priorities meaningfully set — produces
 byte-identical output to pre-G537 behavior.
 
@@ -994,6 +1001,23 @@ normalizes and validates it (`high`/`normal`/`low`, case-insensitive);
 `next-slice`'s ranking function treats any unrecognized/missing value as
 `normal` rather than erroring, so hand-authored or historical
 `queue-state.json` files never fail closed on this field.
+
+**Review repair — `queue reprioritize --write` uses a fail-closed,
+repairable write order.** Writing `queue-state.json` before appending the
+required `priority-changed` runs event could leave a durable priority
+mutation with no audit record if the append step then failed. The order
+is reversed — the runs event is appended **first**, `queue-state.json`
+**second**:
+
+- If the event append fails, `queue-state.json` is never touched at all
+  — no durable change happened, and a plain retry starts fresh.
+- If the event append succeeds but the `queue-state.json` write then
+  fails, the audit trail already proves the attempted change and its
+  reason even though the state file doesn't yet reflect it — never a
+  silent, unaudited mutation. Re-running the exact same command detects
+  the already-recorded event (matched on execution unit + event name +
+  the deterministic reason text) and retries **only** the `queue-state.json`
+  write, so convergence never produces a duplicate event.
 
 ---
 

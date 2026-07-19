@@ -1039,16 +1039,24 @@ bounded canonical transition です:
 (high > normal > low)で order し、class 内では authoring order
 (queue-state array order)を tiebreak として使います。** 既存の
 すべての eligibility gate——packet directory の存在、execution-unit
-namespace regex、domain/repo filter、G534 の lifecycle-aware exclusion、
-legacy-retirement-marker check——は、以前と全く同じように同じ loop
-内で candidate ごとに実行され続けます。priority が、candidate が
-本来 fail するはずの gate を skip させることは決してありません。
-priority が変えるのは、すでに eligible な candidate のうちどれを、
-どの順序で試すかだけであり、それは per-candidate の gate loop が
-走る**前**に行われます。この reorder は **stable** な sort を使う
-ため、すべての item が enqueue のデフォルト値(`"normal"`)を持つ
-host——つまり実質的に priority が設定されていない host——では、
-G537 以前の挙動と byte-identical な出力になります。
+namespace regex、domain/repo filter、**dependency completeness /
+non-empty `blocked_by`**(review repair: `QueueSelection.SelectNext` が
+既に強制しているのと同じ rule——`dependencies` のすべての entry が
+`completed` であること、`blocked_by` が空であること)、G534 の
+lifecycle-aware exclusion、legacy-retirement-marker check——は、以前と
+全く同じように同じ loop 内で candidate ごとに実行され続けます。
+priority が、candidate が本来 fail するはずの gate を skip させる
+ことは決してありません。incomplete な dependency や non-empty な
+`blocked_by` を持つ "high" priority の queued unit は、eligible な
+lower-priority unit よりも先に選ばれることは決してありません——loop
+は単に、他の gate failure と全く同じように、priority/authoring order
+で次の candidate を試すだけです。priority が変えるのは、すでに
+eligible な candidate のうちどれを、どの順序で試すかだけであり、
+それは per-candidate の gate loop が走る**前**に行われます。この
+reorder は **stable** な sort を使うため、すべての item が enqueue
+のデフォルト値(`"normal"`)を持つ host——つまり実質的に priority が
+設定されていない host——では、G537 以前の挙動と byte-identical な
+出力になります。
 
 `QueueItem.Priority` は schema level では引き続き単なる、validate
 されない `string` です(変更なし)——`queue reprioritize` だけが
@@ -1057,6 +1065,25 @@ case-insensitive)。`next-slice` の ranking function は、認識できない
 値や欠けている値をすべて `normal` として扱い、error にはしません。
 そのため、手作業で書かれた、あるいは historical な `queue-state.json`
 ファイルがこの field によって fail closed することはありません。
+
+**Review repair — `queue reprioritize --write` は fail-closed かつ
+repairable な write 順序を使います。** `queue-state.json` を必須の
+`priority-changed` runs event の追記より先に書き込むと、追記 step が
+その後失敗した場合に、audit record の無い durable な priority mutation
+が残ってしまう可能性がありました。順序は逆にされています——runs
+event を**先に**追記し、`queue-state.json` は**後で**書き込みます:
+
+- event の追記が失敗した場合、`queue-state.json` は一切触れられません
+  ——durable な変更は何も起きておらず、単純な retry がまっさらな状態
+  から始まります。
+- event の追記が成功した後で `queue-state.json` の書き込みが失敗した
+  場合、state file がまだそれを反映していなくても、audit trail は
+  既に試みられた変更とその reason を証明します——silent で unaudited
+  な mutation には決してなりません。全く同じコマンドを再実行すると、
+  既に記録されている event(execution unit + event name + 決定論的な
+  reason text で一致)を検出し、`queue-state.json` の書き込み**のみ**を
+  retry するため、convergence が duplicate な event を生成することは
+  決してありません。
 
 ---
 

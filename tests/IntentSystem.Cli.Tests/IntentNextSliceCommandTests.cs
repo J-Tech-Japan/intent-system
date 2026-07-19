@@ -376,6 +376,178 @@ public sealed class IntentNextSliceCommandTests
     }
 
     [Fact]
+    public void Execute_HighPriorityUnitWithIncompleteDependency_IsNeverSelectedOverEligibleLowerPriorityUnit()
+    {
+        // G537 review repair: dependency completeness is an authoritative
+        // eligibility gate — a "high" priority queued unit whose
+        // dependency has NOT reached `completed` must never be selected
+        // ahead of an eligible normal-priority unit with no unmet
+        // dependencies. Priority only orders candidates that already pass
+        // every gate, dependencies included.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G601/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-19T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G600",
+                  "title": "high priority but depends on unfinished work",
+                  "state": "queued",
+                  "dependencies": ["G599"],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "high"
+                },
+                {
+                  "execution_unit": "G601",
+                  "title": "normal priority, no dependencies, fully eligible",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G601", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_HighPriorityUnitWithNonEmptyBlockedBy_IsNeverSelectedOverEligibleLowerPriorityUnit()
+    {
+        // G537 review repair: a non-empty `blocked_by` is likewise an
+        // authoritative eligibility gate that dominates priority.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G610/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G611/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-19T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G610",
+                  "title": "high priority but explicitly blocked",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": ["waiting on infra approval"],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "high"
+                },
+                {
+                  "execution_unit": "G611",
+                  "title": "normal priority, not blocked",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G611", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_HighPriorityUnitWithCompletedDependency_IsSelected()
+    {
+        // Counterpart: once the dependency reaches `completed`, the
+        // high-priority unit becomes eligible and priority correctly wins.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G620/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G621/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-19T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G619",
+                  "title": "the dependency, already completed",
+                  "state": "completed",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                },
+                {
+                  "execution_unit": "G620",
+                  "title": "high priority, dependency now complete",
+                  "state": "queued",
+                  "dependencies": ["G619"],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "high"
+                },
+                {
+                  "execution_unit": "G621",
+                  "title": "normal priority, authored second",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G620", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
     public void Execute_NoPrioritiesSet_SelectionStaysByteIdenticalToAuthoringOrder()
     {
         // G537 required regression: with every item at the enqueue default
