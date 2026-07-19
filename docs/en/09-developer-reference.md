@@ -249,38 +249,77 @@ All three surfaces apply the full order strictly — none of them fall back to
 
 ### Stalled-work detection (G523)
 
-`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] --format json|markdown`
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] --format json|markdown`
 is a **read-only** inventory of pending pipeline transitions with ages, so a
 single orchestrator wake (or an external heartbeat) can detect and recover a
 stalled pipeline without a human cross-checking GitHub labels, PR state, and
 queue-state by hand. It never mutates GitHub labels, queue-state, or
-`runs.jsonl`.
+`runs.jsonl` — and an informational kind never sends the status-check it
+recommends; that remains a human/orchestrator action.
 
-Categories:
+Every item carries `is_informational` (`bool`) distinguishing two families:
+
+**Actionable categories** (`is_informational: false` — `recommended_action`
+is always a runnable `intent-cli` command):
 
 - `published-not-delegated` — an OPEN issue carries `intent-target` but has
   no claim label (`intent-issue-in-progress` / `intent-pr-created`) yet, and
   no PR was ever created for it.
-- `pr-created-not-reviewing` — the source issue carries `intent-pr-created`
-  and its closing PR has not had the `review-start` transition applied (no
-  `intent-pr-reviewing` / `intent-pr-approved` on the PR).
+- `pr-created-not-reviewing` — the source issue carries `intent-pr-created`,
+  its closing PR has not had the `review-start` transition applied (no
+  `intent-pr-reviewing` / `intent-pr-approved` on the PR), AND the PR is not
+  already in the repair or rereview lifecycle (see below — a PR in either of
+  those states is reported under its own informational kind instead).
 - `merged-not-closed-out` — a MERGED PR's linked queue-state item is not yet
   `Completed` (closeout — `pr-merged` + `closeout-recorded` runs events —
   has not been recorded).
 
+**Informational categories (G533)** — `is_informational: true`,
+`recommended_action` is descriptive prose (never a transition command), age
+is reported for visibility only:
+
+- `repair-pending` — a PR carrying `intent-pr-request-update` and/or
+  `intent-pr-update-in-progress`. Field finding: an OPEN PR in exactly this
+  state (PR #1750) was previously misreported as `pr-created-not-reviewing`
+  with a `review-start` recommendation — semantically wrong mid-repair; a
+  detector whose recommendation must be second-guessed loses its value.
+  `age_minutes` is measured from the PR's own `updatedAt` (since entering
+  the repair state), not from PR creation.
+- `rereview-pending` — a PR carrying `intent-pr-rereview-ready` (repair
+  pushed, awaiting re-review). Same `updatedAt`-based age convention as
+  `repair-pending`.
+- `claimed-but-silent` — an issue carrying `intent-issue-in-progress` with
+  **no PR created yet** and no observable activity for longer than
+  `--claimed-silent-minutes` (default **720** minutes / 12 hours — chosen so
+  an ordinary work session never trips it). "Observable activity" is
+  approximated as the more recent of the issue's own `updatedAt` (GitHub
+  bumps this on any label change, comment, or other timeline event — the
+  closest available proxy without a dedicated per-issue timeline-events
+  fetch) and the `updatedAt` of any open PR whose closing references name
+  the issue (a linked PR's own activity counts too, even before
+  `intent-pr-created` is applied). `recommended_action` always reads as a
+  status-check request to the assigned worker — it never assumes
+  completion, failure, or any transition from silence alone. Once a PR
+  exists for the issue (`intent-pr-created`), the PR-lifecycle kinds take
+  over instead; detecting a repair-state PR that is itself stale beyond a
+  threshold is an explicit out-of-scope follow-up.
+
 Each item reports `kind`, `execution_unit`, `issue` and/or `pr` (number +
-url), `age_minutes`, and `recommended_action` — the exact canonical command
-to run next (`worker claim`, `automation pr-transition --transition
-review-start`, or `closeout pr`, respectively). `--stale-minutes` filters
-out items younger than the given threshold (default `0` — report everything
-with its age; callers pick their own threshold). `age_minutes` is
-approximated from the relevant GitHub entity's `createdAt`/`updatedAt`
-timestamp, since GitHub does not expose per-label-application timestamps.
-`published-not-delegated` also checks the already-fetched PR closing
-references independently of issue labels, so a completion label that has
-drifted out of sync with reality (an open PR already closes the issue, but
-`intent-pr-created` was never applied or was removed) never produces a
-false `worker claim` recommendation.
+url), `age_minutes`, `is_informational`, and `recommended_action`.
+`--stale-minutes` filters out items younger than the given threshold
+(default `0` — report everything with its age; callers pick their own
+threshold) — this applies uniformly across all six kinds; `claimed-but-silent`
+additionally gates on its OWN `--claimed-silent-minutes` threshold before an
+item is even considered (so raising `--stale-minutes` alone can never make a
+`claimed-but-silent` item appear earlier than its own threshold allows).
+`age_minutes` is approximated from the relevant GitHub entity's
+`createdAt`/`updatedAt` timestamp, since GitHub does not expose
+per-label-application timestamps or per-issue timeline events without a
+dedicated per-issue fetch this slice does not add. `published-not-delegated`
+also checks the already-fetched PR closing references independently of issue
+labels, so a completion label that has drifted out of sync with reality (an
+open PR already closes the issue, but `intent-pr-created` was never applied
+or was removed) never produces a false `worker claim` recommendation.
 
 **Execution-unit and domain identification (G532)**
 
@@ -361,6 +400,14 @@ packet.yaml path), `domain-underivable` (uncorroborated execution unit), or
 
 This slice is detection only — consuming the surface from the orchestrator
 wake procedure and from an external heartbeat are separate follow-up slices.
+
+`automation heartbeat` (G526) wraps this same analyzer and reflects
+`is_informational` into its `message_body`: the summary line splits into
+"`N` pending transition(s)" and, when any informational item is present,
+"`M` informational note(s)"; each per-item line ends with `— recommended:
+` command `` for an actionable kind or `— FYI: ` prose `` for an
+informational one, so a reader (human or orchestrator) can never mistake
+"no transition needed" for an actionable next command.
 
 ### Retiring a stuck published issue (G525)
 
