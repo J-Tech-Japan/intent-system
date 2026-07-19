@@ -1586,103 +1586,108 @@ truth です。G468 以降、ローカル `dotnet pack` のデフォルト `<Ver
 
 ```json
 {
-  "stableVersion": "0.3.15",
-  "nextVersion": "0.4.0"
+  "stableVersion": "0.4.0",
+  "nextVersion": "0.5.0"
 }
 ```
 
 | ステージ | バージョン形式 | 導出方法 |
 | --- | --- | --- |
-| ローカル pack / install | `0.4.0-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
-| Main CI preview | `0.4.0-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
-| リリース候補（任意） | `0.4.0-rc.N` | タグ `v0.4.0-rc.N` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する |
-| 安定版リリース | `0.4.0` | タグ `v0.4.0` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する（`-p:Version=<tag>` が優先） |
-| リリース後の main ビルド | `0.4.1-preview.<run>.<attempt>` | `nextVersion` を `0.4.1` にバンプ後 |
+| ローカル pack / install | `0.5.0-<sha>-<G-unit>` | `eng/version.json` の `nextVersion`（G468） |
+| Main CI preview | `0.5.0-preview.<run>.<attempt>` | `eng/version.json` の `nextVersion` |
+| リリース候補（任意） | `0.5.0-rc.N` | タグ `v0.5.0-rc.N` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する |
+| 安定版リリース | `0.5.0` | タグ `v0.5.0` の GitHub Release を publish すると `release.yml`（`on: release: published`）がトリガーされる。タグはバージョンを供給する（`-p:Version=<tag>` が優先） |
+| リリース後の main ビルド | `0.5.1-preview.<run>.<attempt>` | `nextVersion` を `0.5.1` にバンプ後 |
 
-**`v0.4.0` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
+**`v0.5.0` リリース後**、`eng/version.json` の両フィールドをバンプしてください:
 
 ```json
 {
-  "stableVersion": "0.4.0",
-  "nextVersion": "0.4.1"
+  "stableVersion": "0.5.0",
+  "nextVersion": "0.5.1"
 }
 ```
 
 これにより次の main ブランチ CI ビルド（およびローカル pack）が
-`0.4.1-preview.<run>.<attempt>` / `0.4.1-<sha>-<G-unit>` を生成し、`0.4.0`（安定版
+`0.5.1-preview.<run>.<attempt>` / `0.5.1-<sha>-<G-unit>` を生成し、`0.5.0`（安定版
 リリースバージョンと衝突）の出力が継続されなくなります。
 
-### 次リリース準備（v0.4.0）
+### 次リリース準備(v0.5.0)
 
-**`v0.3.15` は publish 済み**（GitHub Release + NuGet）で、バージョンポリシーは
-`0.4.0` 開発ラインにバンプされました — これは patch ではなく **minor** バンプです:
-3 つの新しい automation コマンドに加えて、目に見える fail-loud な挙動変更があるため、
-patch リリース以上の扱いが妥当です。リポジトリは現在 in-development の **`0.4.0`**
-`nextVersion` 上にあり、G528 は **prepare-only** です — version メタデータと docs をバンプするだけで
-publish ステップを追加しません。version-bump マージ自体は GitHub Release やタグを作成しません。
-マージされ
-[リリース準備ゲート](release-notes-v0.4.0.md#リリース準備ゲート-g528)が成り立った後、
-**メンテナ/オペレーター（または外部のリリース automation）が `v0.4.0` の GitHub Release を作成・
-publish** します。その Release の publish が `.github/workflows/release.yml`（`on: release: published`）を
+**`v0.4.0` は publish 済み**(GitHub Release + NuGet)で、バージョンポリシーは
+`0.5.0` 開発ラインにバンプされました — これは patch ではなく **minor** バンプです:
+このバッチは 2 つの新しいコマンド(`intent facet-check`、`queue reprioritize`)、新しい
+intent-tree schema サーフェス(`facets`)、新しい stalled-work kind、新しい transition
+target(`retired`)を出荷するため、patch リリース以上の扱いが妥当です。リポジトリは現在
+in-development の **`0.5.0`** `nextVersion` 上にあり、G538 は **prepare-only** です —
+version メタデータと docs をバンプするだけで publish ステップを追加しません。
+version-bump マージ自体は GitHub Release やタグを作成しません。マージされ
+[リリース準備ゲート](release-notes-v0.5.0.md#リリース準備ゲート-g538)が成り立った後、
+**メンテナ/オペレーター(または外部のリリース automation)が `v0.5.0` の GitHub Release を作成・
+publish** します。その Release の publish が `.github/workflows/release.yml`(`on: release: published`)を
 発火させ、NuGet package とプラットフォームごとのバイナリ成果物を build・publish します。
 完全な changelog と operator チェックリスト:
-[release-notes-v0.4.0.md](release-notes-v0.4.0.md)。
+[release-notes-v0.5.0.md](release-notes-v0.5.0.md)。
 
-**`v0.4.0` で出荷予定（`v0.3.15` 以降の変更）— orchestrator スタール防止バッチ、
-fail-loud な domain 解決、parser 修正:**
+**`v0.5.0` で出荷予定（`v0.4.0` 以降の変更）— semantic facets、stalled-work の正確性、
+queue の頑健性、label supersession、publish の信頼性、priority override:**
 
-- **3 つの新しい automation コマンド** — `automation stalled-work`（G523）、
-  `automation heartbeat`（G526）、`automation issue-retire`（G525）: 保留中の
-  transition を一覧する read-only な棚卸しコマンド、それを外部の低頻度スケジューラ向けに
-  ラップして送信可能な reconcile メッセージを返す read-only コマンド、そして authored 通りには
-  決して開始できない published issue を retire する canonical かつ atomic な transition。
-- **fail-loud な domain 解決**（G522）— execution-unit を解決するサーフェス
-  （`automation queue-seed-from-packet`、`review closeout-plan`、
-  `automation publish-recovery`）は、明示的な `--domain` が優先され（packet 自身の
-  `domain:` フィールドと矛盾する場合はエラー）、次に packet-declared な domain、
-  どちらも無い場合は candidate domains と正確な re-invocation を示して fail loud する
-  ようになりました — host の config-default domain への黙ったフォールバックは
-  もうありません。**移行方法:** これまで黙ったフォールバックに依存していたスクリプトや
-  automation は、`--domain` を明示的に渡すか、解決対象の packet.yaml が `domain:`
-  フィールドを宣言していることを確認する必要があります。
-- **orchestrator wake contract**（G524）— publish と delegate を同じ wake 内で行う
-  (「次の wake に持ち越す」はもうありません); メッセージ上限は「wake ごと・receiver ごとに
-  最大 1 通の delegation」と再定義; 新しい end-of-wake の `automation stalled-work`
-  チェック（never-defer ルール付き）; receiver の completion/blocked レポートは
-  すべての delegation の REQUIRED FINAL STEP になりました; そして送信のたびに
-  dispatch roster を検証（`team.sh`）。
-- **managed review worktree + design-alignment チェック**（G520）— review worktree は
-  managed root（`.intent-cli/worktrees/review-<unit>`）配下で強制され、`/tmp` は
-  使われません; design-alignment のエビデンス（packet、review-context、intent tree、
-  ADR/decision note）が無い review completed 返信は incomplete 扱いになります。
-- **Codex monitor（beta）ガイダンス**（G521）— agmsg Codex bridge 向けの setup preflight
-  と 3 つの新しい troubleshooting エントリ（silent launcher、static TUI、doubled
-  responses）。
-- **packet-yaml parser 修正**（G527）— `PreparedPacketYamlScalarParser` の
-  quote-balance チェックが delimiter-aware になり、アポストロフィだけを含む
-  double-quoted 値が誤って拒否されていたフィールドインシデントを修正しました。
+- **semantic facets**(G529–G531)— intent-tree ノードが frontmatter で宣言できる
+  4 つの closed set の `facets:` 値(`vocabulary`、`invariant`、`decider`、
+  `acceptance-property`)。`intent-cli context collect` と `packet draft` は、
+  分類されていない queue-state/clarification context より前に、facet で分類された
+  `## Facet context` セクションを優先的な局所化された semantic context として供給する
+  ようになりました。read-only な `intent facet-check` は、change proposal を facet
+  ノードに照らして、命名衝突やカバレッジのギャップを、決して gate することなく
+  表面化します。
+- **stalled-work の正確性**(G532–G533)— leading-ID/nested-domain の execution-unit
+  識別は、タイトルだけを信頼するのではなく実際の packet/queue linkage で裏付けられる
+  ようになりました。`--domain` は必須の authoritative なスコープ入力です。3 つの
+  新しい informational kind(`repair-pending`、`rereview-pending`、
+  `claimed-but-silent`)により、修理中/再レビュー待ちの PR が誤った `review-start`
+  推奨で誤報告されることがなくなりました。
+- **queue の頑健性**(G534)— packet reader は両方の YAML list-item インデント慣習を
+  受け入れるようになりました。`retired` は今や guarded かつ terminal な `queue
+  transition` target です(適用前に紐づく PR の実際の GitHub 状態を検証)。
+  `intent next-slice` は queue-state と packet-lifecycle の retirement エビデンスを
+  明示的に組み合わせ、矛盾があれば fail closed します。
+- **label supersession**(G535)— `automation pr-transition --transition
+  request-update` は、同じ write の中で古い `intent-pr-rereview-ready` を
+  クリアするようになりました。これにより、`request-update` が修理対象としてマークした
+  PR を `worker claim` が拒否してしまうデッドロックが解消されました。
+- **publish の信頼性**(G536)— `issue publish-flow` の idempotent な再実行は、
+  3 つの durable artifact(GitHub issue、queue-state エントリ、`runs.jsonl`
+  イベント)すべてを、1 つのシグナルを信頼するのではなく独立に検証・復元する
+  ようになり、state が矛盾したまま黙って残るのではなく fail loud するようになりました。
+- **priority override**(G537)— 新しい `queue reprioritize` コマンドは、queued かつ
+  未 publish の execution unit の priority を、durable かつ revision-counted、
+  lock-protected な audit protocol の下で設定します。`intent next-slice` は
+  priority class を優先(high > normal > low、authoring order による安定した
+  tiebreak)して候補を選択し、dependency/WIP/clarification/lifecycle の gate は
+  常に priority に優先します。
 - orchestrator モードは引き続き **preview/experimental** です: オプトインで、まだ hardening 中であり、
   timer-loop モードは完全サポート・不変です。
   [エージェントメッセージオーケストレーション](12-agent-message-orchestration.md) を参照。
 
-**リリース準備の検証（`v0.4.0` version bump のマージ前に実行）:**
+**リリース準備の検証（`v0.5.0` version bump のマージ前に実行）:**
 
 ```bash
-cat eng/version.json   # stableVersion 0.3.15（公開済み）, nextVersion 0.4.0（リリース対象）
+cat eng/version.json   # stableVersion 0.4.0（公開済み）, nextVersion 0.5.0（リリース対象）
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   期待形: intent-cli 0.4.0-<sha>-G52x （stale なリテラルではない）
+#   期待形: intent-cli 0.5.0-<sha>-G53x （stale なリテラルではない）
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.4.0.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.5.0.nupkg
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
   -c Release --filter "FullyQualifiedName~ReleasePackageMetadataTests"
 ```
 
 version-bump マージが `main` に入った後、メンテナ/オペレーター（または外部のリリース automation）が
-`v0.4.0` の GitHub Release を作成・publish します。その publish が `release.yml`
+`v0.5.0` の GitHub Release を作成・publish します。その publish が `release.yml`
 （`on: release: published`）を発火させ、NuGet package とプラットフォームごとのバイナリ成果物を
 build・publish します。publish 後、上記のリリース後 `eng/version.json` バンプ
-（`stableVersion → 0.4.0`, `nextVersion → 0.4.1`）を適用します。
+（`stableVersion → 0.5.0`, `nextVersion → 0.5.1`）を適用します — これは今回のパケットではなく
+NEXT のリリース準備パケットに委ねられます。
 
 ### 削除済みリリースタグ（`v0.3.3`）の再作成
 
