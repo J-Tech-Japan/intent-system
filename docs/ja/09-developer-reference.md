@@ -594,6 +594,92 @@ facet 値（G529 の閉じた集合）だけです。
 
 ---
 
+### facet-check (G531)
+
+`intent-cli intent facet-check` は read-only な lexical scaffold で、
+変更提案を G530 が届けるようにした G529 の facet node に照らし
+チェックします — 提案が持つ候補の command/event 用語を、既存の
+`vocabulary`/`invariant` node と突き合わせることで、reviewer が命名の
+衝突やカバレッジの gap を早期に発見できるようにします（手作業での
+突き合わせの代わりに）。これは明示的に semantic verifier では
+**ありません**し、**決して** gate にもなりません: マッチングは
+lexical（両辺を case/`-`/`_` 正規化した後の完全一致）であり、
+false negative は起こり得るものとして許容されており、このコマンドは
+結果に関わらず常に exit code `0` を返します。
+
+```bash
+intent-cli intent facet-check --domain <d> --packet G531 --format json
+intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --format json
+```
+
+- `--packet <execution-unit>` か `--terms <カンマ区切り>` のどちらか
+  一方が必須です（互いに排他的。両方または どちらも無い場合は usage
+  error）。`--terms` は、他の箇所の `--facets`/`--scope` と同様に、
+  空の要素を拒否します。
+- **`--packet` モード**では、その packet の `github-body.md` と
+  `implementation.md`（連結）から候補の用語を抽出します — 抽出される
+  のは、バッククォート内の裸の識別子（例: `` `CreateOrder` `` —
+  空白や他の記号を含むバッククォートの範囲は、コマンド例などであり
+  用語ではないためスキップされます）、内部に camelCase/PascalCase の
+  境界を持つプレーンテキストの単語（例: `CreateOrder`）、または
+  `Command`・`Event`・`Query` で終わるプレーンテキストの単語です。
+  指定された execution-unit の packet ディレクトリが存在しない場合は
+  usage error（exit `1`）になります。packet ディレクトリは存在するが
+  どちらのソースファイルも無い場合は、単に抽出される用語が 0 件になる
+  だけです。
+- **`--terms` モード**では、用語リストを明示的に受け取ります —
+  packet も抽出も coverage セクションもありません（照合すべき packet
+  scope が無いため、`coverage` は `null` になります。作り物の gap には
+  なりません）。
+- すべての用語は、domain の facet node に対して lexical にチェック
+  されます: node 自身の domain-relative な id の「最後のセグメント」
+  （ファイル名由来の名前。例えば `commands/create-order` なら
+  `create-order`）が、用語と同じ方法で正規化され（小文字化、
+  camelCase/PascalCase の境界、そして `-`/`_`/その他の記号の連続を
+  単一のハイフンに畳み込む）、完全一致で比較されます — そのため
+  `CreateOrder`・`create-order`・`create_order` はすべて「同じ用語」
+  として扱われます。複数の facet を持つ node は 1 回だけ報告されます
+  （順序付けは最優先の facet グループが勝ちます）。facet の数だけ
+  重複して報告されることはありません。
+  - `related_nodes`: マッチしたすべての node を、4 つの facet
+    すべてを対象に、正規の順序
+    `vocabulary → invariant → decider → acceptance-property` で。
+  - `collisions`: `related_nodes` のうち `vocabulary` facet を持つ
+    部分集合 — 提案の用語が重複または衝突している、既存の名前付き
+    概念です。
+  - `unmatched`: `related_nodes` が空の場合に `true`（その用語には
+    facet によるカバレッジが全く無いということです）。
+- **`--packet` モードのみ**: `coverage` セクションが、packet 自身の
+  `implementation_issue_packet.intent_references` と overlap する
+  `acceptance-property` node を報告します — `context collect
+  --scope`/`packet draft` が使うのと全く同じ G530 の scope-overlap
+  ロジックです（拒否された reference の `scope_warnings` の可視化も
+  含みます）。`acceptance-property` の node が packet の scope と
+  1 つも overlap しない場合、`gap` は `true` になります。
+- domain に facet-annotated な node が 1 つも無い場合は
+  `no_facet_data: true` になります（error ではありません — facets は
+  optional です）が、それでも各用語の抽出・マッチング結果は報告され
+  ます（当然すべて `unmatched` になります）— そのため呼び出し側は、
+  「そもそも照合対象が無い」場合と「照合はしたが何も見つからなかった」
+  場合を区別できます。
+- 壊れた `facets:` 宣言や node 上の未知の facet 値は、G530 と同じ
+  `warnings` エントリ（`path`、`reason`）を生成します — 黙って
+  消えることはありません。
+- すべての結果は、lexical scaffold であり gate ではないという
+  position を明示する `disclaimer` フィールドを、JSON でも Markdown
+  でも持ちます。
+- JSON の形: `{domain, disclaimer, no_facet_data, terms: [{term,
+  related_nodes: [{id, facets, summary, path}], collisions: [...],
+  unmatched}], coverage: {nodes: [...], gap, scope_warnings: [{hint,
+  reason}]} | null, warnings: [{path, reason}]}`。
+- この slice の Out of Scope（完全な境界は G531 issue を参照）:
+  semantic/embedding ベースのマッチング、あらゆる blocking/gating の
+  挙動、reviewer guidance や orchestrator delegation preflight への
+  組み込み、そしてどの domain tree への annotation も — このコマンドは
+  読み取りと報告のみを行います。
+
+---
+
 ## バージョンフロー
 
 リポジトリのバージョンポリシーは `eng/version.json` に記載されています。`stableVersion`

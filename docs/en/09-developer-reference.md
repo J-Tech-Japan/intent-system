@@ -563,6 +563,80 @@ VALID facet values (the closed G529 set) are ever bucketed.
 
 ---
 
+### Facet-check (G531)
+
+`intent-cli intent facet-check` is a read-only lexical scaffold that points
+a change proposal AT the G529 facet nodes G530 makes reachable — it checks a
+proposal's candidate command/event terms against existing `vocabulary`/
+`invariant` nodes so reviewers see naming collisions and coverage gaps
+early, instead of reconstructing that mapping by hand. It is explicitly
+**not** a semantic verifier and **never** a gate: matching is lexical (an
+exact match once both sides are case/`-`/`_` normalized), false negatives
+are expected, and the command always exits `0` regardless of findings.
+
+```bash
+intent-cli intent facet-check --domain <d> --packet G531 --format json
+intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --format json
+```
+
+- Exactly one of `--packet <execution-unit>` or `--terms <comma-list>` is
+  required (mutually exclusive; a usage error otherwise). `--terms` rejects
+  an empty element the same way `--facets`/`--scope` do elsewhere.
+- **`--packet` mode** extracts candidate terms from that packet's
+  `github-body.md` and `implementation.md` (concatenated) — a term is
+  extracted when it is a bare identifier inside backticks (e.g.
+  `` `CreateOrder` `` — a backtick span containing whitespace or other
+  punctuation, like a full command example, is skipped, since it is not a
+  term), a plain-text word with an internal camelCase/PascalCase boundary
+  (e.g. `CreateOrder`), or a plain-text word ending in `Command`, `Event`,
+  or `Query`. A missing packet directory for the given execution-unit is a
+  usage error (exit `1`); a packet directory with neither source file
+  present simply extracts zero terms.
+- **`--terms` mode** takes the term list explicitly — no packet, no
+  extraction, no coverage section (there is no packet scope to check
+  coverage against, so `coverage` is `null`, never a fabricated gap).
+- Every term is checked against the domain's facet nodes lexically: a
+  node's own domain-relative id's LAST segment (its filename-derived name,
+  e.g. `commands/create-order` → `create-order`) is normalized the same way
+  the term is (lowercase, camelCase/PascalCase boundaries and any run of
+  `-`/`_`/other punctuation folded into single hyphens) and compared for an
+  exact match — so `CreateOrder`, `create-order`, and `create_order` are all
+  "the same term". A node carrying more than one facet is reported once
+  (its highest-priority facet group wins for ordering), not once per facet.
+  - `related_nodes`: every matching node, across all four facets, in the
+    canonical `vocabulary → invariant → decider → acceptance-property`
+    order.
+  - `collisions`: the subset of `related_nodes` that carry the `vocabulary`
+    facet — an existing named concept the proposal's term duplicates or
+    conflicts with.
+  - `unmatched`: `true` when `related_nodes` is empty (no facet coverage at
+    all for that term).
+- **`--packet` mode only**: a `coverage` section reports the
+  `acceptance-property` nodes overlapping the packet's own
+  `implementation_issue_packet.intent_references` — the exact same G530
+  scope-overlap logic `context collect --scope`/`packet draft` use,
+  including the same rejected-reference `scope_warnings` visibility. `gap`
+  is `true` when no acceptance-property node overlaps the packet's scope.
+- A domain with ZERO facet-annotated nodes at all sets `no_facet_data: true`
+  (not an error — facets are optional) but still reports each term's
+  extraction/match result (trivially all `unmatched`), so a caller can tell
+  "nothing to check against" apart from "checked, found nothing".
+- A malformed `facets:` declaration or an unknown facet value on a node
+  produces the same `warnings` entries (`path`, `reason`) G530 surfaces —
+  never silently dropped.
+- Every result carries a `disclaimer` field stating the lexical-scaffold,
+  non-gate positioning explicitly, in JSON and Markdown alike.
+- JSON shape: `{domain, disclaimer, no_facet_data, terms: [{term,
+  related_nodes: [{id, facets, summary, path}], collisions: [...],
+  unmatched}], coverage: {nodes: [...], gap, scope_warnings: [{hint,
+  reason}]} | null, warnings: [{path, reason}]}`.
+- Out of scope for this slice (see the G531 issue for the full boundary):
+  semantic/embedding-based matching, any blocking/gating behavior, wiring
+  into reviewer guidance or orchestrator delegation preflight, and
+  annotating any domain tree — this command only reads and reports.
+
+---
+
 ## Version flow
 
 The repository version policy lives in `eng/version.json` — the single source of

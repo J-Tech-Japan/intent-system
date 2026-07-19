@@ -294,7 +294,8 @@ internal static class CommandRouter
                 ["search"] = IntentSearchCommand.Execute,
                 ["explain"] = IntentExplainCommand.Execute,
                 ["next-slice"] = IntentNextSliceCommand.Execute,
-                ["draft-from-interview"] = IntentDraftFromInterviewCommand.Execute
+                ["draft-from-interview"] = IntentDraftFromInterviewCommand.Execute,
+                ["facet-check"] = IntentFacetCheckCommand.Execute
             },
             ["packet"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
