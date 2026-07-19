@@ -159,6 +159,7 @@ internal static class IntentAnalyzeTreeCommand
         }
 
         var nextSteps = BuildNextSteps(request, flatFiles, proposals, backups.Count, written.Count);
+        var facetCoverage = ComputeFacetCoverage(domainRoot);
 
         return new IntentAnalyzeTreeResult
         {
@@ -170,8 +171,68 @@ internal static class IntentAnalyzeTreeCommand
             DetectedReferences = detectedRefs,
             BackupPaths = backups,
             WrittenPaths = written,
+            FacetCoverage = facetCoverage,
             NextSteps = nextSteps
         };
+    }
+
+    // ── Facet coverage (G529) ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Counts, across every Markdown file in the whole domain tree (not just
+    /// the top-level flat files this command otherwise analyzes), how many
+    /// nodes carry each facet. Only facets with at least one node are
+    /// included — an unannotated node is legitimate, so there is no
+    /// "facet-less nodes" list, and an unused facet is simply absent rather
+    /// than reported as zero.
+    /// </summary>
+    private static IReadOnlyDictionary<string, int> ComputeFacetCoverage(string domainRoot)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (!Directory.Exists(domainRoot))
+        {
+            return counts;
+        }
+
+        foreach (var file in Directory.GetFiles(domainRoot, "*.md", SearchOption.AllDirectories))
+        {
+            string content;
+            try
+            {
+                content = File.ReadAllText(file);
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            var parsed = IntentNodeFacets.ParseFacets(content);
+            if (parsed.Kind != FacetsParseKind.Present)
+            {
+                // Absent: nothing to count. Malformed: `lint-layout`'s
+                // concern to report as an error, not counted here.
+                continue;
+            }
+
+            // parsed.Values is already deduplicated (stable, first-seen
+            // order) by the shared parser, so every caller — lint, search,
+            // and this coverage count — agrees on how a duplicate "counts".
+            foreach (var facet in parsed.Values)
+            {
+                if (!IntentNodeFacets.IsAllowedValue(facet))
+                {
+                    // Invalid values are `lint-layout`'s concern, not counted here.
+                    continue;
+                }
+                counts[facet] = counts.GetValueOrDefault(facet) + 1;
+            }
+        }
+
+        return counts;
     }
 
     // ── Discovery ────────────────────────────────────────────────────────────
@@ -522,6 +583,20 @@ internal static class IntentAnalyzeTreeCommand
             writer.WriteLine();
         }
 
+        if (result.FacetCoverage.Count > 0)
+        {
+            writer.WriteLine("## Facet coverage");
+            writer.WriteLine();
+            foreach (var facet in IntentNodeFacets.AllowedValues)
+            {
+                if (result.FacetCoverage.TryGetValue(facet, out var count))
+                {
+                    writer.WriteLine($"- {facet}: {count}");
+                }
+            }
+            writer.WriteLine();
+        }
+
         writer.WriteLine("## Next steps");
         writer.WriteLine();
         foreach (var step in result.NextSteps)
@@ -555,6 +630,7 @@ internal sealed record IntentAnalyzeTreeResult
     public required IReadOnlyList<DetectedReference> DetectedReferences { get; init; }
     public required IReadOnlyList<string> BackupPaths { get; init; }
     public required IReadOnlyList<string> WrittenPaths { get; init; }
+    public required IReadOnlyDictionary<string, int> FacetCoverage { get; init; }
     public required IReadOnlyList<string> NextSteps { get; init; }
 }
 

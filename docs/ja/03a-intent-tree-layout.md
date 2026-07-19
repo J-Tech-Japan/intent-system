@@ -87,6 +87,98 @@ features/
     links.md             # 参照リンク
 ```
 
+## facets(セマンティックファセット)
+
+どの node ファイルも、任意の `facets:` frontmatter フィールドで、その node が
+4 つの「人間が理解を保持し続けるべき」サーフェスのうちどれを文書化しているかを
+示すことができます — これは、コーディングを AI に委譲する際に人間が理解し続け
+なければならない最小限のサーフェスです(オペレーター入力、
+[issue #1159](https://github.com/J-Tech-Japan/intent-system/issues/1159))。
+projection や boilerplate は安全に委譲できますが、この 4 つは委譲できません:
+
+- **`vocabulary`** — event/command vocabulary: 何が fact として扱われるか。
+- **`invariant`** — invariant と consistency boundary。
+- **`decider`** — decider judgment: コマンドが何を決定するか。
+- **`acceptance-property`** — acceptance property: 何が壊れてはならないか。
+
+この値セットは現時点では closed set です。拡張は将来の design 作業であり、
+node の frontmatter がローカルに新しい値を作り出すことはできません。
+`facets:` は完全に **任意** です — 付与されていない node は unannotated
+であり、これは正当な状態であって error ではありません。`intent lint-layout`
+は認識できない値のみを拒否します(node・不正な値・許可されている値セットを
+明示)。`intent search --facet <value>` はその facet を持つ node に絞り込み、
+`intent analyze-tree` は facet ごとのカウントを報告します。scaffold される
+node ファイル(`init-tree`、`add-feature`、`draft-from-interview`)には、
+4 つの値すべてを説明するコメント付きの例が含まれます — 該当行のコメントを
+外して編集することで node に注釈を付けられます:
+
+```markdown
+---
+# Optional semantic facets (G529) — closed set, one line each:
+#   vocabulary            — event/command vocabulary: what counts as a fact
+#   invariant              — invariants and consistency boundaries
+#   decider                — decider judgments: what a command decides
+#   acceptance-property    — what must not break
+# Uncomment and edit to annotate this node, e.g.:
+# facets: [vocabulary]
+---
+
+# Node title
+...
+```
+
+facet ごとの例 node を 1 つずつ示します:
+
+- **vocabulary** — ドメインの event/command vocabulary を定義する glossary
+  node:
+
+  ```markdown
+  ---
+  facets: [vocabulary]
+  ---
+  # Glossary
+  **PaymentAuthorized** — 決済プロバイダが資金確保を確認した時点で記録される
+  fact。その場で取り消されることはない(`PaymentRefunded` を参照)。
+  ```
+
+- **invariant** — 機能の consistency boundary を示す node:
+
+  ```markdown
+  ---
+  facets: [invariant]
+  ---
+  # Order — consistency boundary
+  注文の合計は常にその明細行の合計と一致しなければならない。この invariant は
+  `Order` aggregate の境界内でのみ強制され、aggregate を横断しては強制しない。
+  ```
+
+- **decider** — コマンドが何を決定するかを文書化する node:
+
+  ```markdown
+  ---
+  facets: [decider]
+  ---
+  # ApproveRefund — decision
+  返金リクエストと注文の支払い履歴が与えられたとき、返金を承認・部分承認・
+  却下のいずれにするかを決定する。この決定そのもの(通知/projection の副作用
+  ではなく)が、人間によるレビューを維持すべき部分である。
+  ```
+
+- **acceptance-property** — 何が壊れてはならないかを述べる acceptance
+  criteria node:
+
+  ```markdown
+  ---
+  facets: [acceptance-property]
+  ---
+  # Checkout — acceptance properties
+  - 完了した checkout はカートを空でない状態のまま残してはならない。
+  - 同じ注文に対して決済が二重に capture されてはならない。
+  ```
+
+1 つの node が複数の facet を持つこともできます(例: `facets: [vocabulary,
+invariant]`)。本当に両方を文書化している場合に限ります。
+
 ## 相互リンクのルール
 
 相互リンクはツリーをナビゲートしやすくし、コンテンツの重複を防ぎます:
