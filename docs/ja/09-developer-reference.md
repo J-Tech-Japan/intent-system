@@ -617,51 +617,91 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   error）。`--terms` は、他の箇所の `--facets`/`--scope` と同様に、
   空の要素を拒否します。
 - **`--packet` モード**では、その packet の `github-body.md` と
-  `implementation.md`（連結）から候補の用語を抽出します — 抽出される
-  のは、バッククォート内の裸の識別子（例: `` `CreateOrder` `` —
-  空白や他の記号を含むバッククォートの範囲は、コマンド例などであり
-  用語ではないためスキップされます）、内部に camelCase/PascalCase の
-  境界を持つプレーンテキストの単語（例: `CreateOrder`）、または
-  `Command`・`Event`・`Query` で終わるプレーンテキストの単語です。
-  指定された execution-unit の packet ディレクトリが存在しない場合は
-  usage error（exit `1`）になります。packet ディレクトリは存在するが
-  どちらのソースファイルも無い場合は、単に抽出される用語が 0 件になる
-  だけです。
+  `implementation.md`（連結。github-body が先）から候補の用語を
+  抽出します — 抽出されるのは、バッククォート内の裸の識別子（例:
+  `` `CreateOrder` `` — 空白や他の記号を含むバッククォートの範囲は、
+  コマンド例などであり用語ではないためスキップされます）、内部に
+  camelCase/PascalCase の境界を持つプレーンテキストの単語（例:
+  `CreateOrder`）、または `Command`・`Event`・`Query` で終わる
+  プレーンテキストの単語です。ノイズは、どちらのルールが走るより
+  前に除外されます: fenced code block（` ``` ` フェンス内の識別子は
+  決して用語になりません — インラインの単一バッククォートの範囲は
+  影響を受けません）、Markdown リンク（角括弧のテキストと括弧内の
+  リンク先の両方）、裸の URL、そして複数セグメントのパス（例:
+  `src/Commands/CreateOrder.cs`）は、すべて先にブランクされるため、
+  コードサンプル内のクラス名や、パス/URL 中の CamelCase セグメントが
+  候補になることはありません。抽出は、連結されたドキュメント全体を
+  通じて「出現順」です（位置に関係なく「まずバッククォートのヒットを
+  すべて、その後にプレーンワードのヒットをすべて」ではありません）。
+  用語マッチングと同じ正規化で重複除去され、先に出現した表記が
+  保持されます — そのため `github-body.md` で言及された用語が、
+  （別の形で）`implementation.md` で再び言及されても、
+  `github-body.md` 側の出現の表記が保たれます。指定された
+  execution-unit の packet ディレクトリが存在しない場合は usage
+  error（exit `1`）になります。packet ディレクトリは存在するが
+  どちらのソースファイルも無い場合は、単に抽出される用語が 0 件に
+  なるだけです。
 - **`--terms` モード**では、用語リストを明示的に受け取ります —
   packet も抽出も coverage セクションもありません（照合すべき packet
   scope が無いため、`coverage` は `null` になります。作り物の gap には
   なりません）。
 - すべての用語は、domain の facet node に対して lexical にチェック
-  されます: node 自身の domain-relative な id の「最後のセグメント」
+  されます。常に full-token の完全一致のみで（決して substring 検索
+  ではありません）、node が持つ 2 つの自己申告サーフェスと比較され
+  ます: node 自身の domain-relative な id の「最後のセグメント」
   （ファイル名由来の名前。例えば `commands/create-order` なら
-  `create-order`）が、用語と同じ方法で正規化され（小文字化、
-  camelCase/PascalCase の境界、そして `-`/`_`/その他の記号の連続を
-  単一のハイフンに畳み込む）、完全一致で比較されます — そのため
+  `create-order`）と、その title（抽出された `summary`。通常は
+  node の見出し）です。どちらも用語と同じ方法で正規化されてから
+  （小文字化、camelCase/PascalCase の境界、そして `-`/`_`/その他の
+  記号の連続を単一のハイフンに畳み込む）比較されます — そのため
   `CreateOrder`・`create-order`・`create_order` はすべて「同じ用語」
-  として扱われます。複数の facet を持つ node は 1 回だけ報告されます
-  （順序付けは最優先の facet グループが勝ちます）。facet の数だけ
-  重複して報告されることはありません。
+  として扱われ、"Create Order" という title を持つ node は、id が
+  一致しなくてもマッチします。複数の facet を持つ node は 1 回だけ
+  報告されます（順序付けは最優先の facet グループが勝ちます）。facet
+  の数だけ重複して報告されることはありません。
   - `related_nodes`: マッチしたすべての node を、4 つの facet
     すべてを対象に、正規の順序
     `vocabulary → invariant → decider → acceptance-property` で。
-  - `collisions`: `related_nodes` のうち `vocabulary` facet を持つ
-    部分集合 — 提案の用語が重複または衝突している、既存の名前付き
-    概念です。
+    各エントリは `{node: {id, facets, summary, path}, evidence,
+    match_kind}` の形です — `evidence` はマッチした根拠の部分集合
+    （`["id", "title"]` のいずれか、または両方）、`match_kind` は
+    RAW（正規化前）のテキストが完全に一致した場合 `"exact"`、
+    正規化した後にのみ一致した場合 `"normalized"` です。
+  - `collisions`: `related_nodes` のうち、node が `vocabulary` facet
+    を持つ部分集合 — 提案の用語が重複または衝突している、既存の
+    名前付き概念です。同じ `evidence`/`match_kind` の分類を持ちます。
   - `unmatched`: `related_nodes` が空の場合に `true`（その用語には
     facet によるカバレッジが全く無いということです）。
 - **`--packet` モードのみ**: `coverage` セクションが、packet 自身の
   `implementation_issue_packet.intent_references` と overlap する
   `acceptance-property` node を報告します — `context collect
   --scope`/`packet draft` が使うのと全く同じ G530 の scope-overlap
-  ロジックです（拒否された reference の `scope_warnings` の可視化も
-  含みます）。`acceptance-property` の node が packet の scope と
-  1 つも overlap しない場合、`gap` は `true` になります。
+  ロジックです（個々の拒否された reference の `scope_warnings` の
+  可視化も含みます）。`acceptance-property` の node が packet の
+  scope と 1 つも overlap しない場合、`gap` は `true` になります。
+  `scope_status` フィールドは、その scope が「なぜ」そうなったかを
+  区別します — `"valid-empty"`（意図的に authored された空の
+  `intent_references: []`）、`"valid-non-empty"`、`"missing"`
+  （`packet.yaml` が無いか、`intent_references` キー自体が無い）、
+  `"malformed"`（ファイルが YAML としてパースできない）、
+  `"wrong-shape"`（キーは存在するがシーケンスではない）のいずれかで、
+  valid 以外の状態には `scope_status_detail` 文字列が付きます。
+  これが必要な理由は、missing/malformed/wrong-shape な packet scope
+  が、genuinely authored な空リストと「同じ」計算結果の `gap: true`
+  に degrade してしまうためです（空/壊れた scope hint も、coverage
+  を「何にもマッチしない」に絞り込みます）— `scope_status` が無ければ、
+  この 2 つのケースは見分けが付きません。既存の `packet.yaml` を
+  読む際の本物の I/O エラー（「無い」のではなく実際の読み取りエラー）
+  は本物の実行エラーとして扱われ（exit `1`）、決して黙って空の scope
+  に畳み込まれることはありません。
 - domain に facet-annotated な node が 1 つも無い場合は
   `no_facet_data: true` になります（error ではありません — facets は
   optional です）が、それでも各用語の抽出・マッチング結果は報告され
   ます（当然すべて `unmatched` になります）— そのため呼び出し側は、
   「そもそも照合対象が無い」場合と「照合はしたが何も見つからなかった」
-  場合を区別できます。
+  場合を区別できます。このフィールドは JSON でも Markdown でも
+  無条件です — Markdown は常に明示的な `No facet data: yes|no` の
+  行をレンダリングし、`false` のときに省略することはありません。
 - 壊れた `facets:` 宣言や node 上の未知の facet 値は、G530 と同じ
   `warnings` エントリ（`path`、`reason`）を生成します — 黙って
   消えることはありません。
@@ -669,8 +709,9 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   position を明示する `disclaimer` フィールドを、JSON でも Markdown
   でも持ちます。
 - JSON の形: `{domain, disclaimer, no_facet_data, terms: [{term,
-  related_nodes: [{id, facets, summary, path}], collisions: [...],
-  unmatched}], coverage: {nodes: [...], gap, scope_warnings: [{hint,
+  related_nodes: [{node: {id, facets, summary, path}, evidence,
+  match_kind}], collisions: [...], unmatched}], coverage: {nodes: [...],
+  gap, scope_status, scope_status_detail, scope_warnings: [{hint,
   reason}]} | null, warnings: [{path, reason}]}`。
 - この slice の Out of Scope（完全な境界は G531 issue を参照）:
   semantic/embedding ベースのマッチング、あらゆる blocking/gating の

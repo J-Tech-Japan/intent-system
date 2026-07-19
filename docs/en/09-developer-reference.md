@@ -583,52 +583,91 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   required (mutually exclusive; a usage error otherwise). `--terms` rejects
   an empty element the same way `--facets`/`--scope` do elsewhere.
 - **`--packet` mode** extracts candidate terms from that packet's
-  `github-body.md` and `implementation.md` (concatenated) — a term is
-  extracted when it is a bare identifier inside backticks (e.g.
-  `` `CreateOrder` `` — a backtick span containing whitespace or other
-  punctuation, like a full command example, is skipped, since it is not a
-  term), a plain-text word with an internal camelCase/PascalCase boundary
-  (e.g. `CreateOrder`), or a plain-text word ending in `Command`, `Event`,
-  or `Query`. A missing packet directory for the given execution-unit is a
-  usage error (exit `1`); a packet directory with neither source file
-  present simply extracts zero terms.
+  `github-body.md` and `implementation.md` (concatenated, github-body
+  first) — a term is extracted when it is a bare identifier inside
+  backticks (e.g. `` `CreateOrder` `` — a backtick span containing
+  whitespace or other punctuation, like a full command example, is
+  skipped, since it is not a term), a plain-text word with an internal
+  camelCase/PascalCase boundary (e.g. `CreateOrder`), or a plain-text word
+  ending in `Command`, `Event`, or `Query`. Noise is excluded BEFORE either
+  rule runs: fenced code blocks (an identifier inside a ` ``` ` fence is
+  never a term — inline single-backtick spans are unaffected), Markdown
+  links (both the bracketed text and the parenthesized target), bare URLs,
+  and multi-segment paths (e.g. `src/Commands/CreateOrder.cs`) are all
+  blanked first, so a class name inside a code sample or a CamelCase path/
+  URL segment never becomes a candidate. Extraction is appearance-ordered
+  across the whole concatenated document (not "all backtick hits, then all
+  plain-word hits" regardless of position), deduplicated by the same
+  normalization as term matching, first-seen casing kept — so a term
+  mentioned in `github-body.md` and again (in a different form) in
+  `implementation.md` keeps the `github-body.md` occurrence's casing. A
+  missing packet directory for the given execution-unit is a usage error
+  (exit `1`); a packet directory with neither source file present simply
+  extracts zero terms.
 - **`--terms` mode** takes the term list explicitly — no packet, no
   extraction, no coverage section (there is no packet scope to check
   coverage against, so `coverage` is `null`, never a fabricated gap).
-- Every term is checked against the domain's facet nodes lexically: a
-  node's own domain-relative id's LAST segment (its filename-derived name,
-  e.g. `commands/create-order` → `create-order`) is normalized the same way
-  the term is (lowercase, camelCase/PascalCase boundaries and any run of
-  `-`/`_`/other punctuation folded into single hyphens) and compared for an
-  exact match — so `CreateOrder`, `create-order`, and `create_order` are all
-  "the same term". A node carrying more than one facet is reported once
-  (its highest-priority facet group wins for ordering), not once per facet.
+- Every term is checked against the domain's facet nodes lexically, using
+  full-token equality only (never a substring search) against two
+  node-authored surfaces: the node's own domain-relative id's LAST segment
+  (its filename-derived name, e.g. `commands/create-order` → `create-order`)
+  and its title (the extracted `summary`, typically the node's heading).
+  Both are normalized the same way the term is (lowercase, camelCase/
+  PascalCase boundaries and any run of `-`/`_`/other punctuation folded
+  into single hyphens) before comparing — so `CreateOrder`, `create-order`,
+  and `create_order` are all "the same term", and a node titled "Create
+  Order" matches even when its id doesn't. A node carrying more than one
+  facet is reported once (its highest-priority facet group wins for
+  ordering), not once per facet.
   - `related_nodes`: every matching node, across all four facets, in the
     canonical `vocabulary → invariant → decider → acceptance-property`
-    order.
-  - `collisions`: the subset of `related_nodes` that carry the `vocabulary`
-    facet — an existing named concept the proposal's term duplicates or
-    conflicts with.
+    order. Each entry is `{node: {id, facets, summary, path}, evidence,
+    match_kind}` — `evidence` is the subset of `["id", "title"]` that
+    matched (a node can match via either, or both), and `match_kind` is
+    `"exact"` when the RAW (non-normalized) text was identical, else
+    `"normalized"` (equal only after folding).
+  - `collisions`: the subset of `related_nodes` whose node carries the
+    `vocabulary` facet — an existing named concept the proposal's term
+    duplicates or conflicts with, carrying the same `evidence`/`match_kind`
+    classification.
   - `unmatched`: `true` when `related_nodes` is empty (no facet coverage at
     all for that term).
 - **`--packet` mode only**: a `coverage` section reports the
   `acceptance-property` nodes overlapping the packet's own
   `implementation_issue_packet.intent_references` — the exact same G530
   scope-overlap logic `context collect --scope`/`packet draft` use,
-  including the same rejected-reference `scope_warnings` visibility. `gap`
-  is `true` when no acceptance-property node overlaps the packet's scope.
+  including the same rejected-INDIVIDUAL-reference `scope_warnings`
+  visibility. `gap` is `true` when no acceptance-property node overlaps the
+  packet's scope. A `scope_status` field distinguishes WHY the scope was
+  what it was — `"valid-empty"` (an authored, deliberate
+  `intent_references: []`), `"valid-non-empty"`, `"missing"` (no
+  `packet.yaml`, or no `intent_references` key at all),
+  `"malformed"` (the file fails to parse as YAML), or `"wrong-shape"` (the
+  key exists but isn't a sequence) — with an accompanying
+  `scope_status_detail` string for every non-valid status. This exists
+  because a missing/malformed/wrong-shape packet scope degrades to the
+  SAME computed `gap: true` as a genuinely authored empty list (an empty/
+  broken scope hint still narrows coverage to nothing) — `scope_status`
+  is what keeps those two cases from looking identical. A genuine I/O
+  failure reading an EXISTING `packet.yaml` (not "missing" — an actual
+  read error) is treated as a real execution error (exit `1`), never
+  silently folded into an empty scope.
 - A domain with ZERO facet-annotated nodes at all sets `no_facet_data: true`
   (not an error — facets are optional) but still reports each term's
   extraction/match result (trivially all `unmatched`), so a caller can tell
-  "nothing to check against" apart from "checked, found nothing".
+  "nothing to check against" apart from "checked, found nothing". This
+  field is unconditional in BOTH JSON and Markdown — Markdown always
+  renders an explicit `No facet data: yes|no` line, never omitting it when
+  false.
 - A malformed `facets:` declaration or an unknown facet value on a node
   produces the same `warnings` entries (`path`, `reason`) G530 surfaces —
   never silently dropped.
 - Every result carries a `disclaimer` field stating the lexical-scaffold,
   non-gate positioning explicitly, in JSON and Markdown alike.
 - JSON shape: `{domain, disclaimer, no_facet_data, terms: [{term,
-  related_nodes: [{id, facets, summary, path}], collisions: [...],
-  unmatched}], coverage: {nodes: [...], gap, scope_warnings: [{hint,
+  related_nodes: [{node: {id, facets, summary, path}, evidence,
+  match_kind}], collisions: [...], unmatched}], coverage: {nodes: [...],
+  gap, scope_status, scope_status_detail, scope_warnings: [{hint,
   reason}]} | null, warnings: [{path, reason}]}`.
 - Out of scope for this slice (see the G531 issue for the full boundary):
   semantic/embedding-based matching, any blocking/gating behavior, wiring
