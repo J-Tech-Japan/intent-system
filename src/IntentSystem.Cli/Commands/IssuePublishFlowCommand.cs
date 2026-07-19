@@ -53,6 +53,15 @@ internal static class IssuePublishFlowCommand
     /// <summary>Test seam — replaces the default <c>gh issue create</c> shell out.</summary>
     public static Func<IIssueCreator>? CreatorFactory { get; set; }
 
+    /// <summary>
+    /// G536 review repair: test seam — replaces the default
+    /// <c>gh issue list --search</c> shell out used to corroborate that no
+    /// GitHub issue already exists before falling through to
+    /// <c>gh issue create</c> when all three local durable artifacts are
+    /// missing.
+    /// </summary>
+    public static Func<IGitHubExistingIssueChecker>? ExistingIssueCheckerFactory { get; set; }
+
     /// <summary>G278: test seam for the durable-state event timestamp.</summary>
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
@@ -164,9 +173,32 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
-        if (!write)
+        var queueStatePathForIdempotency = context.GetQueueStatePath();
+        var runLogPathForIdempotency = context.GetRunLogPath();
+
+        // G536 review repair: ONE shared, fail-closed analyzer independently
+        // parses all three durable artifacts (queue-state linked_issue,
+        // publish.yaml issue-created record, runs.jsonl issue-created
+        // event(s) — classified zero/exactly-one/duplicate-identical/
+        // conflicting) and resolves a single canonical issue identity, or
+        // fails closed on malformed data or a cross-artifact contradiction.
+        // `AutomationPublishRecoveryCommand` consults the SAME analyzer so
+        // the two surfaces can never disagree about what is missing.
+        //
+        // Field incidents (2026-07-19, G530/#1164 and #1166): a concurrent
+        // host-main advance forced a stash+ff-sync mid-publish. The
+        // pre-G536 short-circuit trusted whichever ONE signal it found
+        // first (publish.yaml or queue-state) and unconditionally reported
+        // durable_state_synced:true without ever checking runs.jsonl —
+        // and a unit whose ONLY surviving signal was runs.jsonl fell
+        // through to the create path entirely, risking a SECOND GitHub
+        // issue for the same execution unit.
+        var analysis = PublishDurableArtifactAnalyzer.Analyze(
+            executionUnit!, repo!, queueStatePathForIdempotency, publishYamlPath, runLogPathForIdempotency);
+
+        if (analysis.IsInvalid)
         {
-            var dryRunResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+            var invalidResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                 packetExists: true,
                 githubBodyPresent: true,
                 missingSections: Array.Empty<string>(),
@@ -179,60 +211,176 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: null,
+                error: $"durable-state analysis for '{executionUnit}' failed closed ({analysis.InvalidReason}): "
+                    + $"{analysis.InvalidDetail} Refusing to create, restore, or otherwise guess at this unit's "
+                    + $"state — inspect {analysis.InvalidArtifactPath} manually, then re-run "
+                    + $"`intent-cli issue publish-flow {executionUnit} --repo {repo} --write` once resolved.",
                 titleSource: titleSource);
+            EmitResult(writer, invalidResult, format);
+            return 1;
+        }
+
+        if (!write)
+        {
+            // Dry-run: PLAN only, never write. When the analyzer finds an
+            // existing issue, report the idempotent-rerun plan (canonical
+            // identity plus any artifacts that would be restored) purely
+            // from the read-only analysis — no restoration helper is ever
+            // invoked here.
+            var dryRunResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: analysis.HasExistingIssue,
+                durableStateSynced: analysis.IsFullySynced,
+                issueUrl: analysis.CanonicalIssueUrl,
+                issueNumber: analysis.CanonicalIssueNumber,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: null,
+                titleSource: titleSource,
+                wouldRestore: analysis.HasExistingIssue ? analysis.Gaps : null);
             EmitResult(writer, dryRunResult, format);
             return 0;
         }
 
-        var queueStatePathForIdempotency = context.GetQueueStatePath();
-
-        // G278 idempotency: if publish.yaml already records issue-created with a
-        // URL, do NOT call gh again and do NOT re-mutate durable state.
-        if (TryReadExistingIssueCreatedArtifact(publishYamlPath, out var existing))
+        if (analysis.HasExistingIssue)
         {
-            var idempotentResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
-                packetExists: true,
-                githubBodyPresent: true,
-                missingSections: Array.Empty<string>(),
-                title: title,
-                created: false,
-                idempotent: true,
-                durableStateSynced: true,
-                issueUrl: existing.CreatedIssueUrl,
-                issueNumber: existing.CreatedIssueNumber,
-                queueStatePatched: false,
-                publishYamlPatched: false,
-                runsAppended: false,
-                error: null,
-                titleSource: titleSource);
-            EmitResult(writer, idempotentResult, format);
-            return 0;
+            return ExecuteIdempotentRerun(
+                writer,
+                format,
+                executionUnit!,
+                domain,
+                repo!,
+                packetDirectory,
+                githubBodyPath,
+                publishYamlPath,
+                queueStatePathForIdempotency,
+                runLogPathForIdempotency,
+                title,
+                titleSource,
+                analysis);
         }
 
-        // G278 idempotency (PR #660 follow-up): if publish.yaml is missing or stale
-        // but queue-state.json already records linked_issue for this execution
-        // unit, treat as idempotent so a rerun cannot create a duplicate GitHub
-        // issue. Both artifact-level checks must short-circuit before any gh call.
-        if (TryReadExistingQueueStateLinkedIssue(queueStatePathForIdempotency, executionUnit!, out var queueLinkedIssue))
+        // G536 review repair: the analyzer found NO existing-issue identity
+        // across all three LOCAL artifacts — before falling through to
+        // create, corroborate against GitHub itself. If a matching issue
+        // already exists there (e.g. every local artifact was reset/lost
+        // but the GitHub issue itself was never re-created), creating here
+        // would produce a genuine duplicate.
+        IGitHubExistingIssueChecker existingIssueChecker;
+        try
         {
-            var queueIdempotentResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+            existingIssueChecker = ExistingIssueCheckerFactory?.Invoke() ?? new GhCliExistingIssueChecker();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            var checkerErrorResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                 packetExists: true,
                 githubBodyPresent: true,
                 missingSections: Array.Empty<string>(),
                 title: title,
                 created: false,
-                idempotent: true,
-                durableStateSynced: true,
-                issueUrl: queueLinkedIssue.Url,
-                issueNumber: queueLinkedIssue.Number,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: null,
+                error: $"failed to initialize GitHub existing-issue check: {exception.Message}",
                 titleSource: titleSource);
-            EmitResult(writer, queueIdempotentResult, format);
-            return 0;
+            EmitResult(writer, checkerErrorResult, format);
+            return 1;
+        }
+
+        GitHubExistingIssueLookupResult lookup;
+        try
+        {
+            lookup = existingIssueChecker.FindExistingIssue(repo!, executionUnit!, title!, File.ReadAllText(githubBodyPath));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            // Fail closed: an unresolvable corroboration check (a search
+            // failure) must never be treated as "no existing issue."
+            var checkerFailedResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"could not verify with GitHub whether an issue for '{executionUnit}' already exists "
+                    + $"({exception.Message}); refusing to create without that corroboration. Retry once GitHub "
+                    + "is reachable.",
+                titleSource: titleSource);
+            EmitResult(writer, checkerFailedResult, format);
+            return 1;
+        }
+
+        if (lookup.Classification == GitHubExistingIssueClassification.Multiple)
+        {
+            var ambiguousResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"multiple issues on {repo} match both the exact expected title and body for '{executionUnit}'; "
+                    + "cannot deterministically pick which one is canonical. Refusing to create or restore around an "
+                    + "ambiguous match — reconcile the duplicate GitHub issues manually, then re-run.",
+                titleSource: titleSource);
+            EmitResult(writer, ambiguousResult, format);
+            return 1;
+        }
+
+        if (lookup.Classification == GitHubExistingIssueClassification.Unique)
+        {
+            // G536 round-4 review repair: a unique, exact title+body match
+            // already exists on GitHub even though every local artifact was
+            // lost — feed that identity into the SAME shared analyzer/
+            // restoration path used for a local-signal rerun, so all three
+            // local artifacts are restored WITHOUT ever calling `gh issue
+            // create` (which would produce a genuine duplicate).
+            var githubSourcedAnalysis = PublishDurableArtifactAnalysis.ExistingIssue(
+                lookup.IssueNumber,
+                lookup.IssueUrl!,
+                new[]
+                {
+                    PublishDurableArtifactAnalyzer.GapQueueLinkedIssueMissing,
+                    PublishDurableArtifactAnalyzer.GapPublishYamlMissing,
+                    PublishDurableArtifactAnalyzer.GapRunsEventMissing,
+                });
+            return ExecuteIdempotentRerun(
+                writer,
+                format,
+                executionUnit!,
+                domain,
+                repo!,
+                packetDirectory,
+                githubBodyPath,
+                publishYamlPath,
+                queueStatePathForIdempotency,
+                runLogPathForIdempotency,
+                title,
+                titleSource,
+                githubSourcedAnalysis);
         }
 
         // G363 (PR #830 review repair): atomic-seed gate. The
@@ -437,75 +585,157 @@ internal static class IssuePublishFlowCommand
         return 0;
     }
 
-    private static bool TryReadExistingIssueCreatedArtifact(string publishYamlPath, out IssuePublishArtifact existing)
-    {
-        existing = default!;
-        if (!File.Exists(publishYamlPath))
-        {
-            return false;
-        }
-
-        try
-        {
-            var artifact = IssuePublishArtifactYaml.Deserialize(File.ReadAllText(publishYamlPath));
-            if (string.Equals(artifact.PublishStatus, PublishStatusIssueCreated, StringComparison.Ordinal)
-                && !string.IsNullOrWhiteSpace(artifact.CreatedIssueUrl))
-            {
-                existing = artifact;
-                return true;
-            }
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException)
-        {
-            // fall through; treat as no existing publish artifact
-        }
-
-        return false;
-    }
-
-    private static bool TryReadExistingQueueStateLinkedIssue(
-        string queueStatePath,
+    /// <summary>
+    /// G536 review repair: the idempotent-rerun path. The shared
+    /// <see cref="PublishDurableArtifactAnalyzer"/> already proved a
+    /// canonical issue identity exists and named exactly which of the three
+    /// durable artifacts (queue-state linked_issue, publish.yaml,
+    /// runs.jsonl issue-created event) are genuinely missing — this method
+    /// restores ONLY those, never touching an artifact the analyzer found
+    /// present (whether correct or, on a prior contradiction, already
+    /// rejected upstream). After attempting restoration it NEVER trusts the
+    /// write helpers' boolean return values alone: it re-invokes the same
+    /// analyzer against the freshly re-read files and reports
+    /// <c>durable_state_synced: true</c> only when that second, independent
+    /// read confirms zero remaining gaps.
+    /// </summary>
+    private static int ExecuteIdempotentRerun(
+        TextWriter writer,
+        string format,
         string executionUnit,
-        out LinkedIssue linkedIssue)
+        string domain,
+        string repo,
+        string packetDirectory,
+        string githubBodyPath,
+        string publishYamlPath,
+        string queueStatePath,
+        string runLogPath,
+        string? title,
+        string? titleSource,
+        PublishDurableArtifactAnalysis analysis)
     {
-        linkedIssue = default!;
-        if (!File.Exists(queueStatePath))
-        {
-            return false;
-        }
+        var canonicalIssueNumber = analysis.CanonicalIssueNumber;
+        var canonicalIssueUrl = analysis.CanonicalIssueUrl!;
+        var restoredAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var restoredArtifacts = new HashSet<string>(StringComparer.Ordinal);
+        var writeProblems = new List<string>();
 
-        try
+        foreach (var gap in analysis.Gaps)
         {
-            var queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
-            foreach (var item in queueState.Items)
+            switch (gap)
             {
-                if (!string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal))
-                {
-                    continue;
-                }
+                case PublishDurableArtifactAnalyzer.GapQueueLinkedIssueMissing:
+                    try
+                    {
+                        if (TryPatchQueueStateLinkedIssue(
+                                queueStatePath, executionUnit, repo, canonicalIssueNumber, canonicalIssueUrl, restoredAt))
+                        {
+                            restoredArtifacts.Add("queue_state");
+                        }
+                        else
+                        {
+                            writeProblems.Add(
+                                File.Exists(queueStatePath)
+                                    ? $"queue-state.json has no item with execution_unit '{executionUnit}' to restore linked_issue onto"
+                                    : $"queue-state.json not found at {queueStatePath}");
+                        }
+                    }
+                    catch (Exception exception) when (exception is IOException or InvalidOperationException)
+                    {
+                        writeProblems.Add($"queue-state.json linked_issue restoration failed: {exception.Message}");
+                    }
+                    break;
 
-                if (item.LinkedIssue is { } existing && !string.IsNullOrWhiteSpace(existing.Url))
-                {
-                    linkedIssue = existing;
-                    return true;
-                }
+                case PublishDurableArtifactAnalyzer.GapPublishYamlMissing:
+                    try
+                    {
+                        if (WritePublishArtifact(
+                                publishYamlPath, packetDirectory, githubBodyPath, executionUnit, canonicalIssueNumber, canonicalIssueUrl))
+                        {
+                            restoredArtifacts.Add("publish_yaml");
+                        }
+                        else
+                        {
+                            writeProblems.Add($"publish.yaml at {publishYamlPath} was not written");
+                        }
+                    }
+                    catch (Exception exception) when (exception is IOException or InvalidOperationException)
+                    {
+                        writeProblems.Add($"publish.yaml restoration failed: {exception.Message}");
+                    }
+                    break;
 
-                break;
+                case PublishDurableArtifactAnalyzer.GapRunsEventMissing:
+                    try
+                    {
+                        if (AppendIssueCreatedRunEvent(
+                                runLogPath, executionUnit, repo, canonicalIssueNumber, canonicalIssueUrl, restoredAt))
+                        {
+                            restoredArtifacts.Add("runs");
+                        }
+                        else
+                        {
+                            writeProblems.Add($"runs.jsonl at {runLogPath} did not receive the issue-created event");
+                        }
+                    }
+                    catch (Exception exception) when (exception is IOException or InvalidOperationException)
+                    {
+                        writeProblems.Add($"runs.jsonl issue-created event restoration failed: {exception.Message}");
+                    }
+                    break;
             }
         }
-        catch (Exception exception) when (exception is InvalidOperationException
-            or IOException
-            or System.Text.Json.JsonException)
+
+        // Never trust the write helpers' boolean returns alone: re-read and
+        // re-analyze all three artifacts from disk before ever reporting
+        // durable_state_synced:true. A concurrent change between the write
+        // above and this re-read (or a write that silently no-opped) is
+        // caught here rather than masked.
+        var reAnalysis = PublishDurableArtifactAnalyzer.Analyze(
+            executionUnit, repo, queueStatePath, publishYamlPath, runLogPath);
+        var fullySynced = reAnalysis.HasExistingIssue && !reAnalysis.IsInvalid && reAnalysis.Gaps.Count == 0;
+
+        string? error = null;
+        if (!fullySynced)
         {
-            // fall through; treat as no idempotency hit.
-            // PR #830 review repair: JsonException added so a
-            // malformed queue-state.json cannot crash this idempotency
-            // probe — it just bypasses the early-exit fast path and
-            // lets the atomic-seed gate (below) handle the malformed
-            // file as "not present" with a structured operator stop.
+            var remaining = new List<string>();
+            if (reAnalysis.IsInvalid)
+            {
+                remaining.Add($"post-restoration re-analysis failed closed ({reAnalysis.InvalidReason}): {reAnalysis.InvalidDetail}");
+            }
+            else if (reAnalysis.Gaps.Count > 0)
+            {
+                remaining.Add($"still missing: {string.Join(", ", reAnalysis.Gaps)}");
+            }
+            if (writeProblems.Count > 0)
+            {
+                remaining.Add(string.Join("; ", writeProblems));
+            }
+
+            error = $"GitHub issue {canonicalIssueUrl} already exists but parent durable state could not be fully "
+                + $"restored: {string.Join("; ", remaining)}. Recovery: re-run "
+                + $"`intent-cli issue publish-flow {executionUnit} --repo {repo} --write` after ensuring these "
+                + "paths are writable, or run `intent-cli automation publish-recovery "
+                + $"--repo {repo} --write` to reconcile queue-state linkage.";
         }
 
-        return false;
+        var result = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+            packetExists: true,
+            githubBodyPresent: true,
+            missingSections: Array.Empty<string>(),
+            title: title,
+            created: false,
+            idempotent: true,
+            durableStateSynced: fullySynced,
+            issueUrl: reAnalysis.CanonicalIssueUrl ?? canonicalIssueUrl,
+            issueNumber: reAnalysis.CanonicalIssueNumber ?? canonicalIssueNumber,
+            queueStatePatched: restoredArtifacts.Contains("queue_state"),
+            publishYamlPatched: restoredArtifacts.Contains("publish_yaml"),
+            runsAppended: restoredArtifacts.Contains("runs"),
+            error: error,
+            titleSource: titleSource);
+        EmitResult(writer, result, format);
+        return fullySynced ? 0 : 1;
     }
 
     /// <summary>
@@ -718,7 +948,8 @@ internal static class IssuePublishFlowCommand
         bool publishYamlPatched,
         bool runsAppended,
         string? error,
-        string? titleSource = null)
+        string? titleSource = null,
+        IReadOnlyList<string>? wouldRestore = null)
     {
         var nextSteps = new List<string>();
         if (created)
@@ -766,6 +997,7 @@ internal static class IssuePublishFlowCommand
             Warnings = string.Equals(titleSource, TitleSourceFallbackUntitled, StringComparison.Ordinal)
                 ? new[] { "title-fallback" }
                 : Array.Empty<string>(),
+            WouldRestore = wouldRestore,
             Error = error
         };
     }
@@ -830,6 +1062,10 @@ internal static class IssuePublishFlowCommand
         writer.WriteLine($"- created: {(result.Created ? "yes" : "no")}");
         writer.WriteLine($"- idempotent: {(result.Idempotent ? "yes" : "no")}");
         writer.WriteLine($"- durable_state_synced: {(result.DurableStateSynced ? "yes" : "no")}");
+        if (result.WouldRestore is { Count: > 0 } wouldRestore)
+        {
+            writer.WriteLine($"- would_restore: {string.Join(", ", wouldRestore)}");
+        }
         if (result.IssueNumber is { } issueNumber)
         {
             writer.WriteLine($"- issue number: {issueNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
@@ -1140,6 +1376,342 @@ internal interface IIssueCreator
 
 internal sealed record IssueCreateOutcome(string IssueUrl);
 
+/// <summary>
+/// G536 round-4 review repair: corroborates against GitHub itself, before
+/// the first-create path, whether an issue for this execution unit already
+/// exists — classified zero / exactly-one / multiple, never a bare bool.
+/// Matching requires BOTH the exact expected issue title (not a prefix —
+/// "G53" must never match "G536 ...") AND the candidate's body matching
+/// the exact local packet body that would have been (or was) posted to
+/// GitHub, so a merely similarly-titled unrelated issue can never match.
+/// This check never GUESSES or reconstructs identity from a fuzzy match —
+/// zero classifies as "safe to create," exactly-one feeds the confirmed
+/// GitHub identity into the same <see cref="PublishDurableArtifactAnalyzer"/>-
+/// backed restoration path (never a `gh issue create`), and multiple fails
+/// closed, non-mutating.
+/// </summary>
+internal interface IGitHubExistingIssueChecker
+{
+    GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody);
+}
+
+internal enum GitHubExistingIssueClassification
+{
+    None,
+    Unique,
+    Multiple,
+}
+
+internal sealed record GitHubExistingIssueLookupResult
+{
+    public required GitHubExistingIssueClassification Classification { get; init; }
+    public int? IssueNumber { get; init; }
+    public string? IssueUrl { get; init; }
+}
+
+/// <summary>
+/// G536 round-5 review repair: enumerates ALL matching issues (open and
+/// closed — <c>state=all</c>, matching the previous rounds' contract) via
+/// GraphQL cursor pagination rather than a fixed <c>--limit</c>, so a real
+/// duplicate can never be silently dropped by a result-count cap. Any page
+/// that reports <c>hasNextPage: true</c> without an <c>endCursor</c>, or a
+/// result set that does not terminate within <see cref="MaxPages"/> pages,
+/// fails loud rather than silently truncating.
+/// </summary>
+internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
+{
+    // Safety ceiling, not a silent cap: if genuinely exceeded, FetchAllCandidates
+    // throws (fails loud) rather than returning a truncated, incomplete result.
+    private const int MaxPages = 50;
+
+    private const string GraphQlQuery = """
+        query($searchQuery: String!, $cursor: String) {
+          search(query: $searchQuery, type: ISSUE, first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              ... on Issue { number title url body }
+            }
+          }
+        }
+        """;
+
+    /// <summary>
+    /// Test seam: replaces the real <c>gh api graphql</c> shell-out for a
+    /// single page. Production default shells to <c>gh</c>; tests inject a
+    /// fake returning canned GraphQL JSON so the real pagination loop,
+    /// truncation guard, and candidate classification/normalization below
+    /// are exercised end-to-end without spawning a process.
+    /// </summary>
+    internal Func<IReadOnlyList<string>, string>? PageFetcherOverride { get; init; }
+
+    public GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody)
+    {
+        var allCandidates = FetchAllCandidates(repo, executionUnit);
+        return ClassifyCandidates(allCandidates, expectedTitle, expectedBody);
+    }
+
+    internal IReadOnlyList<GhIssueListEntry> FetchAllCandidates(string repo, string executionUnit)
+    {
+        var fetchPage = PageFetcherOverride ?? RunGh;
+        // G536 round-6 review repair: `is:issue` — GraphQL search
+        // `type: ISSUE` covers BOTH issues and pull requests; without this
+        // qualifier a matching PR would come back as a node with no Issue
+        // fields (deserializing to an empty/default entry) instead of
+        // being excluded. `state:` is deliberately never added — omitting
+        // it is what keeps both open and closed issues in scope.
+        var searchQuery = $"repo:{repo} {executionUnit} in:title is:issue";
+        var results = new List<GhIssueListEntry>();
+        string? cursor = null;
+        var seenCursors = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var page = 0; ; page++)
+        {
+            if (page >= MaxPages)
+            {
+                throw new InvalidOperationException(
+                    $"gh api graphql issue search for '{executionUnit}' on {repo} did not complete within "
+                    + $"{MaxPages} pages ({MaxPages * 100} candidates); refusing to silently truncate the "
+                    + "candidate set. Narrow the search or investigate an unexpectedly large result set.");
+            }
+
+            var arguments = new List<string> { "api", "graphql", "-f", $"query={GraphQlQuery}", "-f", $"searchQuery={searchQuery}" };
+            if (cursor is not null)
+            {
+                arguments.Add("-f");
+                arguments.Add($"cursor={cursor}");
+            }
+
+            var stdout = fetchPage(arguments);
+
+            GraphQlResponse? response;
+            try
+            {
+                response = JsonSerializer.Deserialize<GraphQlResponse>(stdout);
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidOperationException($"gh api graphql returned unparseable JSON: {exception.Message}");
+            }
+
+            // G536 round-6 review repair: a GraphQL response can carry a
+            // non-empty `errors` array alongside partial `data` (the spec
+            // permits both simultaneously) — that partial data must never
+            // be treated as authoritative. Checked BEFORE touching `data`
+            // at all.
+            if (response?.Errors is { Count: > 0 } errors)
+            {
+                var messages = string.Join("; ", errors.Select(error => error.Message ?? "(no message)"));
+                throw new InvalidOperationException(
+                    $"gh api graphql returned error(s) for the issue-existence check on '{executionUnit}' ({repo}): {messages}");
+            }
+
+            var search = response?.Data?.Search
+                ?? throw new InvalidOperationException("gh api graphql returned no search data for the issue-existence check.");
+
+            // G536 round-7 review repair: a JSON `null` for a "non-nullable"
+            // shape (pageInfo / nodes / an individual node) deserializes
+            // silently rather than throwing — never dereference it without
+            // an explicit check first, or an incomplete authoritative
+            // response degrades into an incidental NullReferenceException
+            // instead of an intentional provider diagnostic.
+            if (search.PageInfo is null)
+            {
+                throw new InvalidOperationException("gh api graphql returned a search result with no pageInfo.");
+            }
+
+            if (search.Nodes is null)
+            {
+                throw new InvalidOperationException("gh api graphql returned a search result with no nodes array.");
+            }
+
+            // G536 round-6/7 review repair: validate every candidate BEFORE
+            // accumulating it — a malformed/incomplete authoritative
+            // response must fail loud here, not be silently carried
+            // forward to discover only after classification (or worse,
+            // after a restoration write) that the fetched identity was
+            // never trustworthy.
+            foreach (var node in search.Nodes)
+            {
+                if (node is null)
+                {
+                    throw new InvalidOperationException(
+                        "gh api graphql returned a null node in the search results; refusing to process an "
+                        + "incomplete authoritative response.");
+                }
+
+                results.Add(ValidateCandidate(node, repo));
+            }
+
+            if (!search.PageInfo.HasNextPage)
+            {
+                break;
+            }
+
+            // G536 round-7 review repair: null, empty, AND whitespace-only
+            // are all a missing cursor — a bare `?? throw` only caught the
+            // null case, letting an empty-string endCursor be sent back as
+            // `cursor=` on the next request and recorded into seenCursors
+            // as if it were a real value.
+            var nextCursor = search.PageInfo.EndCursor;
+            if (string.IsNullOrWhiteSpace(nextCursor))
+            {
+                throw new InvalidOperationException(
+                    "gh api graphql reported hasNextPage=true with a missing endCursor (null, empty, or "
+                    + "whitespace-only); refusing to silently stop pagination short of the real result set.");
+            }
+
+            if (!seenCursors.Add(nextCursor))
+            {
+                throw new InvalidOperationException(
+                    $"gh api graphql returned repeated cursor '{nextCursor}'; the pagination loop would re-fetch "
+                    + "the same page indefinitely. Refusing to loop until the safety cap — investigate the "
+                    + "GraphQL search API response.");
+            }
+
+            cursor = nextCursor;
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// G536 round-6 review repair: a candidate must be a complete,
+    /// self-consistent authoritative record before it is ever accumulated
+    /// — a positive issue number, a non-null/non-empty title, a non-null
+    /// body (required to prove content linkage later; a null body is an
+    /// invalid provider response, never silently treated as empty text),
+    /// and a URL matching the canonical
+    /// <c>https://github.com/&lt;requested repo&gt;/issues/&lt;number&gt;</c>
+    /// shape EXACTLY for the repo this check was scoped to.
+    /// </summary>
+    internal static GhIssueListEntry ValidateCandidate(GhIssueListEntry entry, string repo)
+    {
+        if (entry.Number <= 0)
+        {
+            throw new InvalidOperationException(
+                $"gh api graphql returned a candidate with a non-positive issue number ({entry.Number}) for repo '{repo}'.");
+        }
+
+        if (string.IsNullOrEmpty(entry.Title))
+        {
+            throw new InvalidOperationException(
+                $"gh api graphql returned candidate #{entry.Number} on '{repo}' with a null/empty title.");
+        }
+
+        if (entry.Body is null)
+        {
+            throw new InvalidOperationException(
+                $"gh api graphql returned candidate #{entry.Number} on '{repo}' with a null body; cannot verify content linkage.");
+        }
+
+        var expectedUrl = $"https://github.com/{repo}/issues/{entry.Number}";
+        if (!string.Equals(entry.Url, expectedUrl, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"gh api graphql returned candidate #{entry.Number} with url '{entry.Url ?? "(null)"}'; expected exactly '{expectedUrl}'.");
+        }
+
+        return entry;
+    }
+
+    private static string RunGh(IReadOnlyList<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "gh",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            StandardOutputEncoding = GitHubCliProcessEncoding.Utf8NoBom,
+            StandardErrorEncoding = GitHubCliProcessEncoding.Utf8NoBom
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start gh process.");
+
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"gh api graphql exit {process.ExitCode}: {stderr.Trim()}");
+        }
+
+        return stdout;
+    }
+
+    internal static GitHubExistingIssueLookupResult ClassifyCandidates(
+        IReadOnlyList<GhIssueListEntry> allCandidates, string expectedTitle, string expectedBody)
+    {
+        var normalizedExpectedBody = NormalizeBody(expectedBody);
+        var candidates = allCandidates
+            .Where(entry => string.Equals(entry.Title, expectedTitle, StringComparison.Ordinal))
+            .Where(entry => string.Equals(NormalizeBody(entry.Body ?? string.Empty), normalizedExpectedBody, StringComparison.Ordinal))
+            .ToArray();
+
+        return candidates.Length switch
+        {
+            0 => new GitHubExistingIssueLookupResult { Classification = GitHubExistingIssueClassification.None },
+            1 => new GitHubExistingIssueLookupResult
+            {
+                Classification = GitHubExistingIssueClassification.Unique,
+                IssueNumber = candidates[0].Number,
+                IssueUrl = candidates[0].Url,
+            },
+            _ => new GitHubExistingIssueLookupResult { Classification = GitHubExistingIssueClassification.Multiple },
+        };
+    }
+
+    /// <summary>
+    /// G536 round-5 review repair: the only permitted normalization is
+    /// line-ending conversion (CRLF/CR → LF) and equating "ends with
+    /// exactly one trailing newline" with "no trailing newline" (GitHub's
+    /// own storage/rendering convention). Unlike a blanket <c>Trim()</c>,
+    /// this NEVER touches leading whitespace/indentation or any other
+    /// interior/trailing whitespace — an indented Markdown code block (or
+    /// any other authored whitespace) is semantically significant, so a
+    /// body that differs only in a single trailing newline is treated as
+    /// identical, but any other whitespace drift is treated as a genuine
+    /// difference (not the same issue).
+    /// </summary>
+    internal static string NormalizeBody(string body)
+    {
+        var normalized = body.Replace("\r\n", "\n").Replace("\r", "\n");
+        if (normalized.EndsWith('\n'))
+        {
+            normalized = normalized[..^1];
+        }
+        return normalized;
+    }
+
+    internal sealed record GhIssueListEntry(
+        [property: JsonPropertyName("number")] int Number,
+        [property: JsonPropertyName("title")] string Title,
+        [property: JsonPropertyName("url")] string Url,
+        [property: JsonPropertyName("body")] string? Body);
+
+    private sealed record GraphQlResponse(
+        [property: JsonPropertyName("data")] GraphQlData? Data,
+        [property: JsonPropertyName("errors")] List<GraphQlError>? Errors);
+
+    private sealed record GraphQlError([property: JsonPropertyName("message")] string? Message);
+
+    private sealed record GraphQlData([property: JsonPropertyName("search")] GraphQlSearch? Search);
+
+    private sealed record GraphQlSearch(
+        [property: JsonPropertyName("pageInfo")] GraphQlPageInfo? PageInfo,
+        [property: JsonPropertyName("nodes")] List<GhIssueListEntry?>? Nodes);
+
+    private sealed record GraphQlPageInfo(
+        [property: JsonPropertyName("hasNextPage")] bool HasNextPage,
+        [property: JsonPropertyName("endCursor")] string? EndCursor);
+}
+
 internal sealed class GhCliIssueCreator : IIssueCreator
 {
     public IssueCreateOutcome CreateIssue(string repo, string title, string bodyFilePath)
@@ -1267,6 +1839,15 @@ internal sealed record IssuePublishFlowResult
 
     [JsonPropertyName("runs_appended")]
     public required bool RunsAppended { get; init; }
+
+    /// <summary>
+    /// G536: dry-run-only plan of durable artifacts that a subsequent
+    /// <c>--write</c> rerun would restore, taken verbatim from
+    /// <see cref="PublishDurableArtifactAnalysis.Gaps"/>. Null unless an
+    /// existing issue identity was found in dry-run mode.
+    /// </summary>
+    [JsonPropertyName("would_restore")]
+    public IReadOnlyList<string>? WouldRestore { get; init; }
 
     [JsonPropertyName("intent_target_applied")]
     public required bool IntentTargetApplied { get; init; }

@@ -107,6 +107,115 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G536FieldIncidentFixture_ReportsSamePartialStateGapAsPublishFlow()
+    {
+        // G536 review repair acceptance criterion: "publish-recovery on the
+        // same fixture reports the identical gap set" — not merely its own
+        // unrelated "no-closing-pr" vocabulary. Reproduces the exact
+        // durable-state shape from the field incident (2026-07-19, G530 as
+        // issue #1164) BEFORE any PR exists: queue-state's linked_issue/
+        // linked_pr are both null, but publish.yaml already records the
+        // created issue and runs.jsonl has no issue-created event. Both
+        // `automation publish-recovery` and `issue publish-flow`'s
+        // idempotent rerun now consult the SAME
+        // PublishDurableArtifactAnalyzer — this test proves that parity
+        // directly by running BOTH commands against the identical on-disk
+        // fixture and asserting their gap lists are byte-for-byte equal,
+        // instead of asserting one command's kind string in isolation.
+        using var workspace = new RecoveryWorkspace();
+        var title = "G530 Facet-aware context supply";
+        workspace.WriteQueueState(BuildQueueState("G530", linkedIssue: null, linkedPr: null));
+        workspace.WritePublishArtifact("G530", createdIssueNumber: 1164);
+        workspace.WriteGithubBody("G530", BuildCompleteContractBody(title));
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(Array.Empty<GitHubAutomationPrCandidate>());
+
+        using var recoveryWriter = new StringWriter();
+        var recoveryExit = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+            recoveryWriter);
+
+        Assert.Equal(0, recoveryExit);
+        using var recoveryDoc = JsonDocument.Parse(recoveryWriter.ToString());
+        Assert.Equal(0, recoveryDoc.RootElement.GetProperty("safe_repairs").GetArrayLength());
+        var unsafeStops = recoveryDoc.RootElement.GetProperty("unsafe_stops");
+        Assert.Equal(1, unsafeStops.GetArrayLength());
+        var stop = unsafeStops[0];
+        Assert.Equal("G530", stop.GetProperty("execution_unit").GetString());
+        var recoveryGaps = stop.GetProperty("durable_artifact_gaps").EnumerateArray()
+            .Select(e => e.GetString())
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToArray();
+
+        using var publishFlowWriter = new StringWriter();
+        var publishFlowExit = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G530", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            publishFlowWriter);
+
+        Assert.Equal(0, publishFlowExit);
+        using var publishFlowDoc = JsonDocument.Parse(publishFlowWriter.ToString());
+        Assert.True(publishFlowDoc.RootElement.GetProperty("idempotent").GetBoolean());
+        Assert.False(publishFlowDoc.RootElement.GetProperty("durable_state_synced").GetBoolean());
+        var wouldRestore = publishFlowDoc.RootElement.GetProperty("would_restore").EnumerateArray()
+            .Select(e => e.GetString())
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.NotEmpty(wouldRestore);
+        Assert.Equal(wouldRestore, recoveryGaps);
+
+        // Mutation invariant: dry-run never writes, on either surface.
+        var queueAfter = QueueStateSerializer.Deserialize(
+            File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        Assert.Null(queueAfter.Items[0].LinkedIssue);
+        Assert.Null(queueAfter.Items[0].LinkedPr);
+    }
+
+    private static string BuildCompleteContractBody(string title)
+    {
+        return $"""
+            # {title}
+
+            ## Goal
+            x
+
+            ## Why This Slice Exists Now
+            x
+
+            ## Current Observed State
+            x
+
+            ## Accepted Baseline You May Assume
+            x
+
+            ## Target Repo / Path / Part
+            x
+
+            ## In Scope
+            - x
+
+            ## Out Of Scope
+            - x
+
+            ## Acceptance Criteria
+            - x
+
+            ## Verification
+            x
+
+            ## Related Links
+            - x
+
+            ## Base Branch Policy
+            Policy: `direct-main`
+            Expected PR base branch: `main`
+            Open all child PRs against `main` directly.
+            """;
+    }
+
+    [Fact]
     public void Execute_AlreadyLinkedItem_NotIncluded()
     {
         using var workspace = new RecoveryWorkspace();
@@ -864,7 +973,13 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
             var artifact = new IssuePublishArtifact
             {
                 ExecutionUnit = executionUnit,
-                PublishStatus = "published",
+                // G536 review repair: use the same canonical status
+                // `IssuePublishFlowCommand.PublishStatusIssueCreated`
+                // ("issue-created") that `PublishDurableArtifactAnalyzer`
+                // recognizes, so this fixture's publish.yaml is a genuine
+                // "present" signal for the shared analyzer, not silently
+                // treated as absent.
+                PublishStatus = IssuePublishFlowCommand.PublishStatusIssueCreated,
                 PacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml",
                 IssueBodyPath = $".intent-cli/issues/{executionUnit}/github-body.md",
                 CreatedIssueNumber = createdIssueNumber,
@@ -884,6 +999,18 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
             var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
             Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, "packet.yaml"), $"domain: {domain}\n");
+        }
+
+        /// <summary>
+        /// G536 review repair: seeds a complete Child Issue Contract body so
+        /// <c>issue publish-flow</c> can also run against this exact
+        /// workspace/fixture, for cross-command gap-parity assertions.
+        /// </summary>
+        public void WriteGithubBody(string executionUnit, string content)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "github-body.md"), content);
         }
 
         public void Dispose()

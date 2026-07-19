@@ -721,6 +721,292 @@ refuse されます。
 
 ---
 
+### `issue publish-flow` の idempotent rerun が 3 つの durable artifact すべてを独立に検証・復元する (G536)
+
+Field incident(2026-07-19、G530 を issue #1164、G531 を issue #1166 として
+publish 中): それぞれの GitHub issue 作成後に host `main` が並行して
+進み、publish の途中で stash + fast-forward sync を強いられました。
+#1164 では `publish.yaml` が `issue-created` の記録を保持したまま
+生き残りましたが、`queue-state.json` の `linked_issue` と `runs.jsonl` の
+`issue-created` event は、どちらも publish 前(存在しない状態)に
+戻ってしまいました。#1166 ではさらに深刻で、`queue-state.json` の
+`linked_issue` と `publish.yaml` の `issue-created` record が両方とも
+失われ、`runs.jsonl` の `issue-created` event だけが唯一生き残った
+signal でした。G536 以前の idempotent rerun は `publish.yaml` か
+`queue-state.json` しか参照しておらず、`runs.jsonl` を identity source
+として一度も read していなかったため、#1166 の形状は通常の create path
+に fall through してしまい、同一 execution unit に対して**2 つ目の
+GitHub issue** を作成しかねない状態でした — これが今回の repair で
+修正した最も深刻な defect です。
+
+**単一の共有 analyzer `PublishDurableArtifactAnalyzer` が、`issue
+publish-flow` の idempotent rerun と `automation publish-recovery` の
+両方を今や支えています。** この analyzer は 3 つの durable artifact —
+`queue-state.json` の `linked_issue`、`publish.yaml` の `issue-created`
+record、`runs.jsonl` 内のすべての canonical `issue-created` event — を
+独立に parse し、単一の canonical issue identity を解決するか、fail
+closed します。両方のコマンドは、同じ durable-state の形状に対して
+まったく同じ、安定した gap identifier
+(`queue_linked_issue_missing`、`publish_yaml_missing`、
+`runs_event_missing`)を報告するため、2 つの surface が何が欠けている
+かについて食い違うことは決してありません。
+
+**`runs.jsonl` は存在有無だけでなく分類されます。** ある execution
+unit の `issue-created` event は集合として read され、以下のように
+分類されます:
+
+- **ゼロ件** の一致する event → `runs_event_missing` gap。
+- **ちょうど 1 件**、あるいは **duplicate-identical**(複数 event が
+  すべて同じ issue number を指している — 例えばリトライによる追記)
+  → present、gap なし。
+- **conflicting**(同一 execution unit に対して event が**異なる**
+  issue number を指している)→ `runs_event_conflicting` として fail
+  closed する data contradiction であり、どちらか一方に黙って解決
+  されることは決してありません。
+
+**malformed なデータは "missing" とは区別して fail closed します。**
+parse 不能な `publish.yaml`(`publish_yaml_malformed`)や、
+`linked_issue`(`repo#number`)も `reason` issue URL も認識可能な形で
+持たない `issue-created` run event(`runs_malformed`)は、決して
+silently に absent 扱いされません — malformed なデータを "missing"
+扱いすることは、実際には壊れているだけで本物の record を持つファイルへの
+安全でない上書きを招くためです。分析全体は、gap/復元 logic が走る前に
+fail-closed な結果へと short-circuit します。
+
+**真の cross-artifact contradiction はどちらか一方を選ぶのではなく、
+fail loud します。** artifact 同士が同一 execution unit の issue
+number について食い違っている場合、それは欠けている artifact ではなく
+data contradiction です — コマンドは refuse し
+(exit 1、`cross_artifact_contradiction`)、矛盾するすべての値を named
+し、どちらか一方を黙って信用することは決してありません。
+
+**復元は本当に欠けている artifact だけに触れ、write helper の戻り値を
+信用するのではなく re-read によって検証されます。** rerun は
+analyzer の gap list を iterate し、first-run の success path が使う
+のと全く同じ write helper(`TryPatchQueueStateLinkedIssue`、
+`WritePublishArtifact`、`AppendIssueCreatedRunEvent`)を使って、
+欠けている artifact だけを復元します。復元を試みた後、
+`PublishDurableArtifactAnalyzer.Analyze` を**もう一度**、書き込み直後の
+ファイルに対して独立に呼び出し、その re-read が残っている gap が
+ゼロであることを確認した場合**のみ** `durable_state_synced: true` を
+報告します — write helper が success を返しただけでは十分では
+ありません。idempotent rerun の間、`gh` が再び呼び出されることは
+ありません。
+
+**復元が失敗した場合も、正確に何が欠けているか・どう recovery するか
+を named した上で fail loud します。** artifact を復元できない場合
+(例えば `queue-state.json` にこの execution unit を patch すべき
+item がもはや存在しない場合)、コマンドは non-zero で exit し、
+`durable_state_synced: false` を報告し、その `error` は(復元後の
+re-analysis に基づいて)欠けている / 矛盾している artifact を正確に
+named した上で、正確な recovery command(再試行する `issue
+publish-flow ... --write`、または queue-state の linkage を reconcile
+する `automation publish-recovery ... --write`)を示します。artifact
+の検証は独立しており、all-or-nothing ではありません — 復元*できる*
+artifact は、他の artifact が復元できなかった場合でも復元されます。
+
+**dry-run は計画するだけで、決して書き込まず、`would_restore` を
+報告します。** `issue publish-flow <unit> --repo <owner/repo>`
+(`--write` なし)は同じ read-only な分析を実行し、既存の issue
+identity が見つかった場合は、write helper や `gh` を一切呼び出す
+ことなく、後続の `--write` rerun が復元するであろう正確な gap list
+である `would_restore` を報告します。
+
+**"local signal がゼロ" の unit に対して create する前に、まず
+GitHub 側の existence check が走ります。** analyzer が 3 つの
+local artifact すべてに対して identity を見つけられなかった場合、
+そのまま `gh issue create` に fall through すると、すべての
+local artifact が reset/lost されていても GitHub issue 自体は
+再作成されていないケースで、本物の duplicate を生む risk があります。
+create の前に `gh issue list --search` による corroboration check が
+走り、title の一致が見つかった場合はコマンドは refuse し(exit 1)、
+duplicate を作成したり曖昧な一致から identity を再構築しようと
+試みたりするのではなく、operator に `automation
+publish-recovery --write` か手動での backfill を案内します。
+
+**`automation publish-recovery` は同一の gap を報告します。** すべての
+unsafe stop は今や `durable_artifact_gaps` field を持ちます —
+同じ execution unit・同じ path に対して呼び出された、同一の共有
+analyzer の出力です。これにより operator(あるいは test)は、
+`publish-recovery` の unsafe stop と、`issue publish-flow` 自身の
+rerun が同一の durable state に対して独立に検出・復元するものとを、
+直接比較できます。
+
+**Round-4 review repair — canonical identity は number だけでなく完全な
+tuple です。** 後続の review round で、"issue number が同じ" だけを
+十分とみなすと、矛盾したデータや自己矛盾したデータをまだ通してしまう
+ことが判明しました: 2 つの artifact が同じ issue *number* を記録して
+いても *repo* が異なる場合や、単一の artifact 自身の repo/number/URL
+field が互いに食い違っている場合が、silently に受け入れられて
+いました。analyzer は今や、存在する各 signal に以下を要求します:
+
+- **内部的に自己矛盾がないこと** — `queue-state.json` の
+  `linked_issue`(`repo`、`number`、`url` を別々の field として持つ)や
+  各 `runs.jsonl` event(`linked_issue` の `repo#number` descriptor と
+  `reason` issue URL の両方を持ちうる)は、そもそも signal として
+  受け入れられる前に、自分自身と一致していなければなりません。
+- **canonical な GitHub issue URL であること** —
+  `https://github.com/<owner>/<repo>/issues/<number>` に正確に一致する
+  必要があります。この形に一致しない `/issues/` を含む文字列は、もはや
+  canonical として受け入れられません。
+- **確認済みの target repo と直接照合されること** — artifact 同士の
+  pairwise な比較だけでなく、この command run がスコープする `--repo`
+  と一致しない signal は、それが唯一の存在する signal であっても
+  contradiction になります。
+
+malformed / read 不能な `queue-state.json` も、`publish.yaml`/
+`runs.jsonl` と全く同じように fail closed するようになりました
+(`queue_state_malformed`)— 生き残った `publish.yaml` や `runs.jsonl` の
+signal が、この analyzer が実際には read できなかった
+`queue-state.json` の周りでの復元を authorize することは決してあり
+ません。`publish.yaml` 自身の `execution_unit` field も、packet path が
+スコープする unit と照合されます(不一致なら
+`publish_yaml_malformed` — 別 unit の packet からコピーされたデータは
+corruption であり、この unit の signal ではありません)。
+
+**GitHub existence check は今や bool ではなく分類
+(zero / exactly-one / multiple)であり、exact title と body の両方の
+linkage を要求します。** 前の round の
+`gh issue list --search ... --limit 20` と prefix-boundary な title
+matching は、20 件を超えた実際の duplicate を見逃す可能性と、単に
+似た title を持つだけの無関係な issue に一致する可能性の両方が
+ありました。書き直された check は:
+
+- `--limit 1000`(前 round の 20 に対して)で candidate を取得し、
+  現実的などのような repo の issue 履歴に対しても、client-side の
+  truncation によって本物の duplicate が silently に drop されない
+  ようにします — GitHub 自身の `in:title` search は、identity の
+  決定そのものではなく、高速な pre-filter として引き続き使用します。
+- candidate の title が resolved された expected title と**完全に**
+  一致することを要求します(prefix/boundary heuristic はもう
+  ありません — 似た title を持つだけの無関係な issue は決して一致
+  しません)。
+- さらに、candidate の body が local packet の `github-body.md` の
+  内容と(改行を normalize した上で)byte-for-byte 一致することを
+  要求します — これは `gh issue create --body-file` で post された
+  (あるいは post されるはずの)まさにその内容であり、title だけの
+  推測ではなく本物の content-linkage check になります。
+- 結果を分類します: **zero** 件の一致 → create しても安全、
+  **ちょうど 1 件** → その確認済みの GitHub identity が、local
+  signal による rerun と同じ `PublishDurableArtifactAnalyzer` ベースの
+  復元 path に直接 feed され、`gh issue create` を一切呼び出す
+  ことなく 3 つすべての local artifact を復元します。**multiple**
+  件の一致 → fail closed、non-mutating、exit 1 — 曖昧さが自動的に
+  解決されることは決してありません。
+
+**Round-5 review repair — GitHub enumeration は raised limit ではなく
+本物の cursor pagination であり、body normalization はより厳格に、
+queue-state の cardinality も検証されます。** さらなる review round
+で、固定の `--limit`(どれだけ高くても)は、filter 後の結果がそれを
+超えた場合に本物の duplicate を silently に drop しうる cap のままで
+あること、そして candidate/expected body への一律の `Trim()` が、
+leading indentation が異なる Markdown(例えばcode block)を同一として
+受け入れてしまいうることが判明しました。
+
+- GitHub existence check は今や `gh api graphql` を使い、本物の
+  `search(... first: 100, after: $cursor)` cursor-pagination loop を
+  実行します — `state=all` は維持され(open と closed の両方の issue
+  が参加します)、loop は `pageInfo.hasNextPage` が true である限り
+  継続し、固定件数で止まるのではなくすべての page を蓄積します。
+  `hasNextPage: true` かつ `endCursor` が無い page や、内部の safety
+  ceiling(50 page / 5,000 candidate)以内に終了しない結果セットは、
+  silently に truncate するのではなく fail loud します
+  (`InvalidOperationException`)。
+- body normalization は今や改行変換(`\r\n`/`\r` → `\n`)と、「末尾に
+  ちょうど 1 つの改行がある」ことを「末尾に改行が無い」ことと同等と
+  みなす処理(GitHub 自身の storage convention)**だけ**を行い、
+  `Trim()` はもう呼び出しません。leading indentation、inner の
+  spacing、改行の**前**にある trailing whitespace はすべて保持され、
+  厳密に比較されます — そのため、たった 1 つの leading あるいは
+  interior space が異なるだけの body は、正しく**別の** issue として
+  扱われ、一致とはみなされません。
+- `queue-state.json` の `ReadQueueSignal` は、最初に一致した item を
+  返すのではなく、execution unit に一致する**すべて**の item を
+  収集するようになりました — 同一 unit に対する 2 つ目の item は、
+  それらが一致していようと矛盾していようと関係なく fail closed し
+  (`queue_state_duplicate_execution_unit`、一致するすべての index と
+  identity を named します)、identity が JSON array の順序に依存する
+  ことは決してありません。
+- 新しい test は、command level で使われる `IGitHubExistingIssueChecker`
+  interface stub だけでなく、**本物の** `GhCliExistingIssueChecker`
+  production class を、`PageFetcherOverride` という test seam経由で
+  end-to-end に検証します — 実際の `gh` process の spawn だけを
+  canned GraphQL JSON に置き換えます。multi-page の open+closed
+  蓄積、2 つの fail-loud-on-truncation path、body-normalization の
+  matrix(byte-identical / CRLF vs LF / single-trailing-newline /
+  leading / inner / trailing whitespace drift)をカバーします。
+
+**Round-6 review repair — GraphQL provider は構造的な pagination の
+gap だけでなく、authoritative-response の欠陥に対しても fail closed
+します。** さらなる review round で、checker がまだ authoritative に
+「見える」response を、実際にはそうでない場合にも信用してしまうことが
+判明しました: GraphQL response は、一見妥当な `data` と共に空でない
+`errors` を持ちうること、誤動作する server が同じ `endCursor` を
+2 回返し、safety cap まで永遠に loop してしまいうること、search の
+`type: ISSUE` field は実際には query 自身が PR を除外しない限り issue
+と pull request の両方に一致すること、そして個々の candidate が
+(null body、null/empty title、non-positive number、あるいは requested
+repo と正確に一致しない URL という形で)不完全なまま classification に
+到達する前に reject されないことがありました。
+
+- すべての GraphQL response は、その `data` が read される**前に**
+  空でない `errors` array の有無を check します — spec は両方が同時に
+  存在することを許容しており、error を伴う部分的な `data` が
+  authoritative として扱われることは決してありません。
+- search query は今や `is:issue` を含みます(`repo:<repo> <unit>
+  in:title is:issue`)。これにより、似た title を持つ pull request は
+  空/default に deserialize された node として risk を負うのではなく、
+  server-side で除外されます。`state:` は意図的に含まれないままで、
+  open と closed の両方の issue がスコープに残ります。正確な literal
+  query 文字列は test で pin されています。
+- 各 page の `endCursor` は seen-cursors set に追跡され、繰り返された
+  cursor 値は 50-page の safety cap まで loop するのではなく、直ちに
+  fail loud します(`InvalidOperationException`)。
+- fetch されたすべての candidate は、蓄積される**前に**(そして
+  classification や復元の write が既に進行してから発見するのでは
+  なく)検証されます: positive な issue number、non-null/non-empty な
+  title、non-null な body(null body は無効な provider response であり、
+  空 text として silently に代替されることは決してありません)、そして
+  この check がスコープする repo に対して canonical な
+  `https://github.com/<requested repo>/issues/<number>` 形式に**厳密に**
+  一致する URL。
+- 新しい production-provider test は、部分的な data を伴う GraphQL
+  errors、repeated-cursor 検出、literal な `is:issue`/`state:` 無しの
+  query pin、page-fetcher failure の伝播、malformed JSON、そして
+  すべての candidate-validation failure mode(non-positive number、
+  null/empty title、null body、URL mismatch — 間違った repo、間違った
+  number、間違った scheme、あるいは null)をカバーします。
+
+**Round-7 review repair — provider fail-closed の残り 2 つの gap:
+non-null だが empty な cursor、そして "non-nullable" な形状の代わりの
+JSON `null`。** さらなる review round で、`hasNextPage=true` かつ
+**empty あるいは whitespace-only** な `endCursor` が、round 6 の
+null のみの check をすり抜けてしまうことが判明しました — それは次の
+request で `cursor=` として送り返され、あたかも本物の値であるかのように
+seen-cursors set に記録されてしまいます。別の問題として、
+System.Text.Json は、JSON の値が `null` の場合、宣言上
+non-nullable な reference-type property に silently に `null` を
+代入します(C# は runtime で non-null を強制しません)— そのため
+`pageInfo: null`、`nodes: null`、あるいは `nodes` 内の `null` な
+entry は、以前は意図的な provider diagnostic ではなく、偶発的な
+`NullReferenceException` へと degrade してしまっていました。
+
+- `endCursor` は今や `string.IsNullOrWhiteSpace` で check されます —
+  null、empty、whitespace-only はすべて「missing cursor」として扱われ、
+  loop が再度 fetch する前に fail loud します。
+- `pageInfo`、`nodes`、そして個々の node は、parse 直後に明示的に
+  `null` check されます — これらのどの位置での `null` も、どの部分が
+  欠けていたかを named した具体的な diagnostic で fail loud し、
+  未処理の NRE になることは決してありません。
+- 新しい test は、`FetchAllCandidates` 自身を通した完全な
+  malformed-shape matrix を pin します: empty/whitespace-only な
+  `endCursor`、`null`/wrong-type な top-level envelope(`null`、
+  `[]`、単なる数値、単なる文字列)、empty な process output、
+  `pageInfo: null`、`nodes: null`、そして `nodes` 内の `null` な
+  entry。
+
+---
+
 ### facet を意識した context 供給 (G530)
 
 G529 の 4 つの semantic facet（`vocabulary`、`invariant`、`decider`、

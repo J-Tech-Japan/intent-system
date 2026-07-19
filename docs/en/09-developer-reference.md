@@ -686,6 +686,267 @@ that has not been through `request-update`.
 
 ---
 
+### `issue publish-flow` idempotent rerun independently verifies and restores all three durable artifacts (G536)
+
+Field incidents (2026-07-19, publishing G530 as issue #1164 and G531 as
+issue #1166): host `main` advanced concurrently after each GitHub issue was
+created, forcing a stash + fast-forward sync mid-publish. For #1164,
+`publish.yaml` survived with its `issue-created` record intact, but
+`queue-state.json`'s `linked_issue` and the `runs.jsonl` `issue-created`
+event both reverted to their pre-publish (absent) state. For #1166, the
+loss was worse: `queue-state.json`'s `linked_issue` AND `publish.yaml`'s
+`issue-created` record were both lost — `runs.jsonl`'s `issue-created`
+event was the *only* surviving signal. The pre-G536 idempotent rerun only
+ever consulted `publish.yaml` or `queue-state.json` and never read
+`runs.jsonl` as an identity source at all, so the #1166 shape fell through
+to the normal create path — risking a **second GitHub issue** for the same
+execution unit, the single most severe defect this repair fixes.
+
+**A single shared analyzer, `PublishDurableArtifactAnalyzer`, now backs
+both `issue publish-flow`'s idempotent rerun and `automation
+publish-recovery`.** It independently parses all three durable artifacts —
+`queue-state.json`'s `linked_issue`, `publish.yaml`'s `issue-created`
+record, and every canonical `issue-created` event in `runs.jsonl` — and
+resolves a single canonical issue identity, or fails closed. Both commands
+report the identical, stable gap identifiers
+(`queue_linked_issue_missing`, `publish_yaml_missing`,
+`runs_event_missing`) for the same durable-state shape, so the two
+surfaces can never disagree about what's missing.
+
+**`runs.jsonl` is classified, not just checked for presence.** An
+execution unit's `issue-created` events are read as a set and classified:
+
+- **Zero** matching events → the `runs_event_missing` gap.
+- **Exactly one**, or **duplicate-identical** (multiple events all naming
+  the same issue number — e.g. a retried append) → present, no gap.
+- **Conflicting** (events naming *different* issue numbers for the same
+  execution unit) → fails closed as `runs_event_conflicting`, a data
+  contradiction, never silently resolved either way.
+
+**Malformed data fails closed, distinct from "missing."** An unparseable
+`publish.yaml` (`publish_yaml_malformed`) or an `issue-created` run event
+that carries neither a recognizable `linked_issue` (`repo#number`) nor a
+`reason` issue URL (`runs_malformed`) is never silently treated as absent
+— treating malformed data as "missing" would invite an unsafe overwrite of
+a file that might carry a real, just-corrupted record. The whole analysis
+short-circuits to a fail-closed result before any gap/restoration logic
+runs.
+
+**Genuine cross-artifact contradictions fail loud instead of picking a
+side.** If the artifacts disagree on the issue number for the same
+execution unit, that is a data contradiction, not a missing artifact — the
+command refuses (exit 1, `cross_artifact_contradiction`), names every
+conflicting value, and never silently trusts one side over the other.
+
+**Restoration only touches genuinely-missing artifacts, and is verified by
+re-reading, not by trusting write helpers' return values.** The rerun
+iterates the analyzer's gap list and restores only those artifacts using
+the same write helpers the first-run success path uses
+(`TryPatchQueueStateLinkedIssue`, `WritePublishArtifact`,
+`AppendIssueCreatedRunEvent`). After attempting restoration, it
+re-invokes `PublishDurableArtifactAnalyzer.Analyze` a **second time**
+against the freshly-written files and reports `durable_state_synced:
+true` only when that independent re-read confirms zero remaining gaps —
+a write helper reporting success is never enough on its own. `gh` is
+never re-invoked during any idempotent rerun.
+
+**Restoration failure also fails loud, naming exactly what's missing and
+how to recover.** If an artifact cannot be restored (e.g. `queue-state.json`
+no longer has any item for this execution unit to patch), the command
+exits non-zero, reports `durable_state_synced: false`, and its `error`
+names precisely which artifact(s) remain missing/inconsistent (from the
+post-restoration re-analysis) plus the exact recovery commands (`issue
+publish-flow ... --write` to retry, or `automation publish-recovery
+... --write` to reconcile queue-state linkage). Artifact verification is
+independent, not all-or-nothing: an artifact that *could* be restored
+still gets restored even when another one couldn't.
+
+**Dry-run plans only — it never writes, and reports `would_restore`.**
+`issue publish-flow <unit> --repo <owner/repo>` (no `--write`) runs the
+same read-only analysis and, when an existing issue identity is found,
+reports `would_restore` — the exact gap list a subsequent `--write` rerun
+would restore — without ever invoking a write helper or `gh`.
+
+**Before ever creating on a "zero local signal" unit, a GitHub-side
+existence check runs first.** When the analyzer finds no identity across
+all three local artifacts, falling straight through to `gh issue create`
+would risk a genuine duplicate if every local artifact was reset/lost but
+the GitHub issue itself was never re-created. A `gh issue list --search`
+corroboration check runs before create; if it finds a title match, the
+command refuses (exit 1) and points the operator at `automation
+publish-recovery --write` or a manual backfill, rather than creating a
+duplicate or attempting to reconstruct identity from a fuzzy match.
+
+**`automation publish-recovery` reports the identical gap.** Every unsafe
+stop now carries a `durable_artifact_gaps` field — the output of the same
+shared analyzer, called on the same paths for the same execution unit —
+so an operator (or a test) can directly compare a `publish-recovery`
+unsafe stop against what `issue publish-flow`'s own rerun independently
+detects and restores for the identical durable state.
+
+**Round-4 review repair — the canonical identity is a full tuple, not just
+a number.** A subsequent review round found that treating "same issue
+number" as sufficient still let contradictory or self-inconsistent data
+through: two artifacts naming the same issue *number* but a different
+*repo*, or a single artifact whose own repo/number/URL fields disagreed
+with each other, were silently accepted. The analyzer now requires every
+present signal to be:
+
+- **Internally self-consistent** — `queue-state.json`'s `linked_issue`
+  (which carries `repo`, `number`, and `url` as three separate fields) and
+  each `runs.jsonl` event (which may carry both a `linked_issue`
+  `repo#number` descriptor and a `reason` issue URL) must agree with
+  themselves before they're even accepted as a signal at all.
+- **A canonical GitHub issue URL** — `https://github.com/<owner>/<repo>/issues/<number>`
+  exactly; any `/issues/`-containing string that doesn't match this shape
+  is no longer accepted as if it were canonical.
+- **Checked against the confirmed target repo directly**, not merely
+  pairwise between artifacts — a signal whose repo doesn't match the
+  `--repo` this command run is scoped to is a contradiction even when it's
+  the ONLY present signal.
+
+A malformed/unreadable `queue-state.json` now also fails closed exactly
+like `publish.yaml`/`runs.jsonl` already did (`queue_state_malformed`),
+rather than being silently treated as absent — a surviving `publish.yaml`
+or `runs.jsonl` signal must never authorize restoration around a
+`queue-state.json` this analyzer couldn't actually read. `publish.yaml`'s
+own `execution_unit` field is validated against the unit the packet path
+is scoped to (`publish_yaml_malformed` on mismatch — data copied from
+another unit's packet is corruption, not a signal for this unit).
+
+**The GitHub existence check is now a classification (zero / exactly-one /
+multiple), not a bare boolean, and requires exact title AND body
+linkage.** The prior round's `gh issue list --search ... --limit 20` with
+prefix-boundary title matching could both miss a real duplicate beyond the
+first 20 results and match a merely similarly-titled unrelated issue. The
+rewritten check:
+
+- Retrieves candidates with `--limit 1000` (vs. the prior round's 20) so a
+  legitimate duplicate is never silently dropped by client-side
+  truncation for any realistic repo's issue history — GitHub's own
+  `in:title` search is still used as a fast pre-filter, not the identity
+  decision itself.
+- Requires the candidate's title to equal the resolved expected title
+  **exactly** (no prefix/boundary heuristic — a similarly-titled unrelated
+  issue can never match).
+- Additionally requires the candidate's body to match the local packet's
+  `github-body.md` content byte-for-byte (normalized for line endings) —
+  the same content that was (or would be) posted via `gh issue create
+  --body-file`, giving a genuine content-linkage check rather than a title
+  guess alone.
+- Classifies the result: **zero** matches → safe to create; **exactly
+  one** → that confirmed GitHub identity is fed directly into the same
+  `PublishDurableArtifactAnalyzer`-backed restoration path used for a
+  local-signal rerun, restoring all three local artifacts **without ever
+  calling `gh issue create`**; **multiple** matches → fails closed,
+  non-mutating, exit 1 — ambiguity is never resolved automatically.
+
+**Round-5 review repair — GitHub enumeration is real cursor pagination, not
+a raised limit; body normalization is stricter; queue-state cardinality is
+checked.** A further review round found that a fixed `--limit` (however
+high) is still a cap that can, in principle, silently drop a real
+duplicate once the filtered result exceeds it — and that a blanket
+`Trim()` on the candidate/expected body could accept Markdown with
+different leading indentation (e.g. a code block) as if it were identical.
+
+- The GitHub existence check now uses `gh api graphql` with a real
+  `search(... first: 100, after: $cursor)` cursor-pagination loop —
+  `state=all` is preserved (open and closed issues both participate), and
+  the loop continues while `pageInfo.hasNextPage` is true, accumulating
+  every page rather than stopping at a fixed count. A page reporting
+  `hasNextPage: true` with no `endCursor`, or a result set that doesn't
+  terminate within an internal safety ceiling (50 pages / 5,000
+  candidates), fails loud (`InvalidOperationException`) instead of
+  silently truncating.
+- Body normalization now does **only** line-ending conversion (`\r\n`/`\r`
+  → `\n`) and treats "ends with exactly one trailing newline" as
+  equivalent to "no trailing newline" (GitHub's own storage convention) —
+  it no longer calls `Trim()`. Leading indentation, inner spacing, and any
+  trailing whitespace *before* the newline are preserved and compared
+  exactly, so a body that differs by so much as a single leading or
+  interior space is correctly treated as a **different** issue, not a
+  match.
+- `queue-state.json`'s `ReadQueueSignal` now collects **every** item
+  matching the execution unit rather than returning on the first match —
+  a second item for the same unit fails closed
+  (`queue_state_duplicate_execution_unit`, naming every matching index and
+  its identity) regardless of whether the duplicate entries agree or
+  conflict; identity must never depend on JSON array order.
+- New tests exercise the **real** `GhCliExistingIssueChecker` production
+  class end-to-end (not just the `IGitHubExistingIssueChecker` interface
+  stub used at the command level) via a `PageFetcherOverride` test seam
+  that replaces only the literal `gh` process spawn with canned GraphQL
+  JSON — covering multi-page open+closed accumulation, the two
+  fail-loud-on-truncation paths, and the body-normalization matrix
+  (byte-identical / CRLF vs LF / single-trailing-newline / leading /
+  inner / trailing whitespace drift).
+
+**Round-6 review repair — the GraphQL provider now fails closed on
+authoritative-response defects, not just structural pagination gaps.** A
+further review round found that the checker still trusted an
+authoritative-looking response even when it wasn't: a GraphQL response can
+carry non-empty `errors` alongside otherwise-plausible `data`; a
+misbehaving server could return the same `endCursor` twice, looping the
+fetch forever short of the safety cap; the search `type: ISSUE` field
+actually matches both issues AND pull requests unless the query itself
+excludes PRs; and an individual candidate could be incomplete (null body,
+null/empty title, non-positive number, or a URL that doesn't exactly match
+the requested repo) without being rejected before it reached
+classification.
+
+- Every GraphQL response is checked for a non-empty `errors` array
+  **before** its `data` is ever read — the spec permits both to be present
+  simultaneously, and partial `data` alongside an error is never treated as
+  authoritative.
+- The search query now includes `is:issue` (`repo:<repo> <unit> in:title
+  is:issue`) so a similarly-titled pull request is excluded server-side
+  rather than risking an empty/default-deserialized node; `state:` remains
+  deliberately absent so both open and closed issues stay in scope. The
+  exact literal query string is pinned by a test.
+- Each page's `endCursor` is tracked in a seen-cursors set; a repeated
+  cursor value fails loud immediately (`InvalidOperationException`) rather
+  than looping until the 50-page safety cap.
+- Every fetched candidate is validated **before** it is accumulated (not
+  after, and never discovered only once classification or a restoration
+  write is already underway): a positive issue number, a non-null/
+  non-empty title, a non-null body (a null body is an invalid provider
+  response — never silently substituted with empty text), and a URL
+  matching the canonical `https://github.com/<requested repo>/issues/<number>`
+  shape **exactly** for the repo this check was scoped to.
+- New production-provider tests cover GraphQL errors alongside partial
+  data, repeated-cursor detection, the literal `is:issue`/no-`state:`
+  query pin, page-fetcher failure propagation, malformed JSON, and every
+  candidate-validation failure mode (non-positive number, null/empty
+  title, null body, and URL mismatches — wrong repo, wrong number, wrong
+  scheme, or null).
+
+**Round-7 review repair — the last two provider fail-closed gaps: a
+non-null-but-empty cursor, and JSON `null` in place of a "non-nullable"
+shape.** A further review round found that `hasNextPage=true` with an
+**empty or whitespace-only** `endCursor` slipped past the null-only check
+from round 6 — it would be sent back as `cursor=` on the next request and
+recorded into the seen-cursors set as if it were a real value. Separately,
+System.Text.Json silently assigns `null` to a declared-non-nullable
+reference-type property when the JSON value is `null` (C# doesn't enforce
+non-null at runtime) — so `pageInfo: null`, `nodes: null`, or a `null`
+entry inside `nodes` would previously degrade into an incidental
+`NullReferenceException` rather than an intentional provider diagnostic.
+
+- `endCursor` is now checked with `string.IsNullOrWhiteSpace` — null,
+  empty, and whitespace-only are all treated as "missing cursor" and fail
+  loud before the loop would fetch again.
+- `pageInfo`, `nodes`, and each individual node are explicitly checked for
+  `null` immediately after parsing — a `null` in any of these positions
+  fails loud with a specific diagnostic naming which piece was missing,
+  never an unhandled NRE.
+- New tests pin the full malformed-shape matrix through
+  `FetchAllCandidates` itself: empty/whitespace-only `endCursor`, a
+  `null`/wrong-type top-level envelope (`null`, `[]`, a bare number, a
+  bare string), empty process output, `pageInfo: null`, `nodes: null`, and
+  a `null` entry inside `nodes`.
+
+---
+
 ### Facet-aware context supply (G530)
 
 Building on G529's four semantic facets (`vocabulary`, `invariant`,
