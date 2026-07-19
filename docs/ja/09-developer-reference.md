@@ -626,6 +626,101 @@ retirement や queue tracking 以前の retirement から、`queue-state.json`
 
 ---
 
+### `request-update` が stale な `intent-pr-rereview-ready` を supersede する (G535)
+
+Field finding #5(SKS-G824 / PR #1760): `intent-cli automation pr-transition
+--transition request-update` は自身の repair label(`intent-pr-request-update`
+を追加し、`intent-pr-reviewing` を除去)を適用していましたが、既存の
+`intent-pr-rereview-ready` はそのまま残していました。`worker claim` は
+`intent-pr-rereview-ready` を持つ PR を正しく refuse します(rereview-ready
+な PR は reviewer が拾うべきものであり、worker のものではないため)—
+そのため、PR が rereview-ready の間に design amendment が到着すると、
+`request-update` によって repair 対象としてマークされたにもかかわらず
+`claim` が触れることを拒否する PR が生まれていました。2 つの canonical
+な rule 同士の deadlock であり、インストール済みのどのコマンドも先に
+進めない状態でした。唯一の脱出策は、`review-start` → `request-update`
+という非自明な迂回策でした。
+
+`request-update` は、`intent-pr-request-update` を追加し
+`intent-pr-reviewing` を除去するのと**同じ** write の中で、
+`intent-pr-rereview-ready`(および legacy な `rereview-ready` 文字列
+形式)を除去するようになりました — repair request は常に pending な
+rereview-readiness を supersede するためです。
+
+**両方の mode で truthful な audit output。** `--dry-run` が存在有無に
+関わらず常に完全な planned removal set を報告する
+`review-start`/`approved`/`review-release` とは異なり、
+`request-update` が報告する `remove_labels` は `--dry-run` と
+`--write` の**両方**で、既に fetch 済みの current label から常に
+導出されます。`intent-pr-rereview-ready` のみを持つ PR は、その label
+のみを supersede すると報告され、存在しない `intent-pr-reviewing` や
+存在しない legacy `rereview-ready` を一緒に claim することは決して
+ありません。再実行(や、一度も rereview-ready になったことのない PR)
+は空の removal set を報告・適用します — 単にエラーにならないだけでは
+なく、真に idempotent です。
+
+**逐次的な add/remove ではなく、1 回の atomic GitHub request。**
+`gh <kind> edit --add-label --remove-label` は `gh` CLI の
+convenience wrapper であり、GitHub 視点での atomicity は保証されて
+いません。`request-update` の `--write` path は、代わりに完全な
+desired label set(現在の label のうち supersede される label を除いた
+もの、プラス `intent-pr-request-update`)を計算し、内部の
+`IGitHubLabelSetReplacer.ReplaceLabelSet` seam 経由で、**1 回**の
+GitHub REST call — `PUT /repos/{repo}/issues/{number}/labels` — として
+置き換えます。desired set が current set と(順序を問わず)既に一致
+している場合は、真の no-op です — 単に removal list が空になるだけで
+はなく、GitHub 呼び出しがゼロになります。この atomic-replace path を
+使うのは `request-update` のみであり、他のすべての transition は既存の
+`ApplyLabelTransitions` による add/remove path を変更なく使い続けます。
+
+**Phase-aware な failure report — safety を過大に主張しない、正直な
+記述。** 1 回の HTTP call であるということは、*この call 自身の action*
+が中途半端に反映される window は無い、という意味であり、すべての
+failure が「無害だと分かっている」という意味では**ありません**。
+コマンドの error report はこの違いを正確に反映します:
+
+- PUT 用の `gh` process 自体が起動しなかった場合(例えば実行ファイルを
+  起動できない)、何も送信されていません — 単純な failure として、
+  `applied: false`、`may_have_applied: false` で報告されます;
+- その process が起動した後は、いかなる failure(non-zero exit、
+  write/read error、timeout)も曖昧です — `gh` は既に request を
+  送信済みで、GitHub は failure が表面化する前に既に適用済みかも
+  しれません。`applied: false`、**`may_have_applied: true`** として
+  報告され、mutation が確立しようとしていた `intended_labels` と、
+  曖昧さを解消するための正確な `recovery_command`(`gh <kind> view
+  <n> --repo <repo> --json labels`)が付きます — 「何も変わらな
+  かった」という誤った claim は決してしません;
+- PUT 自体は success を報告したが post-write の verification read が
+  失敗した場合、あるいは success したが read back した set が一致
+  しない場合、どちらも同じく `may_have_applied: true` と同じ recovery
+  情報として報告されます — rollback や「no mutation」の signal として
+  では**ありません**。どちらの場合も PUT 自体はかなりの確率で適用
+  されているためです。
+
+**Bounded concurrency model — post-write verification の正直な限界。**
+GitHub の「Set labels」endpoint には optimistic concurrency 用の
+conditional/If-Match support が無いため、caller の初回 read(desired
+set の計算に使われる)と PUT の間で競合する label 変更を完全に防ぐ
+ことはできません。post-write の verification read は、*その read の
+瞬間にまだ残っている*不一致だけを検出します。初回 read の**後**、
+PUT の**前**に別プロセスが追加した label は — desired set には決して
+反映されないため — PUT によって黙って上書きされる可能性があります。
+PUT と verification read の間に他に何も label を変更しなければ、その
+read は intended set と完全に一致し、コマンドは concurrent な追加が
+まさに失われたにもかかわらず success を報告します。この race は
+read-after-write check だけでは原理的に検出不能であり、doc とコード
+はそれを「完全に保護されている」かのように暗示するのではなく、明示的
+にそう述べています。
+
+これが landed したことで、SKS-G824 の recovery sequence(行き詰まった
+rereview-ready を除去するための `review-start` の後の `request-update`)
+はもはや不要です — `request-update` 単体で、`worker claim` が受け入れる
+状態に PR を残すようになりました。`worker claim` 自体は変更ありません
+— `request-update` を経ていない rereview-ready な PR は引き続き
+refuse されます。
+
+---
+
 ### facet を意識した context 供給 (G530)
 
 G529 の 4 つの semantic facet（`vocabulary`、`invariant`、`decider`、
