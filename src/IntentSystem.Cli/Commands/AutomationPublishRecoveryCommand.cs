@@ -184,6 +184,14 @@ internal static class AutomationPublishRecoveryCommand
             }
         }
 
+        // G536 review repair: attach the SAME shared-analyzer gap
+        // identifiers `issue publish-flow`'s idempotent rerun reports for
+        // this execution unit, so the two surfaces can never disagree
+        // about what durable state is missing.
+        var unsafeStopsWithGaps = analysis.UnsafeStops
+            .Select(stop => AttachDurableArtifactGaps(context, repo!, stop))
+            .ToArray();
+
         var result = new AutomationPublishRecoveryResult
         {
             Repo = repo!,
@@ -192,7 +200,7 @@ internal static class AutomationPublishRecoveryCommand
             Domain = domain,
             QueueStatePath = queueStatePath,
             SafeRepairs = analysis.SafeRepairs,
-            UnsafeStops = analysis.UnsafeStops,
+            UnsafeStops = unsafeStopsWithGaps,
             AppliedCount = applied.Count,
             Warnings = failures,
             Summary = BuildSummary(analysis, applied.Count, write),
@@ -269,6 +277,38 @@ internal static class AutomationPublishRecoveryCommand
         var reinvocation = $"intent-cli automation publish-recovery --repo {repo} --domain <name>"
             + (selectedPr is int pr ? $" --pr {pr}" : string.Empty);
         return PacketDomainResolution.Resolve(explicitDomain, packetDeclaredDomain, candidateDomains, reinvocation);
+    }
+
+    /// <summary>
+    /// G536 review repair: independently re-analyzes this stop's execution
+    /// unit via the SAME <see cref="PublishDurableArtifactAnalyzer"/>
+    /// <c>issue publish-flow</c> consults, so an unsafe stop here always
+    /// names the identical gaps a rerun would restore for the same durable
+    /// state. Skips synthetic PR-scoped placeholder units (e.g.
+    /// <c>&lt;selected-pr-5&gt;</c>) that have no real execution unit to
+    /// analyze.
+    /// </summary>
+    private static PublishRecoveryUnsafeStop AttachDurableArtifactGaps(
+        CliContext context, string repo, PublishRecoveryUnsafeStop stop)
+    {
+        if (stop.ExecutionUnit.StartsWith('<'))
+        {
+            return stop;
+        }
+
+        var queueStatePath = context.GetQueueStatePath();
+        var runLogPath = context.GetRunLogPath();
+        var publishYamlPath = Path.Combine(
+            context.RepoRoot,
+            IssuePublishArtifactPathResolver.Resolve(stop.ExecutionUnit).Replace('/', Path.DirectorySeparatorChar));
+
+        var analysis = PublishDurableArtifactAnalyzer.Analyze(
+            stop.ExecutionUnit, repo, queueStatePath, publishYamlPath, runLogPath);
+
+        var gaps = analysis.IsInvalid
+            ? new[] { $"{analysis.InvalidReason}: {analysis.InvalidDetail}" }
+            : analysis.Gaps;
+        return stop with { DurableArtifactGaps = gaps };
     }
 
     private static IReadOnlyList<PublishRecoveryCandidate> BuildCandidates(CliContext context, QueueState queueState)
@@ -455,6 +495,10 @@ internal static class AutomationPublishRecoveryCommand
             foreach (var stop in result.UnsafeStops)
             {
                 writer.WriteLine($"- `{stop.Kind}` on `{stop.ExecutionUnit}`: {stop.Reason}");
+                if (stop.DurableArtifactGaps is { Count: > 0 } gaps)
+                {
+                    writer.WriteLine($"  - durable_artifact_gaps: {string.Join(", ", gaps)}");
+                }
             }
         }
     }

@@ -688,72 +688,101 @@ that has not been through `request-update`.
 
 ### `issue publish-flow` idempotent rerun independently verifies and restores all three durable artifacts (G536)
 
-Field incident (2026-07-19, publishing G530 as issue #1164): host `main`
-advanced concurrently after the GitHub issue was created, forcing a stash +
-fast-forward sync mid-publish. `publish.yaml` survived with its
-`issue-created` record intact, but `queue-state.json`'s `linked_issue` and
-the `runs.jsonl` `issue-created` event both reverted to their pre-publish
-(absent) state. The idempotent rerun that followed reported
-`durable_state_synced: true` anyway — a false positive, since neither of
-the two artifacts that had actually reverted was ever checked.
+Field incidents (2026-07-19, publishing G530 as issue #1164 and G531 as
+issue #1166): host `main` advanced concurrently after each GitHub issue was
+created, forcing a stash + fast-forward sync mid-publish. For #1164,
+`publish.yaml` survived with its `issue-created` record intact, but
+`queue-state.json`'s `linked_issue` and the `runs.jsonl` `issue-created`
+event both reverted to their pre-publish (absent) state. For #1166, the
+loss was worse: `queue-state.json`'s `linked_issue` AND `publish.yaml`'s
+`issue-created` record were both lost — `runs.jsonl`'s `issue-created`
+event was the *only* surviving signal. The pre-G536 idempotent rerun only
+ever consulted `publish.yaml` or `queue-state.json` and never read
+`runs.jsonl` as an identity source at all, so the #1166 shape fell through
+to the normal create path — risking a **second GitHub issue** for the same
+execution unit, the single most severe defect this repair fixes.
 
-**The pre-G536 idempotent rerun only ever consulted ONE of the three
-artifacts.** It short-circuited on whichever of `publish.yaml`'s
-`issue-created` marker or `queue-state.json`'s `linked_issue` it found
-first, reported `durable_state_synced: true` unconditionally the instant
-either fired, and never even read `runs.jsonl`. There was no cross-check
-between the three artifacts and no restoration of whichever ones were
-actually missing.
+**A single shared analyzer, `PublishDurableArtifactAnalyzer`, now backs
+both `issue publish-flow`'s idempotent rerun and `automation
+publish-recovery`.** It independently parses all three durable artifacts —
+`queue-state.json`'s `linked_issue`, `publish.yaml`'s `issue-created`
+record, and every canonical `issue-created` event in `runs.jsonl` — and
+resolves a single canonical issue identity, or fails closed. Both commands
+report the identical, stable gap identifiers
+(`queue_linked_issue_missing`, `publish_yaml_missing`,
+`runs_event_missing`) for the same durable-state shape, so the two
+surfaces can never disagree about what's missing.
 
-**The idempotent-rerun checklist now verifies all three durable artifacts
-independently, every time, and restores whichever are missing:**
+**`runs.jsonl` is classified, not just checked for presence.** An
+execution unit's `issue-created` events are read as a set and classified:
 
-1. **queue-state.json's `linked_issue`** — must name the same repo/issue
-   number/URL as the canonical issue identity.
-2. **`publish.yaml`'s `issue-created` record** — must carry
-   `publish_status: issue-created` with a matching issue number/URL.
-3. **`runs.jsonl`'s `issue-created` event** — an event for this execution
-   unit must exist (scanned via the full run log, not assumed).
+- **Zero** matching events → the `runs_event_missing` gap.
+- **Exactly one**, or **duplicate-identical** (multiple events all naming
+  the same issue number — e.g. a retried append) → present, no gap.
+- **Conflicting** (events naming *different* issue numbers for the same
+  execution unit) → fails closed as `runs_event_conflicting`, a data
+  contradiction, never silently resolved either way.
 
-The canonical issue identity is established from whichever signal(s) are
-present (`publish.yaml` takes precedence when both agree). Any artifact
-found missing is restored using the exact same write helpers the
-first-run success path uses (`TryPatchQueueStateLinkedIssue`,
-`WritePublishArtifact`, `AppendIssueCreatedRunEvent`) — restoration is
-itself idempotent: a unit already fully in sync makes no further writes,
-and `runs.jsonl` is scanned for an existing `issue-created` event before
-ever appending one, so a repeated rerun can never produce a duplicate
-event. `durable_state_synced: true` is reported **only** once all three
-verify (whether they were already correct or just restored); `gh` is
+**Malformed data fails closed, distinct from "missing."** An unparseable
+`publish.yaml` (`publish_yaml_malformed`) or an `issue-created` run event
+that carries neither a recognizable `linked_issue` (`repo#number`) nor a
+`reason` issue URL (`runs_malformed`) is never silently treated as absent
+— treating malformed data as "missing" would invite an unsafe overwrite of
+a file that might carry a real, just-corrupted record. The whole analysis
+short-circuits to a fail-closed result before any gap/restoration logic
+runs.
+
+**Genuine cross-artifact contradictions fail loud instead of picking a
+side.** If the artifacts disagree on the issue number for the same
+execution unit, that is a data contradiction, not a missing artifact — the
+command refuses (exit 1, `cross_artifact_contradiction`), names every
+conflicting value, and never silently trusts one side over the other.
+
+**Restoration only touches genuinely-missing artifacts, and is verified by
+re-reading, not by trusting write helpers' return values.** The rerun
+iterates the analyzer's gap list and restores only those artifacts using
+the same write helpers the first-run success path uses
+(`TryPatchQueueStateLinkedIssue`, `WritePublishArtifact`,
+`AppendIssueCreatedRunEvent`). After attempting restoration, it
+re-invokes `PublishDurableArtifactAnalyzer.Analyze` a **second time**
+against the freshly-written files and reports `durable_state_synced:
+true` only when that independent re-read confirms zero remaining gaps —
+a write helper reporting success is never enough on its own. `gh` is
 never re-invoked during any idempotent rerun.
-
-**Genuine contradictions fail loud instead of picking a side.** If
-`publish.yaml` and `queue-state.json` both carry a `linked_issue`/
-`issue-created` record but name *different* issue numbers, that is a data
-contradiction, not a missing artifact — the command refuses (exit 1),
-names both conflicting values, and never silently trusts one side over
-the other.
 
 **Restoration failure also fails loud, naming exactly what's missing and
 how to recover.** If an artifact cannot be restored (e.g. `queue-state.json`
 no longer has any item for this execution unit to patch), the command
 exits non-zero, reports `durable_state_synced: false`, and its `error`
-names precisely which artifact(s) remain missing/inconsistent plus the
-exact recovery commands (`issue publish-flow ... --write` to retry, or
-`automation publish-recovery ... --write` to reconcile queue-state
-linkage). Artifact verification is independent, not all-or-nothing: an
-artifact that *could* be restored still gets restored even when another
-one couldn't.
+names precisely which artifact(s) remain missing/inconsistent (from the
+post-restoration re-analysis) plus the exact recovery commands (`issue
+publish-flow ... --write` to retry, or `automation publish-recovery
+... --write` to reconcile queue-state linkage). Artifact verification is
+independent, not all-or-nothing: an artifact that *could* be restored
+still gets restored even when another one couldn't.
 
-**`automation publish-recovery` reports the identical gap.** Given the
-exact field-incident shape (queue-state's `linked_issue`/`linked_pr` both
-null, `publish.yaml` already records the created issue, no PR open yet),
-`publish-recovery`'s dry-run surfaces the same execution unit as an
-unsafe stop (`no-closing-pr-for-published-issue`) rather than silently
-reporting nothing to do — consistent with what `issue publish-flow`'s own
-rerun independently detects (and, unlike `publish-recovery`, can safely
-self-restore without needing PR evidence, since it already knows the
-issue it just verified is the one it's re-verifying).
+**Dry-run plans only — it never writes, and reports `would_restore`.**
+`issue publish-flow <unit> --repo <owner/repo>` (no `--write`) runs the
+same read-only analysis and, when an existing issue identity is found,
+reports `would_restore` — the exact gap list a subsequent `--write` rerun
+would restore — without ever invoking a write helper or `gh`.
+
+**Before ever creating on a "zero local signal" unit, a GitHub-side
+existence check runs first.** When the analyzer finds no identity across
+all three local artifacts, falling straight through to `gh issue create`
+would risk a genuine duplicate if every local artifact was reset/lost but
+the GitHub issue itself was never re-created. A `gh issue list --search`
+corroboration check runs before create; if it finds a title match, the
+command refuses (exit 1) and points the operator at `automation
+publish-recovery --write` or a manual backfill, rather than creating a
+duplicate or attempting to reconstruct identity from a fuzzy match.
+
+**`automation publish-recovery` reports the identical gap.** Every unsafe
+stop now carries a `durable_artifact_gaps` field — the output of the same
+shared analyzer, called on the same paths for the same execution unit —
+so an operator (or a test) can directly compare a `publish-recovery`
+unsafe stop against what `issue publish-flow`'s own rerun independently
+detects and restores for the identical durable state.
 
 ---
 

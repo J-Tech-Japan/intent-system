@@ -13,12 +13,18 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     {
         IssuePublishFlowCommand.CreatorFactory = null;
         IssuePublishFlowCommand.UtcNowFactory = null;
+        // G536 review repair: default to "no existing issue on GitHub" so
+        // the pre-existing create-path tests (which predate this check)
+        // are unaffected; tests covering the new duplicate-refusal path
+        // override this per-test.
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => new StubExistingIssueChecker(found: false);
     }
 
     public void Dispose()
     {
         IssuePublishFlowCommand.CreatorFactory = null;
         IssuePublishFlowCommand.UtcNowFactory = null;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = null;
     }
 
     // ─── G290 tests ────────────────────────────────────────────────────────────
@@ -658,6 +664,368 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_FieldIncidentRegression_G531Issue1166_RunsOnlySignal_RestoresWithoutDuplicateIssueCreate()
+    {
+        // G536 field incident (2026-07-19, publishing G531 as issue #1166,
+        // same concurrent host-main stash+ff-sync sequence as G530/#1164):
+        // this time BOTH queue-state's linked_issue AND publish.yaml's
+        // issue-created record were lost — runs.jsonl's issue-created event
+        // was the ONLY surviving signal. The pre-G536 idempotent-rerun
+        // trigger only ever checked publish.yaml / queue-state and
+        // completely ignored runs.jsonl as an identity source, so this
+        // exact shape fell through to the normal create path and could
+        // have produced a SECOND GitHub issue for the same execution unit
+        // — the single most severe defect this review repair fixes.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G531 Add read-only intent facet-check scaffold";
+        workspace.WriteGithubBody("G531", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G531", title);
+        Assert.False(File.Exists(workspace.PublishYamlPath("G531")));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        var survivingEvent = new RunEvent
+        {
+            Ts = new DateTimeOffset(2026, 7, 19, 2, 0, 0, TimeSpan.Zero),
+            ExecutionUnit = "G531",
+            Event = "issue-created",
+            By = "issue-publish-flow",
+            LinkedIssue = "J-Tech-Japan/intent-system#1166",
+            Reason = "https://github.com/J-Tech-Japan/intent-system/issues/1166",
+        };
+        File.WriteAllText(workspace.RunsLogPath, RunLogSerializer.SerializeLine(survivingEvent) + "\n");
+
+        // Never actually invoked if the fix holds — throws immediately if
+        // the rerun still falls through to a second `gh issue create`.
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G531", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("idempotent").GetBoolean());
+        Assert.True(root.GetProperty("durable_state_synced").GetBoolean());
+        Assert.Equal(1166, root.GetProperty("issue_number").GetInt32());
+        Assert.True(root.GetProperty("queue_state_patched").GetBoolean());
+        Assert.True(root.GetProperty("publish_yaml_patched").GetBoolean());
+        Assert.False(root.GetProperty("runs_appended").GetBoolean()); // event already present, untouched
+
+        var restoredQueueState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        var restoredItem = Assert.Single(restoredQueueState.Items);
+        Assert.NotNull(restoredItem.LinkedIssue);
+        Assert.Equal(1166, restoredItem.LinkedIssue!.Number);
+        Assert.Equal("J-Tech-Japan/intent-system", restoredItem.LinkedIssue.Repo);
+
+        var restoredArtifact = IssuePublishArtifactYaml.Deserialize(
+            File.ReadAllText(workspace.PublishYamlPath("G531")));
+        Assert.Equal("issue-created", restoredArtifact.PublishStatus);
+        Assert.Equal(1166, restoredArtifact.CreatedIssueNumber);
+
+        // No duplicate issue-created event was appended — still exactly one.
+        Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath)));
+    }
+
+    [Fact]
+    public void Execute_DryRun_RunsOnlySignal_ReportsWouldRestoreWithoutMutatingAnyFile()
+    {
+        // G536: dry-run must PLAN only — report the would_restore gap list
+        // for the same runs-only-signal shape above, without writing
+        // queue-state.json, creating publish.yaml, or touching runs.jsonl.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G531 Add read-only intent facet-check scaffold";
+        workspace.WriteGithubBody("G531", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G531", title);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        var survivingEvent = new RunEvent
+        {
+            Ts = new DateTimeOffset(2026, 7, 19, 2, 0, 0, TimeSpan.Zero),
+            ExecutionUnit = "G531",
+            Event = "issue-created",
+            By = "issue-publish-flow",
+            LinkedIssue = "J-Tech-Japan/intent-system#1166",
+            Reason = "https://github.com/J-Tech-Japan/intent-system/issues/1166",
+        };
+        File.WriteAllText(workspace.RunsLogPath, RunLogSerializer.SerializeLine(survivingEvent) + "\n");
+
+        var queueStateBefore = File.ReadAllText(workspace.QueueStatePath);
+        var runsLogBefore = File.ReadAllText(workspace.RunsLogPath);
+
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G531", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("idempotent").GetBoolean());
+        Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
+        Assert.Equal(1166, root.GetProperty("issue_number").GetInt32());
+        var wouldRestore = root.GetProperty("would_restore").EnumerateArray()
+            .Select(e => e.GetString())
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(
+            new[] { "publish_yaml_missing", "queue_linked_issue_missing" },
+            wouldRestore);
+
+        // Byte-for-byte: dry-run never writes.
+        Assert.Equal(queueStateBefore, File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal(runsLogBefore, File.ReadAllText(workspace.RunsLogPath));
+        Assert.False(File.Exists(workspace.PublishYamlPath("G531")));
+    }
+
+    [Fact]
+    public void Execute_GivenConflictingRunsEvents_FailsClosedDistinctFromMissing()
+    {
+        // G536: two issue-created events for the same execution unit naming
+        // DIFFERENT issue numbers is a genuine data contradiction — must
+        // fail closed as "conflicting", never be silently collapsed into
+        // "missing" (which would invite an unsafe overwrite) or "present"
+        // (which would silently pick one side).
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G278", title);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        var eventA = new RunEvent
+        {
+            Ts = new DateTimeOffset(2026, 5, 6, 12, 0, 0, TimeSpan.Zero),
+            ExecutionUnit = "G278",
+            Event = "issue-created",
+            By = "issue-publish-flow",
+            LinkedIssue = "J-Tech-Japan/intent-system#659",
+        };
+        var eventB = eventA with { LinkedIssue = "J-Tech-Japan/intent-system#700", Ts = eventA.Ts.AddMinutes(5) };
+        File.WriteAllText(
+            workspace.RunsLogPath,
+            RunLogSerializer.SerializeLine(eventA) + "\n" + RunLogSerializer.SerializeLine(eventB) + "\n");
+
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("runs_event_conflicting", error, StringComparison.Ordinal);
+        Assert.Contains("659", error, StringComparison.Ordinal);
+        Assert.Contains("700", error, StringComparison.Ordinal);
+
+        // No mutation on refusal.
+        var queueStateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Null(queueStateAfter.Items.Single().LinkedIssue);
+        Assert.False(File.Exists(workspace.PublishYamlPath("G278")));
+        Assert.Equal(2, RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath)).Count);
+    }
+
+    [Fact]
+    public void Execute_GivenDuplicateIdenticalRunsEvents_TreatedAsPresentNotConflicting()
+    {
+        // G536: two issue-created events for the same execution unit naming
+        // the SAME issue number is a harmless duplicate (e.g. a retried
+        // append) — must be treated as present/fine, not conflicting.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G278", title);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        var eventA = new RunEvent
+        {
+            Ts = new DateTimeOffset(2026, 5, 6, 12, 0, 0, TimeSpan.Zero),
+            ExecutionUnit = "G278",
+            Event = "issue-created",
+            By = "issue-publish-flow",
+            LinkedIssue = "J-Tech-Japan/intent-system#659",
+            Reason = "https://github.com/J-Tech-Japan/intent-system/issues/659",
+        };
+        var eventADuplicate = eventA with { Ts = eventA.Ts.AddMinutes(5) };
+        File.WriteAllText(
+            workspace.RunsLogPath,
+            RunLogSerializer.SerializeLine(eventA) + "\n" + RunLogSerializer.SerializeLine(eventADuplicate) + "\n");
+
+        var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/9999");
+        IssuePublishFlowCommand.CreatorFactory = () => stub;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(0, stub.CallCount);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("durable_state_synced").GetBoolean());
+        Assert.Equal(659, root.GetProperty("issue_number").GetInt32());
+        Assert.True(root.GetProperty("queue_state_patched").GetBoolean());
+        Assert.True(root.GetProperty("publish_yaml_patched").GetBoolean());
+        Assert.False(root.GetProperty("runs_appended").GetBoolean()); // already present, no third event added
+
+        Assert.Equal(2, RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath)).Count);
+    }
+
+    [Fact]
+    public void Execute_GivenMalformedPublishYaml_FailsClosedNotTreatedAsMissing()
+    {
+        // G536: an unparseable publish.yaml must fail closed distinctly
+        // ("malformed") rather than being silently treated as "missing" —
+        // which would invite an unsafe overwrite of a file that might carry
+        // a real, just-corrupted issue record.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G278", title);
+
+        var publishYamlPath = workspace.PublishYamlPath("G278");
+        Directory.CreateDirectory(Path.GetDirectoryName(publishYamlPath)!);
+        File.WriteAllText(publishYamlPath, "{{{ not valid yaml at all :::\n\tthis is garbage");
+
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("publish_yaml_malformed", error, StringComparison.Ordinal);
+
+        // No mutation on refusal — the malformed file is left for manual inspection.
+        var queueStateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Null(queueStateAfter.Items.Single().LinkedIssue);
+        Assert.Equal("{{{ not valid yaml at all :::\n\tthis is garbage", File.ReadAllText(publishYamlPath));
+    }
+
+    [Fact]
+    public void Execute_GivenUnparseableIssueCreatedRunsEvent_FailsClosedNotTreatedAsMissing()
+    {
+        // G536: an issue-created run event that carries neither a
+        // recognizable `linked_issue` (repo#number) nor a `reason` issue
+        // URL is malformed data, not an absent signal — must fail closed
+        // rather than being silently skipped as if the event never
+        // existed (which is exactly the gap that risked a duplicate
+        // `gh issue create` in the field incidents).
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G278", title);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        var unparseableEvent = new RunEvent
+        {
+            Ts = new DateTimeOffset(2026, 5, 6, 12, 0, 0, TimeSpan.Zero),
+            ExecutionUnit = "G278",
+            Event = "issue-created",
+            By = "issue-publish-flow",
+            LinkedIssue = null,
+            Reason = "created without a recorded issue reference",
+        };
+        File.WriteAllText(workspace.RunsLogPath, RunLogSerializer.SerializeLine(unparseableEvent) + "\n");
+
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("runs_malformed", error, StringComparison.Ordinal);
+
+        var queueStateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Null(queueStateAfter.Items.Single().LinkedIssue);
+        Assert.False(File.Exists(workspace.PublishYamlPath("G278")));
+    }
+
+    [Fact]
+    public void Execute_GivenNoLocalSignalButGitHubIssueAlreadyExists_RefusesToCreateDuplicate()
+    {
+        // G536: when the analyzer finds NO identity across all three local
+        // artifacts (e.g. every one was reset/lost but the GitHub issue
+        // itself was never re-created), falling straight through to `gh
+        // issue create` would produce a genuine duplicate. The new
+        // GitHub-existence corroboration check must refuse instead.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G278", title);
+        Assert.False(File.Exists(workspace.PublishYamlPath("G278")));
+        Assert.False(File.Exists(workspace.RunsLogPath));
+
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => new StubExistingIssueChecker(found: true);
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("already exists", error, StringComparison.Ordinal);
+        Assert.Contains("Refusing to create a duplicate", error, StringComparison.Ordinal);
+
+        var queueStateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Null(queueStateAfter.Items.Single().LinkedIssue);
+        Assert.False(File.Exists(workspace.PublishYamlPath("G278")));
+    }
+
+    [Fact]
+    public void Execute_GivenNoLocalSignalAndNoGitHubIssue_CreatesNormally()
+    {
+        // Counterpart to the refusal test above: when the GitHub
+        // corroboration check genuinely finds nothing, the normal create
+        // path proceeds exactly as before G536.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G278", title);
+
+        var checker = new StubExistingIssueChecker(found: false);
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        var stub = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/659");
+        IssuePublishFlowCommand.CreatorFactory = () => stub;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, checker.CallCount);
+        Assert.Equal(1, stub.CallCount);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("created").GetBoolean());
+        Assert.True(root.GetProperty("durable_state_synced").GetBoolean());
+    }
+
+    [Fact]
     public void Execute_GivenRestorationImpossible_FailsLoudNamingMissingArtifactAndRecoveryCommand()
     {
         // G536 acceptance criterion: "with restoration impossible ... exits
@@ -1190,6 +1558,38 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     private sealed class ThrowingIssueCreator : IIssueCreator
     {
         public IssueCreateOutcome CreateIssue(string repo, string title, string bodyFilePath)
+        {
+            throw new InvalidOperationException("simulated gh failure");
+        }
+    }
+
+    /// <summary>
+    /// G536 review repair: replaces the real <c>gh issue list --search</c>
+    /// shell-out for tests. Defaults to "not found" so pre-existing tests
+    /// that exercise the normal create path are unaffected; tests covering
+    /// the duplicate-refusal path construct one with <c>found: true</c>.
+    /// </summary>
+    private sealed class StubExistingIssueChecker : IGitHubExistingIssueChecker
+    {
+        private readonly bool found;
+
+        public StubExistingIssueChecker(bool found)
+        {
+            this.found = found;
+        }
+
+        public int CallCount { get; private set; }
+
+        public bool ExistingIssueFound(string repo, string executionUnit)
+        {
+            CallCount++;
+            return found;
+        }
+    }
+
+    private sealed class ThrowingExistingIssueChecker : IGitHubExistingIssueChecker
+    {
+        public bool ExistingIssueFound(string repo, string executionUnit)
         {
             throw new InvalidOperationException("simulated gh failure");
         }

@@ -467,4 +467,16 @@ internal sealed record PublishRecoveryUnsafeStop
     public required string ExecutionUnit { get; init; }
     public required string Reason { get; init; }
     public required string PublishArtifactPath { get; init; }
+
+    /// <summary>
+    /// G536 review repair: the SAME stable gap identifiers
+    /// <see cref="PublishDurableArtifactAnalyzer"/> reports for this
+    /// execution unit (e.g. <c>queue_linked_issue_missing</c>), attached by
+    /// the command layer so an operator — or a test — can directly compare
+    /// this stop against what <c>issue publish-flow</c>'s idempotent rerun
+    /// independently detects and restores for the identical durable state.
+    /// Null for synthetic PR-scoped placeholder stops that have no real
+    /// execution unit to analyze.
+    /// </summary>
+    public IReadOnlyList<string>? DurableArtifactGaps { get; init; }
 }
