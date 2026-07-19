@@ -109,14 +109,30 @@ internal static class AutomationHeartbeatCommand
     /// contract, a single message is sufficient to trigger a full recovery
     /// wake — this body is meant to be sent once per heartbeat run, verbatim,
     /// by the external wrapper.
+    ///
+    /// G533: the summary line and per-item framing distinguish ACTIONABLE
+    /// items (a runnable command is recommended) from INFORMATIONAL ones
+    /// (<see cref="StalledWorkItem.IsInformational"/> — repair-pending,
+    /// rereview-pending, claimed-but-silent) so a reader — human or
+    /// orchestrator — never mistakes "FYI, no transition needed" for
+    /// "pending transition(s)".
     /// </summary>
     private static string BuildMessageBody(AutomationStalledWorkResult stalledWork)
     {
+        var actionableCount = stalledWork.Items.Count(item => !item.IsInformational);
+        var informationalCount = stalledWork.Items.Count(item => item.IsInformational);
+
         var builder = new StringBuilder();
         builder
             .Append("WAKE (heartbeat): ")
-            .Append(stalledWork.Items.Count)
-            .Append(" pending transition(s) stale >= ")
+            .Append(actionableCount)
+            .Append(" pending transition(s)");
+        if (informationalCount > 0)
+        {
+            builder.Append(", ").Append(informationalCount).Append(" informational note(s)");
+        }
+        builder
+            .Append(" stale >= ")
             .Append(stalledWork.StaleMinutesThreshold)
             .Append("m in ")
             .Append(stalledWork.Repo)
@@ -143,7 +159,15 @@ internal static class AutomationHeartbeatCommand
                 builder.Append(", pr #").Append(pr.Number);
             }
 
-            builder.Append(") — recommended: `").Append(item.RecommendedAction).Append('`');
+            builder.Append(')');
+            if (item.IsInformational)
+            {
+                builder.Append(" — FYI: ").Append(item.RecommendedAction);
+            }
+            else
+            {
+                builder.Append(" — recommended: `").Append(item.RecommendedAction).Append('`');
+            }
         }
 
         return builder.ToString();
@@ -246,7 +270,8 @@ internal static class AutomationHeartbeatCommand
         {
             foreach (var item in result.Items)
             {
-                writer.WriteLine($"## `{item.ExecutionUnit}` — {item.Kind} ({item.AgeMinutes}m)");
+                var kindLabel = item.IsInformational ? $"{item.Kind}, informational" : item.Kind;
+                writer.WriteLine($"## `{item.ExecutionUnit}` — {kindLabel} ({item.AgeMinutes}m)");
                 if (item.Issue is { } issue)
                 {
                     writer.WriteLine($"- issue: #{issue.Number} — {issue.Url}");
@@ -255,7 +280,14 @@ internal static class AutomationHeartbeatCommand
                 {
                     writer.WriteLine($"- pr: #{pr.Number} — {pr.Url}");
                 }
-                writer.WriteLine($"- recommended_action: `{item.RecommendedAction}`");
+                if (item.IsInformational)
+                {
+                    writer.WriteLine($"- status: {item.RecommendedAction}");
+                }
+                else
+                {
+                    writer.WriteLine($"- recommended_action: `{item.RecommendedAction}`");
+                }
                 writer.WriteLine();
             }
         }

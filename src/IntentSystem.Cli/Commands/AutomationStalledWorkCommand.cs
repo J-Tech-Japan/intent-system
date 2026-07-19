@@ -7,12 +7,14 @@ namespace IntentSystem.Cli.Commands;
 
 /// <summary>
 /// G523: <c>intent-cli automation stalled-work --domain &lt;d&gt; --repo &lt;r&gt;
-/// [--stale-minutes &lt;m&gt;] [--format json|markdown]</c> — read-only
-/// inventory of pending pipeline transitions with ages, so a single
-/// orchestrator wake (or an external heartbeat) can detect a stall without a
-/// human cross-checking GitHub labels, PR state, and queue-state by hand.
+/// [--stale-minutes &lt;m&gt;] [--claimed-silent-minutes &lt;m&gt;]
+/// [--format json|markdown]</c> — read-only inventory of pending pipeline
+/// transitions with ages, so a single orchestrator wake (or an external
+/// heartbeat) can detect a stall without a human cross-checking GitHub
+/// labels, PR state, and queue-state by hand.
 ///
-/// Categories:
+/// Actionable categories (carry a runnable <c>recommended_action</c> command,
+/// <see cref="StalledWorkItem.IsInformational"/> is <see langword="false"/>):
 /// <list type="bullet">
 /// <item><c>published-not-delegated</c> — an OPEN issue carries
 ///   <c>intent-target</c>, has no claim label
@@ -22,18 +24,42 @@ namespace IntentSystem.Cli.Commands;
 /// <item><c>pr-created-not-reviewing</c> — the source issue carries
 ///   <c>intent-pr-created</c> and its closing PR has not had the
 ///   <c>review-start</c> transition applied (no <c>intent-pr-reviewing</c> /
-///   <c>intent-pr-approved</c> on the PR).</item>
+///   <c>intent-pr-approved</c> on the PR), and the PR is NOT already in the
+///   repair or rereview lifecycle (see <c>repair-pending</c>/
+///   <c>rereview-pending</c> below — G533 review repair, field finding: PR
+///   #1750 was misreported this way with a wrong review-start
+///   recommendation mid-repair).</item>
 /// <item><c>merged-not-closed-out</c> — a MERGED PR's linked queue item is
 ///   not <see cref="QueueItemState.Completed"/>.</item>
 /// </list>
 ///
+/// Informational categories (G533 — age for visibility only,
+/// <c>recommended_action</c> is descriptive prose, never a transition,
+/// <see cref="StalledWorkItem.IsInformational"/> is <see langword="true"/>):
+/// <list type="bullet">
+/// <item><c>repair-pending</c> — a PR carrying <c>intent-pr-request-update</c>
+///   and/or <c>intent-pr-update-in-progress</c>; a review-start transition
+///   would be actively wrong mid-repair.</item>
+/// <item><c>rereview-pending</c> — a PR carrying
+///   <c>intent-pr-rereview-ready</c>; repair pushed, awaiting re-review.</item>
+/// <item><c>claimed-but-silent</c> — an issue carrying
+///   <c>intent-issue-in-progress</c> (no PR yet) with no observable activity
+///   for longer than <c>--claimed-silent-minutes</c> (default
+///   <see cref="DefaultClaimedSilentMinutes"/> minutes) — the third measured
+///   field stall class (silent completion / dead worker after claim).
+///   Recommends a worker status check, never assumes completion or
+///   failure from silence alone.</item>
+/// </list>
+///
 /// Age is approximated from the relevant GitHub entity's `createdAt` /
 /// `updatedAt` timestamp (GitHub does not expose per-label-application
-/// timestamps), which is the closest available proxy for "how long has this
-/// been pending".
+/// timestamps, or per-issue timeline events without a dedicated per-issue
+/// fetch this slice does not add), which is the closest available proxy for
+/// "how long has this been pending" / "how long has this been silent".
 ///
 /// Strictly read-only: no GitHub mutation, no queue-state/runs.jsonl write,
-/// no label change.
+/// no label change, no message sent — informational kinds recommend a
+/// status check but never send one themselves.
 ///
 /// Execution-unit and domain identification (G532, review-repaired):
 /// <list type="bullet">
@@ -83,12 +109,58 @@ internal static class AutomationStalledWorkCommand
     public const string KindMergedNotClosedOut = "merged-not-closed-out";
 
     /// <summary>
+    /// G533: a PR whose source issue carries <c>intent-pr-created</c> but
+    /// which is itself already in the repair lifecycle (<c>intent-pr-
+    /// request-update</c> and/or <c>intent-pr-update-in-progress</c>) —
+    /// informational, since a review-start transition would be wrong
+    /// mid-repair (field finding: PR #1750 was misreported as
+    /// <see cref="KindPrCreatedNotReviewing"/> with that exact wrong
+    /// recommendation).
+    /// </summary>
+    public const string KindRepairPending = "repair-pending";
+
+    /// <summary>
+    /// G533: a PR carrying <c>intent-pr-rereview-ready</c> — repair pushed,
+    /// awaiting re-review. Informational, same reasoning as
+    /// <see cref="KindRepairPending"/>.
+    /// </summary>
+    public const string KindRereviewPending = "rereview-pending";
+
+    /// <summary>
+    /// G533: an issue claimed via <c>intent-issue-in-progress</c> (with no
+    /// PR yet created) showing no observable activity for longer than the
+    /// conservative default threshold — the third measured stall class
+    /// from the field analysis (silent completion / dead worker after
+    /// claim). Informational: recommends a worker status check, never a
+    /// state transition (this command never assumes completion or failure
+    /// from silence alone).
+    /// </summary>
+    public const string KindClaimedButSilent = "claimed-but-silent";
+
+    /// <summary>
+    /// G533: conservative default for <c>--claimed-silent-minutes</c> (12
+    /// hours) — chosen so <c>claimed-but-silent</c> does not fire on an
+    /// ordinary work session; only a genuinely long silence after claim.
+    /// </summary>
+    public const int DefaultClaimedSilentMinutes = 720;
+
+    /// <summary>
     /// G532 review repair: a title matched more than one distinct packet's
     /// declared <c>source_execution_unit</c> as a token — the execution unit
     /// cannot be picked without guessing, so it is reported here instead of
     /// silently choosing the longest (or first-sorted) match.
     /// </summary>
     public const string ReasonExecutionUnitAmbiguous = "execution-unit-ambiguous";
+
+    /// <summary>
+    /// G533 review repair: <see cref="KindClaimedButSilent"/>'s own
+    /// last-activity timestamp (the issue's own <c>updatedAt</c>, or a
+    /// linked open PR's <c>updatedAt</c>) is missing or malformed —
+    /// silence can never be reliably established, so the candidate is
+    /// excluded rather than substituting a different field (e.g.
+    /// <c>createdAt</c>) that measures a different event entirely.
+    /// </summary>
+    public const string ReasonActivityDataUnusable = "activity-data-unusable";
 
     public static Func<IGitHubAutomationCandidateLister>? CandidateListerFactory { get; set; }
 
@@ -101,7 +173,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -115,7 +187,7 @@ internal static class AutomationStalledWorkCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -125,7 +197,7 @@ internal static class AutomationStalledWorkCommand
         AutomationStalledWorkResult result;
         try
         {
-            result = Analyze(context, domain!, repo!, staleMinutes);
+            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
@@ -154,8 +226,13 @@ internal static class AutomationStalledWorkCommand
     /// round-tripping through this command's own JSON output. Throws
     /// <see cref="IOException"/> / <see cref="InvalidOperationException"/>
     /// on a GitHub read failure — callers decide how to report it.
+    /// <paramref name="claimedSilentMinutes"/> defaults to
+    /// <see cref="DefaultClaimedSilentMinutes"/> so existing callers (e.g.
+    /// <c>automation heartbeat</c>) keep compiling and get the conservative
+    /// default without needing their own override plumbing.
     /// </summary>
-    public static AutomationStalledWorkResult Analyze(CliContext context, string domain, string repo, int staleMinutes)
+    public static AutomationStalledWorkResult Analyze(
+        CliContext context, string domain, string repo, int staleMinutes, int claimedSilentMinutes = DefaultClaimedSilentMinutes)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
@@ -175,6 +252,7 @@ internal static class AutomationStalledWorkCommand
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
+        CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded);
 
         var filtered = items
             .Where(item => item.AgeMinutes >= staleMinutes)
@@ -259,6 +337,7 @@ internal static class AutomationStalledWorkCommand
                 Issue = new StalledWorkRef { Number = issue.Number, Url = issue.Url },
                 Pr = null,
                 AgeMinutes = ComputeAgeMinutes(issue.CreatedAt, now),
+                IsInformational = false,
                 RecommendedAction =
                     $"intent-cli worker claim --repo {repo} --kind issue --number {issue.Number} --github-only --write",
             });
@@ -316,6 +395,40 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
+            // G533: a PR already in the repair or rereview lifecycle is NOT
+            // a "review hasn't started" stall — recommending review-start
+            // mid-repair is actively wrong (field finding: PR #1750 was
+            // misreported this way). Report it as an informational kind
+            // with age and no transition recommendation, rather than
+            // silently excluding it or misreporting it.
+            string kind;
+            bool isInformational;
+            string recommendedAction;
+            if (prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrRequestUpdate)
+                || prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrUpdateInProgress))
+            {
+                kind = KindRepairPending;
+                isInformational = true;
+                recommendedAction =
+                    "none — PR is in the repair lifecycle (change requested or repair in progress); "
+                    + "no transition is recommended until the repair completes.";
+            }
+            else if (prLabels.Contains(WorkerNextActionConstants.Labels.IntentPrRereviewReady))
+            {
+                kind = KindRereviewPending;
+                isInformational = true;
+                recommendedAction =
+                    "none — PR has a repair pushed and is awaiting re-review; "
+                    + "no transition is recommended until a reviewer or automation re-reviews it.";
+            }
+            else
+            {
+                kind = KindPrCreatedNotReviewing;
+                isInformational = false;
+                recommendedAction =
+                    $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition review-start --write";
+            }
+
             var resolution = ResolveExecutionUnit(context, matchedIssue.Title);
             var packetDeclaredDomain = resolution.Corroborated ? ReadPacketDeclaredDomain(context, resolution.ExecutionUnit) : null;
             if (!TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo,
@@ -323,7 +436,7 @@ internal static class AutomationStalledWorkCommand
             {
                 excluded.Add(new StalledWorkExcluded
                 {
-                    Kind = KindPrCreatedNotReviewing,
+                    Kind = kind,
                     ExecutionUnit = resolution.ExecutionUnit,
                     Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
                     Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
@@ -333,15 +446,27 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
+            // G533 review repair: repair-pending/rereview-pending age uses
+            // the PR's own `updatedAt` rather than `createdAt` — these are
+            // POST-creation lifecycle states, so "how long has this been
+            // pending" should mean "since entering this state", not "since
+            // the PR was opened". `updatedAt` is only a CONSERVATIVE
+            // approximation of that, though, not the exact label-application
+            // moment: GitHub does not expose per-label-application
+            // timestamps, and `updatedAt` reflects the PR's most recent
+            // modification of ANY kind (which may postdate the specific
+            // label change) unless a dedicated label-event fetch is added.
+            var ageSource = isInformational ? pr.UpdatedAt : pr.CreatedAt;
+
             items.Add(new StalledWorkItem
             {
-                Kind = KindPrCreatedNotReviewing,
+                Kind = kind,
                 ExecutionUnit = resolution.ExecutionUnit,
                 Issue = new StalledWorkRef { Number = matchedIssue.Number, Url = matchedIssue.Url },
                 Pr = new StalledWorkRef { Number = pr.Number, Url = pr.Url },
-                AgeMinutes = ComputeAgeMinutes(pr.CreatedAt, now),
-                RecommendedAction =
-                    $"intent-cli automation pr-transition --repo {repo} --pr {pr.Number} --transition review-start --write",
+                AgeMinutes = ComputeAgeMinutes(ageSource, now),
+                IsInformational = isInformational,
+                RecommendedAction = recommendedAction,
             });
         }
     }
@@ -494,8 +619,193 @@ internal static class AutomationStalledWorkCommand
                 // dedicated `mergedAt` field in the requested field set;
                 // `updatedAt` is set to the merge time for a merged PR.
                 AgeMinutes = ComputeAgeMinutes(pr.UpdatedAt, now),
+                IsInformational = false,
                 RecommendedAction =
                     $"intent-cli closeout pr --pr {pr.Number} --repo {repo} --domain {domain} --pr-merged true --write --format json",
+            });
+        }
+    }
+
+    /// <summary>
+    /// G533: an issue claimed via <c>intent-issue-in-progress</c> that has
+    /// produced no observable activity for longer than
+    /// <paramref name="claimedSilentMinutes"/> — the third measured field
+    /// stall class (silent completion / dead worker after claim). Scoped to
+    /// issues WITHOUT <c>intent-pr-created</c> yet — once a PR exists, the
+    /// PR-lifecycle kinds (<see cref="KindPrCreatedNotReviewing"/>,
+    /// <see cref="KindRepairPending"/>, <see cref="KindRereviewPending"/>)
+    /// take over; detecting a repair-state PR that is itself stale is a
+    /// deliberately separate, out-of-scope follow-up.
+    ///
+    /// "Observable activity" is approximated as the MORE RECENT of the
+    /// issue's own <c>updatedAt</c> (GitHub bumps this on any label change,
+    /// comment, or other timeline event — the closest available proxy
+    /// without a dedicated per-issue timeline-events fetch) and the
+    /// <c>updatedAt</c> of any open PR whose closing references name this
+    /// issue (a linked PR's own activity counts too, even before
+    /// <c>intent-pr-created</c> is applied — e.g. a freshly-opened draft).
+    /// Conservative by construction: the default 720-minute threshold means
+    /// an ordinary work session never fires this kind.
+    ///
+    /// G533 review repair: a missing or malformed <c>updatedAt</c> — on
+    /// either the issue OR a linked PR — is never silently treated as "old
+    /// activity" by falling back to <c>createdAt</c>. <c>createdAt</c>
+    /// measures a DIFFERENT event (issue open time / PR open time, not
+    /// claim acquisition or the linked PR's own last touch) and could
+    /// manufacture a silence interval that begins long before the claim
+    /// was ever made, firing this kind on unusable evidence rather than
+    /// genuine silence. Unusable activity data fails closed into
+    /// <c>excluded[]</c> (never <c>items[]</c>) with a structured
+    /// diagnostic naming exactly which timestamp was unusable and why. A
+    /// parsed timestamp that is somehow in the future relative to
+    /// <paramref name="now"/> (clock skew, bad data) is clamped to
+    /// <paramref name="now"/> — conservative in the same direction as
+    /// everything else here: it can only ever make the candidate look
+    /// LESS silent, never manufacture a false positive.
+    /// </summary>
+    private static void CollectClaimedButSilent(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        string repo,
+        DateTimeOffset now,
+        int claimedSilentMinutes,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        foreach (var issue in openIssues)
+        {
+            if (!IsOpen(issue.State))
+            {
+                continue;
+            }
+
+            var labels = LabelSet(issue.Labels);
+            if (!labels.Contains(WorkerNextActionConstants.Labels.IntentTarget))
+            {
+                continue;
+            }
+            if (!labels.Contains(WorkerNextActionConstants.Labels.IntentIssueInProgress))
+            {
+                continue;
+            }
+            if (labels.Contains(WorkerNextActionConstants.Labels.IntentPrCreated))
+            {
+                // A PR already exists — the PR-lifecycle kinds cover this
+                // issue's ongoing state now, not the claim-silence check.
+                continue;
+            }
+
+            // Best-effort execution-unit naming for diagnostics below —
+            // used regardless of whether corroboration/domain confirmation
+            // ultimately succeeds, matching the pattern every other
+            // collector in this file already follows.
+            var resolution = ResolveExecutionUnit(context, issue.Title);
+            var issueRef = new StalledWorkRef { Number = issue.Number, Url = issue.Url };
+
+            if (!TryParseActivityTimestamp(issue.UpdatedAt, out var issueActivity, out var issueProblem))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindClaimedButSilent,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = issueRef,
+                    Pr = null,
+                    Reason = ReasonActivityDataUnusable,
+                    Detail =
+                        $"issue #{issue.Number}'s updatedAt is {issueProblem} — claimed-but-silent requires a "
+                        + "valid last-activity timestamp and never substitutes createdAt (issue OPEN time, not "
+                        + "claim acquisition time) as a stand-in, since that could manufacture a misleadingly old "
+                        + "silence interval.",
+                });
+                continue;
+            }
+
+            var lastActivity = ClampToNow(issueActivity, now);
+            var linkedPrActivityUnusable = false;
+            string? linkedPrProblemDetail = null;
+
+            foreach (var pr in openPrs)
+            {
+                if (!IsOpen(pr.State))
+                {
+                    continue;
+                }
+                foreach (var reference in pr.ClosingIssuesReferences)
+                {
+                    if (reference.Number == issue.Number && ReferenceMatchesRepo(reference, repo))
+                    {
+                        if (!TryParseActivityTimestamp(pr.UpdatedAt, out var prActivity, out var prProblem))
+                        {
+                            linkedPrActivityUnusable = true;
+                            linkedPrProblemDetail =
+                                $"linked PR #{pr.Number}'s updatedAt is {prProblem} — its real activity could not "
+                                + "be verified, so this candidate is conservatively excluded rather than risking "
+                                + "an under-counted (falsely silent) result.";
+                        }
+                        else
+                        {
+                            var clampedPrActivity = ClampToNow(prActivity, now);
+                            if (clampedPrActivity > lastActivity)
+                            {
+                                lastActivity = clampedPrActivity;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (linkedPrActivityUnusable)
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindClaimedButSilent,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = issueRef,
+                    Pr = null,
+                    Reason = ReasonActivityDataUnusable,
+                    Detail = linkedPrProblemDetail!,
+                });
+                continue;
+            }
+
+            var silentMinutes = ComputeAgeMinutesFromInstant(lastActivity, now);
+            if (silentMinutes < claimedSilentMinutes)
+            {
+                continue;
+            }
+
+            var packetDeclaredDomain = resolution.Corroborated ? ReadPacketDeclaredDomain(context, resolution.ExecutionUnit) : null;
+            if (!TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo,
+                    out var reason, out var detail))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindClaimedButSilent,
+                    ExecutionUnit = resolution.ExecutionUnit,
+                    Issue = issueRef,
+                    Pr = null,
+                    Reason = reason,
+                    Detail = detail,
+                });
+                continue;
+            }
+
+            items.Add(new StalledWorkItem
+            {
+                Kind = KindClaimedButSilent,
+                ExecutionUnit = resolution.ExecutionUnit,
+                Issue = issueRef,
+                Pr = null,
+                AgeMinutes = silentMinutes,
+                IsInformational = true,
+                RecommendedAction =
+                    $"status check: no observable activity on `{resolution.ExecutionUnit}` (issue #{issue.Number}) "
+                    + $"for {silentMinutes}m since claim — ask the assigned worker for a status update; "
+                    + "do not assume completion, failure, or transition state from silence alone.",
             });
         }
     }
@@ -896,17 +1206,70 @@ internal static class AutomationStalledWorkCommand
         return minutes > 0 ? (int)minutes : 0;
     }
 
+    /// <summary>
+    /// G533 review repair: parses <paramref name="timestamp"/> (an entity's
+    /// own <c>updatedAt</c>) for <see cref="KindClaimedButSilent"/>'s
+    /// activity determination — deliberately NEVER falls back to a
+    /// different field (e.g. <c>createdAt</c>) on failure, unlike
+    /// <see cref="ComputeAgeMinutes"/>'s "unparseable means age zero"
+    /// convention used by the other (actionable) kinds. Those other kinds
+    /// treat a missing timestamp as "just happened" (age 0, never
+    /// over-reports staleness); doing the same here — or worse, falling
+    /// back to <c>createdAt</c> — would let claimed-but-silent fire (or
+    /// under-fire) on evidence that was never actually observed. Returns
+    /// <see langword="false"/> with a human-readable <paramref name="problem"/>
+    /// string ("missing" or "malformed (could not parse '...')") on
+    /// failure, so the caller can fail closed with a structured diagnostic
+    /// instead of guessing.
+    /// </summary>
+    private static bool TryParseActivityTimestamp(string timestamp, out DateTimeOffset instant, out string? problem)
+    {
+        if (string.IsNullOrWhiteSpace(timestamp))
+        {
+            instant = default;
+            problem = "missing";
+            return false;
+        }
+        if (!DateTimeOffset.TryParse(timestamp, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out instant))
+        {
+            problem = $"malformed (could not parse '{timestamp}')";
+            return false;
+        }
+        problem = null;
+        return true;
+    }
+
+    /// <summary>
+    /// G533 review repair: a parsed activity timestamp that is somehow in
+    /// the future relative to <paramref name="now"/> (clock skew, bad
+    /// data) is clamped to <paramref name="now"/> rather than trusted
+    /// verbatim — this can only ever make a candidate look LESS silent
+    /// (conservative), never manufacture a false <see cref="KindClaimedButSilent"/>
+    /// positive from an implausible timestamp.
+    /// </summary>
+    private static DateTimeOffset ClampToNow(DateTimeOffset instant, DateTimeOffset now) =>
+        instant > now ? now : instant;
+
+    private static int ComputeAgeMinutesFromInstant(DateTimeOffset instant, DateTimeOffset now)
+    {
+        var minutes = (now - instant).TotalMinutes;
+        return minutes > 0 ? (int)minutes : 0;
+    }
+
     private static bool TryParseArguments(
         string[] args,
         out string? domain,
         out string? repo,
         out int staleMinutes,
+        out int claimedSilentMinutes,
         out string format,
         out string error)
     {
         domain = null;
         repo = null;
         staleMinutes = 0;
+        claimedSilentMinutes = DefaultClaimedSilentMinutes;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -940,6 +1303,18 @@ internal static class AutomationStalledWorkCommand
                         return false;
                     }
                     staleMinutes = parsedMinutes;
+                    index++;
+                    break;
+                case "--claimed-silent-minutes":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer,
+                            System.Globalization.CultureInfo.InvariantCulture, out var parsedSilentMinutes)
+                        || parsedSilentMinutes < 0)
+                    {
+                        error = "--claimed-silent-minutes requires a non-negative integer.";
+                        return false;
+                    }
+                    claimedSilentMinutes = parsedSilentMinutes;
                     index++;
                     break;
                 case "--format":
@@ -994,7 +1369,8 @@ internal static class AutomationStalledWorkCommand
         {
             foreach (var item in result.Items)
             {
-                writer.WriteLine($"## `{item.ExecutionUnit}` — {item.Kind} ({item.AgeMinutes}m)");
+                var kindLabel = item.IsInformational ? $"{item.Kind}, informational" : item.Kind;
+                writer.WriteLine($"## `{item.ExecutionUnit}` — {kindLabel} ({item.AgeMinutes}m)");
                 if (item.Issue is { } issue)
                 {
                     writer.WriteLine($"- issue: #{issue.Number} — {issue.Url}");
@@ -1003,7 +1379,18 @@ internal static class AutomationStalledWorkCommand
                 {
                     writer.WriteLine($"- pr: #{pr.Number} — {pr.Url}");
                 }
-                writer.WriteLine($"- recommended_action: `{item.RecommendedAction}`");
+                // G533: informational kinds never recommend a transition —
+                // rendered as `status` (descriptive prose) rather than
+                // `recommended_action` (always a runnable command) so a
+                // reader never mistakes one for the other.
+                if (item.IsInformational)
+                {
+                    writer.WriteLine($"- status: {item.RecommendedAction}");
+                }
+                else
+                {
+                    writer.WriteLine($"- recommended_action: `{item.RecommendedAction}`");
+                }
                 writer.WriteLine();
             }
         }
@@ -1094,6 +1481,19 @@ internal sealed record StalledWorkItem
 
     [JsonPropertyName("age_minutes")]
     public required int AgeMinutes { get; init; }
+
+    /// <summary>
+    /// G533: <see langword="true"/> for <see cref="AutomationStalledWorkCommand.KindRepairPending"/>,
+    /// <see cref="AutomationStalledWorkCommand.KindRereviewPending"/>, and
+    /// <see cref="AutomationStalledWorkCommand.KindClaimedButSilent"/> —
+    /// these kinds carry age for visibility but never recommend a state
+    /// transition (<see cref="RecommendedAction"/> is descriptive prose, not
+    /// an executable command). <see langword="false"/> for the original
+    /// three actionable kinds, where <see cref="RecommendedAction"/> is
+    /// always a runnable <c>intent-cli</c> command.
+    /// </summary>
+    [JsonPropertyName("is_informational")]
+    public required bool IsInformational { get; init; }
 
     [JsonPropertyName("recommended_action")]
     public required string RecommendedAction { get; init; }

@@ -243,6 +243,36 @@ public sealed class AutomationHeartbeatCommandTests : IDisposable
         Assert.Contains("WAKE (heartbeat)", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_RepairPendingItem_MessageBodyFramesAsFyiNotRecommended()
+    {
+        // G533: an informational kind (repair-pending here) must render as
+        // "FYI: ..." prose in message_body, never "recommended: `<command>`"
+        // — a reader (human or orchestrator) must never mistake "no
+        // transition needed" for an actionable next command.
+        using var workspace = new HeartbeatWorkspace();
+        workspace.WritePacketDomain("G521", "intent-cli");
+        var issue = BuildIssue(1143, "G521: Document agmsg Codex monitor", FixedNow.AddDays(-2), "intent-pr-created");
+        var pr = BuildOpenPrClosingIssue(1750, FixedNow.AddHours(-3), 1143, "intent-pr-request-update");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue], prs: [pr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHeartbeatCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--stale-minutes", "0", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var messageBody = doc.RootElement.GetProperty("message_body").GetString();
+        Assert.NotNull(messageBody);
+        Assert.Contains("repair-pending", messageBody, StringComparison.Ordinal);
+        Assert.Contains("FYI:", messageBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("recommended: `", messageBody, StringComparison.Ordinal);
+        Assert.Contains("informational note(s)", messageBody, StringComparison.Ordinal);
+        Assert.Contains("0 pending transition(s)", messageBody, StringComparison.Ordinal);
+    }
+
     private static GitHubAutomationIssueCandidate BuildIssue(
         int number, string title, DateTimeOffset createdAt, params string[] labels) => new()
         {
@@ -265,6 +295,34 @@ public sealed class AutomationHeartbeatCommandTests : IDisposable
         UpdatedAt = createdAt.ToString("O"),
         State = "MERGED",
         IsDraft = false,
+    };
+
+    /// <summary>G533: an OPEN PR closing a given issue, carrying arbitrary
+    /// extra labels — used for repair-pending/rereview-pending message_body
+    /// framing fixtures.</summary>
+    private static GitHubAutomationPrCandidate BuildOpenPrClosingIssue(
+        int number, DateTimeOffset createdAt, int closingIssueNumber, params string[] extraLabels) => new()
+    {
+        Number = number,
+        Title = "Some open PR",
+        Url = $"https://github.com/J-Tech-Japan/intent-system/pull/{number}",
+        CreatedAt = createdAt.ToString("O"),
+        UpdatedAt = createdAt.ToString("O"),
+        State = "OPEN",
+        IsDraft = false,
+        Labels = extraLabels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray(),
+        ClosingIssuesReferences = new[]
+        {
+            new GitHubPrClosingIssueReference
+            {
+                Number = closingIssueNumber,
+                Repository = new GitHubPrClosingIssueRepository
+                {
+                    Name = "intent-system",
+                    Owner = new GitHubPrClosingIssueRepositoryOwner { Login = "J-Tech-Japan" },
+                },
+            },
+        },
     };
 
     private sealed class FakeLister : IGitHubAutomationCandidateLister

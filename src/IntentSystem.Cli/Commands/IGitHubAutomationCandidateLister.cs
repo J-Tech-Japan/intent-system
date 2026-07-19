@@ -100,6 +100,17 @@ internal sealed record GitHubAutomationIssueCandidate
     [JsonPropertyName("createdAt")]
     public string CreatedAt { get; init; } = string.Empty;
 
+    /// <summary>
+    /// G533: GitHub's own "last modified" timestamp — bumped by any
+    /// label change, comment, or other timeline event on the issue, so it
+    /// is the closest available proxy for "last observable activity"
+    /// without a dedicated per-issue timeline-events fetch. Empty for
+    /// callers that pre-date the field; treated as unknown (falls back to
+    /// <see cref="CreatedAt"/>) by consumers.
+    /// </summary>
+    [JsonPropertyName("updatedAt")]
+    public string UpdatedAt { get; init; } = string.Empty;
+
     [JsonPropertyName("labels")]
     public IReadOnlyList<GitHubAutomationLabel> Labels { get; init; }
         = Array.Empty<GitHubAutomationLabel>();
@@ -136,7 +147,11 @@ internal sealed class GhCliGitHubAutomationCandidateLister : IGitHubAutomationCa
     // G289: also request `state` so the analyzer can defensively filter
     // closed issues / PRs from WIP detection even when callers (e.g. test
     // fakes) don't pre-apply `--state open`.
-    internal const string ListJsonFields = "number,title,url,createdAt,labels,state";
+    // G533: also request `updatedAt` — the closest available proxy for
+    // "last observable issue activity" (label change, comment, etc.)
+    // without a dedicated per-issue timeline-events fetch, used by
+    // `automation stalled-work`'s claimed-but-silent detection.
+    internal const string ListJsonFields = "number,title,url,createdAt,updatedAt,labels,state";
 
     // G319: also request `isDraft` so the host-loop-next-action analyzer
     // can map an approved-but-draft PR to `approved-pr-draft-blocked`

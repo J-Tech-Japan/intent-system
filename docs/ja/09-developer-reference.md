@@ -241,39 +241,97 @@ binding fallback は、packet 自身の `domain:` フィールドが別の値を
 
 ### stalled-work 検出 (G523)
 
-`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] --format json|markdown`
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] --format json|markdown`
 は、保留中の pipeline transition を age 付きで一覧化する **read-only** な
 サーフェスです。これにより、1 回の orchestrator wake（あるいは外部の
 heartbeat）だけで、人間が GitHub label・PR state・queue-state を手で
 突き合わせることなく stall を検出・復旧できます。GitHub label、
-queue-state、`runs.jsonl` を変更することは一切ありません。
+queue-state、`runs.jsonl` を変更することは一切ありません — informational
+な kind も、それが推奨する status check を自分で送ることはありません。
+それは人間/orchestrator の行動として残ります。
 
-カテゴリ:
+すべての item は `is_informational`（`bool`）を持ち、2 つのグループを
+区別します:
+
+**actionable なカテゴリ**（`is_informational: false` —
+`recommended_action` は常に実行可能な `intent-cli` コマンド）:
 
 - `published-not-delegated` — OPEN の issue が `intent-target` を持つが、
   claim label（`intent-issue-in-progress` / `intent-pr-created`）がまだ無く、
   PR も一度も作成されていない。
 - `pr-created-not-reviewing` — 元の issue が `intent-pr-created` を持ち、
   その issue を close する PR に `review-start` transition がまだ適用
-  されていない（PR に `intent-pr-reviewing` / `intent-pr-approved` が無い）。
+  されておらず（PR に `intent-pr-reviewing` / `intent-pr-approved` が無い）、
+  かつその PR が repair/rereview lifecycle に既に入っていない場合（下記
+  参照 — いずれかの状態にある PR は、それぞれ独自の informational な
+  kind として報告されます）。
 - `merged-not-closed-out` — MERGED 状態の PR に紐づく queue-state item が
   まだ `Completed` になっていない（closeout — `pr-merged` +
   `closeout-recorded` の runs event — がまだ記録されていない）。
 
+**informational なカテゴリ (G533)** — `is_informational: true`、
+`recommended_action` は（transition コマンドではなく）説明的な prose、
+age は可視性のためだけに報告されます:
+
+- `repair-pending` — `intent-pr-request-update` および/または
+  `intent-pr-update-in-progress` を持つ PR。field finding: まさにこの
+  状態にあった OPEN PR（PR #1750）が、以前は `pr-created-not-reviewing`
+  として誤報告され、`review-start` が推奨されていました — repair の
+  最中としては意味的に間違っています。推奨を毎回疑ってかからなければ
+  ならない detector は、その価値を失います。`age_minutes` は、PR の
+  作成時刻ではなく PR 自身の `updatedAt` から計測されます — これは
+  「repair 状態に入った時点」の CONSERVATIVE な近似であり、正確な
+  label 付与の瞬間ではありません: GitHub は per-label-application の
+  タイムスタンプを公開しておらず、`updatedAt` は（専用の label-event
+  fetch を追加しない限り）その label の変更より後になり得る、PR への
+  あらゆる種類の最新の変更を反映します。
+- `rereview-pending` — `intent-pr-rereview-ready` を持つ PR（repair が
+  push され、re-review 待ち）。`repair-pending` と同じ `updatedAt` ベース
+  の age 近似です。
+- `claimed-but-silent` — `intent-issue-in-progress` を持つが **まだ PR が
+  作成されていない** issue で、`--claimed-silent-minutes`（デフォルトは
+  **720** 分 / 12 時間 — 通常の作業セッションでは決して発火しないよう
+  選ばれています）を超えて observable な活動が無いもの。「observable な
+  活動」は、issue 自身の `updatedAt`（GitHub は label 変更・コメント・
+  その他の timeline event でこれを更新します — 専用の per-issue
+  timeline-events fetch を持たないこの slice にとって、最も近い
+  proxy です）と、その issue を close する closing reference を持つ
+  OPEN な PR の `updatedAt`（`intent-pr-created` が付与される前でも、
+  紐づく PR 自身の活動はカウントされます）の、より新しい方として
+  近似されます。issue または紐づく PR の `updatedAt` が欠落・不正な
+  場合、それを「古い活動」として `createdAt`（claim 取得時刻や最終
+  タッチ時刻ではなく、issue/PR が開かれた時刻を表す）にフォールバック
+  することは決してありません — 誤解を招くほど古い silence interval を
+  作り出してしまう可能性があるためです。代わりに、`excluded[]`
+  （`activity-data-unusable`、どのタイムスタンプが使用不能だったかを
+  明示）に入り fail closed します。パースされたタイムスタンプが
+  （clock skew などで）未来の時刻になっている場合は、そのまま信頼せず
+  「今」にクランプされます — これは candidate をより silent でなく
+  見せる方向にしか作用しません。`recommended_action` は常に、
+  assigned worker への status check request として読めるテキストです
+  — 沈黙だけから completion・failure・いかなる transition も決して
+  仮定しません。issue に PR が作成されると（`intent-pr-created`）、
+  代わりに PR-lifecycle の kind が引き継ぎます。repair 状態の PR 自体が
+  閾値を超えて stale であることを検出するのは、明示的に out-of-scope の
+  follow-up です。
+
 各 item は `kind`、`execution_unit`、`issue` および/または `pr`
-（番号 + url）、`age_minutes`、`recommended_action`（次に実行すべき
-正確な canonical コマンド — それぞれ `worker claim`、`automation
-pr-transition --transition review-start`、`closeout pr`）を報告します。
-`--stale-minutes` は、指定した閾値より新しい item を除外します
-（デフォルトは `0` — すべてを age 付きで報告し、閾値は呼び出し側が選ぶ）。
-`age_minutes` は、GitHub が label 適用時刻を公開していないため、
-該当する GitHub entity の `createdAt`/`updatedAt` タイムスタンプからの
-近似値です。`published-not-delegated` は、既に取得済みの PR closing
-reference も issue label とは独立にチェックします — そのため、
-completion label が実態とずれてしまっていても（intent-pr-created が
-一度も付与されていない、または削除されてしまったが、OPEN の PR が
-既にその issue を close している場合）、誤って `worker claim` を推奨する
-ことはありません。
+（番号 + url）、`age_minutes`、`is_informational`、`recommended_action`
+を報告します。`--stale-minutes` は、指定した閾値より新しい item を
+除外します（デフォルトは `0` — すべてを age 付きで報告し、閾値は
+呼び出し側が選ぶ）— これは 6 つすべての kind に一律に適用されます。
+`claimed-but-silent` は、そもそも item が検討される前に、それ自身の
+`--claimed-silent-minutes` 閾値でも追加でゲートされます（そのため
+`--stale-minutes` を上げるだけでは、`claimed-but-silent` の item が
+自身の閾値より早く現れることは決してありません）。`age_minutes` は、
+GitHub が label 適用時刻や、専用の per-issue fetch 無しでの timeline
+event を公開していないため、該当する GitHub entity の
+`createdAt`/`updatedAt` タイムスタンプからの近似値です。
+`published-not-delegated` は、既に取得済みの PR closing reference も
+issue label とは独立にチェックします — そのため、completion label が
+実態とずれてしまっていても（intent-pr-created が一度も付与されていない、
+または削除されてしまったが、OPEN の PR が既にその issue を close して
+いる場合）、誤って `worker claim` を推奨することはありません。
 
 **execution unit と domain の特定 (G532)**
 
@@ -366,6 +424,15 @@ packet.yaml が存在せず、かつどの packet の `source_execution_unit`
 
 このスライスは検出のみです — orchestrator wake procedure や外部
 heartbeat からこのサーフェスを利用する部分は、別の後続スライスです。
+
+`automation heartbeat` (G526) はこの同じ analyzer をラップし、
+`is_informational` を `message_body` に反映します: サマリー行は
+「`N` pending transition(s)」と、informational な item が 1 つでも
+あれば「`M` informational note(s)」に分かれます。各 item の行は、
+actionable な kind では `— recommended:` コマンド ``、informational な
+kind では `— FYI:` prose `` で終わります — そのため読み手（人間でも
+orchestrator でも）が「transition は不要」を actionable な次コマンドと
+取り違えることはありません。
 
 ### 行き詰まった published issue を retire する (G525)
 
