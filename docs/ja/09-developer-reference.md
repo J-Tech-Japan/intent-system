@@ -449,6 +449,151 @@ retired になった item は自動的に WIP gating から外れます:
 
 ---
 
+### facet を意識した context 供給 (G530)
+
+G529 の 4 つの semantic facet（`vocabulary`、`invariant`、`decider`、
+`acceptance-property`）を土台に、2 つの read-only サーフェスが、
+facet で分類された node を「変更が尊重すべき、局所化された semantic
+context」として優先的に供給するようになりました — implement/review
+エージェントが手作業でその surface を再構築する代わりに。
+
+**`intent-cli context collect`** は `## Facet context` セクションを
+追加で持つようになりました。これは、その下にある未分類の
+queue-state/clarification/automation-bindings/recent-events の
+context より AHEAD（前）にレンダリングされます（これは
+おまけではなく semantic の核だからです）。このセクションは facet
+ごとに 1 グループを持ち、常に正規の順序
+`vocabulary → invariant → decider → acceptance-property` で並び、
+各 node は `id`、`facets`（現在のグループだけでなく、その node の
+全 facet 値）、`summary`（frontmatter 後の最初の空でない行）、
+`path`（`intents/<domain>/...`）として報告されます:
+
+```bash
+intent-cli context collect --domain <d> --format json
+intent-cli context collect --domain <d> --facets invariant,decider   # これらの facet だけに絞る
+intent-cli context collect --domain <d> --scope intents/<d>/means,identity/mission.md  # overlap で絞り込む
+```
+
+- `--facets <カンマ区切り>` は、そもそもどの facet グループが現れるかを
+  制限します（それでも正規の順序でレンダリングされます）。認識できない
+  facet 名は usage error になります（`intent search --facet` の
+  バリデーションと同様）。カンマ区切りのオプションはすべて（`--facets`
+  も `--scope` も）、trim 後の各要素が非空であることを要求し、
+  先勝ちの順序で重複を除去します — `--scope ","` や `--facets
+  "vocabulary,,decider"`（空の要素）は usage error であり、黙って
+  「scope なし」になったり、要素が黙って捨てられたりすることは
+  ありません。
+- `--scope <カンマ区切りのパス>` は、各グループを、パスがヒントと
+  overlap する node だけに対称的に（両方向で）絞り込みます — ヒントが
+  node の祖先ディレクトリを指す場合に加えて、node 自身のパスが
+  （より具体的な）ヒントの祖先である場合も、両方とも overlap と
+  みなされます。完全一致も同様です。どのヒントの形式も、比較の前に
+  node 自身の id が既に使っている domain-relative なセグメント列に
+  正規化されます — そのため、domain root 配下の絶対ファイルシステム
+  パス、repo-relative な `intents/<domain>/...` 形式、そして短い
+  domain-relative の id 形式（末尾の `.md` の有無を問わず）は、
+  すべて等価です。`..` セグメントは拒否されます（黙って解決される
+  ことはありません — そうしないと、ヒントが自身の scope 対象で
+  あるはずの domain の外へ抜け出してしまう可能性があるためです）。
+  比較は常に大文字小文字を区別します。`--scope` を省略した場合は、
+  domain の facet node すべてが返されます。`--scope` を渡したが、
+  すべてのヒントが無効または domain 外だった場合は、何にもマッチ
+  しません — 黙って「scope 要求なし」にフォールバックすることは
+  ありません。
+- 拒否された `--scope` ヒントも、決して黙って消えることはありません:
+  `facet_context_scope_warnings` エントリ（`hint`、`reason`）を生成し、
+  どのヒントが・なぜ拒否されたか（domain root の外側、`..` トラバーサル
+  など）を正確に示します — そのため「すべてのヒントが無効だったので
+  何にもマッチしなかった」場合と、「本物の有効なヒントがたまたま
+  どの node とも overlap しなかった」場合が、区別できないまま同じに
+  見えることがなくなります。混在したリストでも、有効なヒントは
+  そのまま適用されつつ、拒否されたヒントはすべて報告されます。
+  `facet_context_all_scope_hints_rejected` は、要求されたヒントが
+  すべて拒否された場合にのみ `true` になります。
+- domain に facet-annotated な node が 1 つも無い場合（`--scope`/
+  `--facets` のクエリがたまたま何にもマッチしなかっただけの場合とは
+  異なります）は、`facet_context_note` が設定され、空のセクションの
+  代わりに明示的なノートがレンダリングされます — graceful な
+  degradation であり、決して error にはなりません。facets は
+  optional であり、tree がまだ採用していない段階ではこれが通常です。
+- 壊れた `facets:` 宣言、または Present な宣言に未知の値が含まれる
+  場合、それが黙って消えることはありません: どちらも
+  `facet_context_warnings` エントリ（`path`、`reason`）を JSON に、
+  Markdown では `Warnings` リストを生成し、何が・なぜ除外されたのかを
+  正確に示します — これにより「そもそも facets が無い」場合と
+  「facets はあったが除外された」場合が、区別できないまま同じに
+  見えることがなくなります。未知の値があっても、その node の他の
+  有効な facet からその node が除外されることはありません。
+- JSON の形: `facet_context: [{facet, nodes: [{id, facets, summary,
+  path}]}]`（常に 4 要素。`--facets` を渡した場合はそれより少なくなる
+  こともあります）、`facet_context_note: string | null`、
+  `facet_context_warnings: [{path, reason}]`、
+  `facet_context_scope_warnings: [{hint, reason}]`、
+  `facet_context_all_scope_hints_rejected: bool`。
+
+**`intent-cli packet draft`** は、scaffold される `review-context.md`
+の中に `## Facet context` セクションを生成するようになりました。
+これは、その packet 自身の
+`implementation_issue_packet.intent_references` と overlap する
+facet node を一覧化します — `context collect` の `--scope` が使うのと
+全く同じ overlap ロジック（上記の拒否ヒントの可視化を含む）なので、
+2 つのサーフェスが「overlap」の意味について食い違うことはありません。
+生成される内容は、2 つの HTML コメントマーカー（`<!-- BEGIN/END
+GENERATED FACET CONTEXT (G530) -->`）の間に存在します。
+`review-context.md` の残りの部分は手による所有物であり、一切触れられ
+ません。マーカーの扱いは fail-closed です — 変更が試みられるのは、
+ファイルが「開始マーカー 1 つ、終了マーカー 1 つ、その順序」を
+正確に持つ場合のみです:
+
+- **ファイルがまだ存在しない場合**: 現在の `intent_references`
+  （既に `packet.yaml` が存在していれば、そのディスク上の値を
+  読みます — 例えば、以前の `packet draft` 実行の後に operator が
+  手で編集していた場合。この同じ呼び出しが別途書き込むかもしれない、
+  テンプレートの空の `[]` では決してありません）を使って、ファイル
+  全体が新規に書き込まれます。`created` として報告されます。
+- **ファイルが存在し、かつ正確に 1 組の正しい順序のマーカーを持つ
+  場合**: マーカーの「間」にある内容だけが、packet の現在の
+  `intent_references` から再計算され、ファイル自身の既存の改行規則
+  （CRLF か LF か — 決してハードコードしません。既存の CRLF ファイルが
+  改行スタイル混在になることはありません）を使って置き換えられます —
+  これにより、通常のワークフロー（空の references で scaffold →
+  operator が `packet.yaml` に本物の references を追加 → `packet
+  draft` を再実行 → block にそれが反映される）を通して、セクションが
+  最新に保たれます。開始マーカーより前、終了マーカーより後のすべて
+  （block の周りに手で書かれた文章を含む）は、バイト単位でそのまま
+  保持されます。再計算された内容が既存のものと異なる場合は
+  `updated`、異ならない場合は `skipped`（本物の no-op であり、
+  見せかけの update ではない）として報告されます。
+- **ファイルが存在するが、マーカーが全く無い場合**（この機能より前に
+  作られたか、operator がマーカーを削除した場合）: 他の 3 つの
+  scaffold ファイルの、単純な「存在すればスキップ」の挙動と全く
+  同じように、完全に触れられないままになります。マーカーが手による
+  所有物の中に後から注入されることは決してありません。`skipped`
+  として報告されます。
+- **ファイルが存在し、マーカーが他のいずれかの形（開始・終了の
+  どちらか、または両方が重複している、終了マーカーがその開始マーカー
+  より前に現れる、どちらか片方しか無い）である場合**: これも完全に
+  触れられないままになります（黙った部分的な update や、「どちらが
+  本物のペアか」を勝手に推測することは決してありません）が、
+  `markers-malformed` として明確に区別して報告され、正確にどのような
+  形が見つかったかを示す `detail` 文字列が付きます — この状態が、
+  健全な「マーカーが全く無い」場合と同じに見えることはありません。
+
+空の `intent_references` リストそれ自体が、意味のある scope です —
+「この packet は（今のところ）何も参照していない」— そのため block は
+すべての facet グループを空として表示します。domain 全体の facet
+node を表示することは決してありません。domain に facet node が
+1 つも存在しない場合にのみ、graceful-degradation のノートが
+レンダリングされます。
+
+両サーフェスは 1 つのセレクター（`FacetContextSelector`）を共有して
+スキャン・分類・グループ化・scope-overlap のマッチングを行うため、
+順序付け・フィルタリング・warning・degradation のセマンティクスが
+両者の間で食い違うことはあり得ません。バケット分けされるのは有効な
+facet 値（G529 の閉じた集合）だけです。
+
+---
+
 ## バージョンフロー
 
 リポジトリのバージョンポリシーは `eng/version.json` に記載されています。`stableVersion`

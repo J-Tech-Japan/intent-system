@@ -6,7 +6,7 @@
 
 ## packet とは
 
-**packet** は、intent から切り出された焦点の絞られた実装スライスです。デザインスレッドが正本ファイル一式（`packet.yaml`、`implementation.md`、`review-context.md`、`github-body.md`）を scaffold します。これにより、何を作るかが明確に定義されます。
+**packet** は、intent から切り出された焦点の絞られた実装スライスです。デザインスレッドが正本ファイル一式（`packet.yaml`、`implementation.md`、`review-context.md`、`github-body.md`）を scaffold します。これにより、何を作るかが明確に定義されます。`review-context.md` には、その packet の `intent_references` と overlap する G529 semantic-facet node（vocabulary/invariant/decider/acceptance-property）を一覧化した、生成済みの **Facet context** セクションが含まれます — 詳細は [facet を意識した context 供給 (G530)](09-developer-reference.md#facet-を意識した-context-供給-g530) を参照してください。
 
 **issue 公開**はレビュー済みの packet を GitHub Issue に変換します。この issue は **Standalone Child Issue Contract** であり、child implementation agent が実装に必要な唯一の情報源です。child agent は issue 本文とリポジトリのコードを参照するだけです。host metadata にはアクセスしません。
 

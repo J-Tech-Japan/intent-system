@@ -440,6 +440,129 @@ it — no separate code path needed.
 
 ---
 
+### Facet-aware context supply (G530)
+
+Building on G529's four semantic facets (`vocabulary`, `invariant`,
+`decider`, `acceptance-property`), two read-only surfaces now supply
+facet-classified nodes as the preferred, localized semantic context a
+change must respect — instead of an implement/review agent reconstructing
+that surface by hand.
+
+**`intent-cli context collect`** gains a `## Facet context` section,
+rendered AHEAD of the unclassified queue-state/clarification/automation-
+bindings/recent-events context below it (it is the semantic core, not an
+afterthought). The section holds one group per facet, always in the
+canonical order `vocabulary → invariant → decider → acceptance-property`,
+each node reported as `id`, `facets` (all of that node's facet values, not
+just the current group's), `summary` (first non-blank line after
+frontmatter), and `path` (`intents/<domain>/...`):
+
+```bash
+intent-cli context collect --domain <d> --format json
+intent-cli context collect --domain <d> --facets invariant,decider   # restrict to these facets only
+intent-cli context collect --domain <d> --scope intents/<d>/means,identity/mission.md  # narrow by overlap
+```
+
+- `--facets <comma-separated>` restricts which facet groups appear at all
+  (still rendered in canonical order); an unrecognized facet name is a
+  usage error (mirrors `intent search --facet`'s validation). Every
+  comma-separated option (`--facets` and `--scope` alike) requires each
+  element to be non-empty after trimming and dedupes repeats in first-seen
+  order — `--scope ","` or `--facets "vocabulary,,decider"` (an empty
+  element) is a usage error, never silently "no scope" / a dropped element.
+- `--scope <comma-separated paths>` narrows every group to nodes whose path
+  OVERLAPS a hint, checked symmetrically in BOTH directions — a hint naming
+  an ancestor directory of a node, or a node whose own path is an ancestor
+  of a (more specific) hint, both count, on top of an exact match. Every
+  hint form reduces to the same domain-relative segment list a node's own
+  id already uses before comparing, so these are all equivalent: an
+  absolute filesystem path under the domain root, the repo-relative
+  `intents/<domain>/...` form, and the short domain-relative id form (with
+  or without a trailing `.md`). A `..` segment is rejected (never silently
+  resolved — it could otherwise walk a hint outside the domain it claims to
+  scope); comparison is case-sensitive throughout. Omitting `--scope`
+  entirely returns every domain facet node; passing `--scope` with hints
+  that all turn out invalid or outside the domain matches NOTHING — it
+  never silently falls back to "no scoping requested".
+- A rejected `--scope` hint is never silent either: it produces a
+  `facet_context_scope_warnings` entry (`hint`, `reason`) naming the exact
+  hint and why it was rejected (outside the domain root, a `..` traversal,
+  etc.) — so "matched nothing because every hint was invalid" is never
+  indistinguishable from "matched nothing because a genuinely valid hint
+  just didn't overlap any node". A mixed list still applies the valid
+  hints while reporting every rejected one; `facet_context_all_scope_hints_rejected`
+  is `true` only when every requested hint was rejected.
+- A domain with ZERO facet-annotated nodes at all (not merely a
+  `--scope`/`--facets` query that matched nothing) sets `facet_context_note`
+  and renders an explicit note instead of an empty section — graceful
+  degradation, never an error. Facets are optional; this is the norm before
+  a tree adopts them.
+- A malformed `facets:` declaration, or a Present declaration carrying an
+  unknown value, is never silently dropped: both produce a `facet_context_warnings`
+  entry (`path`, `reason`) in JSON and a `Warnings` list in Markdown, naming
+  exactly what was excluded and why — so "genuinely no facets here" never
+  looks identical to "facets were present but excluded". An unknown value
+  does not disqualify a node from its OTHER valid facets.
+- JSON shape: `facet_context: [{facet, nodes: [{id, facets, summary,
+  path}]}]` (always 4 entries, or fewer when `--facets` is passed),
+  `facet_context_note: string | null`, `facet_context_warnings: [{path,
+  reason}]`, `facet_context_scope_warnings: [{hint, reason}]`,
+  `facet_context_all_scope_hints_rejected: bool`.
+
+**`intent-cli packet draft`** generates a `## Facet context` section inside
+the scaffolded `review-context.md`, listing the facet nodes overlapping the
+packet's own `implementation_issue_packet.intent_references` — the exact
+same overlap logic `context collect`'s `--scope` uses (including the same
+rejected-reference visibility above), so the two surfaces can never
+disagree about what "overlaps". The generated content lives between two
+HTML-comment markers (`<!-- BEGIN/END GENERATED FACET CONTEXT (G530) -->`);
+the rest of `review-context.md` is hand-owned and untouched. Marker
+handling is fail-closed — mutation is attempted ONLY when the file carries
+EXACTLY one begin marker and one end marker in that order:
+
+- **File does not exist yet**: written fresh, in full, with the current
+  `intent_references` (read from an EXISTING `packet.yaml` on disk if one
+  is already present — e.g. an operator hand-edited it after an earlier
+  `packet draft` run — never the freshly-templated empty `[]` this same
+  invocation might otherwise write for `packet.yaml` itself). Reported as
+  `created`.
+- **File exists AND carries exactly one correctly-ordered marker pair**:
+  only the content strictly BETWEEN them is recomputed from the packet's
+  CURRENT `intent_references` and replaced, using the FILE'S OWN existing
+  newline convention (CRLF or LF — never hardcoded, so an existing CRLF
+  file is never left with mixed line endings) — this is what keeps the
+  section current through the ordinary workflow (scaffold with empty
+  references → operator adds real references to `packet.yaml` → rerun
+  `packet draft` → the block reflects them). Everything before the begin
+  marker and after the end marker, including any hand-written prose around
+  the block, is preserved byte-for-byte. Reported as `updated` when the
+  recomputed content differs from what is already there, `skipped` when it
+  doesn't (a genuine no-op, not a spurious update).
+- **File exists but has NO markers at all** (predates this feature, or an
+  operator removed them): left completely untouched, exactly like the
+  other three scaffold files' plain skip-if-exists behavior. The markers
+  are never retroactively injected into hand-owned content. Reported as
+  `skipped`.
+- **File exists with markers in any OTHER shape** — duplicate begin and/or
+  end markers, an end marker appearing before its begin, or only one of the
+  two present: also left completely untouched (never a silent partial
+  update, never guessing which pair is "the real one"), but reported
+  distinctly as `markers-malformed` with a `detail` string naming exactly
+  what shape was found — this state must never look like the healthy
+  no-markers-at-all case.
+
+An empty `intent_references` list is itself a meaningful scope — "this
+packet references nothing (yet)" — so the block shows every facet group as
+empty, never the whole domain's facet nodes; only a domain with zero facet
+nodes AT ALL renders the graceful-degradation note.
+
+Both surfaces share one selector (`FacetContextSelector`) for scanning,
+classifying, grouping, and scope-overlap matching, so ordering, filtering,
+warning, and degradation semantics can't drift apart between them. Only
+VALID facet values (the closed G529 set) are ever bucketed.
+
+---
+
 ## Version flow
 
 The repository version policy lives in `eng/version.json` — the single source of

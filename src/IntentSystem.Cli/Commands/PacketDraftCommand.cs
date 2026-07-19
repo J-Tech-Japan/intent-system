@@ -25,6 +25,41 @@ internal static class PacketDraftCommand
     private const string FileSkipped = "skipped";
     private const string FilePlanned = "planned";
 
+    /// <summary>
+    /// G530 review repair: review-context.md's Facet context block is
+    /// selectively regenerated (not merely created-once-or-skipped like the
+    /// other three scaffold files) — this status distinguishes "the
+    /// existing file's generated block was refreshed" from a fresh
+    /// <see cref="FileCreated"/> or an untouched <see cref="FileSkipped"/>.
+    /// </summary>
+    private const string FileUpdated = "updated";
+
+    /// <summary>
+    /// G530 review repair: distinct from <see cref="FileSkipped"/> (which
+    /// also covers the genuinely healthy "no markers at all, a legacy file"
+    /// case). This status means the file HAS marker text but not in the one
+    /// safe shape (exactly one begin, exactly one end, begin before end) —
+    /// fail-closed: the file is never mutated, but the caller must be able
+    /// to tell "untouched because healthy" apart from "untouched because
+    /// something is wrong with the markers" (see <see cref="PacketDraftFile.Detail"/>).
+    /// </summary>
+    private const string FileMarkersMalformed = "markers-malformed";
+
+    /// <summary>
+    /// G530 review repair: delimits the machine-owned Facet context block
+    /// inside review-context.md. Content between these markers is fully
+    /// regenerated on every `packet draft` run (never hand-edited content —
+    /// treat it as codegen output); content OUTSIDE the markers — including
+    /// everything before/after them in the file — is NEVER touched. A
+    /// review-context.md that predates this feature (or had the markers
+    /// manually removed) has neither marker, so it is left alone entirely,
+    /// exactly like the other three scaffold files' plain skip-if-exists
+    /// behavior — the markers are never retroactively injected into
+    /// hand-owned content.
+    /// </summary>
+    private const string FacetContextBeginMarker = "<!-- BEGIN GENERATED FACET CONTEXT (G530) -->";
+    private const string FacetContextEndMarker = "<!-- END GENERATED FACET CONTEXT (G530) -->";
+
     private const string UsageLine =
         "Usage: intent-cli packet draft --execution-unit <id> [--domain <name>] [--target-repo <owner/repo>] [--dry-run] [--format markdown|json]";
 
@@ -108,11 +143,25 @@ internal static class PacketDraftCommand
             ? BaseBranchPolicyContract.ResolveExpectedBaseBranch(baseBranchPolicy)
             : CliRuntimeContracts.DirectMainBaseBranch;
 
+        // G530: review-context.md's generated "Facet context" block scopes
+        // to whatever `intent_references` an EXISTING packet.yaml on disk
+        // already declares — never the freshly-templated `[]` this same
+        // call may be about to write for packet.yaml itself (that write
+        // happens below, after this read). This is what makes
+        // "regenerating an existing packet" meaningful: packet.yaml can
+        // already carry hand-edited references (added after an earlier
+        // `packet draft` run), and every subsequent `packet draft` run
+        // refreshes the generated block to match current references —
+        // never the surrounding hand-owned content.
+        var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+        var intentReferences = ReadIntentReferences(packetYamlPath);
+        var facetDomainRoot = ResolveFacetDomainRoot(context, domain);
+        var facetSelection = FacetContextSelector.Select(facetDomainRoot, domain, intentReferences, facetFilter: null);
+
         var planned = new[]
         {
             ("packet.yaml", BuildPacketYaml(executionUnit, domain, targetRepo)),
             ("implementation.md", BuildImplementationMd(executionUnit)),
-            ("review-context.md", BuildReviewContextMd(executionUnit)),
             ("github-body.md", BuildGithubBodyMd(executionUnit, baseBranchPolicy, expectedBaseBranch))
         };
 
@@ -144,6 +193,11 @@ internal static class PacketDraftCommand
                 Status = status
             });
         }
+
+        // Inserted at its original position (between implementation.md and
+        // github-body.md) so the reported file order matches the canonical
+        // four-file layout regardless of the dedicated handling below.
+        files.Insert(2, WriteOrUpdateReviewContext(packetDirectory, executionUnit, facetSelection, dryRun));
 
         // Validate contract sections against whatever github-body.md ends up on disk
         // (skeleton if newly written, existing content if previously authored).
@@ -275,7 +329,15 @@ internal static class PacketDraftCommand
             """;
     }
 
-    private static string BuildReviewContextMd(string executionUnit)
+    /// <summary>
+    /// G530 review repair: the review-context.md scaffold, once created,
+    /// gets its Facet context block selectively refreshed on every later
+    /// `packet draft` run rather than the whole file being locked at
+    /// creation time — see <see cref="WriteOrUpdateReviewContext"/>. Content
+    /// is only ever written by that method; this helper produces the FULL
+    /// file for the fresh-create case.
+    /// </summary>
+    private static string BuildReviewContextMd(string executionUnit, FacetContextSelection facetSelection)
     {
         return $"""
             # {executionUnit} Review Context
@@ -289,6 +351,12 @@ internal static class PacketDraftCommand
             - mutates GitHub or parent state when the issue is read-only;
             - skips required contract sections.
 
+            ## Facet context
+
+            {FacetContextBeginMarker}
+            {BuildFacetContextBlockContent(facetSelection)}
+            {FacetContextEndMarker}
+
             ## Knowledge Writeback Expectation (G461)
 
             If the packet's `closeout_learning.write_back_required` is `true`, confirm the
@@ -296,6 +364,294 @@ internal static class PacketDraftCommand
             captured as a follow-up packet. If the packet declined all knowledge maintenance,
             that is acceptable — note it rather than blocking.
             """;
+    }
+
+    /// <summary>
+    /// G530 (review-repaired): the four G529 semantic-facet nodes
+    /// (vocabulary/invariant/decider/acceptance-property) overlapping this
+    /// packet's own declared `intent_references` — the semantic core the
+    /// implementation must respect, surfaced directly in the review
+    /// contract rather than left for a reviewer to reconstruct by hand.
+    /// This is exactly the content written BETWEEN the generated-block
+    /// markers — see <see cref="WriteOrUpdateReviewContext"/> — so it is
+    /// entirely machine-owned and safe to regenerate on every run. Malformed
+    /// or unknown-valued `facets:` declarations are never silently dropped:
+    /// they surface as trailing warning lines naming the excluded path and
+    /// reason.
+    /// </summary>
+    private static string BuildFacetContextBlockContent(FacetContextSelection facetSelection)
+    {
+        var lines = new List<string>();
+        if (!facetSelection.DomainHasAnyFacetNodes)
+        {
+            lines.Add("No facet-annotated nodes found for this domain — facets (G529) are optional and this is the norm before a tree adopts them.");
+        }
+        else
+        {
+            foreach (var group in facetSelection.Groups)
+            {
+                lines.Add($"### {group.Facet}");
+                if (group.Nodes.Count == 0)
+                {
+                    lines.Add("- (none overlapping this packet's intent_references)");
+                    continue;
+                }
+
+                foreach (var node in group.Nodes)
+                {
+                    lines.Add($"- `{node.Id}` [{string.Join(", ", node.Facets)}] {node.Summary} — `{node.Path}`");
+                }
+            }
+        }
+
+        if (facetSelection.Warnings.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("Warnings (excluded from the facet context above):");
+            foreach (var warning in facetSelection.Warnings)
+            {
+                lines.Add($"- `{warning.Path}`: {warning.Reason}");
+            }
+        }
+
+        // G530 review repair: an intent_references entry that could not be
+        // resolved to a domain-relative path must never look like "this
+        // packet simply references nothing overlapping" — it is reported
+        // exactly like context collect's rejected --scope hints.
+        if (facetSelection.ScopeWarnings.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add(
+                facetSelection.AllScopeHintsRejected
+                    ? "Scope warnings (ALL of this packet's intent_references were rejected — nothing was scoped in):"
+                    : "Scope warnings (these intent_references entries were rejected; other valid entries were still applied):");
+            foreach (var warning in facetSelection.ScopeWarnings)
+            {
+                lines.Add($"- `{warning.Hint}`: {warning.Reason}");
+            }
+        }
+
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// G530 review repair: creates review-context.md fresh (matching the
+    /// other three scaffold files' first-write behavior) when it does not
+    /// yet exist. When it DOES exist, the file as a whole is never
+    /// overwritten — but if it carries EXACTLY ONE correctly-ordered pair of
+    /// generated-block markers (see <see cref="FacetContextBeginMarker"/>),
+    /// the content strictly BETWEEN them is replaced with a
+    /// freshly-computed <see cref="FacetContextSelection"/> while
+    /// everything before/after the markers (all hand-owned content) is
+    /// preserved byte-for-byte, using the FILE'S OWN existing newline style
+    /// (CRLF or LF) rather than hardcoding one. A review-context.md with NO
+    /// markers at all (predates this feature, or an operator removed them)
+    /// is left completely untouched — <see cref="FileSkipped"/>, the
+    /// markers are never retroactively injected. A review-context.md with
+    /// markers in any OTHER shape (duplicates, reversed order, only a begin
+    /// or only an end) is ALSO left completely untouched — but reported
+    /// distinctly as <see cref="FileMarkersMalformed"/> with a diagnostic
+    /// <see cref="PacketDraftFile.Detail"/>, so that state is never
+    /// indistinguishable from the genuinely healthy no-markers-at-all case.
+    /// </summary>
+    private static PacketDraftFile WriteOrUpdateReviewContext(
+        string packetDirectory, string executionUnit, FacetContextSelection facetSelection, bool dryRun)
+    {
+        const string name = "review-context.md";
+        var path = Path.Combine(packetDirectory, name);
+
+        if (!File.Exists(path))
+        {
+            var status = dryRun ? FilePlanned : FileCreated;
+            if (!dryRun)
+            {
+                File.WriteAllText(path, BuildReviewContextMd(executionUnit, facetSelection));
+            }
+            return new PacketDraftFile { Name = name, Path = path, Status = status };
+        }
+
+        var existing = File.ReadAllText(path);
+        var markerShape = ClassifyGeneratedBlockMarkers(existing);
+
+        if (markerShape.Kind == GeneratedBlockMarkerKind.None)
+        {
+            return new PacketDraftFile { Name = name, Path = path, Status = FileSkipped };
+        }
+
+        if (markerShape.Kind == GeneratedBlockMarkerKind.Malformed)
+        {
+            return new PacketDraftFile
+            {
+                Name = name,
+                Path = path,
+                Status = FileMarkersMalformed,
+                Detail = markerShape.Diagnostic,
+            };
+        }
+
+        // Preserve the FILE'S OWN newline convention for both the newly
+        // inserted separators and the block content's internal newlines —
+        // never hardcode "\n", which would mix line-ending styles into an
+        // existing CRLF file.
+        var usesCrlf = existing.Contains("\r\n", StringComparison.Ordinal);
+        var newline = usesCrlf ? "\r\n" : "\n";
+        var blockContent = BuildFacetContextBlockContent(facetSelection);
+        if (usesCrlf)
+        {
+            blockContent = blockContent.Replace("\n", "\r\n", StringComparison.Ordinal);
+        }
+
+        var beforeAndBeginMarker = existing[..(markerShape.BeginIndex + FacetContextBeginMarker.Length)];
+        var endMarkerOnward = existing[markerShape.EndIndex..];
+        var updatedContent = $"{beforeAndBeginMarker}{newline}{blockContent}{newline}{endMarkerOnward}";
+
+        if (string.Equals(updatedContent, existing, StringComparison.Ordinal))
+        {
+            return new PacketDraftFile { Name = name, Path = path, Status = FileSkipped };
+        }
+
+        var updateStatus = dryRun ? FilePlanned : FileUpdated;
+        if (!dryRun)
+        {
+            File.WriteAllText(path, updatedContent);
+        }
+        return new PacketDraftFile { Name = name, Path = path, Status = updateStatus };
+    }
+
+    private enum GeneratedBlockMarkerKind
+    {
+        /// <summary>No begin marker and no end marker anywhere — a healthy legacy file (or one never scaffolded by this feature).</summary>
+        None,
+
+        /// <summary>Exactly one begin marker, exactly one end marker, begin strictly before end — safe to regenerate.</summary>
+        ValidPair,
+
+        /// <summary>Any other shape: duplicates, reversed order, or only one of the two markers present.</summary>
+        Malformed,
+    }
+
+    private readonly record struct GeneratedBlockMarkerShape(
+        GeneratedBlockMarkerKind Kind, int BeginIndex, int EndIndex, string? Diagnostic);
+
+    /// <summary>
+    /// G530 review repair: classifies review-context.md's marker state
+    /// before any mutation is attempted — fail-closed. Only the single
+    /// unambiguous "exactly one begin, exactly one end, begin before end"
+    /// shape is safe to regenerate; every other shape (duplicate markers of
+    /// either kind, an end appearing before its begin, or only one of the
+    /// two present) is reported as <see cref="GeneratedBlockMarkerKind.Malformed"/>
+    /// with a human-readable diagnostic rather than silently doing nothing
+    /// OR silently picking an arbitrary pair.
+    /// </summary>
+    private static GeneratedBlockMarkerShape ClassifyGeneratedBlockMarkers(string content)
+    {
+        var beginPositions = AllIndicesOf(content, FacetContextBeginMarker);
+        var endPositions = AllIndicesOf(content, FacetContextEndMarker);
+
+        if (beginPositions.Count == 0 && endPositions.Count == 0)
+        {
+            return new GeneratedBlockMarkerShape(GeneratedBlockMarkerKind.None, -1, -1, null);
+        }
+
+        if (beginPositions.Count == 1 && endPositions.Count == 1 && endPositions[0] > beginPositions[0])
+        {
+            return new GeneratedBlockMarkerShape(GeneratedBlockMarkerKind.ValidPair, beginPositions[0], endPositions[0], null);
+        }
+
+        string diagnostic;
+        if (beginPositions.Count == 0)
+        {
+            diagnostic = $"found {endPositions.Count} end marker(s) but no begin marker — expected exactly one of each.";
+        }
+        else if (endPositions.Count == 0)
+        {
+            diagnostic = $"found {beginPositions.Count} begin marker(s) but no end marker — expected exactly one of each.";
+        }
+        else if (beginPositions.Count > 1 || endPositions.Count > 1)
+        {
+            diagnostic = $"found {beginPositions.Count} begin marker(s) and {endPositions.Count} end marker(s) — expected exactly one of each.";
+        }
+        else
+        {
+            diagnostic = "the end marker appears before the begin marker.";
+        }
+
+        return new GeneratedBlockMarkerShape(GeneratedBlockMarkerKind.Malformed, -1, -1, diagnostic);
+    }
+
+    private static List<int> AllIndicesOf(string content, string marker)
+    {
+        var indices = new List<int>();
+        var searchStart = 0;
+        while (true)
+        {
+            var index = content.IndexOf(marker, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+            {
+                return indices;
+            }
+            indices.Add(index);
+            searchStart = index + marker.Length;
+        }
+    }
+
+    /// <summary>
+    /// G530: reads the `implementation_issue_packet.intent_references` list
+    /// from an EXISTING packet.yaml on disk (never the in-memory template
+    /// this same invocation may be about to write). Tolerant — a missing
+    /// file, missing section, or malformed YAML all degrade to an empty
+    /// list rather than an error, consistent with the rest of this
+    /// scaffolding command's never-fail posture.
+    /// </summary>
+    private static IReadOnlyList<string> ReadIntentReferences(string packetYamlPath)
+    {
+        if (!File.Exists(packetYamlPath))
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            var yaml = new YamlDotNet.RepresentationModel.YamlStream();
+            using var reader = new StringReader(File.ReadAllText(packetYamlPath));
+            yaml.Load(reader);
+
+            if (yaml.Documents.Count == 0
+                || yaml.Documents[0].RootNode is not YamlDotNet.RepresentationModel.YamlMappingNode root
+                || !root.Children.TryGetValue(
+                    new YamlDotNet.RepresentationModel.YamlScalarNode("implementation_issue_packet"), out var implementationNode)
+                || implementationNode is not YamlDotNet.RepresentationModel.YamlMappingNode implementationMapping
+                || !implementationMapping.Children.TryGetValue(
+                    new YamlDotNet.RepresentationModel.YamlScalarNode("intent_references"), out var referencesNode)
+                || referencesNode is not YamlDotNet.RepresentationModel.YamlSequenceNode referencesSequence)
+            {
+                return Array.Empty<string>();
+            }
+
+            return referencesSequence.Children
+                .OfType<YamlDotNet.RepresentationModel.YamlScalarNode>()
+                .Select(scalar => scalar.Value ?? string.Empty)
+                .Where(value => value.Length > 0)
+                .ToArray();
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// G530: same parent-host-aware domain root resolution
+    /// <c>context collect</c> already uses for clarification/automation-
+    /// bindings paths — a child implementation workspace's intent tree
+    /// (and therefore its facet nodes) lives under the PARENT host root
+    /// when one is configured, else the local repo.
+    /// </summary>
+    private static string ResolveFacetDomainRoot(CliContext context, string domain)
+    {
+        var parentRoot = context.ResolveParentIntentRepoRootPath();
+        var baseRoot = string.IsNullOrWhiteSpace(parentRoot) ? context.RepoRoot : parentRoot;
+        return Path.Combine(baseRoot!, "intents", domain);
     }
 
     private static string BuildGithubBodyMd(string executionUnit, string baseBranchPolicy, string expectedBaseBranch)
@@ -409,6 +765,10 @@ internal static class PacketDraftCommand
         foreach (var file in result.Files)
         {
             writer.WriteLine($"- {file.Name}: {file.Status}");
+            if (file.Detail is not null)
+            {
+                writer.WriteLine($"  - {file.Detail}");
+            }
         }
         writer.WriteLine();
 
@@ -578,4 +938,14 @@ internal sealed record PacketDraftFile
 
     [JsonPropertyName("status")]
     public required string Status { get; init; }
+
+    /// <summary>
+    /// G530 review repair: set only for review-context.md's <c>markers-malformed</c>
+    /// status — a human-readable diagnostic explaining exactly what shape
+    /// the generated-block markers were found in (duplicates, reversed
+    /// order, one-sided), so the fail-closed "left untouched" outcome is
+    /// actionable rather than a bare status string.
+    /// </summary>
+    [JsonPropertyName("detail")]
+    public string? Detail { get; init; }
 }

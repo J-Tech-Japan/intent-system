@@ -22,6 +22,63 @@ internal static class ContextCollectRenderer
         writer.WriteLine($"# Context packet: {packet.Domain}");
         writer.WriteLine();
 
+        // G530: the facet section is rendered AHEAD of the unclassified
+        // queue/clarification/automation-bindings/events context below —
+        // it is the semantic core (vocabulary/invariant/decider/
+        // acceptance-property nodes) a change must respect, localized
+        // instead of buried at the end of the packet.
+        writer.WriteLine("## Facet context");
+        if (packet.FacetContextNote is not null)
+        {
+            writer.WriteLine($"- {packet.FacetContextNote}");
+        }
+        else
+        {
+            foreach (var group in packet.FacetContext)
+            {
+                writer.WriteLine($"### {group.Facet}");
+                if (group.Nodes.Count == 0)
+                {
+                    writer.WriteLine("- (none)");
+                    continue;
+                }
+
+                foreach (var node in group.Nodes)
+                {
+                    writer.WriteLine(
+                        $"- `{node.Id}` [{string.Join(", ", node.Facets)}] {node.Summary} — `{node.Path}`");
+                }
+            }
+        }
+
+        // G530 review repair: malformed/unknown-value exclusions are never
+        // silent — surfaced regardless of whether the note above fired, so
+        // "genuinely no facets" and "facets excluded for a reason" never
+        // look identical.
+        if (packet.FacetContextWarnings.Count > 0)
+        {
+            writer.WriteLine("- Warnings (excluded from the facet context above):");
+            foreach (var warning in packet.FacetContextWarnings)
+            {
+                writer.WriteLine($"  - `{warning.Path}`: {warning.Reason}");
+            }
+        }
+
+        // G530 review repair: a rejected --scope hint must never look like
+        // a valid scope that simply matched nothing.
+        if (packet.FacetContextScopeWarnings.Count > 0)
+        {
+            writer.WriteLine(
+                packet.FacetContextAllScopeHintsRejected
+                    ? "- Scope warnings (ALL requested --scope hints were rejected — nothing was scoped in):"
+                    : "- Scope warnings (these --scope hints were rejected; other valid hints were still applied):");
+            foreach (var warning in packet.FacetContextScopeWarnings)
+            {
+                writer.WriteLine($"  - `{warning.Hint}`: {warning.Reason}");
+            }
+        }
+        writer.WriteLine();
+
         writer.WriteLine("## Queue state");
         writer.WriteLine($"- Path: `{packet.QueueStatePath}`");
         writer.WriteLine(
