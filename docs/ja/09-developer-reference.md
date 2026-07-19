@@ -1142,6 +1142,47 @@ unit + event name)への exact match のままです——変わったのは tag
   データ、あるいは手作業で編集されたもの)は、新たに tag された
   reason と exact-match することは決してありません。
 
+**Round-5 review repair — revision counter 自身に input validation が
+必要であり、recovery には bare existence check ではなく明示的な
+cardinality/ownership の classification が必要であり、最終 write には
+concurrent writer に対する保護が必要でした。**
+
+- `PriorityRevision` は制約のない `int` でした——negative な値も
+  問題なく deserialize され、`fromRevision + 1` は unchecked な
+  arithmetic であり、`int.MaxValue` で silently に `int.MinValue` へと
+  wrap し、monotonic/injective という invariant に直接違反していました。
+  dry-run と `--write` の両方が、今や何かを preview・mutate する**前**
+  に `PriorityRevision >= 0` を validate し、`checked` arithmetic で
+  `toRevision` を計算します——negative あるいは exhausted な revision
+  は、event も queue-state の write も無く fail closed し、手動の
+  修復を要求します。
+- Recovery は `events.Any(...)` という bare な existence check を
+  使っていました。revision pair が operation identity である以上、
+  同じ pair を claim する 2 つの IDENTICAL な event は silently に
+  「1 つの pending attempt」として受け入れられてしまい(本物の
+  duplication bug を隠蔽してしまいます)、genuinely CONFLICTING な
+  event——同じ pair だが異なる reason や direction——は silently に
+  無視され、その脇をすり抜けて 2 つ目の異なる event が追記されて
+  いました。recovery は今や明示的な classification です: **zero**
+  match → append しても安全、**ちょうど 1 つの exact match**(reason
+  も一致)→ in-progress な retry の pending audit、**2 つ以上の
+  identical match**、あるいは**同じ pair 上の任意の reason 不一致な
+  match** → fail closed(exit 1、queue-state は無傷のまま、
+  conflicting/duplicate な event を named)——どちらか一方に silently
+  に解決されることは決してありません。
+- `Execute` の先頭での read → event の追記 → queue write という
+  sequence は、今や stale な concurrent writer に対して保護されて
+  います。最終的な `queue-state.json` の write の直前に、file が
+  fresh に re-read されます。target item の `priority_revision` が、
+  この attempt が開始した時点の `fromRevision` と一致しなくなっていた
+  場合、write は refuse します(audit event は既に durably に記録
+  されているため、これは決して silent にはなりません)——concurrent
+  writer が生成したものを blind に上書きするのではなく。最終的な
+  mutation も、その **fresh** な re-read の上に適用されます
+  (`Execute` の先頭で読んだ stale な copy の上ではなく)。そのため、
+  他の field や item への無関係な concurrent change は、上書きされる
+  のではなく保持されます。
+
 ---
 
 ### facet を意識した context 供給 (G530)

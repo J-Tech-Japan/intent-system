@@ -1071,6 +1071,42 @@ the tag's *source* changed:
 - A historical event with no revision tag at all (data predating this
   fix, or hand-edited) can never exact-match a freshly-tagged reason.
 
+**Round-5 review repair — the revision counter itself needed input
+validation; recovery needed explicit cardinality/ownership classification
+instead of a bare existence check; and the final write needed protection
+against a concurrent writer.**
+
+- `PriorityRevision` was an unconstrained `int` — a negative value
+  deserialized successfully, and `fromRevision + 1` was unchecked
+  arithmetic that would silently wrap to `int.MinValue` at
+  `int.MaxValue`, directly violating the monotonic/injective invariant.
+  Both dry-run and `--write` now validate `PriorityRevision >= 0` and
+  compute `toRevision` with `checked` arithmetic **before** previewing or
+  mutating anything — a negative or exhausted revision fails closed with
+  no event and no queue-state write, requiring manual repair.
+- Recovery used `events.Any(...)` — a bare existence check. Since the
+  revision pair *is* the operation identity, two IDENTICAL events already
+  claiming the same pair were silently accepted as "one pending attempt"
+  (masking a real duplication bug), and a genuinely CONFLICTING event —
+  same pair, different reason or direction — was silently ignored, with a
+  second, different event appended right past it. Recovery is now an
+  explicit classification: **zero** matches → safe to append; **exactly
+  one EXACT match** (same reason too) → the pending audit for an
+  in-progress retry; **two or more identical matches**, or **any
+  mismatched-reason match** on the same pair → fails closed (exit 1,
+  queue-state untouched, naming the conflicting/duplicate event) rather
+  than silently resolved either direction.
+- The read (top of `Execute`) → event-append → queue-write sequence is
+  now protected against a stale concurrent writer. Immediately before the
+  final `queue-state.json` write, the file is re-read fresh; if the
+  target item's `priority_revision` no longer equals the `fromRevision`
+  this attempt started from, the write refuses (the audit event is
+  already durably recorded, so this is never silent) rather than
+  blindly overwriting whatever a concurrent writer produced. The final
+  mutation is also applied onto that **fresh** re-read (not the stale
+  copy from the top of `Execute`), so an unrelated concurrent change to
+  any *other* field or item is preserved rather than clobbered.
+
 ---
 
 ### Facet-aware context supply (G530)

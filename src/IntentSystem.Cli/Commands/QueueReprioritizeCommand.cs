@@ -140,6 +140,33 @@ internal static class QueueReprioritizeCommand
             return 0;
         }
 
+        // Round-5 review repair: `PriorityRevision` is the durable,
+        // injective operation identity that every downstream step
+        // depends on — validate it BEFORE previewing or mutating
+        // anything, in both dry-run and write mode. A negative value, or
+        // one that would overflow on increment, is corrupted/exhausted
+        // durable state, not a value this command can safely reason
+        // about.
+        if (item.PriorityRevision < 0)
+        {
+            EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: false,
+                error: $"'{executionUnit}' has a negative priority_revision ({item.PriorityRevision}) in queue-state.json; refusing to reprioritize corrupted durable state. Repair queue-state.json manually before retrying."));
+            return 1;
+        }
+
+        int toRevision;
+        try
+        {
+            toRevision = checked(item.PriorityRevision + 1);
+        }
+        catch (OverflowException)
+        {
+            EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: false,
+                error: $"'{executionUnit}' has priority_revision at int.MaxValue ({item.PriorityRevision}); the revision counter is exhausted and refuses to wrap. Manual intervention (e.g. a durable migration to a wider counter) is required before this unit can be reprioritized again."));
+            return 1;
+        }
+        var fromRevision = item.PriorityRevision;
+
         if (!write)
         {
             EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: true,
@@ -148,50 +175,42 @@ internal static class QueueReprioritizeCommand
         }
 
         var changedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
-        // Round-4 review repair: `PriorityRevision` is the durable,
-        // injective operation identity — read fresh from the
-        // not-yet-mutated item, exactly once per invocation. It is never
-        // decremented and never reused: every successful write below
-        // bumps it by exactly 1, so `toRevision` can mathematically never
-        // be produced by two distinct successful mutations of this item,
-        // REGARDLESS of whether every other field of `queue-state.json`
-        // (priority, updated_at, ...) later cycles back to byte-identical
-        // content. A content fingerprint of the whole file cannot make
-        // this guarantee — the state machine can genuinely revisit
-        // identical bytes (e.g. normal->high->normal under a fixed clock
-        // reproduces the exact original file) — but a monotonic counter
-        // durably persisted IN that same file can never repeat a value it
-        // has already consumed.
-        var fromRevision = item.PriorityRevision;
-        var toRevision = fromRevision + 1;
-        var updatedItem = item with { Priority = requestedPriority!, PriorityRevision = toRevision };
-        var newItems = queueState.Items.ToArray();
-        newItems[index0] = updatedItem;
-        var updatedState = queueState with { Items = newItems, UpdatedAt = changedAt };
         var runLogPath = context.GetRunLogPath();
 
         // G537 review repair: fail-closed, repairable write strategy. The
         // audit event is written FIRST, queue-state SECOND — the reverse
         // of the naive ordering — so a failure at either step never
-        // produces a silent, unaudited priority mutation:
-        //
-        // - If the event append fails, queue-state is never touched: no
-        //   durable change happened at all, and a plain retry starts
-        //   fresh — it will recompute the SAME `fromRevision`/`toRevision`
-        //   pair, since `item.PriorityRevision` on disk is unchanged.
-        // - If the event append succeeds but the queue-state write then
-        //   fails, the audit trail already proves the attempted change
-        //   and its reason even though the state file doesn't yet
-        //   reflect it. Re-running this EXACT command detects the
-        //   already-recorded event (same `toRevision`, since queue-state
-        //   still shows the old `PriorityRevision`) and skips
-        //   re-appending — it only retries the queue-state write, so
-        //   convergence never produces a duplicate event.
+        // produces a silent, unaudited priority mutation. Round-4:
+        // `fromRevision`/`toRevision` is the durable, injective operation
+        // identity embedded in the recorded reason — it can never be
+        // produced twice by two distinct successful mutations of this
+        // item, even if every other field of `queue-state.json` later
+        // cycles back to byte-identical content, since the counter is
+        // itself part of that durable content and only ever moves
+        // forward.
         var expectedReason = $"priority changed from '{item.Priority}' to '{requestedPriority}': {reason}";
         var taggedReason = $"{expectedReason} (revision {fromRevision}->{toRevision})";
-        var alreadyAudited = RunsLogHasMatchingPriorityChangedEvent(runLogPath, executionUnit!, taggedReason);
 
-        if (!alreadyAudited)
+        // Round-5 review repair: the revision pair (fromRevision,
+        // toRevision) IS the operation identity, so recovery must
+        // classify its cardinality/ownership explicitly rather than using
+        // `.Any(...)` — a bare existence check silently accepts
+        // duplicate-identical events as "one pending attempt" and
+        // silently ignores a genuinely conflicting claim on the SAME
+        // pair (appending yet another event instead of stopping).
+        var classification = ClassifyPriorityChangedRecovery(
+            runLogPath, executionUnit!, fromRevision, toRevision, taggedReason, out var recoveryDetail);
+
+        if (classification is PriorityChangedRecoveryClassification.Conflicting or PriorityChangedRecoveryClassification.DuplicateIdentical)
+        {
+            var kind = classification == PriorityChangedRecoveryClassification.Conflicting ? "conflicting" : "duplicate-identical";
+            EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: false,
+                error: $"runs.jsonl has a {kind} claim on revision {fromRevision}->{toRevision} for '{executionUnit}': {recoveryDetail} "
+                    + "queue-state.json was NOT touched. Reconcile runs.jsonl manually before retrying."));
+            return 1;
+        }
+
+        if (classification == PriorityChangedRecoveryClassification.None)
         {
             var runEvent = new RunEvent
             {
@@ -214,14 +233,57 @@ internal static class QueueReprioritizeCommand
             }
         }
 
+        // Round-5 review repair: protect the read -> event -> queue-write
+        // boundary from a stale concurrent queue writer. The event above
+        // is already durably recorded proving this attempt happened, but
+        // the actual mutation must be applied against a FRESH read of
+        // queue-state.json — never the stale copy read at the top of this
+        // invocation — and must refuse (not silently overwrite) if the
+        // target item's `priority_revision` no longer matches
+        // `fromRevision`, since that proves something else changed this
+        // item since this attempt started. Rebuilding the final state
+        // from the fresh read (rather than the stale one) also means an
+        // unrelated concurrent change to any OTHER item is preserved
+        // rather than clobbered.
+        QueueState currentOnDisk;
         try
         {
-            WriteQueueState(queueStatePath, updatedState);
+            currentOnDisk = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
+        {
+            EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: false,
+                error: $"the priority-changed runs event was recorded (revision {fromRevision}->{toRevision}), but queue-state.json could not be re-read to verify no concurrent change occurred before the final write ({exception.Message}); refusing to write blind. Re-run this exact command to retry."));
+            return 1;
+        }
+
+        var currentItem = currentOnDisk.Items.FirstOrDefault(candidate =>
+            string.Equals(candidate.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+
+        if (currentItem is null || currentItem.PriorityRevision != fromRevision)
+        {
+            EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: false,
+                error: $"queue-state.json changed concurrently since this attempt started (expected priority_revision {fromRevision} for '{executionUnit}', "
+                    + $"found {(currentItem is null ? "the item missing entirely" : currentItem.PriorityRevision.ToString(System.Globalization.CultureInfo.InvariantCulture))}); "
+                    + $"refusing to overwrite a concurrent change. The priority-changed runs event was already recorded (revision {fromRevision}->{toRevision}); "
+                    + "re-run this command to retry against the current state."));
+            return 1;
+        }
+
+        var freshItems = currentOnDisk.Items.ToArray();
+        var freshIndex = Array.FindIndex(freshItems, candidate =>
+            string.Equals(candidate.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+        freshItems[freshIndex] = currentItem with { Priority = requestedPriority!, PriorityRevision = toRevision };
+        var finalState = currentOnDisk with { Items = freshItems, UpdatedAt = changedAt };
+
+        try
+        {
+            WriteQueueState(queueStatePath, finalState);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             EmitResult(writer, format, NewResult(executionUnit!, write, oldPriority: item.Priority, requestedPriority!, reason!, changed: false,
-                error: $"the priority-changed runs event was recorded, but queue-state.json could not be updated ({exception.Message}); "
+                error: $"the priority-changed runs event was recorded (revision {fromRevision}->{toRevision}), but queue-state.json could not be updated ({exception.Message}); "
                     + $"queue-state on disk still shows the OLD priority '{item.Priority}'. Re-run this exact command to retry — it will "
                     + "detect the already-recorded event and only retry the queue-state write, without appending a duplicate event."));
             return 1;
@@ -231,11 +293,41 @@ internal static class QueueReprioritizeCommand
         return 0;
     }
 
-    private static bool RunsLogHasMatchingPriorityChangedEvent(string runLogPath, string executionUnit, string taggedReason)
+    private enum PriorityChangedRecoveryClassification
     {
+        /// <summary>No existing event claims this exact revision pair — safe to append a new one.</summary>
+        None,
+
+        /// <summary>Exactly one existing event claims this exact revision pair, with the EXACT same reason — the pending audit for an in-progress retry.</summary>
+        PendingRetry,
+
+        /// <summary>Two or more IDENTICAL events already claim this exact revision pair — an integrity problem, never silently treated as "fine."</summary>
+        DuplicateIdentical,
+
+        /// <summary>An event (or events) claim this exact revision pair with a DIFFERENT reason — a genuine data contradiction.</summary>
+        Conflicting,
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex RevisionPairPattern = new(
+        @"\(revision (?<from>-?\d+)->(?<to>-?\d+)\)$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// G537 round-5 review repair: the revision pair (<paramref name="fromRevision"/>,
+    /// <paramref name="toRevision"/>) IS the operation identity, so recovery
+    /// classifies cardinality/ownership explicitly instead of a bare
+    /// existence check: zero matches means safe to append; exactly one
+    /// EXACT match (same reason too) means a pending retry; two or more
+    /// IDENTICAL matches, or any mismatched-reason match, means the durable
+    /// log has an integrity problem that must fail closed rather than be
+    /// silently resolved either direction.
+    /// </summary>
+    private static PriorityChangedRecoveryClassification ClassifyPriorityChangedRecovery(
+        string runLogPath, string executionUnit, int fromRevision, int toRevision, string expectedReason, out string? detail)
+    {
+        detail = null;
         if (!File.Exists(runLogPath))
         {
-            return false;
+            return PriorityChangedRecoveryClassification.None;
         }
 
         IReadOnlyList<RunEvent> events;
@@ -249,26 +341,62 @@ internal static class QueueReprioritizeCommand
             // suppress recording a genuinely-needed audit event. Worst
             // case on this path is a redundant append once the file is
             // repaired, which is far preferable to a silently missing one.
+            return PriorityChangedRecoveryClassification.None;
+        }
+
+        var matching = events
+            .Where(runEvent =>
+                string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                && string.Equals(runEvent.Event, PriorityChangedEventName, StringComparison.Ordinal)
+                && TryParseRevisionPair(runEvent.Reason, out var parsedFrom, out var parsedTo)
+                && parsedFrom == fromRevision
+                && parsedTo == toRevision)
+            .ToArray();
+
+        if (matching.Length == 0)
+        {
+            return PriorityChangedRecoveryClassification.None;
+        }
+
+        var distinctReasons = matching.Select(runEvent => runEvent.Reason).Distinct(StringComparer.Ordinal).ToArray();
+        if (distinctReasons.Length > 1)
+        {
+            detail = $"{matching.Length} event(s) disagree on the claim for this revision pair: {string.Join(" | ", distinctReasons)}.";
+            return PriorityChangedRecoveryClassification.Conflicting;
+        }
+
+        if (matching.Length > 1)
+        {
+            detail = $"{matching.Length} identical events already claim this revision pair ('{distinctReasons[0]}'); this duplication must be reconciled manually.";
+            return PriorityChangedRecoveryClassification.DuplicateIdentical;
+        }
+
+        if (!string.Equals(matching[0].Reason, expectedReason, StringComparison.Ordinal))
+        {
+            detail = $"an existing event claims this revision pair with reason '{matching[0].Reason}', which does not match the expected reason for this request ('{expectedReason}').";
+            return PriorityChangedRecoveryClassification.Conflicting;
+        }
+
+        return PriorityChangedRecoveryClassification.PendingRetry;
+    }
+
+    private static bool TryParseRevisionPair(string? reasonText, out int fromRevision, out int toRevision)
+    {
+        fromRevision = 0;
+        toRevision = 0;
+        if (string.IsNullOrEmpty(reasonText))
+        {
             return false;
         }
 
-        // Round-4 review repair: the match is now purely on `taggedReason`,
-        // which embeds the durable, injective `fromRevision->toRevision`
-        // pair — necessary and sufficient, both for correctness and
-        // because it can never spuriously match. Unlike a content
-        // fingerprint of the whole file (round 3), `toRevision` can never
-        // be produced twice by two distinct successful mutations of this
-        // item, even if the state machine revisits byte-identical
-        // `queue-state.json` content overall (e.g. normal->high->normal
-        // under a fixed clock) — the revision counter itself is part of
-        // that durable content and only ever moves forward. An older
-        // event lacking a revision tag entirely (pre-round-4 data) or
-        // carrying a DIFFERENT revision pair never matches and is
-        // correctly treated as unrelated history, not a pending retry.
-        return events.Any(runEvent =>
-            string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
-            && string.Equals(runEvent.Event, PriorityChangedEventName, StringComparison.Ordinal)
-            && string.Equals(runEvent.Reason, taggedReason, StringComparison.Ordinal));
+        var match = RevisionPairPattern.Match(reasonText);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        return int.TryParse(match.Groups["from"].Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out fromRevision)
+            && int.TryParse(match.Groups["to"].Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out toRevision);
     }
 
     private static void AppendPriorityChangedEvent(string runLogPath, RunEvent runEvent)

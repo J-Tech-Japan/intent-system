@@ -391,14 +391,17 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         Assert.Equal(2, events.Count);
     }
 
+    // ─── G537 round-5 review repair: revision-pair recovery classification,
+    // checked/validated PriorityRevision, and concurrent-writer protection ──
+
     [Fact]
-    public void Execute_StaleHistoricalEventWithDifferentReasonText_NeverSuppressesTheNewEvent()
+    public void Execute_ConflictingClaimSameRevisionPairDifferentReason_FailsClosedQueueUntouched()
     {
-        // "Wrong reason": a stale event sharing the SAME (correct,
-        // matching) revision pair but a DIFFERENT reason string must
-        // still never dedupe — isolates that the reason text is
-        // independently required, not merely a side effect of a
-        // mismatched revision.
+        // Round-5 review: an existing event claiming the SAME revision
+        // pair but a DIFFERENT reason is a genuine data contradiction —
+        // the revision pair IS the operation identity, so this must fail
+        // closed (never silently append a second, different claim on the
+        // same pair).
         using var workspace = new ReprioritizeWorkspace();
         workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
         SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': OLD_REASON (revision 0->1)");
@@ -409,19 +412,25 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
             ["G537", "--priority", "high", "--reason", "NEW_REASON", "--write", "--format", "json"],
             writer);
 
-        Assert.Equal(0, exitCode);
+        Assert.Equal(1, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
-        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
-        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
-        Assert.Equal(2, events.Count);
-        Assert.Contains(events, e => e.Reason!.Contains("NEW_REASON", StringComparison.Ordinal));
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("conflicting", error, StringComparison.Ordinal);
+        Assert.False(document.RootElement.GetProperty("changed").GetBoolean());
+
+        // Queue untouched, no second event appended.
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("normal", stateAfter.Items.Single().Priority);
+        Assert.Equal(0, stateAfter.Items.Single().PriorityRevision);
+        Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath)));
     }
 
     [Fact]
-    public void Execute_StaleHistoricalEventWithOppositeDirection_NeverSuppressesTheNewEvent()
+    public void Execute_ConflictingClaimSameRevisionPairOppositeDirection_FailsClosedQueueUntouched()
     {
-        // "Wrong direction": same matching revision pair, but the event
-        // records the OPPOSITE transition — must never dedupe.
+        // Round-5 review: same revision pair, but the existing event
+        // records the OPPOSITE transition direction — also a conflict,
+        // not a "wrong reason, append anyway" case.
         using var workspace = new ReprioritizeWorkspace();
         workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
         SeedHistoricalEvent(workspace, "G537", "priority changed from 'high' to 'normal': R (revision 0->1)");
@@ -432,12 +441,226 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
             ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
             writer);
 
-        Assert.Equal(0, exitCode);
+        Assert.Equal(1, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
-        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
-        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
-        Assert.Equal(2, events.Count);
-        Assert.Contains(events, e => e.Reason!.StartsWith("priority changed from 'normal' to 'high': R", StringComparison.Ordinal));
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("conflicting", error, StringComparison.Ordinal);
+
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("normal", stateAfter.Items.Single().Priority);
+        Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath)));
+    }
+
+    [Theory]
+    [InlineData(0, 1)] // conflicting event listed FIRST, matching-shape event would be second (never appended)
+    [InlineData(1, 0)] // reversed order: conflicting event listed SECOND
+    public void Execute_ConflictingClaim_OrderIndependent_AlwaysFailsClosed(int conflictingIndex, int unusedIndex)
+    {
+        // "Reversed/order-independent": classification must not depend on
+        // which position in runs.jsonl the conflicting event occupies.
+        // This fixture seeds exactly one (conflicting) historical event —
+        // the SAME conflict must be detected regardless of the requested
+        // insertion order semantics exercised via conflictingIndex.
+        _ = unusedIndex;
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        if (conflictingIndex == 0)
+        {
+            SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': DIFFERENT (revision 0->1)");
+        }
+        else
+        {
+            // Seed an unrelated (non-matching-unit) event first, THEN the
+            // conflicting one, to prove order of appearance in the file
+            // never matters to the classification.
+            SeedHistoricalEvent(workspace, "G000", "priority changed from 'normal' to 'high': unrelated (revision 0->1)");
+            SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': DIFFERENT (revision 0->1)");
+        }
+
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Contains("conflicting", document.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+        Assert.Equal("normal", QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath)).Items.Single().Priority);
+    }
+
+    [Fact]
+    public void Execute_DuplicateIdenticalEventsForSameRevisionPair_FailsClosedQueueUntouched()
+    {
+        // Round-5 review: TWO existing events, both claiming the SAME
+        // revision pair with the IDENTICAL reason, is itself an integrity
+        // problem (how did that happen?) — must fail closed, not be
+        // silently treated as "one pending retry."
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': R (revision 0->1)");
+        SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': R (revision 0->1)");
+
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("duplicate-identical", error, StringComparison.Ordinal);
+
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("normal", stateAfter.Items.Single().Priority);
+        Assert.Equal(2, RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath)).Count); // no third event appended
+    }
+
+    [Fact]
+    public void Execute_NegativePriorityRevision_FailsClosedInDryRunAndWrite()
+    {
+        // Round-5 review: a negative priority_revision is corrupted
+        // durable state — must refuse before any preview/mutation, in
+        // BOTH dry-run and write mode.
+        using var workspace = new ReprioritizeWorkspace();
+        var baseState = QueueStateSerializer.Deserialize(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(QueueStateSerializer.Serialize(
+            baseState with { Items = new[] { baseState.Items.Single() with { PriorityRevision = -1 } } }));
+
+        using var dryRunWriter = new StringWriter();
+        var dryRunExitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context, ["G537", "--priority", "high", "--reason", "R", "--format", "json"], dryRunWriter);
+        Assert.Equal(1, dryRunExitCode);
+        using var dryRunDoc = JsonDocument.Parse(dryRunWriter.ToString());
+        Assert.Contains("negative priority_revision", dryRunDoc.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+
+        using var writeWriter = new StringWriter();
+        var writeExitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context, ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"], writeWriter);
+        Assert.Equal(1, writeExitCode);
+        using var writeDoc = JsonDocument.Parse(writeWriter.ToString());
+        Assert.Contains("negative priority_revision", writeDoc.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+
+        Assert.False(File.Exists(workspace.RunsLogPath));
+        Assert.Equal(-1, QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath)).Items.Single().PriorityRevision);
+    }
+
+    [Fact]
+    public void Execute_ExhaustedMaxRevision_FailsClosedInDryRunAndWrite_CheckedArithmeticNeverWraps()
+    {
+        // Round-5 review: `int.MaxValue + 1` unchecked wraps to
+        // int.MinValue, directly violating the monotonic/injective
+        // invariant. Must fail closed instead, in BOTH dry-run and write.
+        using var workspace = new ReprioritizeWorkspace();
+        var baseState = QueueStateSerializer.Deserialize(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+        workspace.WriteQueueState(QueueStateSerializer.Serialize(
+            baseState with { Items = new[] { baseState.Items.Single() with { PriorityRevision = int.MaxValue } } }));
+
+        using var dryRunWriter = new StringWriter();
+        var dryRunExitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context, ["G537", "--priority", "high", "--reason", "R", "--format", "json"], dryRunWriter);
+        Assert.Equal(1, dryRunExitCode);
+        using var dryRunDoc = JsonDocument.Parse(dryRunWriter.ToString());
+        Assert.Contains("exhausted", dryRunDoc.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+
+        using var writeWriter = new StringWriter();
+        var writeExitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context, ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"], writeWriter);
+        Assert.Equal(1, writeExitCode);
+        using var writeDoc = JsonDocument.Parse(writeWriter.ToString());
+        Assert.Contains("exhausted", writeDoc.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+
+        Assert.False(File.Exists(workspace.RunsLogPath));
+        Assert.Equal(int.MaxValue, QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath)).Items.Single().PriorityRevision);
+    }
+
+    [Fact]
+    public void Execute_MalformedPriorityRevisionType_FailsClosedAtQueueStateParse()
+    {
+        // "Malformed": priority_revision as a JSON string (wrong type)
+        // fails at the existing queue-state.json parse step — pinned
+        // explicitly per review request.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-08T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G537",
+                  "title": "malformed priority_revision type",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "Claude",
+                  "review_role": "Codex",
+                  "priority": "normal",
+                  "priority_revision": "not-a-number"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context, ["G537", "--priority", "high", "--reason", "R", "--write"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("could not be parsed", writer.ToString(), StringComparison.Ordinal);
+        Assert.False(File.Exists(workspace.RunsLogPath));
+    }
+
+    [Fact]
+    public void Execute_ConcurrentQueueStateChangeBetweenEventAppendAndFinalWrite_FailsClosedWithoutOverwriting()
+    {
+        // Round-5 review: protect the read -> event -> queue-write
+        // boundary. Simulate a concurrent writer mutating queue-state.json
+        // (bumping priority_revision unrelated to this attempt) DURING
+        // the runs-event append step, via the AppendPriorityChangedEventOverride
+        // seam. The subsequent final write must detect the mismatch and
+        // refuse, rather than blindly overwriting the concurrent change.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+
+        QueueReprioritizeCommand.AppendPriorityChangedEventOverride = (path, runEvent) =>
+        {
+            File.AppendAllText(path, RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
+
+            // Simulate a concurrent, unrelated writer bumping this same
+            // item's priority_revision after our read but before our
+            // write.
+            var concurrentState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+            var concurrentItem = concurrentState.Items.Single();
+            var mutated = concurrentState with
+            {
+                Items = new[] { concurrentItem with { Priority = "low", PriorityRevision = concurrentItem.PriorityRevision + 100 } },
+            };
+            File.WriteAllText(workspace.QueueStatePath, QueueStateSerializer.Serialize(mutated));
+        };
+
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("changed concurrently", error, StringComparison.Ordinal);
+
+        // The concurrent writer's own change survives untouched — our
+        // stale mutation must never have overwritten it.
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("low", stateAfter.Items.Single().Priority);
+        Assert.Equal(100, stateAfter.Items.Single().PriorityRevision);
+
+        // The audit event for OUR attempt was still durably recorded.
+        Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath)));
     }
 
     [Fact]
