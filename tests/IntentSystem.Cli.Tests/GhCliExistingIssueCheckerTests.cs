@@ -75,6 +75,88 @@ public sealed class GhCliExistingIssueCheckerTests
         Assert.Contains("hasNextPage=true", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void FetchAllCandidates_HasNextPageTrueWithEmptyOrWhitespaceEndCursor_ThrowsRatherThanFetchingAgain(string emptyCursor)
+    {
+        // G536 round-7 review repair: an empty/whitespace-only endCursor
+        // is just as much a "missing cursor" as null — a bare `?? throw`
+        // only rejected null, letting an empty string be sent back as
+        // `cursor=` on the next request and recorded as if it were real.
+        var pageCalls = 0;
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = _ =>
+            {
+                pageCalls++;
+                return GraphQlPage(hasNextPage: true, endCursor: emptyCursor, nodes: Array.Empty<(int, string, string, string)>());
+            },
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("hasNextPage=true", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(1, pageCalls); // never re-fetched with the bad cursor
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("123")]
+    [InlineData("\"just a string\"")]
+    public void FetchAllCandidates_NullOrWrongTypeEnvelope_FailsLoudNotNullReferenceException(string malformedJson)
+    {
+        var checker = new GhCliExistingIssueChecker { PageFetcherOverride = _ => malformedJson };
+
+        // Must be an intentional diagnostic, never an incidental NRE.
+        Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+    }
+
+    [Fact]
+    public void FetchAllCandidates_EmptyOutput_FailsLoudAsUnparseableJson()
+    {
+        var checker = new GhCliExistingIssueChecker { PageFetcherOverride = _ => string.Empty };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("unparseable JSON", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FetchAllCandidates_NullPageInfo_FailsLoudNotNullReferenceException()
+    {
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = _ => "{\"data\":{\"search\":{\"pageInfo\":null,\"nodes\":[]}}}",
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("no pageInfo", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FetchAllCandidates_NullNodesArray_FailsLoudNotNullReferenceException()
+    {
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = _ => "{\"data\":{\"search\":{\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"nodes\":null}}}",
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("no nodes array", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FetchAllCandidates_NullNodeWithinNodesArray_FailsLoudNotNullReferenceException()
+    {
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = _ => "{\"data\":{\"search\":{\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"nodes\":[null]}}}",
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("null node", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void FetchAllCandidates_NeverTerminates_FailsLoudInsteadOfSilentlyTruncating()
     {

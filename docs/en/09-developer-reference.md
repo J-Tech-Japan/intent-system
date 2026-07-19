@@ -920,6 +920,31 @@ classification.
   title, null body, and URL mismatches — wrong repo, wrong number, wrong
   scheme, or null).
 
+**Round-7 review repair — the last two provider fail-closed gaps: a
+non-null-but-empty cursor, and JSON `null` in place of a "non-nullable"
+shape.** A further review round found that `hasNextPage=true` with an
+**empty or whitespace-only** `endCursor` slipped past the null-only check
+from round 6 — it would be sent back as `cursor=` on the next request and
+recorded into the seen-cursors set as if it were a real value. Separately,
+System.Text.Json silently assigns `null` to a declared-non-nullable
+reference-type property when the JSON value is `null` (C# doesn't enforce
+non-null at runtime) — so `pageInfo: null`, `nodes: null`, or a `null`
+entry inside `nodes` would previously degrade into an incidental
+`NullReferenceException` rather than an intentional provider diagnostic.
+
+- `endCursor` is now checked with `string.IsNullOrWhiteSpace` — null,
+  empty, and whitespace-only are all treated as "missing cursor" and fail
+  loud before the loop would fetch again.
+- `pageInfo`, `nodes`, and each individual node are explicitly checked for
+  `null` immediately after parsing — a `null` in any of these positions
+  fails loud with a specific diagnostic naming which piece was missing,
+  never an unhandled NRE.
+- New tests pin the full malformed-shape matrix through
+  `FetchAllCandidates` itself: empty/whitespace-only `endCursor`, a
+  `null`/wrong-type top-level envelope (`null`, `[]`, a bare number, a
+  bare string), empty process output, `pageInfo: null`, `nodes: null`, and
+  a `null` entry inside `nodes`.
+
 ---
 
 ### Facet-aware context supply (G530)

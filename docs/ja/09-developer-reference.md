@@ -977,6 +977,34 @@ repo と正確に一致しない URL という形で)不完全なまま classifi
   null/empty title、null body、URL mismatch — 間違った repo、間違った
   number、間違った scheme、あるいは null)をカバーします。
 
+**Round-7 review repair — provider fail-closed の残り 2 つの gap:
+non-null だが empty な cursor、そして "non-nullable" な形状の代わりの
+JSON `null`。** さらなる review round で、`hasNextPage=true` かつ
+**empty あるいは whitespace-only** な `endCursor` が、round 6 の
+null のみの check をすり抜けてしまうことが判明しました — それは次の
+request で `cursor=` として送り返され、あたかも本物の値であるかのように
+seen-cursors set に記録されてしまいます。別の問題として、
+System.Text.Json は、JSON の値が `null` の場合、宣言上
+non-nullable な reference-type property に silently に `null` を
+代入します(C# は runtime で non-null を強制しません)— そのため
+`pageInfo: null`、`nodes: null`、あるいは `nodes` 内の `null` な
+entry は、以前は意図的な provider diagnostic ではなく、偶発的な
+`NullReferenceException` へと degrade してしまっていました。
+
+- `endCursor` は今や `string.IsNullOrWhiteSpace` で check されます —
+  null、empty、whitespace-only はすべて「missing cursor」として扱われ、
+  loop が再度 fetch する前に fail loud します。
+- `pageInfo`、`nodes`、そして個々の node は、parse 直後に明示的に
+  `null` check されます — これらのどの位置での `null` も、どの部分が
+  欠けていたかを named した具体的な diagnostic で fail loud し、
+  未処理の NRE になることは決してありません。
+- 新しい test は、`FetchAllCandidates` 自身を通した完全な
+  malformed-shape matrix を pin します: empty/whitespace-only な
+  `endCursor`、`null`/wrong-type な top-level envelope(`null`、
+  `[]`、単なる数値、単なる文字列)、empty な process output、
+  `pageInfo: null`、`nodes: null`、そして `nodes` 内の `null` な
+  entry。
+
 ---
 
 ### facet を意識した context 供給 (G530)

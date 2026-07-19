@@ -1508,7 +1508,23 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
             var search = response?.Data?.Search
                 ?? throw new InvalidOperationException("gh api graphql returned no search data for the issue-existence check.");
 
-            // G536 round-6 review repair: validate every candidate BEFORE
+            // G536 round-7 review repair: a JSON `null` for a "non-nullable"
+            // shape (pageInfo / nodes / an individual node) deserializes
+            // silently rather than throwing — never dereference it without
+            // an explicit check first, or an incomplete authoritative
+            // response degrades into an incidental NullReferenceException
+            // instead of an intentional provider diagnostic.
+            if (search.PageInfo is null)
+            {
+                throw new InvalidOperationException("gh api graphql returned a search result with no pageInfo.");
+            }
+
+            if (search.Nodes is null)
+            {
+                throw new InvalidOperationException("gh api graphql returned a search result with no nodes array.");
+            }
+
+            // G536 round-6/7 review repair: validate every candidate BEFORE
             // accumulating it — a malformed/incomplete authoritative
             // response must fail loud here, not be silently carried
             // forward to discover only after classification (or worse,
@@ -1516,6 +1532,13 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
             // never trustworthy.
             foreach (var node in search.Nodes)
             {
+                if (node is null)
+                {
+                    throw new InvalidOperationException(
+                        "gh api graphql returned a null node in the search results; refusing to process an "
+                        + "incomplete authoritative response.");
+                }
+
                 results.Add(ValidateCandidate(node, repo));
             }
 
@@ -1524,10 +1547,18 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
                 break;
             }
 
-            var nextCursor = search.PageInfo.EndCursor
-                ?? throw new InvalidOperationException(
-                    "gh api graphql reported hasNextPage=true with no endCursor; refusing to silently stop "
-                    + "pagination short of the real result set.");
+            // G536 round-7 review repair: null, empty, AND whitespace-only
+            // are all a missing cursor — a bare `?? throw` only caught the
+            // null case, letting an empty-string endCursor be sent back as
+            // `cursor=` on the next request and recorded into seenCursors
+            // as if it were a real value.
+            var nextCursor = search.PageInfo.EndCursor;
+            if (string.IsNullOrWhiteSpace(nextCursor))
+            {
+                throw new InvalidOperationException(
+                    "gh api graphql reported hasNextPage=true with a missing endCursor (null, empty, or "
+                    + "whitespace-only); refusing to silently stop pagination short of the real result set.");
+            }
 
             if (!seenCursors.Add(nextCursor))
             {
@@ -1673,8 +1704,8 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
     private sealed record GraphQlData([property: JsonPropertyName("search")] GraphQlSearch? Search);
 
     private sealed record GraphQlSearch(
-        [property: JsonPropertyName("pageInfo")] GraphQlPageInfo PageInfo,
-        [property: JsonPropertyName("nodes")] List<GhIssueListEntry> Nodes);
+        [property: JsonPropertyName("pageInfo")] GraphQlPageInfo? PageInfo,
+        [property: JsonPropertyName("nodes")] List<GhIssueListEntry?>? Nodes);
 
     private sealed record GraphQlPageInfo(
         [property: JsonPropertyName("hasNextPage")] bool HasNextPage,
