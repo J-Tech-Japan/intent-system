@@ -963,6 +963,94 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenQueueStateHasDuplicateExecutionUnitItems_FailsClosedRegardlessOfAgreement()
+    {
+        // G536 round-5 review repair: a second queue-state item for the
+        // SAME execution unit must fail closed regardless of whether the
+        // two items agree or conflict — identity must never depend on
+        // which one happens to come first in the JSON array.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G278 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G278", BuildCompleteContractBody(title));
+
+        var linkedIssue = new LinkedIssue
+        {
+            Repo = "J-Tech-Japan/intent-system",
+            Number = 659,
+            Url = "https://github.com/J-Tech-Japan/intent-system/issues/659",
+        };
+        var duplicateState = new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = new DateTimeOffset(2026, 7, 19, 3, 0, 0, TimeSpan.Zero),
+            Items = new[]
+            {
+                new QueueItem
+                {
+                    ExecutionUnit = "G278",
+                    Title = title,
+                    State = QueueItemState.Queued,
+                    Dependencies = Array.Empty<string>(),
+                    BlockedBy = Array.Empty<string>(),
+                    ClarificationReturnPath = string.Empty,
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G278/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G278/review-context.md",
+                        Yaml = ".intent-cli/issues/G278/packet.yaml",
+                    },
+                    LinkedIssue = linkedIssue,
+                    WorkerRole = "Claude",
+                    ReviewRole = "Codex",
+                    Priority = "normal",
+                },
+                new QueueItem
+                {
+                    // Even an IDENTICAL second entry (not just a conflicting
+                    // one) must fail closed — cardinality itself is the
+                    // problem, independent of agreement.
+                    ExecutionUnit = "G278",
+                    Title = title,
+                    State = QueueItemState.Queued,
+                    Dependencies = Array.Empty<string>(),
+                    BlockedBy = Array.Empty<string>(),
+                    ClarificationReturnPath = string.Empty,
+                    PacketPaths = new PacketPaths
+                    {
+                        Implementation = ".intent-cli/issues/G278/implementation.md",
+                        ReviewContext = ".intent-cli/issues/G278/review-context.md",
+                        Yaml = ".intent-cli/issues/G278/packet.yaml",
+                    },
+                    LinkedIssue = linkedIssue,
+                    WorkerRole = "Claude",
+                    ReviewRole = "Codex",
+                    Priority = "normal",
+                },
+            },
+        };
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.QueueStatePath)!);
+        File.WriteAllText(workspace.QueueStatePath, QueueStateSerializer.Serialize(duplicateState));
+
+        IssuePublishFlowCommand.CreatorFactory = () => new ThrowingIssueCreator();
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G278", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("queue_state_duplicate_execution_unit", error, StringComparison.Ordinal);
+        Assert.Contains("items[0]", error, StringComparison.Ordinal);
+        Assert.Contains("items[1]", error, StringComparison.Ordinal);
+
+        // No mutation on refusal.
+        Assert.Equal(2, QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath)).Items.Count);
+    }
+
+    [Fact]
     public void Execute_GivenQueueLinkedIssueFromDifferentRepo_FailsClosedAsCrossRepoContradiction()
     {
         // G536 round-4 review repair: queue-state's linked_issue naming a

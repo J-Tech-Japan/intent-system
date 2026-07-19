@@ -45,6 +45,7 @@ internal static class PublishDurableArtifactAnalyzer
     // invite silent restoration/overwrite); always block identity
     // resolution entirely.
     public const string InvalidQueueStateMalformed = "queue_state_malformed";
+    public const string InvalidQueueStateDuplicateExecutionUnit = "queue_state_duplicate_execution_unit";
     public const string InvalidPublishYamlMalformed = "publish_yaml_malformed";
     public const string InvalidRunsMalformed = "runs_malformed";
     public const string InvalidRunsEventConflicting = "runs_event_conflicting";
@@ -246,40 +247,61 @@ internal static class PublishDurableArtifactAnalyzer
             return ArtifactSignal.Invalid(InvalidQueueStateMalformed, $"queue-state.json could not be parsed: {exception.Message}");
         }
 
-        foreach (var item in queueState.Items)
+        // Round-5 review repair: collect EVERY item matching this execution
+        // unit rather than returning on the first match — identity must
+        // never depend on JSON array order, and a second item (whether it
+        // agrees or conflicts with the first) is itself a data-integrity
+        // problem that must fail closed, not be silently shadowed.
+        var matchingIndices = new List<int>();
+        for (var index = 0; index < queueState.Items.Count; index++)
         {
-            if (!string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal))
+            if (string.Equals(queueState.Items[index].ExecutionUnit, executionUnit, StringComparison.Ordinal))
             {
-                continue;
+                matchingIndices.Add(index);
             }
-
-            if (item.LinkedIssue is not { } linked || string.IsNullOrWhiteSpace(linked.Url))
-            {
-                return ArtifactSignal.Absent();
-            }
-
-            if (linked.Number is not int number || number <= 0)
-            {
-                return ArtifactSignal.Invalid(InvalidQueueStateMalformed,
-                    $"queue-state.json linked_issue for '{executionUnit}' has no positive issue number.");
-            }
-
-            if (!TryParseGithubIssueUrl(linked.Url, out var urlRepo, out var urlNumber) || urlNumber != number)
-            {
-                return ArtifactSignal.Invalid(InvalidQueueStateMalformed,
-                    $"queue-state.json linked_issue for '{executionUnit}' is internally inconsistent: number={number}, url='{linked.Url}'.");
-            }
-
-            if (!string.IsNullOrWhiteSpace(linked.Repo) && !string.Equals(linked.Repo, urlRepo, StringComparison.OrdinalIgnoreCase))
-            {
-                return ArtifactSignal.Invalid(InvalidQueueStateMalformed,
-                    $"queue-state.json linked_issue for '{executionUnit}' is internally inconsistent: repo='{linked.Repo}' does not match url='{linked.Url}'.");
-            }
-
-            return ArtifactSignal.Present(!string.IsNullOrWhiteSpace(linked.Repo) ? linked.Repo : urlRepo, number, linked.Url);
         }
 
-        return ArtifactSignal.Absent();
+        if (matchingIndices.Count == 0)
+        {
+            return ArtifactSignal.Absent();
+        }
+
+        if (matchingIndices.Count > 1)
+        {
+            var detail = string.Join("; ", matchingIndices.Select(index =>
+            {
+                var linkedIssue = queueState.Items[index].LinkedIssue;
+                return $"items[{index}] linked_issue={(linkedIssue is null ? "null" : $"{linkedIssue.Repo}#{linkedIssue.Number} ({linkedIssue.Url})")}";
+            }));
+            return ArtifactSignal.Invalid(InvalidQueueStateDuplicateExecutionUnit,
+                $"queue-state.json has {matchingIndices.Count} items for execution_unit '{executionUnit}': {detail}.");
+        }
+
+        var item = queueState.Items[matchingIndices[0]];
+        if (item.LinkedIssue is not { } linked || string.IsNullOrWhiteSpace(linked.Url))
+        {
+            return ArtifactSignal.Absent();
+        }
+
+        if (linked.Number is not int number || number <= 0)
+        {
+            return ArtifactSignal.Invalid(InvalidQueueStateMalformed,
+                $"queue-state.json linked_issue for '{executionUnit}' has no positive issue number.");
+        }
+
+        if (!TryParseGithubIssueUrl(linked.Url, out var urlRepo, out var urlNumber) || urlNumber != number)
+        {
+            return ArtifactSignal.Invalid(InvalidQueueStateMalformed,
+                $"queue-state.json linked_issue for '{executionUnit}' is internally inconsistent: number={number}, url='{linked.Url}'.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(linked.Repo) && !string.Equals(linked.Repo, urlRepo, StringComparison.OrdinalIgnoreCase))
+        {
+            return ArtifactSignal.Invalid(InvalidQueueStateMalformed,
+                $"queue-state.json linked_issue for '{executionUnit}' is internally inconsistent: repo='{linked.Repo}' does not match url='{linked.Url}'.");
+        }
+
+        return ArtifactSignal.Present(!string.IsNullOrWhiteSpace(linked.Repo) ? linked.Repo : urlRepo, number, linked.Url);
     }
 
     private static ArtifactSignal ReadPublishSignal(string publishYamlPath, string executionUnit)

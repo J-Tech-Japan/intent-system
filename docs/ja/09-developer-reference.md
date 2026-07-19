@@ -894,6 +894,48 @@ matching は、20 件を超えた実際の duplicate を見逃す可能性と、
   件の一致 → fail closed、non-mutating、exit 1 — 曖昧さが自動的に
   解決されることは決してありません。
 
+**Round-5 review repair — GitHub enumeration は raised limit ではなく
+本物の cursor pagination であり、body normalization はより厳格に、
+queue-state の cardinality も検証されます。** さらなる review round
+で、固定の `--limit`(どれだけ高くても)は、filter 後の結果がそれを
+超えた場合に本物の duplicate を silently に drop しうる cap のままで
+あること、そして candidate/expected body への一律の `Trim()` が、
+leading indentation が異なる Markdown(例えばcode block)を同一として
+受け入れてしまいうることが判明しました。
+
+- GitHub existence check は今や `gh api graphql` を使い、本物の
+  `search(... first: 100, after: $cursor)` cursor-pagination loop を
+  実行します — `state=all` は維持され(open と closed の両方の issue
+  が参加します)、loop は `pageInfo.hasNextPage` が true である限り
+  継続し、固定件数で止まるのではなくすべての page を蓄積します。
+  `hasNextPage: true` かつ `endCursor` が無い page や、内部の safety
+  ceiling(50 page / 5,000 candidate)以内に終了しない結果セットは、
+  silently に truncate するのではなく fail loud します
+  (`InvalidOperationException`)。
+- body normalization は今や改行変換(`\r\n`/`\r` → `\n`)と、「末尾に
+  ちょうど 1 つの改行がある」ことを「末尾に改行が無い」ことと同等と
+  みなす処理(GitHub 自身の storage convention)**だけ**を行い、
+  `Trim()` はもう呼び出しません。leading indentation、inner の
+  spacing、改行の**前**にある trailing whitespace はすべて保持され、
+  厳密に比較されます — そのため、たった 1 つの leading あるいは
+  interior space が異なるだけの body は、正しく**別の** issue として
+  扱われ、一致とはみなされません。
+- `queue-state.json` の `ReadQueueSignal` は、最初に一致した item を
+  返すのではなく、execution unit に一致する**すべて**の item を
+  収集するようになりました — 同一 unit に対する 2 つ目の item は、
+  それらが一致していようと矛盾していようと関係なく fail closed し
+  (`queue_state_duplicate_execution_unit`、一致するすべての index と
+  identity を named します)、identity が JSON array の順序に依存する
+  ことは決してありません。
+- 新しい test は、command level で使われる `IGitHubExistingIssueChecker`
+  interface stub だけでなく、**本物の** `GhCliExistingIssueChecker`
+  production class を、`PageFetcherOverride` という test seam経由で
+  end-to-end に検証します — 実際の `gh` process の spawn だけを
+  canned GraphQL JSON に置き換えます。multi-page の open+closed
+  蓄積、2 つの fail-loud-on-truncation path、body-normalization の
+  matrix(byte-identical / CRLF vs LF / single-trailing-newline /
+  leading / inner / trailing whitespace drift)をカバーします。
+
 ---
 
 ### facet を意識した context 供給 (G530)

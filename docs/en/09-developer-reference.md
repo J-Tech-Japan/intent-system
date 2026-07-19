@@ -841,6 +841,46 @@ rewritten check:
   calling `gh issue create`**; **multiple** matches → fails closed,
   non-mutating, exit 1 — ambiguity is never resolved automatically.
 
+**Round-5 review repair — GitHub enumeration is real cursor pagination, not
+a raised limit; body normalization is stricter; queue-state cardinality is
+checked.** A further review round found that a fixed `--limit` (however
+high) is still a cap that can, in principle, silently drop a real
+duplicate once the filtered result exceeds it — and that a blanket
+`Trim()` on the candidate/expected body could accept Markdown with
+different leading indentation (e.g. a code block) as if it were identical.
+
+- The GitHub existence check now uses `gh api graphql` with a real
+  `search(... first: 100, after: $cursor)` cursor-pagination loop —
+  `state=all` is preserved (open and closed issues both participate), and
+  the loop continues while `pageInfo.hasNextPage` is true, accumulating
+  every page rather than stopping at a fixed count. A page reporting
+  `hasNextPage: true` with no `endCursor`, or a result set that doesn't
+  terminate within an internal safety ceiling (50 pages / 5,000
+  candidates), fails loud (`InvalidOperationException`) instead of
+  silently truncating.
+- Body normalization now does **only** line-ending conversion (`\r\n`/`\r`
+  → `\n`) and treats "ends with exactly one trailing newline" as
+  equivalent to "no trailing newline" (GitHub's own storage convention) —
+  it no longer calls `Trim()`. Leading indentation, inner spacing, and any
+  trailing whitespace *before* the newline are preserved and compared
+  exactly, so a body that differs by so much as a single leading or
+  interior space is correctly treated as a **different** issue, not a
+  match.
+- `queue-state.json`'s `ReadQueueSignal` now collects **every** item
+  matching the execution unit rather than returning on the first match —
+  a second item for the same unit fails closed
+  (`queue_state_duplicate_execution_unit`, naming every matching index and
+  its identity) regardless of whether the duplicate entries agree or
+  conflict; identity must never depend on JSON array order.
+- New tests exercise the **real** `GhCliExistingIssueChecker` production
+  class end-to-end (not just the `IGitHubExistingIssueChecker` interface
+  stub used at the command level) via a `PageFetcherOverride` test seam
+  that replaces only the literal `gh` process spawn with canned GraphQL
+  JSON — covering multi-page open+closed accumulation, the two
+  fail-loud-on-truncation paths, and the body-normalization matrix
+  (byte-identical / CRLF vs LF / single-trailing-newline / leading /
+  inner / trailing whitespace drift).
+
 ---
 
 ### Facet-aware context supply (G530)

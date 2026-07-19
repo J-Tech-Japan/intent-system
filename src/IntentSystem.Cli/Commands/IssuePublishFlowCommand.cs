@@ -1409,9 +1409,103 @@ internal sealed record GitHubExistingIssueLookupResult
     public string? IssueUrl { get; init; }
 }
 
+/// <summary>
+/// G536 round-5 review repair: enumerates ALL matching issues (open and
+/// closed — <c>state=all</c>, matching the previous rounds' contract) via
+/// GraphQL cursor pagination rather than a fixed <c>--limit</c>, so a real
+/// duplicate can never be silently dropped by a result-count cap. Any page
+/// that reports <c>hasNextPage: true</c> without an <c>endCursor</c>, or a
+/// result set that does not terminate within <see cref="MaxPages"/> pages,
+/// fails loud rather than silently truncating.
+/// </summary>
 internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
 {
+    // Safety ceiling, not a silent cap: if genuinely exceeded, FetchAllCandidates
+    // throws (fails loud) rather than returning a truncated, incomplete result.
+    private const int MaxPages = 50;
+
+    private const string GraphQlQuery = """
+        query($searchQuery: String!, $cursor: String) {
+          search(query: $searchQuery, type: ISSUE, first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              ... on Issue { number title url body }
+            }
+          }
+        }
+        """;
+
+    /// <summary>
+    /// Test seam: replaces the real <c>gh api graphql</c> shell-out for a
+    /// single page. Production default shells to <c>gh</c>; tests inject a
+    /// fake returning canned GraphQL JSON so the real pagination loop,
+    /// truncation guard, and candidate classification/normalization below
+    /// are exercised end-to-end without spawning a process.
+    /// </summary>
+    internal Func<IReadOnlyList<string>, string>? PageFetcherOverride { get; init; }
+
     public GitHubExistingIssueLookupResult FindExistingIssue(string repo, string executionUnit, string expectedTitle, string expectedBody)
+    {
+        var allCandidates = FetchAllCandidates(repo, executionUnit);
+        return ClassifyCandidates(allCandidates, expectedTitle, expectedBody);
+    }
+
+    internal IReadOnlyList<GhIssueListEntry> FetchAllCandidates(string repo, string executionUnit)
+    {
+        var fetchPage = PageFetcherOverride ?? RunGh;
+        var searchQuery = $"repo:{repo} {executionUnit} in:title";
+        var results = new List<GhIssueListEntry>();
+        string? cursor = null;
+
+        for (var page = 0; ; page++)
+        {
+            if (page >= MaxPages)
+            {
+                throw new InvalidOperationException(
+                    $"gh api graphql issue search for '{executionUnit}' on {repo} did not complete within "
+                    + $"{MaxPages} pages ({MaxPages * 100} candidates); refusing to silently truncate the "
+                    + "candidate set. Narrow the search or investigate an unexpectedly large result set.");
+            }
+
+            var arguments = new List<string> { "api", "graphql", "-f", $"query={GraphQlQuery}", "-f", $"searchQuery={searchQuery}" };
+            if (cursor is not null)
+            {
+                arguments.Add("-f");
+                arguments.Add($"cursor={cursor}");
+            }
+
+            var stdout = fetchPage(arguments);
+
+            GraphQlResponse? response;
+            try
+            {
+                response = JsonSerializer.Deserialize<GraphQlResponse>(stdout);
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidOperationException($"gh api graphql returned unparseable JSON: {exception.Message}");
+            }
+
+            var search = response?.Data?.Search
+                ?? throw new InvalidOperationException("gh api graphql returned no search data for the issue-existence check.");
+
+            results.AddRange(search.Nodes);
+
+            if (!search.PageInfo.HasNextPage)
+            {
+                break;
+            }
+
+            cursor = search.PageInfo.EndCursor
+                ?? throw new InvalidOperationException(
+                    "gh api graphql reported hasNextPage=true with no endCursor; refusing to silently stop "
+                    + "pagination short of the real result set.");
+        }
+
+        return results;
+    }
+
+    private static string RunGh(IReadOnlyList<string> arguments)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -1422,24 +1516,10 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
             StandardOutputEncoding = GitHubCliProcessEncoding.Utf8NoBom,
             StandardErrorEncoding = GitHubCliProcessEncoding.Utf8NoBom
         };
-        startInfo.ArgumentList.Add("issue");
-        startInfo.ArgumentList.Add("list");
-        startInfo.ArgumentList.Add("--repo");
-        startInfo.ArgumentList.Add(repo);
-        startInfo.ArgumentList.Add("--state");
-        startInfo.ArgumentList.Add("all");
-        // Narrows candidates via GitHub's own title search — a coarse,
-        // fast pre-filter, not the identity check itself (exact title+body
-        // matching below is what actually decides). 1000 (vs the prior
-        // round's 20) so a legitimate duplicate candidate is never
-        // silently dropped by client-side truncation for any realistic
-        // repo's issue history.
-        startInfo.ArgumentList.Add("--search");
-        startInfo.ArgumentList.Add($"{executionUnit} in:title");
-        startInfo.ArgumentList.Add("--json");
-        startInfo.ArgumentList.Add("number,title,url,body");
-        startInfo.ArgumentList.Add("--limit");
-        startInfo.ArgumentList.Add("1000");
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start gh process.");
@@ -1450,21 +1530,17 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
 
         if (process.ExitCode != 0)
         {
-            throw new InvalidOperationException($"gh issue list exit {process.ExitCode}: {stderr.Trim()}");
+            throw new InvalidOperationException($"gh api graphql exit {process.ExitCode}: {stderr.Trim()}");
         }
 
-        List<GhIssueListEntry>? entries;
-        try
-        {
-            entries = JsonSerializer.Deserialize<List<GhIssueListEntry>>(stdout);
-        }
-        catch (JsonException exception)
-        {
-            throw new InvalidOperationException($"gh issue list returned unparseable JSON: {exception.Message}");
-        }
+        return stdout;
+    }
 
+    internal static GitHubExistingIssueLookupResult ClassifyCandidates(
+        IReadOnlyList<GhIssueListEntry> allCandidates, string expectedTitle, string expectedBody)
+    {
         var normalizedExpectedBody = NormalizeBody(expectedBody);
-        var candidates = (entries ?? new List<GhIssueListEntry>())
+        var candidates = allCandidates
             .Where(entry => string.Equals(entry.Title, expectedTitle, StringComparison.Ordinal))
             .Where(entry => string.Equals(NormalizeBody(entry.Body ?? string.Empty), normalizedExpectedBody, StringComparison.Ordinal))
             .ToArray();
@@ -1482,13 +1558,45 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
         };
     }
 
-    private static string NormalizeBody(string body) => body.Replace("\r\n", "\n").Trim();
+    /// <summary>
+    /// G536 round-5 review repair: the only permitted normalization is
+    /// line-ending conversion (CRLF/CR → LF) and equating "ends with
+    /// exactly one trailing newline" with "no trailing newline" (GitHub's
+    /// own storage/rendering convention). Unlike a blanket <c>Trim()</c>,
+    /// this NEVER touches leading whitespace/indentation or any other
+    /// interior/trailing whitespace — an indented Markdown code block (or
+    /// any other authored whitespace) is semantically significant, so a
+    /// body that differs only in a single trailing newline is treated as
+    /// identical, but any other whitespace drift is treated as a genuine
+    /// difference (not the same issue).
+    /// </summary>
+    internal static string NormalizeBody(string body)
+    {
+        var normalized = body.Replace("\r\n", "\n").Replace("\r", "\n");
+        if (normalized.EndsWith('\n'))
+        {
+            normalized = normalized[..^1];
+        }
+        return normalized;
+    }
 
-    private sealed record GhIssueListEntry(
+    internal sealed record GhIssueListEntry(
         [property: JsonPropertyName("number")] int Number,
         [property: JsonPropertyName("title")] string Title,
         [property: JsonPropertyName("url")] string Url,
         [property: JsonPropertyName("body")] string? Body);
+
+    private sealed record GraphQlResponse([property: JsonPropertyName("data")] GraphQlData? Data);
+
+    private sealed record GraphQlData([property: JsonPropertyName("search")] GraphQlSearch? Search);
+
+    private sealed record GraphQlSearch(
+        [property: JsonPropertyName("pageInfo")] GraphQlPageInfo PageInfo,
+        [property: JsonPropertyName("nodes")] List<GhIssueListEntry> Nodes);
+
+    private sealed record GraphQlPageInfo(
+        [property: JsonPropertyName("hasNextPage")] bool HasNextPage,
+        [property: JsonPropertyName("endCursor")] string? EndCursor);
 }
 
 internal sealed class GhCliIssueCreator : IIssueCreator
