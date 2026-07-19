@@ -595,19 +595,35 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   - **Fenced code blocks** are blanked (a class name inside one is never a
     term) — honoring CommonMark's actual boundary, not a loose
     approximation: a fence opener/closer may be indented AT MOST 3 spaces
-    (4+ spaces, or any leading tab, is a different construct — an indented
-    code block — and is NOT recognized as a fence, so its content is
-    scanned normally); tilde (`~~~`) fences and 4-or-more-backtick fences
-    are recognized; a backtick fence's info string may never itself contain
-    a backtick (CommonMark rejects that as an opener, ambiguous with inline
-    code); a closer must use the SAME fence character and be at least as
-    long as the opener — a wrong-character, too-short, or over-indented
-    line is never mistaken for a closer and does not end the fence early;
-    CRLF and LF line endings are both handled; and an UNCLOSED fence fails
-    CLOSED: everything from the opening fence to end-of-document is masked
-    as code rather than left free to leak identifiers. Inline
-    single-backtick spans are a separate, unaffected concern, and a
-    backslash-escaped backtick never opens one.
+    (4+ spaces, or any leading tab, is NOT recognized as a fence at all —
+    see the separate indented-code-block pass immediately below for why
+    that does not mean "not noise"); tilde (`~~~`) fences and
+    4-or-more-backtick fences are recognized; a backtick fence's info
+    string may never itself contain a backtick (CommonMark rejects that as
+    an opener, ambiguous with inline code); a closer must use the SAME
+    fence character and be at least as long as the opener — a wrong-
+    character, too-short, or over-indented line is never mistaken for a
+    closer and does not end the fence early; CRLF and LF line endings are
+    both handled; and an UNCLOSED fence fails CLOSED: everything from the
+    opening fence to end-of-document is masked as code rather than left
+    free to leak identifiers. Inline single-backtick spans are a separate,
+    unaffected concern, and a backslash-escaped backtick never opens one.
+  - **Indented code blocks** — a SEPARATE, independent masking pass from
+    fence recognition above: "this line does not open a fence" and "this
+    line is not code" are different questions. A maximal run of
+    consecutive lines that are each either indented (a literal tab, or 4+
+    literal leading spaces — 1–3 spaces is ordinary, merely-aligned prose
+    and is deliberately NOT enough to qualify) or blank is masked as one
+    block; a blank line WITHIN the run does not end it (mirroring
+    CommonMark's own tolerance for blank continuation lines inside an
+    indented code block), and the run always terminates at the first
+    genuinely non-blank, non-indented line, where ordinary extraction
+    resumes immediately. This is a SIMPLIFIED approximation — it does not
+    replicate CommonMark's full list-item-continuation disambiguation
+    (indentation measured relative to a list marker rather than column 0),
+    so a 4-space-indented continuation line inside a list item is treated
+    the same as top-level indented code; an accepted, documented
+    limitation of this scaffold, not a bug.
   - **Inline Markdown/image links** — `[label](destination title)` /
     `![alt](destination title)` — are masked SELECTIVELY via a small
     hand-written scanner (not a naive first-`)`-wins regex): only the

@@ -470,11 +470,16 @@ internal static class IntentFacetCheckCommand
 
     /// <summary>
     /// G531 review repair: blanks every noise region in document order —
-    /// fenced code blocks first (<see cref="MaskFencedCodeBlocks"/>), then
-    /// reference-style link DEFINITION lines, then autolinks, then inline
-    /// Markdown/image link/image TARGETS only (label/alt preserved,
-    /// <see cref="MaskInlineLinksAndImages"/>), then bare URLs, then any
-    /// remaining multi-segment path-like run (e.g.
+    /// BLOCK-level constructs first (fenced code blocks via
+    /// <see cref="MaskFencedCodeBlocks"/>, then CommonMark INDENTED code
+    /// blocks via <see cref="MaskIndentedCodeBlocks"/> — "not a fence" and
+    /// "not code" are different questions; a 4-space/tab-indented block
+    /// that fails fence recognition is still its own separate code
+    /// construct and still noise), then INLINE constructs on whatever real
+    /// prose remains (reference-style link DEFINITION lines, autolinks,
+    /// inline Markdown/image link/image TARGETS only — label/alt preserved,
+    /// see <see cref="MaskInlineLinksAndImages"/> — bare URLs, then any
+    /// remaining multi-segment path-like run, e.g.
     /// <c>src/Commands/CreateOrder.cs</c>) — so neither extraction regex
     /// can see identifier-shaped noise living inside any of them. Order
     /// matters: each pass only ever operates on text the PRIOR pass already
@@ -484,12 +489,106 @@ internal static class IntentFacetCheckCommand
     {
         var masked = text;
         masked = MaskFencedCodeBlocks(masked);
+        masked = MaskIndentedCodeBlocks(masked);
         masked = MaskRegionsOf(masked, ReferenceDefinitionRegex);
         masked = MaskRegionsOf(masked, AutolinkRegex);
         masked = MaskInlineLinksAndImages(masked);
         masked = MaskRegionsOf(masked, UrlRegex);
         masked = MaskRegionsOf(masked, PathLikeRegex);
         return masked;
+    }
+
+    /// <summary>
+    /// G531 review repair round 5: an independent noise pass for
+    /// CommonMark INDENTED code blocks — a line beginning with a literal
+    /// tab, or with 4+ literal leading spaces, is code (a wholly separate
+    /// construct from a fenced block; recognizing "this isn't a fence" does
+    /// NOT mean "this isn't noise"). A maximal run of consecutive lines
+    /// that are each either indented (per the rule above) or BLANK
+    /// (whitespace-only) is masked as one block — blank lines may appear
+    /// WITHIN the block as continuation without ending it, mirroring
+    /// CommonMark's own tolerance for blank lines inside an indented code
+    /// block. The run always terminates at the first genuinely non-blank,
+    /// non-indented line (real prose resumes normal extraction from
+    /// there) or end-of-document. 1–3 space indentation is deliberately
+    /// NOT enough to qualify — that is ordinary, merely-aligned prose and
+    /// must never be over-masked. This pass runs on whatever
+    /// <see cref="MaskFencedCodeBlocks"/> already left alone, and is a
+    /// SIMPLIFIED approximation: it does not attempt CommonMark's full
+    /// list-item-continuation disambiguation (indentation measured
+    /// relative to a list marker rather than column 0), so a 4-space-
+    /// indented continuation line inside a list item is treated the same
+    /// as top-level indented code — an accepted, documented limitation of
+    /// this scaffold, not a bug.
+    /// </summary>
+    private static string MaskIndentedCodeBlocks(string text)
+    {
+        var lineStarts = new List<int> { 0 };
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\n')
+            {
+                lineStarts.Add(i + 1);
+            }
+        }
+
+        var lineCount = lineStarts.Count;
+        string LineText(int index)
+        {
+            var start = lineStarts[index];
+            var end = index + 1 < lineCount ? lineStarts[index + 1] : text.Length;
+            return text[start..end];
+        }
+
+        static bool IsBlank(string line) => line.All(ch => ch is ' ' or '\t' or '\r' or '\n');
+
+        static bool IsIndented(string line)
+        {
+            if (IsBlank(line))
+            {
+                return false;
+            }
+            var content = line.TrimEnd('\r', '\n');
+            return content[0] == '\t'
+                || (content.Length >= 4 && content[0] == ' ' && content[1] == ' ' && content[2] == ' ' && content[3] == ' ');
+        }
+
+        var builder = new System.Text.StringBuilder(text.Length);
+        var line = 0;
+        while (line < lineCount)
+        {
+            if (!IsIndented(LineText(line)))
+            {
+                builder.Append(LineText(line));
+                line++;
+                continue;
+            }
+
+            var runStart = line;
+            var runEnd = line + 1;
+            while (runEnd < lineCount)
+            {
+                var candidate = LineText(runEnd);
+                if (IsIndented(candidate) || IsBlank(candidate))
+                {
+                    runEnd++;
+                    continue;
+                }
+                break;
+            }
+
+            for (var i = runStart; i < runEnd; i++)
+            {
+                foreach (var ch in LineText(i))
+                {
+                    builder.Append(ch is '\n' or '\r' ? ch : ' ');
+                }
+            }
+
+            line = runEnd;
+        }
+
+        return builder.ToString();
     }
 
     /// <summary>

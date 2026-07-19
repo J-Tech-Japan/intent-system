@@ -223,28 +223,114 @@ public sealed class IntentFacetCheckCommandTests
     // ── Extraction: fence boundary correctness (review repair round 4) ────
 
     [Fact]
-    public void ExtractCandidateTerms_FourSpaceIndentedFenceLike_NotRecognizedAsFence_ContentFlowsThrough()
+    public void ExtractCandidateTerms_FourSpaceIndentedFenceLike_NotAFence_ButStillMaskedAsIndentedCode()
     {
         // CommonMark: a fence may be indented AT MOST 3 spaces. Four or
-        // more spaces is a DIFFERENT construct (an indented code block,
-        // out of scope for this scaffold's masking) — the ``` here must
-        // NOT be treated as a fence opener, so the CamelCase identifier
-        // inside is picked up normally.
+        // more spaces is a DIFFERENT construct — an indented code block —
+        // so the ``` here must NOT be treated as a fence opener. But
+        // "not a fence" does not mean "not code": an indented code block
+        // is still noise, just via a different masking pass (see the
+        // "indented code block" test group below).
         var text = "Intro.\n    ```\n    class NoiseNotMasked { }\n    ```\nOutro.";
 
         var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
 
-        Assert.Contains("NoiseNotMasked", terms);
+        Assert.DoesNotContain("NoiseNotMasked", terms);
     }
 
     [Fact]
-    public void ExtractCandidateTerms_TabIndentedFenceLike_NotRecognizedAsFence_ContentFlowsThrough()
+    public void ExtractCandidateTerms_TabIndentedFenceLike_NotAFence_ButStillMaskedAsIndentedCode()
     {
         var text = "Intro.\n\t```\n\tclass NoiseNotMaskedTab { }\n\t```\nOutro.";
 
         var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
 
-        Assert.Contains("NoiseNotMaskedTab", terms);
+        Assert.DoesNotContain("NoiseNotMaskedTab", terms);
+    }
+
+    // ── Extraction: indented code blocks (review repair round 5) ──────
+
+    [Fact]
+    public void ExtractCandidateTerms_FourSpaceIndentedCode_MaskedAsNoise()
+    {
+        var text = "Intro.\n\n    class NoiseIndentedCode { }\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseIndentedCode", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_TabIndentedCode_MaskedAsNoise()
+    {
+        var text = "Intro.\n\n\tclass NoiseTabIndentedCode { }\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseTabIndentedCode", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_IndentedCodeWithCommandEventToken_MaskedAsNoise()
+    {
+        var text = "Intro.\n\n    var handler = new RefundCommand();\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("RefundCommand", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_IndentedCodeWithBlankLineContinuation_BothSidesMasked()
+    {
+        // A blank line WITHIN an indented-code region does not end it —
+        // content on both sides of the blank line is still noise.
+        var text = "Intro.\n\n    class NoiseBeforeBlank { }\n\n    class NoiseAfterBlank { }\n\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseBeforeBlank", terms);
+        Assert.DoesNotContain("NoiseAfterBlank", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_IndentedCodeTerminatesBackToOrdinaryProse()
+    {
+        // Once a genuinely non-indented, non-blank line resumes, normal
+        // extraction resumes immediately after the indented-code run.
+        var text = "Intro.\n\n    class NoiseIndented { }\n\nMentions OrderPlaced in ordinary prose.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseIndented", terms);
+        Assert.Contains("OrderPlaced", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_ThreeSpaceIndentedProse_NotOverMasked()
+    {
+        // 1-3 spaces of indentation is ordinary, merely-aligned prose per
+        // CommonMark — it must never be swept into indented-code masking.
+        var text = "Intro.\n\n   Mentions CreateOrder with only three leading spaces.\n";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.Contains("CreateOrder", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_ListItemContinuationIndentation_DocumentedApproximationMasksIt()
+    {
+        // Accepted, documented limitation: this scaffold does not
+        // replicate CommonMark's full list-item-continuation
+        // disambiguation (indentation measured relative to a list marker,
+        // not column 0) — a 4-space-indented continuation line under a
+        // list item is treated the same as top-level indented code.
+        var text = "- some item\n\n    NestedListContinuationNoise\n";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NestedListContinuationNoise", terms);
     }
 
     [Fact]
