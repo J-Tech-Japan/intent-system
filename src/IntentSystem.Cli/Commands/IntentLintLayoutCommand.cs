@@ -112,6 +112,9 @@ internal static class IntentLintLayoutCommand
         // Check features/index.md
         CheckFeaturesIndex(domainRoot, request.Domain, warnings);
 
+        // G529: validate any facets: frontmatter against the closed value set
+        CheckFacetValues(domainRoot, request.Domain, warnings);
+
         return BuildResult(request, warnings, isTreeDomain);
     }
 
@@ -275,6 +278,59 @@ internal static class IntentLintLayoutCommand
                     Code: "MISSING-FEATURE-OVERVIEW",
                     Message: $"Feature folder 'intents/{domain}/features/{featureName}/' is missing 'overview.md'.",
                     Fix: $"Add 'intents/{domain}/features/{featureName}/overview.md' with goals and acceptance criteria."));
+            }
+        }
+    }
+
+    // ── Facet check (G529) ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A node's optional <c>facets:</c> frontmatter must draw only from the
+    /// closed set (<see cref="IntentNodeFacets.AllowedValues"/>). A node with
+    /// no frontmatter, or frontmatter with no <c>facets:</c> line, is
+    /// unaffected — unannotated nodes are legitimate and stay lint-clean.
+    /// </summary>
+    private static void CheckFacetValues(
+        string domainRoot,
+        string domain,
+        List<LintWarning> warnings)
+    {
+        var allMarkdown = Directory.GetFiles(domainRoot, "*.md", SearchOption.AllDirectories);
+
+        foreach (var mdFile in allMarkdown)
+        {
+            string content;
+            try
+            {
+                content = File.ReadAllText(mdFile);
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            var rawFacets = IntentNodeFacets.ExtractRawFacets(content);
+            if (rawFacets.Count == 0)
+            {
+                continue;
+            }
+
+            var rel = $"intents/{domain}/" + Path.GetRelativePath(domainRoot, mdFile).Replace(Path.DirectorySeparatorChar, '/');
+            var allowed = string.Join(", ", IntentNodeFacets.AllowedValues);
+
+            foreach (var value in rawFacets.Distinct(StringComparer.Ordinal))
+            {
+                if (!IntentNodeFacets.IsAllowedValue(value))
+                {
+                    warnings.Add(new LintWarning(
+                        Code: "INVALID-FACET",
+                        Message: $"Node '{rel}' has invalid facet '{value}' (allowed: {allowed}).",
+                        Fix: $"Use one of: {allowed}, or remove '{value}' from the 'facets:' line in '{rel}'."));
+                }
             }
         }
     }

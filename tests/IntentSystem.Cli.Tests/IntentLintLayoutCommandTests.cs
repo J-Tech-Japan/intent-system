@@ -270,6 +270,89 @@ public sealed class IntentLintLayoutCommandTests
     }
 
     // ──────────────────────────────────────────────
+    // Facets (G529)
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_NodeWithValidFacets_ReportsNoInvalidFacetWarning()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets: [vocabulary, invariant]\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        var output = writer.ToString();
+        Assert.DoesNotContain("INVALID-FACET", output, StringComparison.Ordinal);
+        Assert.Contains("clean", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_NodeWithUnknownFacetValue_ReportsInvalidFacetWarningNamingNodeValueAndAllowedSet()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets: [projection]\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        var output = writer.ToString();
+        Assert.Contains("INVALID-FACET", output, StringComparison.Ordinal);
+        Assert.Contains("intents/auth/identity/mission.md", output, StringComparison.Ordinal);
+        Assert.Contains("projection", output, StringComparison.Ordinal);
+        Assert.Contains("vocabulary", output, StringComparison.Ordinal);
+        Assert.Contains("invariant", output, StringComparison.Ordinal);
+        Assert.Contains("decider", output, StringComparison.Ordinal);
+        Assert.Contains("acceptance-property", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_NodeWithMixOfValidAndInvalidFacets_ReportsOnlyTheInvalidOne()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets: [decider, projection]\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        var output = writer.ToString();
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(output, "INVALID-FACET"));
+        Assert.Contains("projection", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_NodeWithNoFacetsFrontmatter_StaysBackwardCompatible()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        // No frontmatter at all — the pre-G529 default shape.
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "# Mission\n\nNo frontmatter here.\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.DoesNotContain("INVALID-FACET", output, StringComparison.Ordinal);
+        Assert.Contains("clean", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ──────────────────────────────────────────────
     // Mixed flat/tree compatibility
     // ──────────────────────────────────────────────
 

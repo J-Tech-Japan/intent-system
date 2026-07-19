@@ -109,7 +109,7 @@ public sealed class IntentSearchCommandTests
     }
 
     [Fact]
-    public void Execute_MissingQuery_ReturnsUsageError()
+    public void Execute_MissingQueryAndFacet_ReturnsUsageError()
     {
         using var workspace = new IntentSearchWorkspace();
         using var writer = new StringWriter();
@@ -120,7 +120,80 @@ public sealed class IntentSearchCommandTests
             writer);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("--query is required.", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("requires --query and/or --facet", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    // ──────────────────────────────────────────────
+    // Facet filter (G529)
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_FacetFilterAlone_ReturnsOnlyNodesCarryingThatFacet()
+    {
+        using var workspace = new IntentSearchWorkspace();
+        workspace.WriteFile(
+            "intents/intent-cli/features/auth/overview.md",
+            "---\nfacets: [invariant]\n---\n# Auth overview\n");
+        workspace.WriteFile(
+            "intents/intent-cli/features/auth/decisions.md",
+            "---\nfacets: [decider]\n---\n# Auth decisions\n");
+        workspace.WriteFile(
+            "intents/intent-cli/README.md",
+            "No facets here.");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentSearchCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--facet", "invariant", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var hits = document.RootElement.GetProperty("hits");
+        var paths = hits.EnumerateArray().Select(h => h.GetProperty("path").GetString()).ToArray();
+        Assert.Contains(paths, p => p!.EndsWith("overview.md", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p!.EndsWith("decisions.md", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p!.EndsWith("README.md", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_FacetFilterCombinedWithQuery_RestrictsToBothConditions()
+    {
+        using var workspace = new IntentSearchWorkspace();
+        workspace.WriteFile(
+            "intents/intent-cli/features/auth/overview.md",
+            "---\nfacets: [invariant]\n---\n# Auth overview\nDescribes the login invariant.\n");
+        workspace.WriteFile(
+            "intents/intent-cli/features/auth/requirements.md",
+            "---\nfacets: [invariant]\n---\n# Auth requirements\nNo matching keyword here.\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentSearchCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--query", "login invariant", "--facet", "invariant", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var hits = document.RootElement.GetProperty("hits");
+        var paths = hits.EnumerateArray().Select(h => h.GetProperty("path").GetString()).ToArray();
+        Assert.Contains(paths, p => p!.EndsWith("overview.md", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p!.EndsWith("requirements.md", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_UnknownFacetValue_ReturnsUsageError()
+    {
+        using var workspace = new IntentSearchWorkspace();
+        using var writer = new StringWriter();
+
+        var exitCode = IntentSearchCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--facet", "projection"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--facet must be one of", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

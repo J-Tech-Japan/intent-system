@@ -107,6 +107,16 @@ internal static class IntentDraftFromInterviewCommand
     private static string BuildDraftMarkdown(string domain, string session, IReadOnlyList<InterviewQuestion> accepted, IReadOnlyList<InterviewQuestion> open)
     {
         var builder = new StringBuilder();
+        builder.AppendLine("---");
+        builder.AppendLine("# Optional semantic facets (G529) — closed set, one line each:");
+        builder.AppendLine("#   vocabulary            — event/command vocabulary: what counts as a fact");
+        builder.AppendLine("#   invariant              — invariants and consistency boundaries");
+        builder.AppendLine("#   decider                — decider judgments: what a command decides");
+        builder.AppendLine("#   acceptance-property    — what must not break");
+        builder.AppendLine("# Uncomment and edit to annotate this node, e.g.:");
+        builder.AppendLine("# facets: [vocabulary]");
+        builder.AppendLine("---");
+        builder.AppendLine();
         builder.AppendLine($"# Draft intent — {domain} / session {session}");
         builder.AppendLine();
         builder.AppendLine("> Compiled from accepted interview answers. Operator must accept this draft before any source-of-truth mutation.");

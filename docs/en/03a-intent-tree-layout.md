@@ -95,6 +95,98 @@ features/
     links.md             # References
 ```
 
+## Facets
+
+Any node file can carry an optional `facets:` frontmatter field naming which
+of four "human-retained understanding" surfaces it documents — the minimal
+surface humans must keep understanding when coding is delegated to AI
+(operator input, [issue #1159](https://github.com/J-Tech-Japan/intent-system/issues/1159)).
+Projections and boilerplate are safely delegable; these four are not:
+
+- **`vocabulary`** — event/command vocabulary: what counts as a fact.
+- **`invariant`** — invariants and consistency boundaries.
+- **`decider`** — decider judgments: what a command decides.
+- **`acceptance-property`** — acceptance properties: what must not break.
+
+The value set is closed for now; extending it is future design work, not
+something a node's frontmatter can invent locally. `facets:` is entirely
+**optional** — a node without it is unannotated, which is legitimate, not an
+error. `intent lint-layout` rejects only an unrecognized value (naming the
+node, the bad value, and the allowed set); `intent search --facet <value>`
+filters to nodes carrying that facet; `intent analyze-tree` reports
+per-facet counts. Scaffolded node files (`init-tree`, `add-feature`,
+`draft-from-interview`) include a commented example explaining all four
+values — uncomment and edit the line to annotate a node:
+
+```markdown
+---
+# Optional semantic facets (G529) — closed set, one line each:
+#   vocabulary            — event/command vocabulary: what counts as a fact
+#   invariant              — invariants and consistency boundaries
+#   decider                — decider judgments: what a command decides
+#   acceptance-property    — what must not break
+# Uncomment and edit to annotate this node, e.g.:
+# facets: [vocabulary]
+---
+
+# Node title
+...
+```
+
+One example node per facet:
+
+- **vocabulary** — a glossary node defining the domain's event/command
+  vocabulary:
+
+  ```markdown
+  ---
+  facets: [vocabulary]
+  ---
+  # Glossary
+  **PaymentAuthorized** — a fact recorded once a payment provider confirms
+  funds capture; never reversed in place (see `PaymentRefunded`).
+  ```
+
+- **invariant** — a feature's consistency-boundary node:
+
+  ```markdown
+  ---
+  facets: [invariant]
+  ---
+  # Order — consistency boundary
+  An order's total must always equal the sum of its line items; this
+  invariant is enforced inside the `Order` aggregate boundary, never across
+  aggregates.
+  ```
+
+- **decider** — a node documenting what a command decides:
+
+  ```markdown
+  ---
+  facets: [decider]
+  ---
+  # ApproveRefund — decision
+  Given a refund request and the order's payment history, decides whether
+  to approve, partially approve, or reject the refund; the decision itself
+  (not the notification/projection side effects) is what must stay
+  human-reviewed.
+  ```
+
+- **acceptance-property** — an acceptance-criteria node stating what must
+  never break:
+
+  ```markdown
+  ---
+  facets: [acceptance-property]
+  ---
+  # Checkout — acceptance properties
+  - A completed checkout must never leave the cart non-empty.
+  - A payment must never be captured twice for the same order.
+  ```
+
+A node can carry more than one facet (e.g. `facets: [vocabulary, invariant]`)
+when it genuinely documents both.
+
 ## Cross-linking rules
 
 Cross-links keep the tree navigable and prevent duplication:

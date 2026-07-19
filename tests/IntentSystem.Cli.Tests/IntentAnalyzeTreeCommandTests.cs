@@ -354,6 +354,82 @@ public sealed class IntentAnalyzeTreeCommandTests
     }
 
     // ──────────────────────────────────────────────
+    // Facet coverage (G529)
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_NodesWithFacets_ReportsPerFacetCounts()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        var featuresDir = Path.Combine(hostRoot, "intents", "auth", "features", "login");
+        Directory.CreateDirectory(featuresDir);
+        File.WriteAllText(
+            Path.Combine(featuresDir, "overview.md"),
+            "---\nfacets: [vocabulary, invariant]\n---\n# Login overview\n");
+        File.WriteAllText(
+            Path.Combine(featuresDir, "decisions.md"),
+            "---\nfacets: [invariant]\n---\n# Login decisions\n");
+        File.WriteAllText(
+            Path.Combine(featuresDir, "requirements.md"),
+            "# Login requirements\n\nNo facets frontmatter.\n");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentAnalyzeTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        var coverage = document.RootElement.GetProperty("facet_coverage");
+        Assert.Equal(1, coverage.GetProperty("vocabulary").GetInt32());
+        Assert.Equal(2, coverage.GetProperty("invariant").GetInt32());
+        // "decider" and "acceptance-property" have zero nodes — only
+        // positive counts are reported, so they must be absent entirely.
+        Assert.False(coverage.TryGetProperty("decider", out _));
+        Assert.False(coverage.TryGetProperty("acceptance-property", out _));
+    }
+
+    [Fact]
+    public void Execute_NoNodesWithFacets_FacetCoverageIsEmpty()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateFlatFile(hostRoot, "auth", "intent.md", "# Auth\n\n## Mission\nWe auth.");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentAnalyzeTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        var coverage = document.RootElement.GetProperty("facet_coverage");
+        Assert.Equal(0, coverage.EnumerateObject().Count());
+    }
+
+    [Fact]
+    public void Execute_Markdown_RendersFacetCoverageSection()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        var identityDir = Path.Combine(hostRoot, "intents", "auth", "identity");
+        Directory.CreateDirectory(identityDir);
+        File.WriteAllText(
+            Path.Combine(identityDir, "mission.md"),
+            "---\nfacets: [decider]\n---\n# Mission\n");
+        using var writer = new StringWriter();
+
+        IntentAnalyzeTreeCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        var output = writer.ToString();
+        Assert.Contains("## Facet coverage", output, StringComparison.Ordinal);
+        Assert.Contains("decider: 1", output, StringComparison.Ordinal);
+    }
+
+    // ──────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────
 

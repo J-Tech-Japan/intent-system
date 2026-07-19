@@ -472,6 +472,35 @@ public sealed class IntentInitTreeCommandTests
     }
 
     // ──────────────────────────────────────────────
+    // Facets scaffold comment (G529)
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void Execute_WithWrite_MissionStarterIncludesCommentedFacetsExample_AndLintStaysClean()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+
+        IntentInitTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--write"],
+            TextWriter.Null);
+
+        var missionContent = File.ReadAllText(Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"));
+        // Present as a comment (explaining all four values), not a live field.
+        Assert.Contains("# facets: [vocabulary]", missionContent, StringComparison.Ordinal);
+        Assert.Contains("vocabulary", missionContent, StringComparison.Ordinal);
+        Assert.Contains("invariant", missionContent, StringComparison.Ordinal);
+        Assert.Contains("decider", missionContent, StringComparison.Ordinal);
+        Assert.Contains("acceptance-property", missionContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("\nfacets:", missionContent, StringComparison.Ordinal);
+
+        using var lintWriter = new StringWriter();
+        IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], lintWriter);
+        Assert.DoesNotContain("INVALID-FACET", lintWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    // ──────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────
 

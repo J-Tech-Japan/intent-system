@@ -10,6 +10,13 @@ namespace IntentSystem.Cli.Commands;
 /// (<c>intents/&lt;domain&gt;/</c>) and emits the matching file paths,
 /// 1-based line numbers, and a trimmed snippet. Never mutates state and
 /// never launches an AI provider.
+///
+/// G529: an optional <c>--facet &lt;value&gt;</c> filter (one of
+/// <see cref="IntentNodeFacets.AllowedValues"/>) restricts results to files
+/// whose <c>facets:</c> frontmatter carries that value, combinable with
+/// <c>--query</c>. When <c>--facet</c> is given without <c>--query</c>, each
+/// matching file is reported once (its <c>facets:</c> line as the snippet)
+/// rather than doing line-level substring matching.
 /// </summary>
 internal static class IntentSearchCommand
 {
@@ -20,7 +27,7 @@ internal static class IntentSearchCommand
     private const int SnippetMaxLength = 240;
 
     private const string UsageLine =
-        "Usage: intent-cli intent search --query <text> [--domain <name>] [--format markdown|json]";
+        "Usage: intent-cli intent search [--query <text>] [--domain <name>] [--facet vocabulary|invariant|decider|acceptance-property] [--format markdown|json]";
 
     private static readonly string[] SearchableExtensions =
         new[] { ".md", ".yaml", ".yml", ".json", ".txt" };
@@ -37,14 +44,14 @@ internal static class IntentSearchCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var query, out var domainOverride, out var format, out var error))
+        if (!TryParseArguments(args, out var query, out var domainOverride, out var facet, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
             return 1;
         }
 
-        var result = Search(context, query!, domainOverride);
+        var result = Search(context, query, domainOverride, facet);
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -59,7 +66,7 @@ internal static class IntentSearchCommand
         return 0;
     }
 
-    internal static IntentSearchResult Search(CliContext context, string query, string? domainOverride)
+    internal static IntentSearchResult Search(CliContext context, string? query, string? domainOverride, string? facet)
     {
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
@@ -70,26 +77,27 @@ internal static class IntentSearchCommand
         var packetRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
         if (Directory.Exists(packetRoot))
         {
-            CollectMatches(packetRoot, query, hits);
+            CollectMatches(packetRoot, query, facet, hits);
         }
 
         var domainRoot = Path.Combine(context.RepoRoot, "intents", domain);
         if (Directory.Exists(domainRoot))
         {
-            CollectMatches(domainRoot, query, hits);
+            CollectMatches(domainRoot, query, facet, hits);
         }
 
         return new IntentSearchResult
         {
             Domain = domain,
             Query = query,
+            Facet = facet,
             PacketRoot = packetRoot,
             DomainRoot = domainRoot,
             Hits = hits
         };
     }
 
-    private static void CollectMatches(string root, string query, List<IntentSearchHit> hits)
+    private static void CollectMatches(string root, string? query, string? facet, List<IntentSearchHit> hits)
     {
         var files = Directory
             .EnumerateFiles(root, "*", SearchOption.AllDirectories)
@@ -100,10 +108,10 @@ internal static class IntentSearchCommand
 
         foreach (var file in files)
         {
-            string[] lines;
+            string content;
             try
             {
-                lines = File.ReadAllLines(file);
+                content = File.ReadAllText(file);
             }
             catch (IOException)
             {
@@ -114,6 +122,41 @@ internal static class IntentSearchCommand
                 continue;
             }
 
+            // G529: when --facet is given, restrict to files carrying that
+            // facet in their frontmatter before any text matching happens.
+            if (facet is not null
+                && !IntentNodeFacets.ExtractRawFacets(content).Contains(facet, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(query))
+            {
+                // G529: facet-only mode — report the file once rather than
+                // doing line-level substring matching with an empty query.
+                // Skip past any frontmatter block so the snippet shows the
+                // node's actual title/prose, not the "---" delimiter.
+                // Both the frontmatter extraction and the line split operate
+                // on the same normalized (LF-only) text, so the offset math
+                // stays correct regardless of the file's original line endings.
+                var normalizedContent = content.Replace("\r\n", "\n", StringComparison.Ordinal);
+                var body = IntentNodeFacets.TryExtractFrontmatterBlock(normalizedContent, out var frontmatter)
+                    ? normalizedContent[(4 + frontmatter.Length + 4)..]
+                    : normalizedContent;
+                var firstLine = body
+                    .Split('\n')
+                    .Select(line => line.Trim())
+                    .FirstOrDefault(line => line.Length > 0) ?? string.Empty;
+                hits.Add(new IntentSearchHit
+                {
+                    Path = file,
+                    Line = 1,
+                    Snippet = TrimSnippet(firstLine)
+                });
+                continue;
+            }
+
+            var lines = content.Split('\n');
             var matchesInFile = 0;
             for (var index = 0; index < lines.Length && matchesInFile < MatchesPerFile; index++)
             {
@@ -149,7 +192,14 @@ internal static class IntentSearchCommand
     {
         writer.WriteLine($"# Intent search — {result.Domain}");
         writer.WriteLine();
-        writer.WriteLine($"- query: `{result.Query}`");
+        if (!string.IsNullOrEmpty(result.Query))
+        {
+            writer.WriteLine($"- query: `{result.Query}`");
+        }
+        if (!string.IsNullOrEmpty(result.Facet))
+        {
+            writer.WriteLine($"- facet: `{result.Facet}`");
+        }
         writer.WriteLine($"- packet root: {result.PacketRoot}");
         writer.WriteLine($"- domain root: {result.DomainRoot}");
         writer.WriteLine($"- matches: {result.Hits.Count}");
@@ -172,11 +222,13 @@ internal static class IntentSearchCommand
         string[] args,
         out string? query,
         out string? domainOverride,
+        out string? facet,
         out string format,
         out string error)
     {
         query = null;
         domainOverride = null;
+        facet = null;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -207,6 +259,24 @@ internal static class IntentSearchCommand
                     index++;
                     break;
 
+                case "--facet":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--facet requires a value.";
+                        return false;
+                    }
+
+                    var requestedFacet = args[index + 1];
+                    if (!IntentNodeFacets.IsAllowedValue(requestedFacet))
+                    {
+                        error = $"--facet must be one of: {string.Join(", ", IntentNodeFacets.AllowedValues)} (got '{requestedFacet}').";
+                        return false;
+                    }
+
+                    facet = requestedFacet;
+                    index++;
+                    break;
+
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -232,9 +302,9 @@ internal static class IntentSearchCommand
             }
         }
 
-        if (string.IsNullOrWhiteSpace(query))
+        if (string.IsNullOrWhiteSpace(query) && string.IsNullOrWhiteSpace(facet))
         {
-            error = "--query is required.";
+            error = "intent search requires --query and/or --facet.";
             return false;
         }
 
@@ -246,6 +316,7 @@ internal static class IntentSearchCommand
         writer.WriteLine("intent search");
         writer.WriteLine(UsageLine);
         writer.WriteLine("Read-only substring search across packets and the per-domain intent tree.");
+        writer.WriteLine("--facet filters to files whose facets: frontmatter carries that value; combinable with --query.");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -262,7 +333,10 @@ internal sealed record IntentSearchResult
     public required string Domain { get; init; }
 
     [JsonPropertyName("query")]
-    public required string Query { get; init; }
+    public string? Query { get; init; }
+
+    [JsonPropertyName("facet")]
+    public string? Facet { get; init; }
 
     [JsonPropertyName("packet_root")]
     public required string PacketRoot { get; init; }
