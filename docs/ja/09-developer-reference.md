@@ -620,19 +620,34 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   `implementation.md`（連結。github-body が先）から候補の用語を
   抽出します — 抽出されるのは、バッククォート内の裸の識別子（例:
   `` `CreateOrder` `` — 空白や他の記号を含むバッククォートの範囲は、
-  コマンド例などであり用語ではないためスキップされます）、内部に
-  camelCase/PascalCase の境界を持つプレーンテキストの単語（例:
-  `CreateOrder`）、または `Command`・`Event`・`Query` で終わる
-  プレーンテキストの単語です。ノイズは、どちらのルールが走るより
-  前に除外されます: fenced code block（` ``` ` フェンス内の識別子は
-  決して用語になりません — インラインの単一バッククォートの範囲は
-  影響を受けません）、Markdown リンク（角括弧のテキストと括弧内の
-  リンク先の両方）、裸の URL、そして複数セグメントのパス（例:
-  `src/Commands/CreateOrder.cs`）は、すべて先にブランクされるため、
-  コードサンプル内のクラス名や、パス/URL 中の CamelCase セグメントが
-  候補になることはありません。抽出は、連結されたドキュメント全体を
-  通じて「出現順」です（位置に関係なく「まずバッククォートのヒットを
-  すべて、その後にプレーンワードのヒットをすべて」ではありません）。
+  コマンド例などであり用語ではないためスキップされます。バックスラッシュ
+  でエスケープされたバッククォート、例えば `` \` `` は、決して span を
+  開始しません）、内部に camelCase/PascalCase の境界を持つプレーン
+  テキストの単語（例: `CreateOrder`）、または `Command`・`Event`・
+  `Query` で終わるプレーンテキストの単語です。ノイズは、どちらの
+  ルールが走るより前に、Markdown を意識した形で除外されます:
+  - **fenced code block** はブランクされます（その中の識別子は決して
+    用語になりません）— インデントされたフェンス、tilde（`~~~`）
+    フェンス、4 個以上のバッククォートのフェンスもすべて認識されます
+    （単純な column-zero の ` ``` ` だけではありません）。CRLF と LF
+    の両方の改行を扱い、閉じられていないフェンスは fail closed です:
+    開始フェンスから文書の末尾までがコードとしてマスクされ、識別子が
+    漏れ出す余地を残しません。インラインの単一バッククォートの範囲は
+    別の、影響を受けない関心事です。
+  - **Markdown/image リンク** — `[label](target)` / `![alt](target)`
+    — は選択的にマスクされます: 括弧内の target（path/URL のノイズ）
+    だけがブランクされ、角括弧のラベルはそのまま残ります。可視の
+    ラベルは意図的に authored された提案テキストだからです（例えば
+    `` [CreateOrder](design.md) `` は依然として `CreateOrder` という
+    用語を生み出します）。
+  - **裸の URL** と **複数セグメントのパス**（例:
+    `src/Commands/CreateOrder.cs`）は、そのままブランクされます。
+
+  抽出は、連結されたドキュメント全体を通じて「出現順」です（位置に
+  関係なく「まずバッククォートのヒットをすべて、その後にプレーン
+  ワードのヒットをすべて」ではありません — implementation.md 自身の
+  候補は、常に github-body.md のすべての候補より後にソートされます。
+  ここでの「ドキュメント順」を決めるのは連結の順序だからです）。
   用語マッチングと同じ正規化で重複除去され、先に出現した表記が
   保持されます — そのため `github-body.md` で言及された用語が、
   （別の形で）`implementation.md` で再び言及されても、
@@ -662,14 +677,19 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   - `related_nodes`: マッチしたすべての node を、4 つの facet
     すべてを対象に、正規の順序
     `vocabulary → invariant → decider → acceptance-property` で。
-    各エントリは `{node: {id, facets, summary, path}, evidence,
-    match_kind}` の形です — `evidence` はマッチした根拠の部分集合
-    （`["id", "title"]` のいずれか、または両方）、`match_kind` は
-    RAW（正規化前）のテキストが完全に一致した場合 `"exact"`、
-    正規化した後にのみ一致した場合 `"normalized"` です。
+    各エントリは `{node: {id, facets, summary, path}, evidence}` の
+    形です — `evidence` は、マッチした node-authored サーフェスごとの
+    レコードのリストです: `{field: "id" | "title", value, match_kind}`。
+    `value` は実際に比較された生の authored テキスト（node 自身の
+    id の最後のセグメント、または title）、`match_kind` は、その
+    フィールド固有の生テキストが用語と完全に一致した場合 `"exact"`、
+    正規化した後にのみ一致した場合 `"normalized"` です。マッチ全体に
+    対する単一の集約 match-kind は意図的にありません — id が
+    normalized のみでマッチし、title が exact にマッチした node は、
+    1 つの混ぜ合わされたフラグにせず、両方の事実を別々に報告します。
   - `collisions`: `related_nodes` のうち、node が `vocabulary` facet
     を持つ部分集合 — 提案の用語が重複または衝突している、既存の
-    名前付き概念です。同じ `evidence`/`match_kind` の分類を持ちます。
+    名前付き概念です。同じフィールドごとの `evidence` を持ちます。
   - `unmatched`: `related_nodes` が空の場合に `true`（その用語には
     facet によるカバレッジが全く無いということです）。
 - **`--packet` モードのみ**: `coverage` セクションが、packet 自身の
@@ -690,10 +710,12 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   が、genuinely authored な空リストと「同じ」計算結果の `gap: true`
   に degrade してしまうためです（空/壊れた scope hint も、coverage
   を「何にもマッチしない」に絞り込みます）— `scope_status` が無ければ、
-  この 2 つのケースは見分けが付きません。既存の `packet.yaml` を
-  読む際の本物の I/O エラー（「無い」のではなく実際の読み取りエラー）
-  は本物の実行エラーとして扱われ（exit `1`）、決して黙って空の scope
-  に畳み込まれることはありません。
+  この 2 つのケースは見分けが付きません。既存の packet ソースファイル
+  — `github-body.md`、`implementation.md`、または `packet.yaml` —
+  を読む際の本物の I/O エラー（「無い」のではなく実際の読み取り
+  エラー）は本物の実行エラーとして扱われ（exit `1`、"Failed to read
+  packet source..."）、決して黙って空の scope や空の用語リストに
+  畳み込まれることはありません。
 - domain に facet-annotated な node が 1 つも無い場合は
   `no_facet_data: true` になります（error ではありません — facets は
   optional です）が、それでも各用語の抽出・マッチング結果は報告され
@@ -709,10 +731,10 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   position を明示する `disclaimer` フィールドを、JSON でも Markdown
   でも持ちます。
 - JSON の形: `{domain, disclaimer, no_facet_data, terms: [{term,
-  related_nodes: [{node: {id, facets, summary, path}, evidence,
-  match_kind}], collisions: [...], unmatched}], coverage: {nodes: [...],
-  gap, scope_status, scope_status_detail, scope_warnings: [{hint,
-  reason}]} | null, warnings: [{path, reason}]}`。
+  related_nodes: [{node: {id, facets, summary, path}, evidence: [{field,
+  value, match_kind}]}], collisions: [...], unmatched}], coverage:
+  {nodes: [...], gap, scope_status, scope_status_detail,
+  scope_warnings: [{hint, reason}]} | null, warnings: [{path, reason}]}`。
 - この slice の Out of Scope（完全な境界は G531 issue を参照）:
   semantic/embedding ベースのマッチング、あらゆる blocking/gating の
   挙動、reviewer guidance や orchestrator delegation preflight への

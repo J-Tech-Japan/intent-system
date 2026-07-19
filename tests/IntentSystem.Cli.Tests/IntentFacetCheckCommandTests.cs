@@ -7,9 +7,10 @@ namespace IntentSystem.Cli.Tests;
 
 /// <summary>
 /// G531: coverage for the read-only <c>intent facet-check</c> scaffold —
-/// appearance-ordered/noise-excluded term extraction, lexical evidence/
-/// match-kind classification, acceptance-property coverage scope-status
-/// honesty, no-facet-data degradation, and the always-exit-0 /
+/// appearance-ordered/Markdown-aware-noise-excluded term extraction,
+/// per-field evidence/match-kind classification, acceptance-property
+/// coverage scope-status honesty, deterministic packet-I/O fault
+/// injection, no-facet-data degradation, and the always-exit-0 /
 /// always-carries-a-disclaimer contract.
 /// </summary>
 public sealed class IntentFacetCheckCommandTests
@@ -30,6 +31,14 @@ public sealed class IntentFacetCheckCommandTests
         var terms = IntentFacetCheckCommand.ExtractCandidateTerms("Run `intent facet-check --domain d` first.");
 
         Assert.DoesNotContain(terms, t => t.Contains(' '));
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_BacktickSpanFollowedByPunctuation_StillExtracted()
+    {
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms("Introduces `CreateOrder`, a new command.");
+
+        Assert.Contains("CreateOrder", terms);
     }
 
     [Fact]
@@ -67,6 +76,19 @@ public sealed class IntentFacetCheckCommandTests
         Assert.Single(terms, t => t == "CreateOrder");
     }
 
+    [Fact]
+    public void ExtractCandidateTerms_EscapedBacktick_NotTreatedAsInlineCodeDelimiter()
+    {
+        // "escapedterm" has no case transition and no Command/Event/Query
+        // suffix, so it can ONLY be extracted via a (wrongly unescaped)
+        // backtick span — isolating the escaping behavior specifically,
+        // unlike a term such as "NotATerm" which independently qualifies
+        // as a plain camelCase word regardless of any surrounding backticks.
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(@"The \`escapedterm\` is escaped, not inline code.");
+
+        Assert.DoesNotContain("escapedterm", terms);
+    }
+
     // ── Extraction: appearance order (review repair) ─────────────────
 
     [Fact]
@@ -90,7 +112,23 @@ public sealed class IntentFacetCheckCommandTests
         Assert.Equal(new[] { "ShipPackage", "OrderPlaced" }, terms);
     }
 
-    // ── Extraction: noise exclusion (review repair) ───────────────────
+    [Fact]
+    public void ExtractCandidateTerms_CrossFileOrderingOffsets_LaterFileTermsSortAfterEarlierFileTerms()
+    {
+        // Concatenation puts github-body before implementation, so even
+        // though implementation's own internal offsets restart near zero,
+        // its terms must still sort AFTER every github-body term — true
+        // document order across the concatenation, not per-file offsets.
+        var githubBody = "Mentions ZebraEvent near the end of the body.";
+        var implementation = "AlphaCommand appears first in this file.";
+        var concatenated = string.Join("\n", new[] { githubBody, implementation });
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(concatenated);
+
+        Assert.Equal(new[] { "ZebraEvent", "AlphaCommand" }, terms);
+    }
+
+    // ── Extraction: fenced-code noise (review repair round 3) ─────────
 
     [Fact]
     public void ExtractCandidateTerms_FencedCodeBlock_ExcludedAsNoise()
@@ -111,17 +149,83 @@ public sealed class IntentFacetCheckCommandTests
     }
 
     [Fact]
-    public void ExtractCandidateTerms_UrlSegment_ExcludedAsNoise()
+    public void ExtractCandidateTerms_LanguageTaggedFence_ExcludedAsNoise()
     {
-        var terms = IntentFacetCheckCommand.ExtractCandidateTerms("See https://example.com/CreateOrder for details.");
+        var text = "```csharp\nclass NoiseWithLanguageTag {}\n```";
 
-        Assert.DoesNotContain("CreateOrder", terms);
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseWithLanguageTag", terms);
     }
 
     [Fact]
-    public void ExtractCandidateTerms_MarkdownLinkTarget_ExcludedAsNoise()
+    public void ExtractCandidateTerms_NoLanguageFence_ExcludedAsNoise()
     {
-        var terms = IntentFacetCheckCommand.ExtractCandidateTerms("See [the doc](docs/CreateOrder.md) for details.");
+        var text = "```\nclass NoiseWithNoLanguageTag {}\n```";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseWithNoLanguageTag", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_TildeFence_ExcludedAsNoise()
+    {
+        var text = "Intro.\n~~~\npublic class NoiseFromTildeFence { }\n~~~\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseFromTildeFence", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_LongBacktickFence_ExcludedAsNoise()
+    {
+        // A 4-backtick fence, whose content itself contains a 3-backtick
+        // run — the 3-backtick run must NOT be mistaken for a closer.
+        var text = "Intro.\n````\nRaw text with ``` inside: class NoiseFromLongFence {}\n````\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseFromLongFence", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_IndentedFence_ExcludedAsNoise()
+    {
+        var text = "Intro.\n   ```\n   class NoiseFromIndentedFence {}\n   ```\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseFromIndentedFence", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_CrlfFence_ExcludedAsNoise()
+    {
+        var text = "Intro.\r\n```csharp\r\nclass NoiseFromCrlfFence {}\r\n```\r\nOutro.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseFromCrlfFence", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_UnclosedFence_FailsClosed_MasksToEndOfDocument()
+    {
+        var text = "Intro.\n```csharp\nclass NoiseFromUnclosedFence {}\nNo closing fence follows.";
+
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms(text);
+
+        Assert.DoesNotContain("NoiseFromUnclosedFence", terms);
+    }
+
+    // ── Extraction: link/URL/path noise, label preservation (review repair round 3) ──
+
+    [Fact]
+    public void ExtractCandidateTerms_UrlSegment_ExcludedAsNoise()
+    {
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms("See https://example.com/CreateOrder for details.");
 
         Assert.DoesNotContain("CreateOrder", terms);
     }
@@ -132,6 +236,33 @@ public sealed class IntentFacetCheckCommandTests
         var terms = IntentFacetCheckCommand.ExtractCandidateTerms("Implemented in src/Commands/CreateOrder.cs today.");
 
         Assert.DoesNotContain("CreateOrder", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_MarkdownLinkTarget_ExcludedAsNoise()
+    {
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms("See [the doc](docs/NoiseFromLinkTarget.md) for details.");
+
+        Assert.DoesNotContain("NoiseFromLinkTarget", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_MarkdownLinkVisibleLabel_PreservedAndExtracted()
+    {
+        // The visible label is intentional authored proposal text — only
+        // the parenthesized target is path/URL noise.
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms("See [CreateOrder](design.md) for details.");
+
+        Assert.Contains("CreateOrder", terms);
+    }
+
+    [Fact]
+    public void ExtractCandidateTerms_ImageAltTextPreserved_ImageTargetMasked()
+    {
+        var terms = IntentFacetCheckCommand.ExtractCandidateTerms("![CreateOrder](diagrams/NoiseFromImagePath.png)");
+
+        Assert.Contains("CreateOrder", terms);
+        Assert.DoesNotContain("NoiseFromImagePath", terms);
     }
 
     // ── --terms mode: matching / evidence / collision / unmatched ────
@@ -225,27 +356,6 @@ public sealed class IntentFacetCheckCommandTests
     }
 
     [Fact]
-    public void Execute_TermsMode_SameIdMultiFacet_EvidenceCorrect_CollisionIsolatesVocabulary()
-    {
-        using var workspace = new FacetCheckWorkspace();
-        workspace.WriteFacetNode("commands/create-order.md", ["vocabulary", "invariant"], "Create Order");
-
-        using var writer = new StringWriter();
-        var exitCode = IntentFacetCheckCommand.Execute(
-            workspace.Context, ["--domain", "intent-cli", "--terms", "CreateOrder", "--format", "json"], writer);
-
-        Assert.Equal(0, exitCode);
-        using var document = JsonDocument.Parse(writer.ToString());
-        var termReport = document.RootElement.GetProperty("terms")[0];
-        var match = Assert.Single(termReport.GetProperty("related_nodes").EnumerateArray());
-        var evidence = match.GetProperty("evidence").EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Contains("id", evidence);
-        Assert.Contains("title", evidence);
-        var collision = Assert.Single(termReport.GetProperty("collisions").EnumerateArray());
-        Assert.Equal("commands/create-order", collision.GetProperty("node").GetProperty("id").GetString());
-    }
-
-    [Fact]
     public void Execute_TermsMode_NoCoverageSection_NullNotFabricatedGap()
     {
         using var workspace = new FacetCheckWorkspace();
@@ -276,14 +386,37 @@ public sealed class IntentFacetCheckCommandTests
         Assert.Contains("not semantic verification", disclaimer, StringComparison.OrdinalIgnoreCase);
     }
 
-    // ── Evidence / match-kind classification (review repair) ──────────
+    // ── Per-field evidence / match-kind classification (review repair round 3) ──
 
     [Fact]
-    public void Execute_TermsMode_TitleOnlyEvidence_MatchedViaSummaryNotId()
+    public void Execute_TermsMode_IdOnlyEvidence_ExactRawMatch()
+    {
+        using var workspace = new FacetCheckWorkspace();
+        // id last segment "create-order" raw-exact-matches the term; the
+        // title is unrelated prose, so it contributes no evidence at all.
+        workspace.WriteFacetNode("commands/create-order.md", ["vocabulary"], "Unrelated Title Text");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentFacetCheckCommand.Execute(
+            workspace.Context, ["--domain", "intent-cli", "--terms", "create-order", "--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var termReport = document.RootElement.GetProperty("terms")[0];
+        var match = Assert.Single(termReport.GetProperty("related_nodes").EnumerateArray());
+        var evidence = Assert.Single(match.GetProperty("evidence").EnumerateArray());
+        Assert.Equal("id", evidence.GetProperty("field").GetString());
+        Assert.Equal("create-order", evidence.GetProperty("value").GetString());
+        Assert.Equal("exact", evidence.GetProperty("match_kind").GetString());
+    }
+
+    [Fact]
+    public void Execute_TermsMode_TitleOnlyEvidence_NormalizedMatch()
     {
         using var workspace = new FacetCheckWorkspace();
         // id last segment "order-flow" does NOT normalize-match "CreateOrder",
-        // but the node's title/summary "Create Order" does.
+        // but the node's title/summary "Create Order" does (only after
+        // normalization — the raw strings differ).
         workspace.WriteFacetNode("commands/order-flow.md", ["vocabulary"], "Create Order");
 
         using var writer = new StringWriter();
@@ -294,32 +427,17 @@ public sealed class IntentFacetCheckCommandTests
         using var document = JsonDocument.Parse(writer.ToString());
         var termReport = document.RootElement.GetProperty("terms")[0];
         var match = Assert.Single(termReport.GetProperty("related_nodes").EnumerateArray());
-        var evidence = match.GetProperty("evidence").EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Equal(new[] { "title" }, evidence);
+        var evidence = Assert.Single(match.GetProperty("evidence").EnumerateArray());
+        Assert.Equal("title", evidence.GetProperty("field").GetString());
+        Assert.Equal("Create Order", evidence.GetProperty("value").GetString());
+        Assert.Equal("normalized", evidence.GetProperty("match_kind").GetString());
     }
 
     [Fact]
-    public void Execute_TermsMode_ExactRawIdMatch_MatchKindExact()
+    public void Execute_TermsMode_BothIdAndTitleEvidence_BothNormalizedOnly()
     {
         using var workspace = new FacetCheckWorkspace();
-        workspace.WriteFacetNode("commands/create-order.md", ["vocabulary"], "Create Order");
-
-        using var writer = new StringWriter();
-        var exitCode = IntentFacetCheckCommand.Execute(
-            workspace.Context, ["--domain", "intent-cli", "--terms", "create-order", "--format", "json"], writer);
-
-        Assert.Equal(0, exitCode);
-        using var document = JsonDocument.Parse(writer.ToString());
-        var termReport = document.RootElement.GetProperty("terms")[0];
-        var match = Assert.Single(termReport.GetProperty("related_nodes").EnumerateArray());
-        Assert.Equal("exact", match.GetProperty("match_kind").GetString());
-    }
-
-    [Fact]
-    public void Execute_TermsMode_NormalizedOnlyMatch_DifferentCasing_MatchKindNormalized()
-    {
-        using var workspace = new FacetCheckWorkspace();
-        workspace.WriteFacetNode("commands/create-order.md", ["vocabulary"], "Create Order");
+        workspace.WriteFacetNode("commands/create-order.md", ["vocabulary", "invariant"], "Create Order");
 
         using var writer = new StringWriter();
         var exitCode = IntentFacetCheckCommand.Execute(
@@ -329,7 +447,38 @@ public sealed class IntentFacetCheckCommandTests
         using var document = JsonDocument.Parse(writer.ToString());
         var termReport = document.RootElement.GetProperty("terms")[0];
         var match = Assert.Single(termReport.GetProperty("related_nodes").EnumerateArray());
-        Assert.Equal("normalized", match.GetProperty("match_kind").GetString());
+        var evidences = match.GetProperty("evidence").EnumerateArray().ToArray();
+        Assert.Equal(2, evidences.Length);
+        Assert.All(evidences, e => Assert.Equal("normalized", e.GetProperty("match_kind").GetString()));
+        var fields = evidences.Select(e => e.GetProperty("field").GetString()).ToArray();
+        Assert.Contains("id", fields);
+        Assert.Contains("title", fields);
+        // Vocabulary-carrying node still isolates correctly into collisions.
+        var collision = Assert.Single(termReport.GetProperty("collisions").EnumerateArray());
+        Assert.Equal("commands/create-order", collision.GetProperty("node").GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public void Execute_TermsMode_MixedIdExactTitleNormalized_EvidencePerFieldClassification()
+    {
+        using var workspace = new FacetCheckWorkspace();
+        // File literally named "CreateOrder.md" -> id last segment
+        // "CreateOrder" is raw-exact against the term. Title "Create-Order"
+        // normalizes the same but is NOT raw-identical to the term.
+        workspace.WriteFacetNode("commands/CreateOrder.md", ["vocabulary"], "Create-Order");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentFacetCheckCommand.Execute(
+            workspace.Context, ["--domain", "intent-cli", "--terms", "CreateOrder", "--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var termReport = document.RootElement.GetProperty("terms")[0];
+        var match = Assert.Single(termReport.GetProperty("related_nodes").EnumerateArray());
+        var byField = match.GetProperty("evidence").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("field").GetString()!, e => e.GetProperty("match_kind").GetString());
+        Assert.Equal("exact", byField["id"]);
+        Assert.Equal("normalized", byField["title"]);
     }
 
     [Fact]
@@ -520,12 +669,13 @@ public sealed class IntentFacetCheckCommandTests
         Assert.Contains("# Facet check — intent-cli", output, StringComparison.Ordinal);
         Assert.Contains("## Terms", output, StringComparison.Ordinal);
         Assert.Contains("### `CreateOrder`", output, StringComparison.Ordinal);
+        Assert.Contains("evidence: id=", output, StringComparison.Ordinal);
         Assert.Contains("## Acceptance-property coverage", output, StringComparison.Ordinal);
         Assert.Contains("Scope status: valid-empty", output, StringComparison.Ordinal);
         Assert.Contains("Gap: yes", output, StringComparison.Ordinal);
     }
 
-    // ── Coverage scope-status honesty (review repair) ─────────────────
+    // ── Coverage scope-status honesty ─────────────────────────────────
 
     [Fact]
     public void Execute_PacketMode_AuthoredEmptyIntentReferences_ScopeStatusValidEmpty()
@@ -652,34 +802,67 @@ public sealed class IntentFacetCheckCommandTests
         Assert.Contains("traversal", warning.GetProperty("reason").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void Execute_PacketYamlUnreadable_TreatedAsNonFindingError_NotSilentEmptyResult()
-    {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
-        {
-            // chmod-based permission denial isn't portable to Windows, and
-            // root bypasses Unix permission bits, so this test would be
-            // meaningless (or flaky) in either environment.
-            return;
-        }
+    // ── Deterministic packet-I/O fault injection (review repair round 3) ──
 
+    [Fact]
+    public void Execute_GithubBodyUnreadable_DeterministicFaultInjection_TreatedAsNonFindingError()
+    {
+        using var workspace = new FacetCheckWorkspace();
+        workspace.WritePacket("G900", githubBody: "`CreateOrder`", implementation: "irrelevant text", intentReferences: []);
+        var githubBodyPath = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G900", "github-body.md");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentFacetCheckCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--packet", "G900"],
+            writer,
+            path => string.Equals(path, githubBodyPath, StringComparison.Ordinal)
+                ? throw new IOException("simulated I/O failure")
+                : File.ReadAllText(path));
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Failed to read packet source", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("simulated I/O failure", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ImplementationMdUnreadable_DeterministicFaultInjection_TreatedAsNonFindingError()
+    {
+        using var workspace = new FacetCheckWorkspace();
+        workspace.WritePacket("G900", githubBody: "`CreateOrder`", implementation: "irrelevant text", intentReferences: []);
+        var implementationPath = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G900", "implementation.md");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentFacetCheckCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--packet", "G900"],
+            writer,
+            path => string.Equals(path, implementationPath, StringComparison.Ordinal)
+                ? throw new UnauthorizedAccessException("simulated permission failure")
+                : File.ReadAllText(path));
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Failed to read packet source", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PacketYamlUnreadable_DeterministicFaultInjection_TreatedAsNonFindingError()
+    {
         using var workspace = new FacetCheckWorkspace();
         workspace.WritePacket("G900", githubBody: "`CreateOrder`", implementation: string.Empty, intentReferences: []);
         var packetYamlPath = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G900", "packet.yaml");
-        File.SetUnixFileMode(packetYamlPath, UnixFileMode.None);
-        try
-        {
-            using var writer = new StringWriter();
-            var exitCode = IntentFacetCheckCommand.Execute(
-                workspace.Context, ["--domain", "intent-cli", "--packet", "G900"], writer);
 
-            Assert.Equal(1, exitCode);
-            Assert.Contains("Failed to read packet scope", writer.ToString(), StringComparison.Ordinal);
-        }
-        finally
-        {
-            File.SetUnixFileMode(packetYamlPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
+        using var writer = new StringWriter();
+        var exitCode = IntentFacetCheckCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--packet", "G900"],
+            writer,
+            path => string.Equals(path, packetYamlPath, StringComparison.Ordinal)
+                ? throw new IOException("simulated I/O failure")
+                : File.ReadAllText(path));
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Failed to read packet source", writer.ToString(), StringComparison.Ordinal);
     }
 
     // ── usage / exit-code contract ────────────────────────────────────
