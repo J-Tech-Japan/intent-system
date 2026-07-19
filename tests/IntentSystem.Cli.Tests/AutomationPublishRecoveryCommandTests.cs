@@ -107,6 +107,47 @@ public sealed class AutomationPublishRecoveryCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_G536FieldIncidentFixture_ReportsSamePartialStateGapAsPublishFlow()
+    {
+        // G536 (publish-flow's idempotent-rerun hardening) acceptance
+        // criterion: "publish-recovery on the same fixture reports the
+        // identical gap set." Reproduces the exact durable-state shape
+        // from the field incident BEFORE any PR exists — queue-state's
+        // linked_issue/linked_pr are both null, but publish.yaml already
+        // records the created issue. publish-recovery must not silently
+        // treat this as "nothing to do" — with no open PR to serve as
+        // closing evidence, it must surface this specific execution unit
+        // as an unsafe stop naming the same gap publish-flow's own rerun
+        // independently detects and (self-)restores.
+        using var workspace = new RecoveryWorkspace();
+        workspace.WriteQueueState(BuildQueueState("G530", linkedIssue: null, linkedPr: null));
+        workspace.WritePublishArtifact("G530", createdIssueNumber: 1164);
+
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(Array.Empty<GitHubAutomationPrCandidate>());
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", "J-Tech-Japan/intent-system", "--domain", "intent-cli", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("safe_repairs").GetArrayLength());
+        var unsafeStops = doc.RootElement.GetProperty("unsafe_stops");
+        Assert.Equal(1, unsafeStops.GetArrayLength());
+        var stop = unsafeStops[0];
+        Assert.Equal("G530", stop.GetProperty("execution_unit").GetString());
+        Assert.Equal("no-closing-pr-for-published-issue", stop.GetProperty("kind").GetString());
+
+        // Mutation invariant: dry-run never writes.
+        var queueAfter = QueueStateSerializer.Deserialize(
+            File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        Assert.Null(queueAfter.Items[0].LinkedIssue);
+        Assert.Null(queueAfter.Items[0].LinkedPr);
+    }
+
+    [Fact]
     public void Execute_AlreadyLinkedItem_NotIncluded()
     {
         using var workspace = new RecoveryWorkspace();

@@ -721,6 +721,88 @@ refuse されます。
 
 ---
 
+### `issue publish-flow` の idempotent rerun が 3 つの durable artifact すべてを独立に検証・復元する (G536)
+
+Field incident(2026-07-19、G530 を issue #1164 として publish 中):
+GitHub issue の作成後に host `main` が並行して進み、publish の途中で
+stash + fast-forward sync を強いられました。`publish.yaml` は
+`issue-created` の記録を保持したまま生き残りましたが、
+`queue-state.json` の `linked_issue` と `runs.jsonl` の
+`issue-created` event は、どちらも publish 前(存在しない状態)に
+戻ってしまいました。その後の idempotent rerun は、実際には revert
+された 2 つの artifact のどちらも一度も check していないにもかかわらず、
+`durable_state_synced: true` と報告してしまいました — false positive
+です。
+
+**G536 以前の idempotent rerun は、3 つの artifact のうち常に
+たった 1 つしか参照していませんでした。** `publish.yaml` の
+`issue-created` marker と `queue-state.json` の `linked_issue` の
+どちらか先に見つかった方で short-circuit し、どちらか一方が hit した
+瞬間に無条件で `durable_state_synced: true` を報告し、`runs.jsonl` は
+一度も read しませんでした。3 つの artifact 間の cross-check は無く、
+実際に欠けている artifact の復元もありませんでした。
+
+**idempotent-rerun のチェックリストは、今や 3 つの durable artifact
+すべてを毎回独立に検証し、欠けているものを復元します:**
+
+1. **queue-state.json の `linked_issue`** — canonical な issue identity
+   と同じ repo/issue number/URL を指している必要があります。
+2. **`publish.yaml` の `issue-created` record** — 一致する issue
+   number/URL を伴う `publish_status: issue-created` を持っている
+   必要があります。
+3. **`runs.jsonl` の `issue-created` event** — この execution unit の
+   event が存在している必要があります(前提とするのではなく、完全な
+   run log を scan して確認します)。
+
+canonical な issue identity は、存在するどちらかの signal から
+確立されます(両方が存在し一致する場合は `publish.yaml` を優先)。
+欠けていると判明した artifact は、first-run の success path が使う
+のと全く同じ write helper(`TryPatchQueueStateLinkedIssue`、
+`WritePublishArtifact`、`AppendIssueCreatedRunEvent`)を使って復元
+されます — 復元自体も idempotent です: 既に完全に sync している
+unit はそれ以上何も書き込みませんし、`runs.jsonl` は
+`issue-created` event を追記する前に既存の event の有無を scan する
+ため、繰り返し rerun しても重複した event が生成されることは決して
+ありません。`durable_state_synced: true` が報告されるのは、3 つ
+すべてが検証済み(元々正しかった場合も、今回復元された場合も含む)に
+なった場合**のみ**です。idempotent rerun の間、`gh` が再び呼び出さ
+れることはありません。
+
+**真の contradiction はどちらか一方を選ぶのではなく、fail loud
+します。** `publish.yaml` と `queue-state.json` の両方が
+`linked_issue`/`issue-created` record を持っているにもかかわらず、
+互いに**異なる** issue number を記録している場合、それは欠けている
+artifact ではなく data contradiction です — コマンドは refuse し
+(exit 1)、矛盾する両方の値を named し、どちらか一方を黙って信用する
+ことは決してありません。
+
+**復元が失敗した場合も、正確に何が欠けているか・どう recovery するか
+を named した上で fail loud します。** artifact を復元できない場合
+(例えば `queue-state.json` にこの execution unit を patch すべき
+item がもはや存在しない場合)、コマンドは non-zero で exit し、
+`durable_state_synced: false` を報告し、その `error` は、欠けている /
+矛盾している artifact を正確に named した上で、正確な recovery
+command(再試行する `issue publish-flow ... --write`、または
+queue-state の linkage を reconcile する
+`automation publish-recovery ... --write`)を示します。artifact の
+検証は独立しており、all-or-nothing ではありません — 復元*できる*
+artifact は、他の artifact が復元できなかった場合でも復元されます。
+
+**`automation publish-recovery` は同一の gap を報告します。** field
+incident とまったく同じ形状(queue-state の `linked_issue`/`linked_pr`
+がどちらも null で、`publish.yaml` は既に created issue を記録して
+おり、PR はまだ open していない)を与えると、`publish-recovery` の
+dry-run は「何もすることがない」と黙って報告するのではなく、同じ
+execution unit を unsafe stop
+(`no-closing-pr-for-published-issue`)として surface します — これは
+`issue publish-flow` 自身の rerun が独立に検出するものと consistent
+です(ただし `publish-recovery` と異なり、`issue publish-flow` は
+PR evidence を必要とせず安全に self-restore できます。今まさに
+re-verify している issue が、自分がさっき検証した issue そのもので
+あることを既に知っているためです)。
+
+---
+
 ### facet を意識した context 供給 (G530)
 
 G529 の 4 つの semantic facet（`vocabulary`、`invariant`、`decider`、

@@ -686,6 +686,77 @@ that has not been through `request-update`.
 
 ---
 
+### `issue publish-flow` idempotent rerun independently verifies and restores all three durable artifacts (G536)
+
+Field incident (2026-07-19, publishing G530 as issue #1164): host `main`
+advanced concurrently after the GitHub issue was created, forcing a stash +
+fast-forward sync mid-publish. `publish.yaml` survived with its
+`issue-created` record intact, but `queue-state.json`'s `linked_issue` and
+the `runs.jsonl` `issue-created` event both reverted to their pre-publish
+(absent) state. The idempotent rerun that followed reported
+`durable_state_synced: true` anyway — a false positive, since neither of
+the two artifacts that had actually reverted was ever checked.
+
+**The pre-G536 idempotent rerun only ever consulted ONE of the three
+artifacts.** It short-circuited on whichever of `publish.yaml`'s
+`issue-created` marker or `queue-state.json`'s `linked_issue` it found
+first, reported `durable_state_synced: true` unconditionally the instant
+either fired, and never even read `runs.jsonl`. There was no cross-check
+between the three artifacts and no restoration of whichever ones were
+actually missing.
+
+**The idempotent-rerun checklist now verifies all three durable artifacts
+independently, every time, and restores whichever are missing:**
+
+1. **queue-state.json's `linked_issue`** — must name the same repo/issue
+   number/URL as the canonical issue identity.
+2. **`publish.yaml`'s `issue-created` record** — must carry
+   `publish_status: issue-created` with a matching issue number/URL.
+3. **`runs.jsonl`'s `issue-created` event** — an event for this execution
+   unit must exist (scanned via the full run log, not assumed).
+
+The canonical issue identity is established from whichever signal(s) are
+present (`publish.yaml` takes precedence when both agree). Any artifact
+found missing is restored using the exact same write helpers the
+first-run success path uses (`TryPatchQueueStateLinkedIssue`,
+`WritePublishArtifact`, `AppendIssueCreatedRunEvent`) — restoration is
+itself idempotent: a unit already fully in sync makes no further writes,
+and `runs.jsonl` is scanned for an existing `issue-created` event before
+ever appending one, so a repeated rerun can never produce a duplicate
+event. `durable_state_synced: true` is reported **only** once all three
+verify (whether they were already correct or just restored); `gh` is
+never re-invoked during any idempotent rerun.
+
+**Genuine contradictions fail loud instead of picking a side.** If
+`publish.yaml` and `queue-state.json` both carry a `linked_issue`/
+`issue-created` record but name *different* issue numbers, that is a data
+contradiction, not a missing artifact — the command refuses (exit 1),
+names both conflicting values, and never silently trusts one side over
+the other.
+
+**Restoration failure also fails loud, naming exactly what's missing and
+how to recover.** If an artifact cannot be restored (e.g. `queue-state.json`
+no longer has any item for this execution unit to patch), the command
+exits non-zero, reports `durable_state_synced: false`, and its `error`
+names precisely which artifact(s) remain missing/inconsistent plus the
+exact recovery commands (`issue publish-flow ... --write` to retry, or
+`automation publish-recovery ... --write` to reconcile queue-state
+linkage). Artifact verification is independent, not all-or-nothing: an
+artifact that *could* be restored still gets restored even when another
+one couldn't.
+
+**`automation publish-recovery` reports the identical gap.** Given the
+exact field-incident shape (queue-state's `linked_issue`/`linked_pr` both
+null, `publish.yaml` already records the created issue, no PR open yet),
+`publish-recovery`'s dry-run surfaces the same execution unit as an
+unsafe stop (`no-closing-pr-for-published-issue`) rather than silently
+reporting nothing to do — consistent with what `issue publish-flow`'s own
+rerun independently detects (and, unlike `publish-recovery`, can safely
+self-restore without needing PR evidence, since it already knows the
+issue it just verified is the one it's re-verifying).
+
+---
+
 ### Facet-aware context supply (G530)
 
 Building on G529's four semantic facets (`vocabulary`, `invariant`,

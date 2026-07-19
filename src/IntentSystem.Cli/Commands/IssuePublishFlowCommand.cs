@@ -186,53 +186,43 @@ internal static class IssuePublishFlowCommand
         }
 
         var queueStatePathForIdempotency = context.GetQueueStatePath();
+        var runLogPathForIdempotency = context.GetRunLogPath();
 
-        // G278 idempotency: if publish.yaml already records issue-created with a
-        // URL, do NOT call gh again and do NOT re-mutate durable state.
-        if (TryReadExistingIssueCreatedArtifact(publishYamlPath, out var existing))
-        {
-            var idempotentResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
-                packetExists: true,
-                githubBodyPresent: true,
-                missingSections: Array.Empty<string>(),
-                title: title,
-                created: false,
-                idempotent: true,
-                durableStateSynced: true,
-                issueUrl: existing.CreatedIssueUrl,
-                issueNumber: existing.CreatedIssueNumber,
-                queueStatePatched: false,
-                publishYamlPatched: false,
-                runsAppended: false,
-                error: null,
-                titleSource: titleSource);
-            EmitResult(writer, idempotentResult, format);
-            return 0;
-        }
+        // G536: detect whether the GitHub issue already exists via EITHER
+        // signal (publish.yaml issue-created marker OR queue-state
+        // linked_issue), WITHOUT yet trusting either one alone as proof
+        // that all THREE durable artifacts (queue-state linked_issue,
+        // publish.yaml, runs.jsonl issue-created event) are actually in
+        // sync. Field incident (2026-07-19, G530/#1164): a concurrent
+        // host-main advance forced a stash+ff-sync mid-publish, and the
+        // pre-G536 short-circuit (whichever signal fired first won
+        // immediately, unconditionally reporting durable_state_synced:true)
+        // reported synced while queue-state's linked_issue and the runs.jsonl
+        // issue-created event were both actually missing.
+        var hasPublishYamlSignal = TryReadExistingIssueCreatedArtifact(publishYamlPath, out var publishYamlArtifact);
+        var hasQueueStateSignal = TryReadExistingQueueStateLinkedIssue(
+            queueStatePathForIdempotency, executionUnit!, out var queueLinkedIssueSignal);
 
-        // G278 idempotency (PR #660 follow-up): if publish.yaml is missing or stale
-        // but queue-state.json already records linked_issue for this execution
-        // unit, treat as idempotent so a rerun cannot create a duplicate GitHub
-        // issue. Both artifact-level checks must short-circuit before any gh call.
-        if (TryReadExistingQueueStateLinkedIssue(queueStatePathForIdempotency, executionUnit!, out var queueLinkedIssue))
+        if (hasPublishYamlSignal || hasQueueStateSignal)
         {
-            var queueIdempotentResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
-                packetExists: true,
-                githubBodyPresent: true,
-                missingSections: Array.Empty<string>(),
-                title: title,
-                created: false,
-                idempotent: true,
-                durableStateSynced: true,
-                issueUrl: queueLinkedIssue.Url,
-                issueNumber: queueLinkedIssue.Number,
-                queueStatePatched: false,
-                publishYamlPatched: false,
-                runsAppended: false,
-                error: null,
-                titleSource: titleSource);
-            EmitResult(writer, queueIdempotentResult, format);
-            return 0;
+            return ExecuteIdempotentRerun(
+                context,
+                writer,
+                format,
+                executionUnit!,
+                domain,
+                repo!,
+                packetDirectory,
+                githubBodyPath,
+                publishYamlPath,
+                queueStatePathForIdempotency,
+                runLogPathForIdempotency,
+                title,
+                titleSource,
+                hasPublishYamlSignal,
+                publishYamlArtifact,
+                hasQueueStateSignal,
+                queueLinkedIssueSignal);
         }
 
         // G363 (PR #830 review repair): atomic-seed gate. The
@@ -435,6 +425,290 @@ internal static class IssuePublishFlowCommand
             titleSource: titleSource);
         EmitResult(writer, successResult, format);
         return 0;
+    }
+
+    /// <summary>
+    /// G536: the idempotent-rerun path. At least one signal (publish.yaml
+    /// or queue-state linked_issue) already proves the GitHub issue for
+    /// this execution unit exists — establish the canonical issue identity
+    /// from whichever signal(s) are present (refusing to proceed on a
+    /// genuine contradiction between them), then independently verify and,
+    /// where missing, RESTORE each of the three durable artifacts
+    /// (queue-state linked_issue, publish.yaml, runs.jsonl issue-created
+    /// event) against that identity. Reports <c>durable_state_synced:
+    /// true</c> only when all three verify after restoration; otherwise
+    /// fails loud (exit 1) naming exactly which artifacts remain
+    /// missing/inconsistent and the recovery command, never a false
+    /// "synced" positive.
+    /// </summary>
+    private static int ExecuteIdempotentRerun(
+        CliContext context,
+        TextWriter writer,
+        string format,
+        string executionUnit,
+        string domain,
+        string repo,
+        string packetDirectory,
+        string githubBodyPath,
+        string publishYamlPath,
+        string queueStatePath,
+        string runLogPath,
+        string? title,
+        string? titleSource,
+        bool hasPublishYamlSignal,
+        IssuePublishArtifact publishYamlArtifact,
+        bool hasQueueStateSignal,
+        LinkedIssue queueLinkedIssueSignal)
+    {
+        // Establish the canonical issue identity. Prefer publish.yaml when
+        // both signals are present (matches the pre-G536 precedence), but
+        // refuse to proceed if the two signals materially disagree on the
+        // issue number — that is a genuine data contradiction, not a
+        // "missing artifact," and must never be silently resolved either
+        // direction.
+        if (hasPublishYamlSignal && hasQueueStateSignal
+            && publishYamlArtifact.CreatedIssueNumber.HasValue
+            && queueLinkedIssueSignal.Number.HasValue
+            && publishYamlArtifact.CreatedIssueNumber.Value != queueLinkedIssueSignal.Number.Value)
+        {
+            var contradictionResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: true,
+                durableStateSynced: false,
+                issueUrl: publishYamlArtifact.CreatedIssueUrl,
+                issueNumber: publishYamlArtifact.CreatedIssueNumber,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"durable-state contradiction for '{executionUnit}': publish.yaml at {publishYamlPath} records "
+                    + $"issue #{publishYamlArtifact.CreatedIssueNumber} but queue-state.json records issue "
+                    + $"#{queueLinkedIssueSignal.Number} for the same execution unit. Refusing to pick one "
+                    + "automatically — inspect both artifacts, correct whichever is stale, then re-run "
+                    + $"`intent-cli issue publish-flow {executionUnit} --repo {repo} --write`.",
+                titleSource: titleSource);
+            EmitResult(writer, contradictionResult, format);
+            return 1;
+        }
+
+        int? canonicalIssueNumber;
+        string canonicalIssueUrl;
+        if (hasPublishYamlSignal)
+        {
+            canonicalIssueNumber = publishYamlArtifact.CreatedIssueNumber;
+            canonicalIssueUrl = publishYamlArtifact.CreatedIssueUrl!;
+        }
+        else
+        {
+            canonicalIssueNumber = queueLinkedIssueSignal.Number;
+            canonicalIssueUrl = queueLinkedIssueSignal.Url!;
+        }
+
+        var restoredAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var restoredArtifacts = new HashSet<string>(StringComparer.Ordinal);
+        var problems = new List<string>();
+
+        // 1) queue-state.json linked_issue
+        bool queueStateOk;
+        if (hasQueueStateSignal && QueueLinkedIssueMatchesCanonical(queueLinkedIssueSignal, repo, canonicalIssueNumber, canonicalIssueUrl))
+        {
+            queueStateOk = true;
+        }
+        else if (hasQueueStateSignal)
+        {
+            queueStateOk = false;
+            problems.Add(
+                $"queue-state.json linked_issue points to {queueLinkedIssueSignal.Repo}#{queueLinkedIssueSignal.Number} "
+                + $"({queueLinkedIssueSignal.Url}), which does not match the canonical {repo}#{canonicalIssueNumber} "
+                + $"({canonicalIssueUrl})");
+        }
+        else
+        {
+            try
+            {
+                queueStateOk = TryPatchQueueStateLinkedIssue(
+                    queueStatePath, executionUnit, repo, canonicalIssueNumber, canonicalIssueUrl, restoredAt);
+                if (queueStateOk)
+                {
+                    restoredArtifacts.Add("queue_state");
+                }
+                else
+                {
+                    problems.Add(
+                        File.Exists(queueStatePath)
+                            ? $"queue-state.json has no item with execution_unit '{executionUnit}' to restore linked_issue onto"
+                            : $"queue-state.json not found at {queueStatePath}");
+                }
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                queueStateOk = false;
+                problems.Add($"queue-state.json linked_issue restoration failed: {exception.Message}");
+            }
+        }
+
+        // 2) publish.yaml
+        bool publishYamlOk;
+        if (hasPublishYamlSignal && PublishArtifactMatchesCanonical(publishYamlArtifact, canonicalIssueNumber, canonicalIssueUrl))
+        {
+            publishYamlOk = true;
+        }
+        else if (hasPublishYamlSignal)
+        {
+            // Only reachable when the contradiction check above didn't
+            // already refuse — i.e. one side lacked a number to compare.
+            // Treat as inconsistent rather than silently overwriting.
+            publishYamlOk = false;
+            problems.Add(
+                $"publish.yaml at {publishYamlPath} does not match the canonical {repo}#{canonicalIssueNumber} "
+                + $"({canonicalIssueUrl})");
+        }
+        else
+        {
+            try
+            {
+                publishYamlOk = WritePublishArtifact(
+                    publishYamlPath, packetDirectory, githubBodyPath, executionUnit, canonicalIssueNumber, canonicalIssueUrl);
+                if (publishYamlOk)
+                {
+                    restoredArtifacts.Add("publish_yaml");
+                }
+                else
+                {
+                    problems.Add($"publish.yaml at {publishYamlPath} was not written");
+                }
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                publishYamlOk = false;
+                problems.Add($"publish.yaml restoration failed: {exception.Message}");
+            }
+        }
+
+        // 3) runs.jsonl issue-created event
+        bool runsOk = RunsLogHasIssueCreatedEvent(runLogPath, executionUnit);
+        if (!runsOk)
+        {
+            try
+            {
+                runsOk = AppendIssueCreatedRunEvent(
+                    runLogPath, executionUnit, repo, canonicalIssueNumber, canonicalIssueUrl, restoredAt);
+                if (runsOk)
+                {
+                    restoredArtifacts.Add("runs");
+                }
+                else
+                {
+                    problems.Add($"runs.jsonl at {runLogPath} did not receive the issue-created event");
+                }
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                runsOk = false;
+                problems.Add($"runs.jsonl issue-created event restoration failed: {exception.Message}");
+            }
+        }
+
+        var fullySynced = queueStateOk && publishYamlOk && runsOk;
+
+        var result = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+            packetExists: true,
+            githubBodyPresent: true,
+            missingSections: Array.Empty<string>(),
+            title: title,
+            created: false,
+            idempotent: true,
+            durableStateSynced: fullySynced,
+            issueUrl: canonicalIssueUrl,
+            issueNumber: canonicalIssueNumber,
+            queueStatePatched: restoredArtifacts.Contains("queue_state"),
+            publishYamlPatched: restoredArtifacts.Contains("publish_yaml"),
+            runsAppended: restoredArtifacts.Contains("runs"),
+            error: fullySynced
+                ? null
+                : $"GitHub issue {canonicalIssueUrl} already exists but parent durable state could not be fully "
+                    + $"restored: {string.Join("; ", problems)}. Recovery: re-run "
+                    + $"`intent-cli issue publish-flow {executionUnit} --repo {repo} --write` after ensuring these "
+                    + "paths are writable, or run `intent-cli automation publish-recovery "
+                    + $"--repo {repo} --write` to reconcile queue-state linkage.",
+            titleSource: titleSource);
+        EmitResult(writer, result, format);
+        return fullySynced ? 0 : 1;
+    }
+
+    private static bool QueueLinkedIssueMatchesCanonical(
+        LinkedIssue linkedIssue, string repo, int? issueNumber, string issueUrl)
+    {
+        if (!string.Equals(linkedIssue.Repo, repo, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (issueNumber.HasValue && linkedIssue.Number.HasValue && linkedIssue.Number.Value != issueNumber.Value)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(linkedIssue.Url)
+            && !string.IsNullOrWhiteSpace(issueUrl)
+            && !string.Equals(linkedIssue.Url, issueUrl, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool PublishArtifactMatchesCanonical(
+        IssuePublishArtifact artifact, int? issueNumber, string issueUrl)
+    {
+        if (!string.Equals(artifact.PublishStatus, PublishStatusIssueCreated, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(artifact.CreatedIssueUrl))
+        {
+            return false;
+        }
+
+        if (issueNumber.HasValue && artifact.CreatedIssueNumber.HasValue
+            && artifact.CreatedIssueNumber.Value != issueNumber.Value)
+        {
+            return false;
+        }
+
+        return string.Equals(artifact.CreatedIssueUrl, issueUrl, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// G536: scans runs.jsonl for an existing <c>issue-created</c> event for
+    /// this execution unit, so the idempotent-rerun restoration never
+    /// appends a duplicate event when one already exists.
+    /// </summary>
+    private static bool RunsLogHasIssueCreatedEvent(string runLogPath, string executionUnit)
+    {
+        if (!File.Exists(runLogPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            return events.Any(runEvent =>
+                string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
+                && string.Equals(runEvent.Event, IssueCreatedEventName, StringComparison.Ordinal));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+            or IOException
+            or System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool TryReadExistingIssueCreatedArtifact(string publishYamlPath, out IssuePublishArtifact existing)
