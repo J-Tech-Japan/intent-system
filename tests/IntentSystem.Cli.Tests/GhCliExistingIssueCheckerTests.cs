@@ -168,6 +168,158 @@ public sealed class GhCliExistingIssueCheckerTests
         Assert.Equal(GitHubExistingIssueClassification.Multiple, result.Classification);
     }
 
+    // ─── G536 round-6 tests ─────────────────────────────────────────────────
+
+    [Fact]
+    public void FetchAllCandidates_PinsLiteralProductionSearchQuery_IsIssueIncludedNoStateFilter()
+    {
+        IReadOnlyList<string>? capturedArguments = null;
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = arguments =>
+            {
+                capturedArguments = arguments;
+                return GraphQlPage(hasNextPage: false, endCursor: null, nodes: Array.Empty<(int, string, string, string)>());
+            },
+        };
+
+        checker.FetchAllCandidates("acme/widgets", "G536");
+
+        Assert.NotNull(capturedArguments);
+        Assert.Contains("searchQuery=repo:acme/widgets G536 in:title is:issue", capturedArguments!);
+        Assert.DoesNotContain(capturedArguments!, arg => arg.Contains("state:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FetchAllCandidates_GraphQlErrorsPresentAlongsidePartialData_FailsLoudRatherThanAcceptingPartialData()
+    {
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = _ => GraphQlPageWithErrors(
+                hasNextPage: false,
+                endCursor: null,
+                nodes: new[] { (1, "G536 partial candidate", "https://github.com/acme/widgets/issues/1", "body") },
+                errorMessages: new[] { "Something went wrong while executing your query" }),
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("Something went wrong", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FetchAllCandidates_RepeatedCursor_FailsLoudInsteadOfLoopingUntilSafetyCap()
+    {
+        var pageCalls = 0;
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = arguments =>
+            {
+                pageCalls++;
+                var cursor = ExtractCursor(arguments);
+                // Page 1 (no cursor) -> "cursor-a". Page 2 (cursor-a) also
+                // reports "cursor-a" as its OWN endCursor — a server bug
+                // that would otherwise loop forever.
+                return GraphQlPage(hasNextPage: true, endCursor: "cursor-a", nodes: Array.Empty<(int, string, string, string)>());
+            },
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("repeated cursor", exception.Message, StringComparison.OrdinalIgnoreCase);
+        // Fails on the second occurrence, long before the 50-page safety cap.
+        Assert.Equal(2, pageCalls);
+    }
+
+    [Fact]
+    public void FetchAllCandidates_PageFetcherThrows_PropagatesFailureWithoutSwallowing()
+    {
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = _ => throw new InvalidOperationException("gh api graphql exit 1: authentication required"),
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("authentication required", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FetchAllCandidates_MalformedJson_FailsLoud()
+    {
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = _ => "not json at all",
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("unparseable JSON", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FetchAllCandidates_NodeWithNullBody_FailsLoudRatherThanAccumulating()
+    {
+        var checker = new GhCliExistingIssueChecker
+        {
+            PageFetcherOverride = _ => "{\"data\":{\"search\":{\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},"
+                + "\"nodes\":[{\"number\":1,\"title\":\"G536 issue\",\"url\":\"https://github.com/acme/widgets/issues/1\",\"body\":null}]}}}",
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => checker.FetchAllCandidates("acme/widgets", "G536"));
+        Assert.Contains("null body", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateCandidate_HappyPath_ReturnsSameEntry()
+    {
+        var entry = new GhCliExistingIssueChecker.GhIssueListEntry(7, "G536 Title", "https://github.com/acme/widgets/issues/7", "body");
+
+        var validated = GhCliExistingIssueChecker.ValidateCandidate(entry, "acme/widgets");
+
+        Assert.Equal(entry, validated);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ValidateCandidate_NonPositiveNumber_ThrowsFailLoud(int number)
+    {
+        var entry = new GhCliExistingIssueChecker.GhIssueListEntry(number, "G536 Title", $"https://github.com/acme/widgets/issues/{number}", "body");
+
+        var exception = Assert.Throws<InvalidOperationException>(() => GhCliExistingIssueChecker.ValidateCandidate(entry, "acme/widgets"));
+        Assert.Contains("non-positive issue number", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    public void ValidateCandidate_NullOrEmptyTitle_ThrowsFailLoud(string? title)
+    {
+        var entry = new GhCliExistingIssueChecker.GhIssueListEntry(1, title!, "https://github.com/acme/widgets/issues/1", "body");
+
+        var exception = Assert.Throws<InvalidOperationException>(() => GhCliExistingIssueChecker.ValidateCandidate(entry, "acme/widgets"));
+        Assert.Contains("null/empty title", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateCandidate_NullBody_ThrowsFailLoud()
+    {
+        var entry = new GhCliExistingIssueChecker.GhIssueListEntry(1, "G536 Title", "https://github.com/acme/widgets/issues/1", null);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => GhCliExistingIssueChecker.ValidateCandidate(entry, "acme/widgets"));
+        Assert.Contains("null body", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("https://github.com/other-org/other-repo/issues/1")] // different repo entirely
+    [InlineData("https://github.com/acme/widgets/issues/2")] // number mismatch
+    [InlineData("http://github.com/acme/widgets/issues/1")] // wrong scheme
+    [InlineData(null)]
+    public void ValidateCandidate_UrlNotExactCanonicalForRequestedRepo_ThrowsFailLoud(string? url)
+    {
+        var entry = new GhCliExistingIssueChecker.GhIssueListEntry(1, "G536 Title", url!, "body");
+
+        var exception = Assert.Throws<InvalidOperationException>(() => GhCliExistingIssueChecker.ValidateCandidate(entry, "acme/widgets"));
+        Assert.Contains("expected exactly", exception.Message, StringComparison.Ordinal);
+    }
+
     private static string? ExtractCursor(IReadOnlyList<string> arguments)
     {
         for (var index = 0; index < arguments.Count; index++)
@@ -180,7 +332,14 @@ public sealed class GhCliExistingIssueCheckerTests
         return null;
     }
 
-    private static string GraphQlPage(bool hasNextPage, string? endCursor, IReadOnlyList<(int Number, string Title, string Url, string Body)> nodes)
+    private static string GraphQlPage(bool hasNextPage, string? endCursor, IReadOnlyList<(int Number, string Title, string Url, string Body)> nodes) =>
+        GraphQlPageWithErrors(hasNextPage, endCursor, nodes, errorMessages: null);
+
+    private static string GraphQlPageWithErrors(
+        bool hasNextPage,
+        string? endCursor,
+        IReadOnlyList<(int Number, string Title, string Url, string Body)> nodes,
+        IReadOnlyList<string>? errorMessages)
     {
         var nodesJson = string.Join(",", nodes.Select(n => System.Text.Json.JsonSerializer.Serialize(new
         {
@@ -191,7 +350,16 @@ public sealed class GhCliExistingIssueCheckerTests
         })));
         var endCursorJson = endCursor is null ? "null" : System.Text.Json.JsonSerializer.Serialize(endCursor);
         var hasNextPageJson = hasNextPage ? "true" : "false";
-        return "{\"data\":{\"search\":{\"pageInfo\":{\"hasNextPage\":" + hasNextPageJson
-            + ",\"endCursor\":" + endCursorJson + "},\"nodes\":[" + nodesJson + "]}}}";
+        var dataJson = "{\"search\":{\"pageInfo\":{\"hasNextPage\":" + hasNextPageJson
+            + ",\"endCursor\":" + endCursorJson + "},\"nodes\":[" + nodesJson + "]}}";
+
+        if (errorMessages is null || errorMessages.Count == 0)
+        {
+            return "{\"data\":" + dataJson + "}";
+        }
+
+        var errorsJson = string.Join(",", errorMessages.Select(message =>
+            "{\"message\":" + System.Text.Json.JsonSerializer.Serialize(message) + "}"));
+        return "{\"data\":" + dataJson + ",\"errors\":[" + errorsJson + "]}";
     }
 }

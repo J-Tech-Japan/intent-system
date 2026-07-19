@@ -936,6 +936,47 @@ leading indentation が異なる Markdown(例えばcode block)を同一として
   matrix(byte-identical / CRLF vs LF / single-trailing-newline /
   leading / inner / trailing whitespace drift)をカバーします。
 
+**Round-6 review repair — GraphQL provider は構造的な pagination の
+gap だけでなく、authoritative-response の欠陥に対しても fail closed
+します。** さらなる review round で、checker がまだ authoritative に
+「見える」response を、実際にはそうでない場合にも信用してしまうことが
+判明しました: GraphQL response は、一見妥当な `data` と共に空でない
+`errors` を持ちうること、誤動作する server が同じ `endCursor` を
+2 回返し、safety cap まで永遠に loop してしまいうること、search の
+`type: ISSUE` field は実際には query 自身が PR を除外しない限り issue
+と pull request の両方に一致すること、そして個々の candidate が
+(null body、null/empty title、non-positive number、あるいは requested
+repo と正確に一致しない URL という形で)不完全なまま classification に
+到達する前に reject されないことがありました。
+
+- すべての GraphQL response は、その `data` が read される**前に**
+  空でない `errors` array の有無を check します — spec は両方が同時に
+  存在することを許容しており、error を伴う部分的な `data` が
+  authoritative として扱われることは決してありません。
+- search query は今や `is:issue` を含みます(`repo:<repo> <unit>
+  in:title is:issue`)。これにより、似た title を持つ pull request は
+  空/default に deserialize された node として risk を負うのではなく、
+  server-side で除外されます。`state:` は意図的に含まれないままで、
+  open と closed の両方の issue がスコープに残ります。正確な literal
+  query 文字列は test で pin されています。
+- 各 page の `endCursor` は seen-cursors set に追跡され、繰り返された
+  cursor 値は 50-page の safety cap まで loop するのではなく、直ちに
+  fail loud します(`InvalidOperationException`)。
+- fetch されたすべての candidate は、蓄積される**前に**(そして
+  classification や復元の write が既に進行してから発見するのでは
+  なく)検証されます: positive な issue number、non-null/non-empty な
+  title、non-null な body(null body は無効な provider response であり、
+  空 text として silently に代替されることは決してありません)、そして
+  この check がスコープする repo に対して canonical な
+  `https://github.com/<requested repo>/issues/<number>` 形式に**厳密に**
+  一致する URL。
+- 新しい production-provider test は、部分的な data を伴う GraphQL
+  errors、repeated-cursor 検出、literal な `is:issue`/`state:` 無しの
+  query pin、page-fetcher failure の伝播、malformed JSON、そして
+  すべての candidate-validation failure mode(non-positive number、
+  null/empty title、null body、URL mismatch — 間違った repo、間違った
+  number、間違った scheme、あるいは null)をカバーします。
+
 ---
 
 ### facet を意識した context 供給 (G530)

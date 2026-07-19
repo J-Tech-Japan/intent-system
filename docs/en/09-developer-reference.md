@@ -881,6 +881,45 @@ different leading indentation (e.g. a code block) as if it were identical.
   (byte-identical / CRLF vs LF / single-trailing-newline / leading /
   inner / trailing whitespace drift).
 
+**Round-6 review repair — the GraphQL provider now fails closed on
+authoritative-response defects, not just structural pagination gaps.** A
+further review round found that the checker still trusted an
+authoritative-looking response even when it wasn't: a GraphQL response can
+carry non-empty `errors` alongside otherwise-plausible `data`; a
+misbehaving server could return the same `endCursor` twice, looping the
+fetch forever short of the safety cap; the search `type: ISSUE` field
+actually matches both issues AND pull requests unless the query itself
+excludes PRs; and an individual candidate could be incomplete (null body,
+null/empty title, non-positive number, or a URL that doesn't exactly match
+the requested repo) without being rejected before it reached
+classification.
+
+- Every GraphQL response is checked for a non-empty `errors` array
+  **before** its `data` is ever read — the spec permits both to be present
+  simultaneously, and partial `data` alongside an error is never treated as
+  authoritative.
+- The search query now includes `is:issue` (`repo:<repo> <unit> in:title
+  is:issue`) so a similarly-titled pull request is excluded server-side
+  rather than risking an empty/default-deserialized node; `state:` remains
+  deliberately absent so both open and closed issues stay in scope. The
+  exact literal query string is pinned by a test.
+- Each page's `endCursor` is tracked in a seen-cursors set; a repeated
+  cursor value fails loud immediately (`InvalidOperationException`) rather
+  than looping until the 50-page safety cap.
+- Every fetched candidate is validated **before** it is accumulated (not
+  after, and never discovered only once classification or a restoration
+  write is already underway): a positive issue number, a non-null/
+  non-empty title, a non-null body (a null body is an invalid provider
+  response — never silently substituted with empty text), and a URL
+  matching the canonical `https://github.com/<requested repo>/issues/<number>`
+  shape **exactly** for the repo this check was scoped to.
+- New production-provider tests cover GraphQL errors alongside partial
+  data, repeated-cursor detection, the literal `is:issue`/no-`state:`
+  query pin, page-fetcher failure propagation, malformed JSON, and every
+  candidate-validation failure mode (non-positive number, null/empty
+  title, null body, and URL mismatches — wrong repo, wrong number, wrong
+  scheme, or null).
+
 ---
 
 ### Facet-aware context supply (G530)

@@ -1453,9 +1453,16 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
     internal IReadOnlyList<GhIssueListEntry> FetchAllCandidates(string repo, string executionUnit)
     {
         var fetchPage = PageFetcherOverride ?? RunGh;
-        var searchQuery = $"repo:{repo} {executionUnit} in:title";
+        // G536 round-6 review repair: `is:issue` — GraphQL search
+        // `type: ISSUE` covers BOTH issues and pull requests; without this
+        // qualifier a matching PR would come back as a node with no Issue
+        // fields (deserializing to an empty/default entry) instead of
+        // being excluded. `state:` is deliberately never added — omitting
+        // it is what keeps both open and closed issues in scope.
+        var searchQuery = $"repo:{repo} {executionUnit} in:title is:issue";
         var results = new List<GhIssueListEntry>();
         string? cursor = null;
+        var seenCursors = new HashSet<string>(StringComparer.Ordinal);
 
         for (var page = 0; ; page++)
         {
@@ -1486,23 +1493,94 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
                 throw new InvalidOperationException($"gh api graphql returned unparseable JSON: {exception.Message}");
             }
 
+            // G536 round-6 review repair: a GraphQL response can carry a
+            // non-empty `errors` array alongside partial `data` (the spec
+            // permits both simultaneously) — that partial data must never
+            // be treated as authoritative. Checked BEFORE touching `data`
+            // at all.
+            if (response?.Errors is { Count: > 0 } errors)
+            {
+                var messages = string.Join("; ", errors.Select(error => error.Message ?? "(no message)"));
+                throw new InvalidOperationException(
+                    $"gh api graphql returned error(s) for the issue-existence check on '{executionUnit}' ({repo}): {messages}");
+            }
+
             var search = response?.Data?.Search
                 ?? throw new InvalidOperationException("gh api graphql returned no search data for the issue-existence check.");
 
-            results.AddRange(search.Nodes);
+            // G536 round-6 review repair: validate every candidate BEFORE
+            // accumulating it — a malformed/incomplete authoritative
+            // response must fail loud here, not be silently carried
+            // forward to discover only after classification (or worse,
+            // after a restoration write) that the fetched identity was
+            // never trustworthy.
+            foreach (var node in search.Nodes)
+            {
+                results.Add(ValidateCandidate(node, repo));
+            }
 
             if (!search.PageInfo.HasNextPage)
             {
                 break;
             }
 
-            cursor = search.PageInfo.EndCursor
+            var nextCursor = search.PageInfo.EndCursor
                 ?? throw new InvalidOperationException(
                     "gh api graphql reported hasNextPage=true with no endCursor; refusing to silently stop "
                     + "pagination short of the real result set.");
+
+            if (!seenCursors.Add(nextCursor))
+            {
+                throw new InvalidOperationException(
+                    $"gh api graphql returned repeated cursor '{nextCursor}'; the pagination loop would re-fetch "
+                    + "the same page indefinitely. Refusing to loop until the safety cap — investigate the "
+                    + "GraphQL search API response.");
+            }
+
+            cursor = nextCursor;
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// G536 round-6 review repair: a candidate must be a complete,
+    /// self-consistent authoritative record before it is ever accumulated
+    /// — a positive issue number, a non-null/non-empty title, a non-null
+    /// body (required to prove content linkage later; a null body is an
+    /// invalid provider response, never silently treated as empty text),
+    /// and a URL matching the canonical
+    /// <c>https://github.com/&lt;requested repo&gt;/issues/&lt;number&gt;</c>
+    /// shape EXACTLY for the repo this check was scoped to.
+    /// </summary>
+    internal static GhIssueListEntry ValidateCandidate(GhIssueListEntry entry, string repo)
+    {
+        if (entry.Number <= 0)
+        {
+            throw new InvalidOperationException(
+                $"gh api graphql returned a candidate with a non-positive issue number ({entry.Number}) for repo '{repo}'.");
+        }
+
+        if (string.IsNullOrEmpty(entry.Title))
+        {
+            throw new InvalidOperationException(
+                $"gh api graphql returned candidate #{entry.Number} on '{repo}' with a null/empty title.");
+        }
+
+        if (entry.Body is null)
+        {
+            throw new InvalidOperationException(
+                $"gh api graphql returned candidate #{entry.Number} on '{repo}' with a null body; cannot verify content linkage.");
+        }
+
+        var expectedUrl = $"https://github.com/{repo}/issues/{entry.Number}";
+        if (!string.Equals(entry.Url, expectedUrl, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"gh api graphql returned candidate #{entry.Number} with url '{entry.Url ?? "(null)"}'; expected exactly '{expectedUrl}'.");
+        }
+
+        return entry;
     }
 
     private static string RunGh(IReadOnlyList<string> arguments)
@@ -1586,7 +1664,11 @@ internal sealed class GhCliExistingIssueChecker : IGitHubExistingIssueChecker
         [property: JsonPropertyName("url")] string Url,
         [property: JsonPropertyName("body")] string? Body);
 
-    private sealed record GraphQlResponse([property: JsonPropertyName("data")] GraphQlData? Data);
+    private sealed record GraphQlResponse(
+        [property: JsonPropertyName("data")] GraphQlData? Data,
+        [property: JsonPropertyName("errors")] List<GraphQlError>? Errors);
+
+    private sealed record GraphQlError([property: JsonPropertyName("message")] string? Message);
 
     private sealed record GraphQlData([property: JsonPropertyName("search")] GraphQlSearch? Search);
 
