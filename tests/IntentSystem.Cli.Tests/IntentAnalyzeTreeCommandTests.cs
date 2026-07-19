@@ -392,6 +392,61 @@ public sealed class IntentAnalyzeTreeCommandTests
     }
 
     [Fact]
+    public void Execute_BlockFormFacetsAndDuplicateValues_CountedConsistentlyWithFlowForm()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        var featuresDir = Path.Combine(hostRoot, "intents", "auth", "features", "login");
+        Directory.CreateDirectory(featuresDir);
+        // Block form.
+        File.WriteAllText(
+            Path.Combine(featuresDir, "overview.md"),
+            "---\nfacets:\n  - vocabulary\n  - invariant\n---\n# Login overview\n");
+        // Flow form with a duplicate value — a duplicate within ONE node
+        // must count as ONE occurrence of that facet, not two.
+        File.WriteAllText(
+            Path.Combine(featuresDir, "decisions.md"),
+            "---\nfacets: [invariant, invariant]\n---\n# Login decisions\n");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentAnalyzeTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        var coverage = document.RootElement.GetProperty("facet_coverage");
+        Assert.Equal(1, coverage.GetProperty("vocabulary").GetInt32());
+        // One from overview.md (block form) + one from decisions.md (the
+        // duplicate collapses to a single occurrence) = 2, not 3.
+        Assert.Equal(2, coverage.GetProperty("invariant").GetInt32());
+    }
+
+    [Fact]
+    public void Execute_MalformedFacetsNode_ExcludedFromCoverage_NotCounted()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        var identityDir = Path.Combine(hostRoot, "intents", "auth", "identity");
+        Directory.CreateDirectory(identityDir);
+        File.WriteAllText(
+            Path.Combine(identityDir, "mission.md"),
+            "---\nfacets: invariant\n---\n# Mission\n");
+        using var writer = new StringWriter();
+
+        var exitCode = IntentAnalyzeTreeCommand.Execute(
+            CreateContext(hostRoot),
+            ["--domain", "auth", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = System.Text.Json.JsonDocument.Parse(writer.ToString());
+        var coverage = document.RootElement.GetProperty("facet_coverage");
+        Assert.False(coverage.TryGetProperty("invariant", out _));
+    }
+
+    [Fact]
     public void Execute_NoNodesWithFacets_FacetCoverageIsEmpty()
     {
         using var tmp = new TemporaryDirectory();

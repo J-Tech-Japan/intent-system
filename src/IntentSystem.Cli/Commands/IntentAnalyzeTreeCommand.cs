@@ -210,7 +210,18 @@ internal static class IntentAnalyzeTreeCommand
                 continue;
             }
 
-            foreach (var facet in IntentNodeFacets.ExtractRawFacets(content).Distinct(StringComparer.Ordinal))
+            var parsed = IntentNodeFacets.ParseFacets(content);
+            if (parsed.Kind != FacetsParseKind.Present)
+            {
+                // Absent: nothing to count. Malformed: `lint-layout`'s
+                // concern to report as an error, not counted here.
+                continue;
+            }
+
+            // parsed.Values is already deduplicated (stable, first-seen
+            // order) by the shared parser, so every caller — lint, search,
+            // and this coverage count — agrees on how a duplicate "counts".
+            foreach (var facet in parsed.Values)
             {
                 if (!IntentNodeFacets.IsAllowedValue(facet))
                 {

@@ -157,6 +157,51 @@ public sealed class IntentSearchCommandTests
     }
 
     [Fact]
+    public void Execute_FacetFilter_MatchesBlockFormFrontmatter()
+    {
+        using var workspace = new IntentSearchWorkspace();
+        workspace.WriteFile(
+            "intents/intent-cli/features/auth/overview.md",
+            "---\nfacets:\n  - vocabulary\n  - invariant\n---\n# Auth overview\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentSearchCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--facet", "invariant", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var hits = document.RootElement.GetProperty("hits");
+        Assert.Equal(1, hits.GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_FacetFilter_MalformedFacetsNode_IsExcludedNotErrored()
+    {
+        using var workspace = new IntentSearchWorkspace();
+        workspace.WriteFile(
+            "intents/intent-cli/features/auth/broken.md",
+            "---\nfacets: invariant\n---\n# Broken facets declaration\n");
+        workspace.WriteFile(
+            "intents/intent-cli/features/auth/overview.md",
+            "---\nfacets: [invariant]\n---\n# Auth overview\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentSearchCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--facet", "invariant", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var paths = document.RootElement.GetProperty("hits").EnumerateArray()
+            .Select(h => h.GetProperty("path").GetString()).ToArray();
+        Assert.Contains(paths, p => p!.EndsWith("overview.md", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p!.EndsWith("broken.md", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Execute_FacetFilterCombinedWithQuery_RestrictsToBothConditions()
     {
         using var workspace = new IntentSearchWorkspace();

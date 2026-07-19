@@ -274,7 +274,7 @@ public sealed class IntentLintLayoutCommandTests
     // ──────────────────────────────────────────────
 
     [Fact]
-    public void Execute_NodeWithValidFacets_ReportsNoInvalidFacetWarning()
+    public void Execute_NodeWithValidFacets_FlowForm_ExitsZeroCleanNoInvalidFacetWarning()
     {
         using var tmp = new TemporaryDirectory();
         var hostRoot = tmp.CreateDirectory("host");
@@ -284,15 +284,36 @@ public sealed class IntentLintLayoutCommandTests
             "---\nfacets: [vocabulary, invariant]\n---\n# Mission\n");
 
         using var writer = new StringWriter();
-        IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
 
+        Assert.Equal(0, exitCode);
         var output = writer.ToString();
         Assert.DoesNotContain("INVALID-FACET", output, StringComparison.Ordinal);
         Assert.Contains("clean", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void Execute_NodeWithUnknownFacetValue_ReportsInvalidFacetWarningNamingNodeValueAndAllowedSet()
+    public void Execute_NodeWithValidFacets_BlockForm_ExitsZeroClean()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets:\n  - vocabulary\n  - invariant\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.DoesNotContain("INVALID-FACET", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("MALFORMED-FACETS", output, StringComparison.Ordinal);
+        Assert.Contains("clean", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_NodeWithUnknownFacetValue_ReportsErrorSeverity_NamesNodeValueAndAllowedSet_ExitsNonzero()
     {
         using var tmp = new TemporaryDirectory();
         var hostRoot = tmp.CreateDirectory("host");
@@ -302,8 +323,9 @@ public sealed class IntentLintLayoutCommandTests
             "---\nfacets: [projection]\n---\n# Mission\n");
 
         using var writer = new StringWriter();
-        IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
 
+        Assert.NotEqual(0, exitCode);
         var output = writer.ToString();
         Assert.Contains("INVALID-FACET", output, StringComparison.Ordinal);
         Assert.Contains("intents/auth/identity/mission.md", output, StringComparison.Ordinal);
@@ -312,10 +334,12 @@ public sealed class IntentLintLayoutCommandTests
         Assert.Contains("invariant", output, StringComparison.Ordinal);
         Assert.Contains("decider", output, StringComparison.Ordinal);
         Assert.Contains("acceptance-property", output, StringComparison.Ordinal);
+        Assert.Contains("**Severity:** error", output, StringComparison.Ordinal);
+        Assert.Contains("has-errors: True", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Execute_NodeWithMixOfValidAndInvalidFacets_ReportsOnlyTheInvalidOne()
+    public void Execute_NodeWithMixOfValidAndInvalidFacets_ReportsOnlyTheInvalidOne_ExitsNonzero()
     {
         using var tmp = new TemporaryDirectory();
         var hostRoot = tmp.CreateDirectory("host");
@@ -325,11 +349,50 @@ public sealed class IntentLintLayoutCommandTests
             "---\nfacets: [decider, projection]\n---\n# Mission\n");
 
         using var writer = new StringWriter();
-        IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
 
+        Assert.NotEqual(0, exitCode);
         var output = writer.ToString();
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(output, "INVALID-FACET"));
         Assert.Contains("projection", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_NodeWithMalformedFacets_BareScalar_ReportsErrorNeverAbsent_ExitsNonzero()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets: projection\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.NotEqual(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("MALFORMED-FACETS", output, StringComparison.Ordinal);
+        Assert.Contains("**Severity:** error", output, StringComparison.Ordinal);
+        // Must never be silently treated as "no facets" (absent).
+        Assert.DoesNotContain("clean", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_NodeWithMalformedFacets_UnterminatedFlowList_ReportsErrorAndExitsNonzero()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets: [vocabulary, invariant\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("MALFORMED-FACETS", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -350,6 +413,45 @@ public sealed class IntentLintLayoutCommandTests
         var output = writer.ToString();
         Assert.DoesNotContain("INVALID-FACET", output, StringComparison.Ordinal);
         Assert.Contains("clean", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_LegacyWarningWithNoFacetsIssue_StaysNonfatal_ExitsZero()
+    {
+        // G529 rereview repair: a facets: error must not make unrelated,
+        // pre-existing layout warnings fatal. A missing manifest (a
+        // legacy, non-facet finding) must still exit 0 on its own.
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        Directory.CreateDirectory(Path.Combine(hostRoot, "intents", "auth"));
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("MISSING-MANIFEST", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_LegacyWarningAndFacetsError_OnlyFacetsErrorDrivesNonzeroExit()
+    {
+        // Both a legacy warning (missing manifest) and a facets error are
+        // present simultaneously — the facets error alone must drive the
+        // nonzero exit; the legacy warning stays reported but non-fatal on
+        // its own merits.
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        var domainDir = Path.Combine(hostRoot, "intents", "auth");
+        Directory.CreateDirectory(domainDir);
+        File.WriteAllText(Path.Combine(domainDir, "note.md"), "---\nfacets: [projection]\n---\n# Note\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.NotEqual(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("MISSING-MANIFEST", output, StringComparison.Ordinal);
+        Assert.Contains("INVALID-FACET", output, StringComparison.Ordinal);
     }
 
     // ──────────────────────────────────────────────

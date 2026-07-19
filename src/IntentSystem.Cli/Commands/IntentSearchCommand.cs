@@ -122,12 +122,20 @@ internal static class IntentSearchCommand
                 continue;
             }
 
-            // G529: when --facet is given, restrict to files carrying that
-            // facet in their frontmatter before any text matching happens.
-            if (facet is not null
-                && !IntentNodeFacets.ExtractRawFacets(content).Contains(facet, StringComparer.Ordinal))
+            // G529: when --facet is given, restrict to files that PARSE a
+            // present, valid facets: list carrying that value. A malformed
+            // facets: declaration is `lint-layout`'s concern to flag as an
+            // error — search simply excludes it, the same as a node with no
+            // facets: at all, since it cannot be confirmed to carry the
+            // requested facet.
+            if (facet is not null)
             {
-                continue;
+                var parsed = IntentNodeFacets.ParseFacets(content);
+                if (parsed.Kind != FacetsParseKind.Present
+                    || !parsed.Values.Contains(facet, StringComparer.Ordinal))
+                {
+                    continue;
+                }
             }
 
             if (string.IsNullOrEmpty(query))

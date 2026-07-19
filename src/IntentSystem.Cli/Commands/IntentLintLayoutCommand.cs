@@ -27,6 +27,12 @@ internal static class IntentLintLayoutCommand
     private const string FormatJson = "json";
     private const string FormatMarkdown = "markdown";
 
+    /// <summary>Non-fatal (exit 0) — every pre-existing layout check.</summary>
+    public const string SeverityWarning = "warning";
+
+    /// <summary>Fatal (nonzero exit) — currently only <c>facets:</c> findings.</summary>
+    public const string SeverityError = "error";
+
     private const string UsageLine =
         "Usage: intent-cli intent lint-layout --domain <name> [--format markdown|json]";
 
@@ -54,7 +60,11 @@ internal static class IntentLintLayoutCommand
         {
             var result = ExecuteCore(context.RepoRoot, request);
             WriteOutput(writer, request.Format, result);
-            return result.Warnings.Count > 0 ? 0 : 0; // always exit 0; warnings surfaced in output
+            // G529 rereview repair: legacy layout warnings stay non-fatal
+            // (exit 0, backward compatible with every pre-existing check),
+            // but a facets: error (malformed declaration or an unknown
+            // value) is a real contract violation — nonzero exit.
+            return result.HasErrors ? 1 : 0;
         }
         catch (InvalidOperationException exception)
         {
@@ -285,10 +295,17 @@ internal static class IntentLintLayoutCommand
     // ── Facet check (G529) ────────────────────────────────────────────────────
 
     /// <summary>
-    /// A node's optional <c>facets:</c> frontmatter must draw only from the
-    /// closed set (<see cref="IntentNodeFacets.AllowedValues"/>). A node with
-    /// no frontmatter, or frontmatter with no <c>facets:</c> line, is
+    /// A node's optional <c>facets:</c> frontmatter must parse as a genuine
+    /// YAML list (block or flow form) and draw only from the closed set
+    /// (<see cref="IntentNodeFacets.AllowedValues"/>). A node with no
+    /// frontmatter, or frontmatter with no <c>facets:</c> key, is
     /// unaffected — unannotated nodes are legitimate and stay lint-clean.
+    /// A <c>facets:</c> key that is present but does not parse (a bare
+    /// scalar, an unterminated list, an unbalanced quote) is a
+    /// <see cref="IntentLintLayoutCommand.SeverityError"/> finding — it is
+    /// never silently treated as absent. An unknown value from an
+    /// otherwise-valid list is likewise an error, naming the node, the bad
+    /// value, and the allowed set.
     /// </summary>
     private static void CheckFacetValues(
         string domainRoot,
@@ -296,6 +313,7 @@ internal static class IntentLintLayoutCommand
         List<LintWarning> warnings)
     {
         var allMarkdown = Directory.GetFiles(domainRoot, "*.md", SearchOption.AllDirectories);
+        var allowed = string.Join(", ", IntentNodeFacets.AllowedValues);
 
         foreach (var mdFile in allMarkdown)
         {
@@ -313,23 +331,34 @@ internal static class IntentLintLayoutCommand
                 continue;
             }
 
-            var rawFacets = IntentNodeFacets.ExtractRawFacets(content);
-            if (rawFacets.Count == 0)
+            var parsed = IntentNodeFacets.ParseFacets(content);
+            if (parsed.Kind == FacetsParseKind.Absent)
             {
                 continue;
             }
 
             var rel = $"intents/{domain}/" + Path.GetRelativePath(domainRoot, mdFile).Replace(Path.DirectorySeparatorChar, '/');
-            var allowed = string.Join(", ", IntentNodeFacets.AllowedValues);
 
-            foreach (var value in rawFacets.Distinct(StringComparer.Ordinal))
+            if (parsed.Kind == FacetsParseKind.Malformed)
+            {
+                warnings.Add(new LintWarning(
+                    Code: "MALFORMED-FACETS",
+                    Message: $"Node '{rel}' has a malformed 'facets:' declaration: {parsed.MalformedReason}.",
+                    Fix: $"Use a YAML list, e.g. `facets: [{IntentNodeFacets.Vocabulary}]` or a block list with "
+                        + $"'- item' entries, drawing only from: {allowed}.",
+                    Severity: SeverityError));
+                continue;
+            }
+
+            foreach (var value in parsed.Values)
             {
                 if (!IntentNodeFacets.IsAllowedValue(value))
                 {
                     warnings.Add(new LintWarning(
                         Code: "INVALID-FACET",
                         Message: $"Node '{rel}' has invalid facet '{value}' (allowed: {allowed}).",
-                        Fix: $"Use one of: {allowed}, or remove '{value}' from the 'facets:' line in '{rel}'."));
+                        Fix: $"Use one of: {allowed}, or remove '{value}' from the 'facets:' line in '{rel}'.",
+                        Severity: SeverityError));
                 }
             }
         }
@@ -346,7 +375,8 @@ internal static class IntentLintLayoutCommand
             Domain = request.Domain,
             IsTreeDomain = isTreeDomain,
             Warnings = warnings,
-            Clean = warnings.Count == 0
+            Clean = warnings.Count == 0,
+            HasErrors = warnings.Any(w => string.Equals(w.Severity, SeverityError, StringComparison.Ordinal))
         };
 
     private static void EnsureNotChildWorktree(string hostRepoRoot)
@@ -439,12 +469,15 @@ internal static class IntentLintLayoutCommand
 
     private static void WriteMarkdown(TextWriter writer, IntentLintLayoutResult result)
     {
-        var status = result.Clean ? "clean" : $"{result.Warnings.Count} warning(s)";
+        var errorCount = result.Warnings.Count(w => string.Equals(w.Severity, SeverityError, StringComparison.Ordinal));
+        var warnCount = result.Warnings.Count - errorCount;
+        var status = result.Clean ? "clean" : $"{errorCount} error(s), {warnCount} warning(s)";
         writer.WriteLine($"# intent lint-layout — {result.Domain} ({status})");
         writer.WriteLine();
         writer.WriteLine($"- domain: {result.Domain}");
         writer.WriteLine($"- tree-domain: {result.IsTreeDomain}");
         writer.WriteLine($"- warnings: {result.Warnings.Count}");
+        writer.WriteLine($"- has-errors: {result.HasErrors}");
         writer.WriteLine();
 
         if (result.Clean)
@@ -459,6 +492,7 @@ internal static class IntentLintLayoutCommand
         {
             writer.WriteLine($"### [{w.Code}] {w.Message}");
             writer.WriteLine();
+            writer.WriteLine($"**Severity:** {w.Severity}");
             writer.WriteLine($"**Fix:** {w.Fix}");
             writer.WriteLine();
         }
@@ -483,10 +517,27 @@ internal sealed record IntentLintLayoutResult
     public required string Domain { get; init; }
     public required bool IsTreeDomain { get; init; }
     public required bool Clean { get; init; }
+
+    /// <summary>
+    /// G529 rereview repair: true when at least one finding carries
+    /// <c>Severity == "error"</c> (currently only <c>facets:</c>
+    /// malformed/unknown-value findings) — drives the command's exit code.
+    /// Every pre-existing layout check stays "warning" severity (exit 0),
+    /// so this is purely additive, not a behavior change for legacy checks.
+    /// </summary>
+    public required bool HasErrors { get; init; }
+
     public required IReadOnlyList<LintWarning> Warnings { get; init; }
 }
 
+/// <summary>
+/// <paramref name="Severity"/> defaults to <c>"warning"</c> so every
+/// pre-existing call site (all positional/named constructions that predate
+/// G529) keeps its non-fatal, exit-0 behavior unchanged. Only the G529
+/// facets checks pass <c>Severity: "error"</c> explicitly.
+/// </summary>
 internal sealed record LintWarning(
     string Code,
     string Message,
-    string Fix);
+    string Fix,
+    string Severity = IntentLintLayoutCommand.SeverityWarning);
