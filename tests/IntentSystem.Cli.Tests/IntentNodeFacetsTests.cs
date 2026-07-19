@@ -431,6 +431,23 @@ public sealed class IntentNodeFacetsTests
     }
 
     [Fact]
+    public void ParseFacets_DuplicateTopLevelFacetsKeys_DiagnosticReportsFileAccurateLineNumbers_NotFrontmatterRelative()
+    {
+        // Third rereview repair: `frontmatter` (as extracted by
+        // TryExtractFrontmatterBlock) is everything AFTER the opening
+        // "---" line, so its own line 0 is already file line 2. A field
+        // preceding "facets:" shifts the two declarations to file lines 3
+        // and 4 — the diagnostic must report those file-accurate numbers,
+        // not the frontmatter-relative 2 and 3.
+        var content = "---\nintent_id: I.TEST\nfacets: [vocabulary]\nfacets: [invariant]\n---\n";
+
+        var result = IntentNodeFacets.ParseFacets(content);
+
+        Assert.Equal(FacetsParseKind.Malformed, result.Kind);
+        Assert.Contains("lines 3, 4", result.MalformedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ParseFacets_DuplicateTopLevelFacetsKeys_BlockForm_IsMalformed()
     {
         var content = "---\nfacets:\n  - vocabulary\nfacets:\n  - invariant\n---\n";

@@ -122,8 +122,14 @@ internal static class IntentNodeFacets
             // top-level "facets:" key is unambiguously a contract
             // violation regardless of whether either declaration is
             // otherwise well-formed YAML.
+            //
+            // `frontmatter` is everything BETWEEN the opening "---" line
+            // and the closing one (see TryExtractFrontmatterBlock), so its
+            // own line 0 is already file line 2 — translate a frontmatter
+            // index back to a 1-based FILE line by adding 2, not 1, or the
+            // reported location is one line short of the actual file.
             return FacetsParseResult.Malformed(
-                $"multiple top-level 'facets:' keys found in frontmatter (lines {string.Join(", ", facetsLineIndices.Select(i => i + 1))}); only one is allowed");
+                $"multiple top-level 'facets:' keys found in frontmatter (lines {string.Join(", ", facetsLineIndices.Select(i => i + 2))}); only one is allowed");
         }
 
         // Hand YamlDotNet everything from the "facets:" line to the end of
