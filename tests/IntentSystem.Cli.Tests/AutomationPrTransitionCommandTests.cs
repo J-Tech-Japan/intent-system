@@ -390,13 +390,15 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
         Assert.True(result.Applied);
 
-        var transition = Assert.Single(mutator.AppliedTransitions);
-        Assert.Equal("pr", transition.Kind);
-        Assert.Equal(542, transition.Number);
-        Assert.Contains("intent-pr-request-update", transition.AddLabels);
-        Assert.Contains("intent-pr-reviewing", transition.RemoveLabels);
-        Assert.DoesNotContain("intent-pr-created", transition.AddLabels);
-        Assert.DoesNotContain("intent-pr-created", transition.RemoveLabels);
+        // G535 review repair: request-update must apply via ONE atomic
+        // ReplaceLabelSet call carrying the full desired set, never via
+        // ApplyLabelTransitions' sequential add/remove.
+        Assert.Empty(mutator.AppliedTransitions);
+        var replacedSet = Assert.Single(mutator.ReplacedLabelSets);
+        Assert.Contains("intent-target", replacedSet);
+        Assert.Contains("intent-pr-request-update", replacedSet);
+        Assert.DoesNotContain("intent-pr-reviewing", replacedSet);
+        Assert.DoesNotContain("intent-pr-created", replacedSet);
     }
 
     // ─── G535 tests: request-update supersedes stale rereview-ready ─────────
@@ -467,17 +469,18 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         Assert.Contains("intent-pr-request-update", result.AddLabels);
         Assert.Contains("intent-pr-rereview-ready", result.RemoveLabels);
 
-        var transition = Assert.Single(mutator.AppliedTransitions);
-        Assert.Contains("intent-pr-request-update", transition.AddLabels);
-        Assert.Contains("intent-pr-rereview-ready", transition.RemoveLabels);
+        // G535 review repair: applied via ONE atomic ReplaceLabelSet call,
+        // never sequential add/remove.
+        Assert.Empty(mutator.AppliedTransitions);
+        var replacedSet = Assert.Single(mutator.ReplacedLabelSets);
+        Assert.Contains("intent-target", replacedSet);
+        Assert.Contains("intent-pr-request-update", replacedSet);
+        Assert.DoesNotContain("intent-pr-rereview-ready", replacedSet);
 
-        // Simulate the resulting label set and prove `worker claim` now succeeds.
-        var postTransitionLabels = mutator.Labels
-            .Except(transition.RemoveLabels, StringComparer.Ordinal)
-            .Concat(transition.AddLabels)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        var claimDecision = WorkerClaimAnalyzer.Analyze(GhCliGitHubLabelMutator.Kinds.Pr, postTransitionLabels);
+        // The fake mutator's own Labels reflect the replacement (mirroring
+        // the production adapter's re-read-and-verify contract) — prove
+        // `worker claim` now succeeds directly against it.
+        var claimDecision = WorkerClaimAnalyzer.Analyze(GhCliGitHubLabelMutator.Kinds.Pr, mutator.Labels);
         Assert.True(claimDecision.Proceed);
         Assert.Contains("intent-pr-update-in-progress", claimDecision.AddLabels);
     }
@@ -521,20 +524,24 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
             writer);
 
         Assert.Equal(0, exitCode);
-        var transition = Assert.Single(mutator.AppliedTransitions);
-        Assert.Contains("intent-pr-request-update", transition.AddLabels);
-        Assert.DoesNotContain("intent-pr-rereview-ready", transition.RemoveLabels);
-        Assert.DoesNotContain("rereview-ready", transition.RemoveLabels);
-        Assert.DoesNotContain("intent-pr-reviewing", transition.RemoveLabels);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        // Truthful output: nothing was actually superseded, so nothing is
+        // reported as removed (G535 review repair blocker #1).
+        Assert.Empty(result.RemoveLabels);
+
+        Assert.Empty(mutator.AppliedTransitions);
+        var replacedSet = Assert.Single(mutator.ReplacedLabelSets);
+        Assert.Contains("intent-target", replacedSet);
+        Assert.Contains("intent-pr-request-update", replacedSet);
     }
 
     [Fact]
     public void Execute_RequestUpdate_ApiFailureAppliesNoPartialTransition()
     {
-        // G535: the add+remove edit is a single gh call (already-atomic by
-        // construction) — a failure must leave the PR's labels completely
-        // untouched, never a half-applied state (request-update added but
-        // rereview-ready not yet cleared, or vice versa).
+        // G535 review repair blocker #2: the mutation is ONE atomic
+        // ReplaceLabelSet call — a failure must leave the PR's labels
+        // completely untouched, never a half-applied state (request-update
+        // added but rereview-ready not yet cleared, or vice versa).
         using var workspace = new AutomationPrTransitionWorkspace();
         var mutator = new ThrowingMutator
         {
@@ -557,6 +564,77 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("failed to apply PR transition", writer.ToString(), StringComparison.Ordinal);
+        // No half-transition: the original label set is exactly what remains.
+        Assert.Equal(new[] { "intent-target", "intent-pr-rereview-ready" }, mutator.Labels);
+    }
+
+    [Fact]
+    public void Execute_RequestUpdate_WritePreservesUnrelatedLabels()
+    {
+        // G535 review repair: labels this transition never touches (e.g. a
+        // domain/priority label) must survive the atomic replace untouched.
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-reviewing", "priority-high", "domain-billing" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "request-update",
+                "--write",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var replacedSet = Assert.Single(mutator.ReplacedLabelSets);
+        Assert.Contains("intent-target", replacedSet);
+        Assert.Contains("priority-high", replacedSet);
+        Assert.Contains("domain-billing", replacedSet);
+        Assert.Contains("intent-pr-request-update", replacedSet);
+        Assert.DoesNotContain("intent-pr-reviewing", replacedSet);
+    }
+
+    [Fact]
+    public void Execute_RequestUpdate_DryRunDoesNotCallEitherMutationPath()
+    {
+        // G535 review repair: dry/write parity check — dry-run must never
+        // call ApplyLabelTransitions NOR ReplaceLabelSet.
+        using var workspace = new AutomationPrTransitionWorkspace();
+        var mutator = new FakeMutator
+        {
+            Labels = new[] { "intent-target", "intent-pr-rereview-ready", "rereview-ready" },
+        };
+        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPrTransitionCommand.Execute(
+            workspace.Context,
+            new[]
+            {
+                "--repo", "J-Tech-Japan/intent-system",
+                "--pr", "542",
+                "--transition", "request-update",
+                "--dry-run",
+                "--format", "json",
+            },
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var result = JsonSerializer.Deserialize<AutomationPrTransitionResult>(writer.ToString())!;
+        Assert.False(result.Applied);
+        // Both present forms are named as superseded, truthfully, in dry-run too.
+        Assert.Contains("intent-pr-rereview-ready", result.RemoveLabels);
+        Assert.Contains("rereview-ready", result.RemoveLabels);
+        Assert.Empty(mutator.AppliedTransitions);
+        Assert.Empty(mutator.ReplacedLabelSets);
     }
 
     [Fact]
@@ -788,11 +866,14 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
             "AutomationPrTransitionCommand must never invoke NestedProviderLauncher.");
     }
 
-    private sealed class FakeMutator : IGitHubLabelMutator
+    private sealed class FakeMutator : IGitHubLabelMutator, IGitHubLabelSetReplacer
     {
-        public IReadOnlyList<string> Labels { get; init; } = Array.Empty<string>();
+        public IReadOnlyList<string> Labels { get; set; } = Array.Empty<string>();
 
         public List<AppliedTransition> AppliedTransitions { get; } = new();
+
+        /// <summary>G535: each ReplaceLabelSet call's full desired set, in call order.</summary>
+        public List<IReadOnlyList<string>> ReplacedLabelSets { get; } = new();
 
         public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number) =>
             Labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray();
@@ -828,6 +909,33 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
                 removeLabels.ToArray()));
         }
 
+        /// <summary>
+        /// G535: mirrors the production adapter's contract — replaces
+        /// <see cref="Labels"/> wholesale with the desired set (as if the
+        /// PUT-then-verified-re-read succeeded), and records the call so
+        /// tests can assert exactly one atomic mutation payload.
+        /// </summary>
+        public void ReplaceLabelSet(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> desiredLabels)
+        {
+            if (string.Equals(kind, "pr", StringComparison.Ordinal)
+                && desiredLabels.Contains("intent-pr-created", StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException("'intent-pr-created' is issue-only.");
+            }
+
+            var normalized = desiredLabels
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(label => label, StringComparer.Ordinal)
+                .ToArray();
+            ReplacedLabelSets.Add(normalized);
+            Labels = normalized;
+        }
+
         public void ApplyReconcileTransitions(
             string repo,
             string kind,
@@ -845,11 +953,11 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
         IReadOnlyList<string> RemoveLabels);
 
     /// <summary>
-    /// G535: fake mutator whose <see cref="ApplyLabelTransitions"/> always
-    /// throws, simulating a `gh` API failure, to prove the command reports
-    /// failure without claiming <c>applied: true</c> — no half-transition.
+    /// G535: fake mutator whose mutation paths always throw, simulating a
+    /// `gh` API failure, to prove the command reports failure without
+    /// claiming <c>applied: true</c> — no half-transition.
     /// </summary>
-    private sealed class ThrowingMutator : IGitHubLabelMutator
+    private sealed class ThrowingMutator : IGitHubLabelMutator, IGitHubLabelSetReplacer
     {
         public IReadOnlyList<string> Labels { get; init; } = Array.Empty<string>();
 
@@ -862,6 +970,13 @@ public sealed class AutomationPrTransitionCommandTests : IDisposable
             int number,
             IReadOnlyCollection<string> addLabels,
             IReadOnlyCollection<string> removeLabels) =>
+            throw new IOException("simulated gh API failure");
+
+        public void ReplaceLabelSet(
+            string repo,
+            string kind,
+            int number,
+            IReadOnlyCollection<string> desiredLabels) =>
             throw new IOException("simulated gh API failure");
 
         public void ApplyReconcileTransitions(

@@ -612,17 +612,38 @@ with no installed command able to proceed. The only escape was a non-obvious
 `review-start` → `request-update` detour.
 
 `request-update` now clears `intent-pr-rereview-ready` (and its legacy
-`rereview-ready` string form) in the **same** label write that adds
+`rereview-ready` string form) in the **same** write that adds
 `intent-pr-request-update` and removes `intent-pr-reviewing` — a repair
-request always supersedes pending rereview-readiness. As with the other
-transitions that clear multiple labels (`review-start`, `approved`,
-`review-release`), `--write` mode only removes labels that are actually
-present, so a rerun (or a PR that was never rereview-ready) stays
-idempotent; `--dry-run` still reports the full planned removal set
-regardless of presence, matching the existing convention. Because the
-add/remove edit is issued as a single `gh` call, the transition stays atomic
-— a failure leaves the PR's labels completely untouched, never a
-half-applied state. No other transition's label set changed.
+request always supersedes pending rereview-readiness.
+
+**Truthful audit output in both modes.** Unlike `review-start`/`approved`/
+`review-release` (whose `--dry-run` intentionally reports the *full*
+planned removal set regardless of presence), `request-update`'s reported
+`remove_labels` — in **both** `--dry-run` and `--write` — is always derived
+from the already-fetched current labels: a PR carrying only
+`intent-pr-rereview-ready` is reported as superseding exactly that label,
+never an absent `intent-pr-reviewing` or absent legacy `rereview-ready`
+alongside it. A rerun (or a PR that was never rereview-ready) reports and
+applies an empty removal set — genuinely idempotent, not merely
+non-erroring.
+
+**One atomic GitHub request, not sequential add/remove.** `gh <kind> edit
+--add-label --remove-label` is a CLI convenience wrapper — its atomicity
+from GitHub's perspective is not guaranteed. `request-update`'s `--write`
+path instead computes the full desired label set (every current label
+minus the ones being superseded, plus `intent-pr-request-update`) and
+replaces it in **one** GitHub REST call — `PUT
+/repos/{repo}/issues/{number}/labels` — via the internal
+`IGitHubLabelSetReplacer.ReplaceLabelSet` seam. A failure in that single
+call leaves the PR's labels completely untouched; there is no window where
+one label lands and another doesn't. GitHub's "Set labels" endpoint has no
+conditional/If-Match support for optimistic concurrency, so a concurrent
+label change racing the read-then-write cannot be prevented outright —
+instead, the adapter re-reads the labels immediately after the PUT and
+throws if the result doesn't match the desired set exactly, rather than
+silently claiming success on a lost update. This atomic-replace path is
+used only by `request-update`; every other transition keeps using the
+pre-existing `ApplyLabelTransitions` add/remove path, unchanged.
 
 With this landed, the SKS-G824 recovery sequence (`review-start` then
 `request-update` to clear a stuck rereview-ready) is no longer necessary —

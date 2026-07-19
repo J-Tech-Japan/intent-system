@@ -108,12 +108,43 @@ internal static class AutomationPrTransitionCommand
         {
             try
             {
-                mutator.ApplyLabelTransitions(
-                    repo!,
-                    GhCliGitHubLabelMutator.Kinds.Pr,
-                    pr!.Value,
-                    plan.AddLabels,
-                    removeLabels);
+                if (string.Equals(transition, TransitionRequestUpdate, StringComparison.Ordinal))
+                {
+                    // G535 review repair: request-update must never apply as
+                    // sequential add/remove gh calls — a failure between the
+                    // two would leave a half-transitioned PR (e.g. rereview-ready
+                    // removed but request-update not yet added, or vice versa).
+                    // Compute the full desired label set (every current label
+                    // minus the ones actually being superseded, plus the ones
+                    // being added) and replace it atomically in one GitHub
+                    // request via IGitHubLabelSetReplacer.
+                    if (mutator is not IGitHubLabelSetReplacer replacer)
+                    {
+                        writer.WriteLine(
+                            "the configured GitHub mutator does not support atomic label-set replacement, "
+                            + "required for the request-update transition (G535).");
+                        return 1;
+                    }
+
+                    var removeLabelSet = new HashSet<string>(removeLabels, StringComparer.Ordinal);
+                    var desiredLabels = currentLabels
+                        .Where(label => !removeLabelSet.Contains(label))
+                        .Concat(plan.AddLabels)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
+
+                    replacer.ReplaceLabelSet(repo!, GhCliGitHubLabelMutator.Kinds.Pr, pr!.Value, desiredLabels);
+                }
+                else
+                {
+                    mutator.ApplyLabelTransitions(
+                        repo!,
+                        GhCliGitHubLabelMutator.Kinds.Pr,
+                        pr!.Value,
+                        plan.AddLabels,
+                        removeLabels);
+                }
+
                 applied = true;
             }
             catch (Exception exception) when (
@@ -224,22 +255,34 @@ internal static class AutomationPrTransitionCommand
         IReadOnlyList<string> plannedRemoveLabels,
         IReadOnlyList<string> currentLabels)
     {
+        // G535 review repair: request-update's audit output must be
+        // truthful in BOTH modes, never other transitions'. A PR carrying
+        // only intent-pr-rereview-ready must not be reported (dry-run OR
+        // write) as also superseding an absent intent-pr-reviewing or
+        // legacy "rereview-ready" — that would claim a removal that never
+        // happens. Filter to present-only regardless of mode, computed
+        // from the already-fetched current labels (no extra GitHub call).
+        if (string.Equals(transition, TransitionRequestUpdate, StringComparison.Ordinal))
+        {
+            var requestUpdateCurrentLabelSet = new HashSet<string>(currentLabels, StringComparer.Ordinal);
+            return plannedRemoveLabels
+                .Where(label => requestUpdateCurrentLabelSet.Contains(label))
+                .ToArray();
+        }
+
         // G292: review-release is also defensive about stale labels — only
         // remove labels that are actually present, so the dry-run plan
         // matches what gh will actually mutate.
         // G503: approved joins this set so clearing rereview-ready /
         // request-update / update-in-progress stays idempotent when those
         // labels are absent.
-        // G535: request-update joins this set too — the new
-        // intent-pr-rereview-ready / "rereview-ready" supersession removal
-        // must only be reported/applied when the label is actually present,
-        // so a rerun (or a PR that was never rereview-ready) stays
-        // idempotent and the reported plan matches what gh actually mutates.
+        // Unlike request-update above, these three transitions intentionally
+        // report the FULL planned removal set in dry-run (pre-existing,
+        // unchanged behavior) and only filter to present-only in --write.
         if (string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
             && (string.Equals(transition, TransitionReviewStart, StringComparison.Ordinal)
                 || string.Equals(transition, TransitionReviewRelease, StringComparison.Ordinal)
-                || string.Equals(transition, TransitionApproved, StringComparison.Ordinal)
-                || string.Equals(transition, TransitionRequestUpdate, StringComparison.Ordinal)))
+                || string.Equals(transition, TransitionApproved, StringComparison.Ordinal)))
         {
             var currentLabelSet = new HashSet<string>(currentLabels, StringComparer.Ordinal);
             return plannedRemoveLabels

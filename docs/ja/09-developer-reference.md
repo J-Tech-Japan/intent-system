@@ -642,19 +642,42 @@ Field finding #5(SKS-G824 / PR #1760): `intent-cli automation pr-transition
 という非自明な迂回策でした。
 
 `request-update` は、`intent-pr-request-update` を追加し
-`intent-pr-reviewing` を除去するのと**同じ** label write の中で、
+`intent-pr-reviewing` を除去するのと**同じ** write の中で、
 `intent-pr-rereview-ready`(および legacy な `rereview-ready` 文字列
 形式)を除去するようになりました — repair request は常に pending な
-rereview-readiness を supersede するためです。複数の label を除去する
-他の transition(`review-start`、`approved`、`review-release`)と同様、
-`--write` mode は実際に存在する label のみを除去するため、再実行(や、
-一度も rereview-ready になったことのない PR)は idempotent なままです。
-`--dry-run` は既存の convention と同様、存在有無に関わらず完全な
-planned removal set を引き続き報告します。add/remove の edit は 1 回の
-`gh` 呼び出しとして発行されるため、transition は atomic のままです —
-失敗した場合、PR の label は完全に手つかずのまま残り、half-applied な
-状態には決してなりません。他のどの transition の label set も変更
-されていません。
+rereview-readiness を supersede するためです。
+
+**両方の mode で truthful な audit output。** `--dry-run` が存在有無に
+関わらず常に完全な planned removal set を報告する
+`review-start`/`approved`/`review-release` とは異なり、
+`request-update` が報告する `remove_labels` は `--dry-run` と
+`--write` の**両方**で、既に fetch 済みの current label から常に
+導出されます。`intent-pr-rereview-ready` のみを持つ PR は、その label
+のみを supersede すると報告され、存在しない `intent-pr-reviewing` や
+存在しない legacy `rereview-ready` を一緒に claim することは決して
+ありません。再実行(や、一度も rereview-ready になったことのない PR)
+は空の removal set を報告・適用します — 単にエラーにならないだけでは
+なく、真に idempotent です。
+
+**逐次的な add/remove ではなく、1 回の atomic GitHub request。**
+`gh <kind> edit --add-label --remove-label` は `gh` CLI の
+convenience wrapper であり、GitHub 視点での atomicity は保証されて
+いません。`request-update` の `--write` path は、代わりに完全な
+desired label set(現在の label のうち supersede される label を除いた
+もの、プラス `intent-pr-request-update`)を計算し、内部の
+`IGitHubLabelSetReplacer.ReplaceLabelSet` seam 経由で、**1 回**の
+GitHub REST call — `PUT /repos/{repo}/issues/{number}/labels` — として
+置き換えます。この単一の call が失敗した場合、PR の label は完全に
+手つかずのまま残ります — 一方の label は反映され他方は反映されない、
+という window は存在しません。GitHub の「Set labels」endpoint には
+optimistic concurrency 用の conditional/If-Match support が無いため、
+read してから write するまでの間の並行した label 変更を完全に防ぐ
+ことはできません — その代わり、adapter は PUT 直後に label を
+re-read し、結果が desired set と完全に一致しない場合は throw します。
+lost update に対して黙って success を claim することは決してありません。
+この atomic-replace path を使うのは `request-update` のみであり、他の
+すべての transition は既存の `ApplyLabelTransitions` による add/remove
+path を変更なく使い続けます。
 
 これが landed したことで、SKS-G824 の recovery sequence(行き詰まった
 rereview-ready を除去するための `review-start` の後の `request-update`)
