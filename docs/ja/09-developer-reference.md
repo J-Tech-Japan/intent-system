@@ -1007,6 +1007,59 @@ entry は、以前は意図的な provider diagnostic ではなく、偶発的�
 
 ---
 
+### Canonical な publish-order override — queue priority (G537)
+
+Field incident(2026-07-19): G529 の closeout 後、orchestrator は
+——正当な理由をもって——field-impact fix である G532/G534 を
+G530/G531 の continuation よりも先に publish するよう ruling を
+下しました。`queue-state.json` の `priority` field(field で観測された
+`high` のような値)は既に存在していましたが、どの selection surface も
+それを参照していませんでした——orchestrator は「host state を
+hand-edit するか、ruling を諦めるか」という禁じられた選択を迫られ、
+正しく ruling を諦めて gap を報告しました。
+
+**`intent-cli queue reprioritize <execution-unit> --priority
+<high|normal|low> --reason <text> [--write]`** は、この gap を埋める
+bounded canonical transition です:
+
+- **queued かつ未 publish** の item の `priority` のみを mutate します
+  ——item の state が `queued` でない場合、あるいは既に linked GitHub
+  issue がある場合は refuse します(mutation なし、理由を named)。
+- `--reason <text>` は必須です——理由が記録されない priority 変更は
+  決して許可されません。
+- **デフォルトは dry-run です。** `--write` なしでは、コマンドは
+  実際に起こる mutation(old priority、requested priority、実際に
+  何か変わるかどうか)を報告するだけで、`queue-state.json` には
+  一切触れません。mutate して `priority-changed` runs event(old/new
+  priority と operator の reason)を追記するには `--write` が必要です。
+- item の現在の priority を再度 request した場合は no-op(idempotent)
+  です——write も runs event も無く、`changed: false` です。
+
+**`intent next-slice` は、eligible な candidate を priority-class-first
+(high > normal > low)で order し、class 内では authoring order
+(queue-state array order)を tiebreak として使います。** 既存の
+すべての eligibility gate——packet directory の存在、execution-unit
+namespace regex、domain/repo filter、G534 の lifecycle-aware exclusion、
+legacy-retirement-marker check——は、以前と全く同じように同じ loop
+内で candidate ごとに実行され続けます。priority が、candidate が
+本来 fail するはずの gate を skip させることは決してありません。
+priority が変えるのは、すでに eligible な candidate のうちどれを、
+どの順序で試すかだけであり、それは per-candidate の gate loop が
+走る**前**に行われます。この reorder は **stable** な sort を使う
+ため、すべての item が enqueue のデフォルト値(`"normal"`)を持つ
+host——つまり実質的に priority が設定されていない host——では、
+G537 以前の挙動と byte-identical な出力になります。
+
+`QueueItem.Priority` は schema level では引き続き単なる、validate
+されない `string` です(変更なし)——`queue reprioritize` だけが
+それを normalize・validate します(`high`/`normal`/`low`、
+case-insensitive)。`next-slice` の ranking function は、認識できない
+値や欠けている値をすべて `normal` として扱い、error にはしません。
+そのため、手作業で書かれた、あるいは historical な `queue-state.json`
+ファイルがこの field によって fail closed することはありません。
+
+---
+
 ### facet を意識した context 供給 (G530)
 
 G529 の 4 つの semantic facet（`vocabulary`、`invariant`、`decider`、

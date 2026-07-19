@@ -247,6 +247,12 @@ internal static class IntentNextSliceCommand
         // re-surface it as a next-slice candidate. Track retired units
         // explicitly and exclude them the same way completed ones are.
         var retired = new HashSet<string>(StringComparer.Ordinal);
+        // G537: priority only ORDERS the queued bucket below — every gate
+        // (domain/repo, execution-unit namespace, WIP, clarification,
+        // lifecycle) is still evaluated per-candidate in the loop at the
+        // `queued` foreach exactly as before; priority never lets a
+        // candidate skip a gate it would otherwise fail.
+        var priorityByUnit = new Dictionary<string, string>(StringComparer.Ordinal);
         if (queueState is not null)
         {
             foreach (var item in queueState.Items)
@@ -272,6 +278,7 @@ internal static class IntentNextSliceCommand
 
                     case QueueItemState.Queued:
                         queued.Add(item.ExecutionUnit);
+                        priorityByUnit[item.ExecutionUnit] = item.Priority;
                         break;
 
                     case QueueItemState.Completed:
@@ -283,6 +290,17 @@ internal static class IntentNextSliceCommand
                         break;
                 }
             }
+
+            // G537: reorder the queued bucket priority-class-first (high >
+            // normal > low), with authoring order (original queue-state.json
+            // array order — the order `queued` was just built in) preserved
+            // as the in-class tiebreak. `OrderBy` (LINQ) is a STABLE sort,
+            // so when every item ranks the same (no priorities set, or all
+            // "normal" — the enqueue default), this is a byte-identical
+            // no-op versus the pre-G537 authoring-order behavior.
+            queued = queued
+                .OrderBy(unit => PriorityRank(priorityByUnit.GetValueOrDefault(unit)))
+                .ToList();
         }
 
         var clarificationPath = Path.Combine(context.RepoRoot, "intents", domain, "clarifications", "open.md");
@@ -725,6 +743,20 @@ internal static class IntentNextSliceCommand
     /// every unit passes so pre-G359 hosts and misconfigured bindings
     /// never silently block all candidates.
     /// </summary>
+    /// <summary>
+    /// G537: ranks a queue item's <c>priority</c> field for candidate
+    /// ordering — lower rank sorts earlier. Unrecognized, missing, or
+    /// empty values (including the pre-G537 default <c>"normal"</c>) all
+    /// rank the same as an explicit <c>"normal"</c>, so a host with no
+    /// priorities set (or all-normal) never changes ordering.
+    /// </summary>
+    private static int PriorityRank(string? priority) => priority?.Trim().ToLowerInvariant() switch
+    {
+        QueueReprioritizeCommand.PriorityHigh => 0,
+        QueueReprioritizeCommand.PriorityLow => 2,
+        _ => 1,
+    };
+
     private static bool MatchesExecutionUnitRegex(Regex? regex, string executionUnit)
     {
         if (regex is null)

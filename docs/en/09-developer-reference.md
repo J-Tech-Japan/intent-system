@@ -947,6 +947,56 @@ entry inside `nodes` would previously degrade into an incidental
 
 ---
 
+### Canonical publish-order override — queue priority (G537)
+
+Field incident (2026-07-19): after the G529 closeout, the orchestrator
+ruled — with justification — to publish field-impact fixes G532/G534
+ahead of a G530/G531 continuation. `queue-state.json`'s `priority` field
+(values like `high` observed in the field) already existed, but no
+selection surface consulted it — the orchestrator faced the forbidden
+choice of hand-editing ordering state or abandoning the ruling, correctly
+abandoned it, and reported the gap.
+
+**`intent-cli queue reprioritize <execution-unit> --priority
+<high|normal|low> --reason <text> [--write]`** is the bounded canonical
+transition that closes this gap:
+
+- Only ever mutates a **queued, not-yet-published** item's `priority` —
+  refuses (no mutation, naming why) when the item's state isn't `queued`,
+  or when it already has a linked GitHub issue.
+- `--reason <text>` is required — a priority change without a recorded
+  reason is never permitted.
+- **Dry-run by default.** Without `--write`, the command reports the
+  exact mutation that would happen (old priority, requested priority,
+  whether anything would actually change) without touching
+  `queue-state.json`. `--write` is required to mutate and append the
+  `priority-changed` runs event (old/new priority plus the operator's
+  reason).
+- Requesting the item's current priority is a no-op (idempotent) — no
+  write, no runs event, `changed: false`.
+
+**`intent next-slice` orders eligible candidates priority-class-first
+(high > normal > low), with authoring order (queue-state array order) as
+the in-class tiebreak.** Every existing eligibility gate — packet
+directory presence, execution-unit namespace regex, domain/repo filter,
+G534's lifecycle-aware exclusion, and the legacy-retirement-marker check
+— still runs exactly as before, per candidate, inside the same loop;
+priority never lets a candidate skip a gate it would otherwise fail. It
+only reorders which already-eligible candidate is tried, and in which
+order, before that per-candidate gate loop runs. Because the reorder uses
+a **stable** sort, a host where every item carries the enqueue default
+(`"normal"`) — i.e. no priorities meaningfully set — produces
+byte-identical output to pre-G537 behavior.
+
+`QueueItem.Priority` remains a plain, unvalidated `string` at the schema
+level (unchanged) — `queue reprioritize` is the only writer that
+normalizes and validates it (`high`/`normal`/`low`, case-insensitive);
+`next-slice`'s ranking function treats any unrecognized/missing value as
+`normal` rather than erroring, so hand-authored or historical
+`queue-state.json` files never fail closed on this field.
+
+---
+
 ### Facet-aware context supply (G530)
 
 Building on G529's four semantic facets (`vocabulary`, `invariant`,
