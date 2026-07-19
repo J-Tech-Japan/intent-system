@@ -1007,6 +1007,232 @@ entry は、以前は意図的な provider diagnostic ではなく、偶発的�
 
 ---
 
+### Canonical な publish-order override — queue priority (G537)
+
+Field incident(2026-07-19): G529 の closeout 後、orchestrator は
+——正当な理由をもって——field-impact fix である G532/G534 を
+G530/G531 の continuation よりも先に publish するよう ruling を
+下しました。`queue-state.json` の `priority` field(field で観測された
+`high` のような値)は既に存在していましたが、どの selection surface も
+それを参照していませんでした——orchestrator は「host state を
+hand-edit するか、ruling を諦めるか」という禁じられた選択を迫られ、
+正しく ruling を諦めて gap を報告しました。
+
+**`intent-cli queue reprioritize <execution-unit> --priority
+<high|normal|low> --reason <text> [--write]`** は、この gap を埋める
+bounded canonical transition です:
+
+- **queued かつ未 publish** の item の `priority` のみを mutate します
+  ——item の state が `queued` でない場合、あるいは既に linked GitHub
+  issue がある場合は refuse します(mutation なし、理由を named)。
+- `--reason <text>` は必須です——理由が記録されない priority 変更は
+  決して許可されません。
+- **デフォルトは dry-run です。** `--write` なしでは、コマンドは
+  実際に起こる mutation(old priority、requested priority、実際に
+  何か変わるかどうか)を報告するだけで、`queue-state.json` には
+  一切触れません。mutate して `priority-changed` runs event(old/new
+  priority と operator の reason)を追記するには `--write` が必要です。
+- item の現在の priority を再度 request した場合は no-op(idempotent)
+  です——write も runs event も無く、`changed: false` です。
+
+**`intent next-slice` は、eligible な candidate を priority-class-first
+(high > normal > low)で order し、class 内では authoring order
+(queue-state array order)を tiebreak として使います。** 既存の
+すべての eligibility gate——packet directory の存在、execution-unit
+namespace regex、domain/repo filter、**dependency completeness /
+non-empty `blocked_by`**(review repair: `QueueSelection.SelectNext` が
+既に強制しているのと同じ rule——`dependencies` のすべての entry が
+`completed` であること、`blocked_by` が空であること)、G534 の
+lifecycle-aware exclusion、legacy-retirement-marker check——は、以前と
+全く同じように同じ loop 内で candidate ごとに実行され続けます。
+priority が、candidate が本来 fail するはずの gate を skip させる
+ことは決してありません。incomplete な dependency や non-empty な
+`blocked_by` を持つ "high" priority の queued unit は、eligible な
+lower-priority unit よりも先に選ばれることは決してありません——loop
+は単に、他の gate failure と全く同じように、priority/authoring order
+で次の candidate を試すだけです。priority が変えるのは、すでに
+eligible な candidate のうちどれを、どの順序で試すかだけであり、
+それは per-candidate の gate loop が走る**前**に行われます。この
+reorder は **stable** な sort を使うため、すべての item が enqueue
+のデフォルト値(`"normal"`)を持つ host——つまり実質的に priority が
+設定されていない host——では、G537 以前の挙動と byte-identical な
+出力になります。
+
+`QueueItem.Priority` は schema level では引き続き単なる、validate
+されない `string` です(変更なし)——`queue reprioritize` だけが
+それを normalize・validate します(`high`/`normal`/`low`、
+case-insensitive)。`next-slice` の ranking function は、認識できない
+値や欠けている値をすべて `normal` として扱い、error にはしません。
+そのため、手作業で書かれた、あるいは historical な `queue-state.json`
+ファイルがこの field によって fail closed することはありません。
+
+**Review repair — `queue reprioritize --write` は fail-closed かつ
+repairable な write 順序を使います。** `queue-state.json` を必須の
+`priority-changed` runs event の追記より先に書き込むと、追記 step が
+その後失敗した場合に、audit record の無い durable な priority mutation
+が残ってしまう可能性がありました。順序は逆にされています——runs
+event を**先に**追記し、`queue-state.json` は**後で**書き込みます:
+
+- event の追記が失敗した場合、`queue-state.json` は一切触れられません
+  ——durable な変更は何も起きておらず、単純な retry がまっさらな状態
+  から始まります。
+- event の追記が成功した後で `queue-state.json` の書き込みが失敗した
+  場合、state file がまだそれを反映していなくても、audit trail は
+  既に試みられた変更とその reason を証明します——silent で unaudited
+  な mutation には決してなりません。全く同じコマンドを再実行すると、
+  既に記録されている event を検出し、`queue-state.json` の書き込み
+  **のみ**を retry するため、convergence が duplicate な event を
+  生成することは決してありません。
+
+**Round-2 review repair(round 3 で置き換え済み)— dedup の match は
+まず `queue-state.json` の `UpdatedAt` timestamp に束縛されました。**
+これは本物の collision を修正するためでした: 全く同じ transition を
+後で replay した場合(例えば `normal→high` reason `R`、続いて
+`high→normal` reason `S`、そして再び `normal→high` reason `R`——これは
+正当な 3 番目の mutation です)、生成される reason 文字列が最初の
+event と byte-identical になるため、execution unit + event name +
+reason text だけに頼る素朴な dedup は、その stale な historical event
+を 3 番目の mutation の pending audit だと誤認してしまいます。
+
+**Round-3 review repair(round 4 で置き換え済み)— dedup の match は
+次に、mutation 前の `queue-state.json` bytes の SHA-256 content
+fingerprint に束縛されました。** これは round 2 の `Ts >= UpdatedAt`
+という束縛(timestamp が等しい場合や clock rollback で破綻し、そもそも
+`changedAt` が `UpdatedAt` を厳密に上回ることも保証していなかった)から
+wall-clock への依存を完全に排除するためでした。
+
+**Round-4 review repair — content fingerprint は bytes を識別するもの
+であり、この state machine は同一の bytes を再訪しうる。dedup token は
+今や、何かの fingerprint ではなく、durable かつ injective な
+`priority_revision` counter です。** round 3 の fingerprint は異なる
+content に対しては collision-resistant ですが、genuinely revisit
+可能です: 1 つの固定 clock のもとで `normal→high(R)`、続いて
+`high→normal(S)` を行うと、**元の file の bytes そのもの**が再現されて
+しまいます(同じ priority、同じ `updated_at`、その他すべて同じ)——
+これは仮定ではなく本物の revisit です。その後の `normal→high(R)`
+request は、最初の event と同一の fingerprint と tagged reason を計算
+してしまうため、fingerprint ベースの dedup は、その stale な最初の
+event を、正当に異なる 3 番目の mutation の pending event だと誤認
+します。
+
+`QueueItem` は今や `priority_revision` を持ちます——単なる `int` で、
+意図的に `required` にはしていません。そのため、この field より前の
+legacy な `queue-state.json` は、単に `0` として deserialize されます
+(正しい migration semantics です: revision の計測は、その item に
+初めて `queue reprioritize` が適用された時点から始まります)。成功した
+`--write` は必ずそれを 1 だけ進めます。記録される reason は今や
+`fromRevision->toRevision` のペアを持ちます(例: `... (revision
+0->1)`)。dedup の match は、その tagged reason(に加えて execution
+unit + event name)への exact match のままです——変わったのは tag の
+**source** だけです:
+
+- `toRevision` は、同一 item に対する 2 つの異なる成功した mutation
+  によって生成されることが数学的に決してありません: 各 mutation は、
+  durable に永続化された sequence の「次」の整数を厳密に消費し、一度
+  消費されると二度と「次」にはなりません——**`queue-state.json` の
+  他のすべての field が後で byte-identical な content に戻っても
+  関係ありません**。counter 自身がその同じ durable な content の一部
+  であり、常に前にしか進まないためです。
+- 本物の retry(失敗した queue-state write の後の re-run)は、両方の
+  試行で、依然として未 mutate な file から同じ `fromRevision` を
+  read します——失敗した attempt はその bump を書き込んでいません
+  ——そのため同一の `fromRevision->toRevision` ペアを計算し、自分
+  自身の既に記録された event を見つけます。
+- revision tag を全く持たない historical event(この fix より前の
+  データ、あるいは手作業で編集されたもの)は、新たに tag された
+  reason と exact-match することは決してありません。
+
+**Round-5 review repair — revision counter 自身に input validation が
+必要であり、recovery には bare existence check ではなく明示的な
+cardinality/ownership の classification が必要であり、最終 write には
+concurrent writer に対する保護が必要でした。**
+
+- `PriorityRevision` は制約のない `int` でした——negative な値も
+  問題なく deserialize され、`fromRevision + 1` は unchecked な
+  arithmetic であり、`int.MaxValue` で silently に `int.MinValue` へと
+  wrap し、monotonic/injective という invariant に直接違反していました。
+  dry-run と `--write` の両方が、今や何かを preview・mutate する**前**
+  に `PriorityRevision >= 0` を validate し、`checked` arithmetic で
+  `toRevision` を計算します——negative あるいは exhausted な revision
+  は、event も queue-state の write も無く fail closed し、手動の
+  修復を要求します。
+- Recovery は `events.Any(...)` という bare な existence check を
+  使っていました。revision pair が operation identity である以上、
+  同じ pair を claim する 2 つの IDENTICAL な event は silently に
+  「1 つの pending attempt」として受け入れられてしまい(本物の
+  duplication bug を隠蔽してしまいます)、genuinely CONFLICTING な
+  event——同じ pair だが異なる reason や direction——は silently に
+  無視され、その脇をすり抜けて 2 つ目の異なる event が追記されて
+  いました。recovery は今や明示的な classification です: **zero**
+  match → append しても安全、**ちょうど 1 つの exact match**(reason
+  も一致)→ in-progress な retry の pending audit、**2 つ以上の
+  identical match**、あるいは**同じ pair 上の任意の reason 不一致な
+  match** → fail closed(exit 1、queue-state は無傷のまま、
+  conflicting/duplicate な event を named)——どちらか一方に silently
+  に解決されることは決してありません。
+- `Execute` の先頭での read → event の追記 → queue write という
+  sequence は、今や stale な concurrent writer に対して保護されて
+  います。最終的な `queue-state.json` の write の直前に、file が
+  fresh に re-read されます。target item の `priority_revision` が、
+  この attempt が開始した時点の `fromRevision` と一致しなくなっていた
+  場合、write は refuse します(audit event は既に durably に記録
+  されているため、これは決して silent にはなりません)——concurrent
+  writer が生成したものを blind に上書きするのではなく。最終的な
+  mutation も、その **fresh** な re-read の上に適用されます
+  (`Execute` の先頭で読んだ stale な copy の上ではなく)。そのため、
+  他の field や item への無関係な concurrent change は、上書きされる
+  のではなく保持されます。
+
+**Round-6 review repair — round 5 の「re-read + compare」は依然として
+TOCTOU check であり、authoritative な mutual exclusion ではありません
+でした。** 2 つの concurrent な invocation が、両方とも同じ
+`priority_revision` を read し、両方とも event claim ゼロを classify
+し、両方とも自分自身の event を追記し、両方とも re-read してまだ
+変わっていない revision を見て、両方ともそのまま commit してしまう
+可能性がありました——同一の request であれば audit trail が
+duplicate し、異なる request であれば silently に last-writer-wins な
+state と conflicting な orphaned event が残ってしまいます。
+
+`--write` は今や、authoritative な queue-state/runs.jsonl の read
+**より前**に **non-blocking な OS-level exclusive lock**
+(`queue-state.json` の隣に置く stable な sibling file、例えば
+`queue-state.reprioritize.lock` に対する `FileShare.None`)を取得し、
+revision validation、event-claim の classification/追記、fresh な
+re-read、そして最終的な commit にわたってそれを保持し続けます——解放
+されるのは、この invocation が完全に完了した時だけです。同じ lock を
+取得できなかった 2 つ目の concurrent な invocation は、compare point
+に到達することすらなく、**即座に** fail closed します(wait も retry
+もありません)。dry-run は決して mutate せず、決して lock を取得
+しません。round 5 の fresh-re-read-and-rebuild は、その lock の
+**内側**に維持されます——これは、この lock を経由しない non-cooperating
+な writer(`queue-state.json` を直接 mutate する任意の tool)に対する
+保護であり続けます。一方、lock 自体が、2 つの **cooperating** な
+`queue reprioritize` invocation を互いに排他的にするものです。
+
+**Round-7 review repair — round 6 の保証には、throw する test callback
+によって lock が leak しうる境界がまだ一箇所残っていました。**
+test 専用の `OnLockAcquiredForTest` hook は、取得した lock stream を
+dispose する `try`/`finally` に入る**前**に発火していました。この
+callback から例外が飛ぶと(あるいは、同じ形で、`try` より前に誤って
+配置された将来の post-acquisition コードから飛んでも)、OS-level の
+lock handle が dispose されないまま残ってしまい——後続の独立した
+invocation は、GC/finalization がいずれ handle を閉じるまで、
+unbounded かつ non-deterministic な期間 lock され続けてしまいます。
+
+callback を含む、lock 取得後のすべての操作は、今や lock stream を
+dispose する `try`/`finally` の**内側**で実行されます——取得と
+guarded region は隣接しており、その間にあるのは callback の呼び出し
+だけです。callback (あるいは他の post-acquisition のステップ) が
+throw しても、他の invocation がそれを「利用不可」として観測できる
+期間を必要以上に長くする前に、例外が unwind する過程で lock は
+直ちに解放されます。新しい deterministic な test は、throw する
+callback を仕込んで、1 回目の call が例外を伝播しつつ queue/runs の
+state が byte 単位で変化していないことを確認し、その上で 2 回目の
+独立した call が同じ lock を直ちに取得して正常に完了することを
+確認します。
+
+---
+
 ### facet を意識した context 供給 (G530)
 
 G529 の 4 つの semantic facet（`vocabulary`、`invariant`、`decider`、

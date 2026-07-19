@@ -947,6 +947,212 @@ entry inside `nodes` would previously degrade into an incidental
 
 ---
 
+### Canonical publish-order override — queue priority (G537)
+
+Field incident (2026-07-19): after the G529 closeout, the orchestrator
+ruled — with justification — to publish field-impact fixes G532/G534
+ahead of a G530/G531 continuation. `queue-state.json`'s `priority` field
+(values like `high` observed in the field) already existed, but no
+selection surface consulted it — the orchestrator faced the forbidden
+choice of hand-editing ordering state or abandoning the ruling, correctly
+abandoned it, and reported the gap.
+
+**`intent-cli queue reprioritize <execution-unit> --priority
+<high|normal|low> --reason <text> [--write]`** is the bounded canonical
+transition that closes this gap:
+
+- Only ever mutates a **queued, not-yet-published** item's `priority` —
+  refuses (no mutation, naming why) when the item's state isn't `queued`,
+  or when it already has a linked GitHub issue.
+- `--reason <text>` is required — a priority change without a recorded
+  reason is never permitted.
+- **Dry-run by default.** Without `--write`, the command reports the
+  exact mutation that would happen (old priority, requested priority,
+  whether anything would actually change) without touching
+  `queue-state.json`. `--write` is required to mutate and append the
+  `priority-changed` runs event (old/new priority plus the operator's
+  reason).
+- Requesting the item's current priority is a no-op (idempotent) — no
+  write, no runs event, `changed: false`.
+
+**`intent next-slice` orders eligible candidates priority-class-first
+(high > normal > low), with authoring order (queue-state array order) as
+the in-class tiebreak.** Every existing eligibility gate — packet
+directory presence, execution-unit namespace regex, domain/repo filter,
+**dependency completeness / non-empty `blocked_by`** (review repair: the
+same rule `QueueSelection.SelectNext` already enforces — every
+`dependencies` entry must be `completed`, and `blocked_by` must be
+empty), G534's lifecycle-aware exclusion, and the legacy-retirement-marker
+check — still runs exactly as before, per candidate, inside the same
+loop; priority never lets a candidate skip a gate it would otherwise
+fail. A "high" priority queued unit with an incomplete dependency or a
+non-empty `blocked_by` is never selected ahead of an eligible
+lower-priority unit — the loop simply tries the next candidate in
+priority/authoring order, same as any other gate failure. Priority only
+reorders which already-eligible candidate is tried, and in which order,
+before that per-candidate gate loop runs. Because the reorder uses a
+**stable** sort, a host where every item carries the enqueue default
+(`"normal"`) — i.e. no priorities meaningfully set — produces
+byte-identical output to pre-G537 behavior.
+
+`QueueItem.Priority` remains a plain, unvalidated `string` at the schema
+level (unchanged) — `queue reprioritize` is the only writer that
+normalizes and validates it (`high`/`normal`/`low`, case-insensitive);
+`next-slice`'s ranking function treats any unrecognized/missing value as
+`normal` rather than erroring, so hand-authored or historical
+`queue-state.json` files never fail closed on this field.
+
+**Review repair — `queue reprioritize --write` uses a fail-closed,
+repairable write order.** Writing `queue-state.json` before appending the
+required `priority-changed` runs event could leave a durable priority
+mutation with no audit record if the append step then failed. The order
+is reversed — the runs event is appended **first**, `queue-state.json`
+**second**:
+
+- If the event append fails, `queue-state.json` is never touched at all
+  — no durable change happened, and a plain retry starts fresh.
+- If the event append succeeds but the `queue-state.json` write then
+  fails, the audit trail already proves the attempted change and its
+  reason even though the state file doesn't yet reflect it — never a
+  silent, unaudited mutation. Re-running the exact same command detects
+  the already-recorded event and retries **only** the `queue-state.json`
+  write, so convergence never produces a duplicate event.
+
+**Round-2 review repair (superseded by round 3 below) — the dedup match
+was first bound to `queue-state.json`'s `UpdatedAt` timestamp,** to fix a
+real collision: replaying the exact same transition later (e.g.
+`normal→high` reason `R`, then `high→normal` reason `S`, then
+`normal→high` reason `R` again — a genuine third mutation) produces a
+reason string byte-identical to the first event's, so a naive dedup on
+execution unit + event name + reason text alone would wrongly treat that
+stale historical event as the pending audit for the third mutation.
+
+**Round-3 review repair (superseded by round 4 below) — the dedup match
+was next bound to a SHA-256 content fingerprint of the pre-mutation
+`queue-state.json` bytes,** to eliminate all wall-clock dependence from
+round 2's `Ts >= UpdatedAt` bound (which broke at timestamp equality, on
+clock rollback, and because the write path never guaranteed `changedAt`
+strictly advances past `UpdatedAt` in the first place).
+
+**Round-4 review repair — a content fingerprint identifies BYTES, and
+this state machine can revisit identical bytes; the dedup token is now a
+durable, injective `priority_revision` counter, not a fingerprint of
+anything.** The round-3 fingerprint is collision-resistant for different
+content, but genuinely revisitable: `normal→high(R)` then `high→normal(S)`
+under one fixed clock reproduces the *exact original file bytes* (same
+priority, same `updated_at`, same everything) — a real revisit, not a
+hypothetical one. A subsequent `normal→high(R)` request then computes the
+identical fingerprint and tagged reason as the first event, so the
+fingerprint-based dedup wrongly treats that stale first event as pending
+for the third, genuinely distinct mutation.
+
+`QueueItem` now carries `priority_revision` — a plain `int`, deliberately
+NOT `required`, so a legacy `queue-state.json` predating this field
+simply deserializes it as `0` (the correct migration semantics: revision
+counting starts from the first `queue reprioritize` ever applied to a
+given item). Every successful `--write` bumps it by exactly 1. The
+recorded reason now carries the `fromRevision->toRevision` pair (e.g.
+`... (revision 0->1)`), and the dedup match is an exact match on that
+tagged reason (plus execution unit + event name), same as before — only
+the tag's *source* changed:
+
+- `toRevision` can mathematically never be produced by two distinct
+  successful mutations of the same item: each mutation strictly consumes
+  the "next" integer in the durably-persisted sequence, and once
+  consumed it is never the "next" one again — **regardless of whether
+  every other field of `queue-state.json` later cycles back to
+  byte-identical content**, since the counter itself is part of that same
+  durable content and only ever moves forward.
+- A genuine retry (failed queue-state write, then re-run) reads the SAME
+  `fromRevision` from the still-unmutated file both times — the failed
+  attempt never wrote the bump — so it computes the identical
+  `fromRevision->toRevision` pair and finds its own already-recorded
+  event.
+- A historical event with no revision tag at all (data predating this
+  fix, or hand-edited) can never exact-match a freshly-tagged reason.
+
+**Round-5 review repair — the revision counter itself needed input
+validation; recovery needed explicit cardinality/ownership classification
+instead of a bare existence check; and the final write needed protection
+against a concurrent writer.**
+
+- `PriorityRevision` was an unconstrained `int` — a negative value
+  deserialized successfully, and `fromRevision + 1` was unchecked
+  arithmetic that would silently wrap to `int.MinValue` at
+  `int.MaxValue`, directly violating the monotonic/injective invariant.
+  Both dry-run and `--write` now validate `PriorityRevision >= 0` and
+  compute `toRevision` with `checked` arithmetic **before** previewing or
+  mutating anything — a negative or exhausted revision fails closed with
+  no event and no queue-state write, requiring manual repair.
+- Recovery used `events.Any(...)` — a bare existence check. Since the
+  revision pair *is* the operation identity, two IDENTICAL events already
+  claiming the same pair were silently accepted as "one pending attempt"
+  (masking a real duplication bug), and a genuinely CONFLICTING event —
+  same pair, different reason or direction — was silently ignored, with a
+  second, different event appended right past it. Recovery is now an
+  explicit classification: **zero** matches → safe to append; **exactly
+  one EXACT match** (same reason too) → the pending audit for an
+  in-progress retry; **two or more identical matches**, or **any
+  mismatched-reason match** on the same pair → fails closed (exit 1,
+  queue-state untouched, naming the conflicting/duplicate event) rather
+  than silently resolved either direction.
+- The read (top of `Execute`) → event-append → queue-write sequence is
+  now protected against a stale concurrent writer. Immediately before the
+  final `queue-state.json` write, the file is re-read fresh; if the
+  target item's `priority_revision` no longer equals the `fromRevision`
+  this attempt started from, the write refuses (the audit event is
+  already durably recorded, so this is never silent) rather than
+  blindly overwriting whatever a concurrent writer produced. The final
+  mutation is also applied onto that **fresh** re-read (not the stale
+  copy from the top of `Execute`), so an unrelated concurrent change to
+  any *other* field or item is preserved rather than clobbered.
+
+**Round-6 review repair — the round-5 "re-read + compare" was still a
+TOCTOU check, not authoritative mutual exclusion.** Two concurrent
+invocations could both read the same `priority_revision`, both classify
+zero event claims, both append their own event, both re-read and see the
+still-unchanged revision, and both then commit — with identical requests
+that duplicates the audit trail; with different requests it silently
+produces last-writer-wins state with a conflicting orphaned event.
+
+`--write` now acquires a **non-blocking, OS-level exclusive lock**
+(`FileShare.None` on a stable sibling file next to `queue-state.json`,
+e.g. `queue-state.reprioritize.lock`) **before** the authoritative
+queue-state/runs.jsonl read, and holds it across revision validation,
+event-claim classification/append, the fresh re-read, and the final
+commit — released only once the invocation is completely done. A second,
+concurrent invocation that cannot acquire the same lock fails closed
+**immediately** (no wait, no retry) rather than racing to the compare
+point at all. Dry-run never mutates and never takes the lock. The
+round-5 fresh-re-read-and-rebuild is retained *underneath* the lock — it
+still protects against a non-cooperating writer (any tool that mutates
+`queue-state.json` without going through this lock), while the lock
+itself is what makes two *cooperating* `queue reprioritize` invocations
+mutually exclusive.
+
+**Round-7 review repair — the lock could still leak on a throwing
+test callback, one boundary short of the round-6 guarantee.** The
+test-only `OnLockAcquiredForTest` hook fired *before* entering the
+`try`/`finally` that disposes the acquired lock stream. Any exception
+from that callback (or, by the same shape, any future post-acquisition
+code accidentally placed ahead of the `try`) would leave the OS-level
+lock handle undisposed — a subsequent independent invocation would stay
+locked out until GC/finalization eventually closed the handle, an
+unbounded and non-deterministic window.
+
+Every post-acquisition operation, including the callback, now runs
+*inside* the `try`/`finally` that disposes the lock stream — acquisition
+and the guarded region are adjacent with nothing but the callback
+invocation between them. A callback (or any post-acquisition step) that
+throws still releases the lock immediately as the exception unwinds,
+before any other invocation could observe it as unavailable for longer
+than necessary. A new deterministic test seeds a throwing callback,
+confirms the first call propagates the exception with the queue/runs
+state left byte-unchanged, and then confirms a second, independent call
+acquires the same lock immediately and completes normally.
+
+---
+
 ### Facet-aware context supply (G530)
 
 Building on G529's four semantic facets (`vocabulary`, `invariant`,

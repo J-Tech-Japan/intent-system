@@ -36,4 +36,20 @@ public sealed record QueueItem
     /// optionally suffixed with an operator note. Null for every other state.
     /// </summary>
     public string? RetirementReason { get; init; }
+
+    /// <summary>
+    /// G537 round-4 review repair: a durable, monotonically-incrementing
+    /// counter bumped by exactly 1 on every successful <c>queue
+    /// reprioritize --write</c>. Deliberately NOT <c>required</c> — legacy
+    /// <c>queue-state.json</c> files predating this field simply
+    /// deserialize it as <c>0</c> (the JSON default for an absent `int`
+    /// property), which is the correct migration semantics: revision
+    /// counting starts from the first reprioritize this command ever
+    /// applies to a given item. Unlike a content fingerprint of the whole
+    /// file, this value can never recur for two distinct mutations of the
+    /// same item, even if every other field of <c>queue-state.json</c>
+    /// later cycles back to byte-identical content — it only ever moves
+    /// forward.
+    /// </summary>
+    public int PriorityRevision { get; init; }
 }
