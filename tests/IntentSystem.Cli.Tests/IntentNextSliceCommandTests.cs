@@ -461,12 +461,15 @@ public sealed class IntentNextSliceCommandTests
     }
 
     [Fact]
-    public void Execute_LifecycleRetiredContradictsQueueNotRetired_ExcludedRegardless()
+    public void Execute_LifecycleRetiredContradictsQueueNotRetired_ExcludedWithDiagnostic()
     {
-        // G534 review repair: "active-vs-retired", direction 2 — a packet
-        // lifecycle already marked retired excludes the unit even though
-        // queue-state does not (yet) agree. This direction pre-dates G534
-        // (G474/G525) and must keep working unchanged.
+        // G534 review repair (round 2): "active-vs-retired", direction 2 —
+        // a packet lifecycle already marked retired excludes the unit even
+        // though a PRESENT queue entry does not (yet) agree. Exclusion
+        // itself pre-dates G534 (G474/G525) and must keep working
+        // unchanged — but this contradiction must now ALSO be diagnosed
+        // (previously silent), so a later, unrelated candidate can never
+        // hide the inconsistent earlier unit.
         using var workspace = new IntentNextSliceWorkspace();
         workspace.WriteFile(
             ".intent-cli/issues/G244/github-body.md",
@@ -507,6 +510,114 @@ public sealed class IntentNextSliceCommandTests
         var root = document.RootElement;
         Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
         Assert.Equal("G245", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()).ToArray();
+        Assert.Contains("lifecycle-metadata-diagnostic", warnings);
+        var notes = root.GetProperty("notes").EnumerateArray().Select(n => n.GetString()).ToArray();
+        Assert.Contains(notes, note => note!.Contains("G244", StringComparison.Ordinal)
+            && note.Contains("contradict", StringComparison.OrdinalIgnoreCase)
+            && note.Contains("queued", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_LifecycleRetiredContradictsQueueActive_MarkdownFormat_IncludesDiagnostic()
+    {
+        // G534 review repair (round 2): the same reverse-direction
+        // contradiction, verified in the `--format markdown` renderer too
+        // — the Markdown output must not silently omit the diagnostic
+        // note/warning that the JSON output carries.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: retired\n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "lifecycle retired, queue active",
+                  "state": "active",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var markdown = writer.ToString();
+        Assert.Contains("lifecycle-metadata-diagnostic", markdown, StringComparison.Ordinal);
+        Assert.Contains("G244", markdown, StringComparison.Ordinal);
+        Assert.Contains("contradict", markdown, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_LifecycleActiveContradictsQueueRetired_MarkdownFormat_IncludesDiagnostic()
+    {
+        // G534 review repair (round 2): direction 1's diagnostic, verified
+        // in the `--format markdown` renderer too.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: ready\n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "contradiction: queue retired, lifecycle ready",
+                  "state": "retired",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var markdown = writer.ToString();
+        Assert.Contains("lifecycle-metadata-diagnostic", markdown, StringComparison.Ordinal);
+        Assert.Contains("G244", markdown, StringComparison.Ordinal);
+        Assert.Contains("contradict", markdown, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

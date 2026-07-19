@@ -550,11 +550,24 @@ transition target として受け付けられるようになりましたが —
 `automation issue-retire` 自身の refusal(G525)と一貫した、専用の
 guarded な entry point(`QueueManager.Retire`)を持ちます:
 
-- `Completed` 以外のどの state からも legal です — completed な item
-  (merge 済み、あるいは何らかの形で完了済みの作業。linked PR を持つ
-  ものも含む)は、mutation も run event もゼロのまま retirement を
-  refuse します。retirement は authored 通りには決して完了できない作業
-  にのみ適用されるためです;
+- `Completed` 以外のどの state からも legal です — completed な item は
+  mutation も run event もゼロのまま retirement を refuse します。
+  retirement は authored 通りには決して完了できない作業にのみ適用され
+  るためです;
+- **linked PR こそが authoritative な evidence であり、queue-state
+  自体ではありません** — queue-state は stale になり得るため、何かを
+  mutate する前に CLI boundary がその item の `linked_pr`(存在すれば)
+  を `gh pr view` 経由で解決し、その PR が **merged または closed**
+  であると確認された場合は retirement を拒否します — queue-state が
+  まだ非 `Completed`(`Queued`/`Review`/`Fixing`)と言っている item で
+  あってもです。linked PR の state が解決できない場合(lookup 失敗、
+  parse 不能・誤った repo の URL、曖昧な response)も retirement は
+  refuse します — fail closed であり、open だと推定することは決してあり
+  ません。linked PR が一切無い item は、この check を完全にスキップし
+  ます(検証するものが無いため)。この lookup が retirement path の中で
+  GitHub に到達することが許されている唯一の場所です —
+  `QueueManager.Retire` 自体は network-free のままで、既に検証済みの
+  evidence を受け取るだけです;
 - 既に `Retired` な item に対しては idempotent です — 何も変更しない
   no-op であり、何度再実行しても重複した `retired` run event が追記
   されることはありません;
@@ -586,11 +599,19 @@ key の欠落、blank、または未知の値)— そしてそれを queue-state
   `automation issue-retire` や `queue transition --to retired` 経由の
   queue のみによる retirement)でも成り立ちます;
 - 明示的な `lifecycle: ready` は queue-state の `Retired` レコードを
-  上書き**しません** — その組み合わせは contradiction であり、それでも
-  除外され、actionable な diagnostic
-  (`lifecycle-metadata-diagnostic` warning。unit 名と sidecar path を
-  記した note 付き)として表示されます。どちらの方向にも黙って解決
-  されるのではなく、reconcile できるようにするためです;
+  上書き**せず**、また non-publishable な `lifecycle.yaml` も、
+  *存在する* queue-state エントリが `Retired` ではない
+  (`queued`/`active`/`review`/`fixing`/…)からといって上書きされること
+  は**ありません** — どちらの方向も contradiction であり、それでも
+  除外されます。そして今回、どちらの方向も actionable な diagnostic
+  (`lifecycle-metadata-diagnostic` warning。unit 名・sidecar path・
+  両方の state を記した note 付き)として表示されるようになりました —
+  以前はどちらの方向も黙って解決されていました。後続の、無関係な
+  candidate が、先行する unit の矛盾した evidence を隠してしまうことは
+  もう決してありません;
+- agreement(両方の signal が retired)や、queue エントリが**一切無い**
+  lifecycle のみによる retirement は contradiction ではなく、以前と
+  同じく黙って除外されます;
 - invalid な lifecycle metadata(unreadable、blank、key の欠落、または
   未知の値)は、queue state に関わらず unit を除外し、同じ diagnostic
   を発生させます — 曖昧な retirement evidence は決して

@@ -373,7 +373,7 @@ internal static class IntentNextSliceCommand
                     continue;
                 }
 
-                if (IsExcludedByLifecycle(executionUnit, directory, retired, lifecycleDiagnostics))
+                if (IsExcludedByLifecycle(executionUnit, directory, queueState, lifecycleDiagnostics))
                 {
                     continue;
                 }
@@ -418,7 +418,7 @@ internal static class IntentNextSliceCommand
                         continue;
                     }
 
-                    if (IsExcludedByLifecycle(executionUnit, directory, retired, lifecycleDiagnostics))
+                    if (IsExcludedByLifecycle(executionUnit, directory, queueState, lifecycleDiagnostics))
                     {
                         continue;
                     }
@@ -505,17 +505,22 @@ internal static class IntentNextSliceCommand
     }
 
     /// <summary>
-    /// G534 review repair: combines queue-state retirement evidence
-    /// (<paramref name="queueRetiredUnits"/>) with the packet's own
-    /// <c>lifecycle.yaml</c> evidence explicitly, instead of consulting only
-    /// one signal or treating an unreadable/malformed sidecar as if no
-    /// sidecar existed:
+    /// G534 review repair: combines queue-state retirement evidence with the
+    /// packet's own <c>lifecycle.yaml</c> evidence explicitly, instead of
+    /// consulting only one signal or treating an unreadable/malformed
+    /// sidecar as if no sidecar existed:
     /// <list type="bullet">
     /// <item>either signal alone recording retirement excludes the unit;</item>
     /// <item>an explicit <c>lifecycle: ready</c> does NOT override a
-    /// queue-state <c>Retired</c> record — that combination is a
-    /// contradiction, still excluded, and surfaced as a diagnostic so it can
-    /// be reconciled;</item>
+    /// queue-state <c>Retired</c> record, and a non-publishable
+    /// <c>lifecycle.yaml</c> does NOT get overridden by a queue-state entry
+    /// that is present but NOT <c>Retired</c> (queued/active/review/fixing/
+    /// blocked/etc.) — both directions are contradictions, still excluded,
+    /// and surfaced as a diagnostic naming both the lifecycle path/state and
+    /// the queue path/state so they can be reconciled;</item>
+    /// <item>agreement (both signals retired) and a lifecycle-only
+    /// retirement with NO queue entry at all are NOT contradictions — they
+    /// exclude silently, exactly as before;</item>
     /// <item>an unreadable, blank, missing-key, or unrecognized lifecycle
     /// value is <see cref="PacketLifecycleState.Invalid"/> — excluded and
     /// diagnosed (fail closed) regardless of queue state, since ambiguous
@@ -527,11 +532,13 @@ internal static class IntentNextSliceCommand
     private static bool IsExcludedByLifecycle(
         string executionUnit,
         string directory,
-        HashSet<string> queueRetiredUnits,
+        QueueState? queueState,
         List<string> lifecycleDiagnostics)
     {
         var outcome = PacketLifecycle.ReadState(directory);
-        var isQueueRetired = queueRetiredUnits.Contains(executionUnit);
+        var queueItem = queueState?.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+        var isQueueRetired = queueItem?.State == QueueItemState.Retired;
 
         switch (outcome.State)
         {
@@ -543,6 +550,21 @@ internal static class IntentNextSliceCommand
                 return true;
 
             case PacketLifecycleState.ValidRetired:
+                if (queueItem is not null && queueItem.State != QueueItemState.Retired)
+                {
+                    // Reverse-direction contradiction: lifecycle says
+                    // non-publishable, but a queue entry exists and is NOT
+                    // Retired — the unit is still excluded (lifecycle wins
+                    // for exclusion purposes, same as G474/G525 predate
+                    // this fix), but the disagreement is diagnosed so a
+                    // later, unrelated candidate cannot silently hide it.
+                    lifecycleDiagnostics.Add(
+                        $"packet '{executionUnit}' has contradictory retirement evidence: lifecycle.yaml at "
+                        + $"{outcome.SidecarPath} declares it non-publishable ('{outcome.Metadata?.Lifecycle}') "
+                        + $"but queue-state records it as '{FormatQueueStateForDiagnostic(queueItem.State)}'; "
+                        + "excluded from next-slice selection until the contradiction is reconciled.");
+                }
+
                 return true;
 
             case PacketLifecycleState.ValidActive when isQueueRetired:
@@ -559,6 +581,15 @@ internal static class IntentNextSliceCommand
             default:
                 return isQueueRetired;
         }
+    }
+
+    private static string FormatQueueStateForDiagnostic(QueueItemState state)
+    {
+        return state switch
+        {
+            QueueItemState.ClarifyBlocked => "clarify-blocked",
+            _ => state.ToString().ToLowerInvariant()
+        };
     }
 
     private static IntentNextSliceCandidate BuildCandidate(string executionUnit, string directory)

@@ -144,11 +144,24 @@ public static class QueueManager
     /// in <see cref="TransitionNonBlocking"/> / <see cref="TransitionBlocking"/>,
     /// which refuses every other transition away from it.
     /// </summary>
+    /// <param name="linkedPrVerification">
+    /// G534 review repair: queue-state alone is not authoritative for
+    /// whether an item's linked PR is actually done — a stale
+    /// <c>Queued</c>/<c>Review</c>/<c>Fixing</c> item whose linked PR was
+    /// separately merged or closed must refuse retirement exactly like a
+    /// <see cref="QueueItemState.Completed"/> item does, and an
+    /// unverifiable linked PR must fail closed rather than being presumed
+    /// open. The caller resolves this (e.g. via <c>gh pr view</c>) before
+    /// calling — <see cref="QueueManager"/> never performs the lookup
+    /// itself. Defaults to <see cref="LinkedPrVerification.NotLinked"/> for
+    /// callers that already know the item has no linked PR.
+    /// </param>
     public static QueueRetireResult Retire(
         QueueState state,
         string executionUnit,
         string by,
-        DateTimeOffset ts)
+        DateTimeOffset ts,
+        LinkedPrVerification linkedPrVerification = LinkedPrVerification.NotLinked)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
@@ -172,6 +185,25 @@ public static class QueueManager
                 WasRetired = false,
                 Event = null
             };
+        }
+
+        // G534 review repair: queue-state can be stale — a Queued/Review/
+        // Fixing/etc. item whose linked PR was separately merged or closed
+        // must refuse retirement exactly like a Completed item does, and an
+        // unverifiable linked PR must fail closed rather than being
+        // presumed open.
+        if (linkedPrVerification == LinkedPrVerification.ConfirmedMergedOrClosed)
+        {
+            throw new InvalidOperationException(
+                $"Cannot retire execution unit '{executionUnit}': its linked PR is merged or closed "
+                + "(queue-state is stale); retirement only applies to work that can never be completed as authored.");
+        }
+
+        if (linkedPrVerification == LinkedPrVerification.Unverifiable)
+        {
+            throw new InvalidOperationException(
+                $"Cannot retire execution unit '{executionUnit}': its linked PR state could not be verified; "
+                + "refusing to retire on unverifiable evidence (fail closed).");
         }
 
         var runEvent = new RunEvent

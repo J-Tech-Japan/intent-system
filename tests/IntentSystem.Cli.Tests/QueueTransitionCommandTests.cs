@@ -280,6 +280,190 @@ public sealed class QueueTransitionCommandTests
         Assert.Empty(File.ReadAllText(runLogPath));
     }
 
+    // ─── G534 review repair: authoritative linked-PR preflight ───────────────
+
+    [Theory]
+    [InlineData("queued", "MERGED", false)]
+    [InlineData("queued", "CLOSED", false)]
+    [InlineData("review", "MERGED", false)]
+    [InlineData("review", "CLOSED", false)]
+    [InlineData("fixing", "MERGED", false)]
+    [InlineData("fixing", "CLOSED", false)]
+    public void Execute_GivenRetiredTargetOnStaleNonCompletedItemWithMergedOrClosedLinkedPr_RefusesWithoutMutation(
+        string sourceState, string linkedPrState, bool merged)
+    {
+        // G534 review repair (round 2): queue-state alone is stale
+        // evidence — a Queued/Review/Fixing item whose LINKED PR is
+        // already MERGED or CLOSED must refuse retirement exactly like a
+        // Completed item does, with zero queue/run mutation.
+        var targetState = sourceState switch
+        {
+            "queued" => QueueItemState.Queued,
+            "review" => QueueItemState.Review,
+            "fixing" => QueueItemState.Fixing,
+            _ => throw new InvalidOperationException("unexpected state")
+        };
+
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        var queueStateContents = QueueStateSerializer.Serialize(new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items = [CreateItem("A2", targetState) with { LinkedPr = "https://github.com/org/repo/pull/42" }]
+        });
+        tempDirectory.CreateFile(queueStatePath, queueStateContents);
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(runLogPath, string.Empty);
+        using var writer = new StringWriter();
+
+        QueueTransitionCommand.PrLookupFactory = () => new StubLinkedPrLookup
+        {
+            State = linkedPrState,
+            Merged = merged
+        };
+        try
+        {
+            var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("merged or closed", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(queueStateContents, File.ReadAllText(queueStatePath));
+            Assert.Empty(File.ReadAllText(runLogPath));
+        }
+        finally
+        {
+            QueueTransitionCommand.PrLookupFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenRetiredTargetWithVerifiedOpenLinkedPr_Succeeds()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(new QueueState
+            {
+                SchemaVersion = "1",
+                UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+                Items = [CreateItem("A2", QueueItemState.Queued) with { LinkedPr = "https://github.com/org/repo/pull/42" }]
+            }));
+        using var writer = new StringWriter();
+
+        QueueTransitionCommand.PrLookupFactory = () => new StubLinkedPrLookup { State = "OPEN" };
+        try
+        {
+            var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+            Assert.Equal(0, exitCode);
+            var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+            Assert.Equal(QueueItemState.Retired, updatedState.Items.Single(item => item.ExecutionUnit == "A2").State);
+        }
+        finally
+        {
+            QueueTransitionCommand.PrLookupFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenRetiredTargetWithUnresolvableLinkedPrLookup_RefusesWithoutMutation()
+    {
+        // G534 review repair: a lookup failure (network error, PR/repo not
+        // found, etc.) must fail closed — never presumed open.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        var queueStateContents = QueueStateSerializer.Serialize(new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items = [CreateItem("A2", QueueItemState.Queued) with { LinkedPr = "https://github.com/some-other-org/some-other-repo/pull/7" }]
+        });
+        tempDirectory.CreateFile(queueStatePath, queueStateContents);
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(runLogPath, string.Empty);
+        using var writer = new StringWriter();
+
+        string? observedRepo = null;
+        QueueTransitionCommand.PrLookupFactory = () => new StubLinkedPrLookup
+        {
+            OnLookup = repo => observedRepo = repo,
+            ThrowOnLookup = new InvalidOperationException("`gh pr view` failed: no such PR in that repo")
+        };
+        try
+        {
+            var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("could not be verified", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(queueStateContents, File.ReadAllText(queueStatePath));
+            Assert.Empty(File.ReadAllText(runLogPath));
+            // The repo/PR were resolved from the linked-PR URL itself (not
+            // assumed same-repo) before the lookup was attempted.
+            Assert.Equal("some-other-org/some-other-repo", observedRepo);
+        }
+        finally
+        {
+            QueueTransitionCommand.PrLookupFactory = null;
+        }
+    }
+
+    [Fact]
+    public void Execute_GivenRetiredTargetWithMalformedLinkedPrUrl_RefusesWithoutMutation()
+    {
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        var queueStateContents = QueueStateSerializer.Serialize(new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+            Items = [CreateItem("A2", QueueItemState.Queued) with { LinkedPr = "not-a-valid-url" }]
+        });
+        tempDirectory.CreateFile(queueStatePath, queueStateContents);
+        var runLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
+        tempDirectory.CreateFile(runLogPath, string.Empty);
+        using var writer = new StringWriter();
+
+        var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("could not be verified", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(queueStateContents, File.ReadAllText(queueStatePath));
+        Assert.Empty(File.ReadAllText(runLogPath));
+    }
+
+    [Fact]
+    public void Execute_GivenRetiredTargetWithNoLinkedPr_SkipsLookupAndSucceeds()
+    {
+        // Pins that an item with NO linked PR never triggers a GitHub call
+        // at all — PrLookupFactory is left unset (would throw if invoked
+        // since GhCliGitHubPrLookup shells to a real `gh` binary that may
+        // not exist in this environment).
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueStatePath = Path.Combine(repoRoot, ".intent-cli", "queue-state.json");
+        tempDirectory.CreateFile(
+            queueStatePath,
+            QueueStateSerializer.Serialize(new QueueState
+            {
+                SchemaVersion = "1",
+                UpdatedAt = DateTimeOffset.Parse("2026-04-03T10:12:34Z"),
+                Items = [CreateItem("A2", QueueItemState.Queued)]
+            }));
+        using var writer = new StringWriter();
+
+        var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "retired"], writer);
+
+        Assert.Equal(0, exitCode);
+        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
+        Assert.Equal(QueueItemState.Retired, updatedState.Items.Single(item => item.ExecutionUnit == "A2").State);
+    }
+
     [Fact]
     public void Execute_GivenMissingRunLog_CreatesRunLogFile()
     {
@@ -463,6 +647,42 @@ public sealed class QueueTransitionCommandTests
             ReviewRole = "reviewer",
             Priority = "normal"
         };
+    }
+
+    /// <summary>
+    /// G534 review repair: parametric <see cref="IGitHubPrLookup"/> fake for
+    /// verifying a linked PR's state before retirement, without shelling out
+    /// to a real <c>gh</c> binary. <see cref="ThrowOnLookup"/> simulates a
+    /// lookup failure (network error, wrong repo, PR not found, etc.).
+    /// <see cref="OnLookup"/> optionally captures the resolved
+    /// <c>repo</c> argument for assertions.
+    /// </summary>
+    private sealed class StubLinkedPrLookup : IGitHubPrLookup
+    {
+        public string State { get; init; } = "OPEN";
+
+        public bool Merged { get; init; }
+
+        public Exception? ThrowOnLookup { get; init; }
+
+        public Action<string>? OnLookup { get; init; }
+
+        public GitHubPrLookupResult Lookup(string repo, int prNumber)
+        {
+            OnLookup?.Invoke(repo);
+
+            if (ThrowOnLookup is not null)
+            {
+                throw ThrowOnLookup;
+            }
+
+            return new GitHubPrLookupResult
+            {
+                Number = prNumber,
+                State = State,
+                Merged = Merged
+            };
+        }
     }
 
     private sealed class TemporaryDirectory : IDisposable

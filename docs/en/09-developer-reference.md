@@ -531,11 +531,21 @@ generic, source-state-agnostic transition path; it has its own guarded
 entry point (`QueueManager.Retire`) consistent with `automation
 issue-retire`'s own refusal (G525):
 
-- legal from any state except `Completed` — a completed item (merged or
-  otherwise finished work, including one that still carries a linked PR)
-  refuses retirement with zero mutation and zero run event, since
-  retirement only ever applies to work that can never be completed as
-  authored;
+- legal from any state except `Completed` — a completed item refuses
+  retirement with zero mutation and zero run event, since retirement only
+  ever applies to work that can never be completed as authored;
+- **the linked PR is the authoritative evidence, not queue-state itself** —
+  queue-state can be stale, so before mutating anything the CLI boundary
+  resolves the item's `linked_pr` (if any) via `gh pr view` and refuses
+  retirement outright when that PR is confirmed **merged or closed**, even
+  for a `Queued`/`Review`/`Fixing` item that queue-state still calls
+  non-`Completed`. When the linked PR's state cannot be resolved (lookup
+  failure, unparseable/wrong-repo URL, an ambiguous response) retirement
+  also refuses — fail closed, never presumed open. An item with no linked
+  PR at all skips this check entirely (nothing to verify). This lookup is
+  the one place in the retirement path permitted to reach GitHub;
+  `QueueManager.Retire` itself stays network-free and simply receives the
+  already-verified evidence;
 - idempotent when the item is already `Retired` — a no-op that changes
   nothing and never appends a duplicate `retired` run event, however many
   times it is re-run;
@@ -563,10 +573,17 @@ signal:
   retirement) or no `lifecycle.yaml` at all (a queue-only retirement, e.g.
   via `automation issue-retire` or `queue transition --to retired`);
 - an explicit `lifecycle: ready` does **not** override a queue-state
-  `Retired` record — that combination is a contradiction, still excluded,
-  and surfaced as an actionable diagnostic (`lifecycle-metadata-diagnostic`
-  warning, with a note naming the unit and the sidecar path) so it can be
-  reconciled instead of silently resolved either direction;
+  `Retired` record, and a non-publishable `lifecycle.yaml` does **not** get
+  overridden by a *present* queue-state entry that is not `Retired`
+  (`queued`/`active`/`review`/`fixing`/…) — both directions are
+  contradictions, still excluded, and both are now surfaced as an
+  actionable diagnostic (`lifecycle-metadata-diagnostic` warning, with a
+  note naming the unit, the sidecar path, and both states) instead of
+  either direction resolving silently — a later, unrelated candidate can
+  never hide an earlier unit's inconsistent evidence;
+- agreement (both signals retired) and a lifecycle-only retirement with
+  **no queue entry at all** are not contradictions and stay silent —
+  exactly as before;
 - invalid lifecycle metadata (unreadable, blank, missing key, or an
   unrecognized value) excludes the unit and raises the same diagnostic
   regardless of queue state — ambiguous retirement evidence must never
