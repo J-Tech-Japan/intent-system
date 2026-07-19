@@ -258,6 +258,43 @@ public sealed class PacketDraftCommandTests
     }
 
     [Fact]
+    public void Execute_IntentReferenceIsAbsolutePathWithTraversalSegment_RejectedNotSilentlyCanonicalized()
+    {
+        // Round-4 review repair: an intent_references entry that is an
+        // ABSOLUTE path containing ".." — resolving right back to a real
+        // in-domain node — must still be rejected as a scope hint, not
+        // silently canonicalized into a match, and must surface in the
+        // generated block's Scope warnings.
+        using var workspace = new PacketDraftWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var packetDir = Path.Combine(workspace.RepoRoot, ".intent-cli", "issues", "G530");
+        Directory.CreateDirectory(packetDir);
+        var domainRoot = Path.Combine(workspace.RepoRoot, "intents", "intent-cli");
+        var traversalReference = Path.Combine(domainRoot, "identity", "..", "identity", "mission.md").Replace('\\', '/');
+        File.WriteAllText(
+            Path.Combine(packetDir, "packet.yaml"),
+            $"""
+            implementation_issue_packet:
+              source_execution_unit: G530
+              domain: intent-cli
+              intent_references:
+                - {traversalReference}
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(workspace.Context, ["--execution-unit", "G530"], writer);
+
+        Assert.Equal(0, exitCode);
+        var reviewContext = File.ReadAllText(Path.Combine(packetDir, "review-context.md"));
+        Assert.Contains("Scope warnings", reviewContext, StringComparison.Ordinal);
+        Assert.Contains(traversalReference, reviewContext, StringComparison.Ordinal);
+        Assert.Contains("traversal", reviewContext, StringComparison.OrdinalIgnoreCase);
+        // Rejected, so the node it would otherwise canonicalize to is never
+        // matched — each facet group falls back to the "no overlap" note.
+        Assert.Contains("(none overlapping this packet's intent_references)", reviewContext, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_RegenerationWithUnchangedReferences_StatusIsSkippedNotSpuriouslyUpdated()
     {
         using var workspace = new PacketDraftWorkspace();

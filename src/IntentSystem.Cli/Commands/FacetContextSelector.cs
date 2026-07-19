@@ -258,6 +258,25 @@ internal static class FacetContextSelector
 
         var normalized = hint.Trim().Replace('\\', '/');
 
+        // G530 review repair: reject a literal ".." segment on the
+        // NORMALIZED ORIGINAL hint text — before any filesystem
+        // canonicalization. For an absolute hint, Path.GetFullPath below
+        // would silently RESOLVE (and thereby hide) a traversal such as
+        // "<domainRoot>/identity/../identity/mission.md" before the old
+        // post-canonicalization segment loop ever saw it, so an absolute
+        // hint using ".." syntax was wrongly accepted while the identical
+        // RELATIVE hint text was correctly rejected. Checking here — on the
+        // slash-unified text, which already folds backslash separators in,
+        // so a mixed-separator traversal can't hide either — applies the
+        // same rejection uniformly to both hint forms, and never flags a
+        // benign segment that merely contains a dot (only a segment that is
+        // LITERALLY "..").
+        if (normalized.Split('/').Any(segment => segment == ".."))
+        {
+            rejectionReason = "contains a '..' traversal segment, which is rejected rather than resolved";
+            return null;
+        }
+
         if (Path.IsPathRooted(normalized))
         {
             string fullHintPath;

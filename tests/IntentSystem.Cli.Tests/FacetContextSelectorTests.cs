@@ -406,6 +406,40 @@ public sealed class FacetContextSelectorTests : IDisposable
     }
 
     [Fact]
+    public void Select_AbsoluteHintWithTraversalSegment_RejectedNotSilentlyCanonicalized()
+    {
+        // Round-4 review repair: an ABSOLUTE hint containing ".." must be
+        // rejected on its ORIGINAL text before Path.GetFullPath gets a
+        // chance to canonicalize the traversal away — this hint resolves
+        // right back to the real node's path, so if the traversal check ran
+        // AFTER canonicalization (the prior bug) it would wrongly match.
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        var hint = Path.Combine(domainRoot, "identity", "..", "identity", "mission.md");
+
+        var selection = FacetContextSelector.Select(domainRoot, "intent-cli", scopeHints: [hint], facetFilter: null);
+
+        var warning = Assert.Single(selection.ScopeWarnings);
+        Assert.Equal(hint, warning.Hint);
+        Assert.Contains("traversal", warning.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(selection.AllScopeHintsRejected);
+        Assert.Empty(selection.Groups.Single(g => g.Facet == "vocabulary").Nodes);
+    }
+
+    [Fact]
+    public void Select_AbsoluteHintWithMixedSeparatorTraversal_RejectedNotSilentlyCanonicalized()
+    {
+        WriteNode("identity/mission.md", ["vocabulary"]);
+        var hint = Path.Combine(domainRoot, "identity") + @"\..\identity\mission.md";
+
+        var selection = FacetContextSelector.Select(domainRoot, "intent-cli", scopeHints: [hint], facetFilter: null);
+
+        var warning = Assert.Single(selection.ScopeWarnings);
+        Assert.Equal(hint, warning.Hint);
+        Assert.Contains("traversal", warning.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(selection.Groups.Single(g => g.Facet == "vocabulary").Nodes);
+    }
+
+    [Fact]
     public void Select_MixedValidAndInvalidScopeHints_UsesValidOnes_ReportsOnlyTheRejectedOnes()
     {
         WriteNode("identity/mission.md", ["vocabulary"]);

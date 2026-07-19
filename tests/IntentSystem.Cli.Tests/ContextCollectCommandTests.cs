@@ -424,6 +424,54 @@ public sealed class ContextCollectCommandTests
     }
 
     [Fact]
+    public void Execute_AbsoluteScopeHintWithTraversalSegment_RejectedNotSilentlyCanonicalized()
+    {
+        // Round-4 review repair: an ABSOLUTE --scope value containing ".."
+        // that resolves right back to a real in-domain node must still be
+        // rejected — the traversal check must run on the original hint text
+        // before Path.GetFullPath canonicalizes the ".." away.
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var domainRoot = Path.Combine(workspace.Context.RepoRoot, "intents", "intent-cli");
+        var traversalHint = Path.Combine(domainRoot, "identity", "..", "identity", "mission.md");
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--scope", traversalHint, "--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        var scopeWarnings = root.GetProperty("facet_context_scope_warnings").EnumerateArray().ToArray();
+        var warning = Assert.Single(scopeWarnings);
+        Assert.Equal(traversalHint, warning.GetProperty("hint").GetString());
+        Assert.Contains("traversal", warning.GetProperty("reason").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.True(root.GetProperty("facet_context_all_scope_hints_rejected").GetBoolean());
+        var vocabularyNodes = root.GetProperty("facet_context")[0].GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.Empty(vocabularyNodes);
+    }
+
+    [Fact]
+    public void Execute_AbsoluteScopeHintWithMixedSeparatorTraversal_SurfacesScopeWarningInMarkdown()
+    {
+        using var workspace = new ContextCollectWorkspace();
+        workspace.WriteFacetNode("identity/mission.md", ["vocabulary"], "Mission");
+        var domainRoot = Path.Combine(workspace.Context.RepoRoot, "intents", "intent-cli");
+        var traversalHint = Path.Combine(domainRoot, "identity") + @"\..\identity\mission.md";
+
+        using var writer = new StringWriter();
+        var exitCode = ContextCollectCommand.Execute(
+            workspace.Context, ["--scope", traversalHint], writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("Scope warnings", output, StringComparison.Ordinal);
+        Assert.Contains("ALL requested --scope hints were rejected", output, StringComparison.Ordinal);
+        Assert.Contains(traversalHint, output, StringComparison.Ordinal);
+        Assert.Contains("traversal", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Execute_MixedValidAndInvalidScopeHints_NotAllRejected_ValidHintStillApplied()
     {
         using var workspace = new ContextCollectWorkspace();
