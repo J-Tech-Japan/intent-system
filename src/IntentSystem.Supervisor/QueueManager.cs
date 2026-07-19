@@ -83,7 +83,8 @@ public static class QueueManager
         ArgumentException.ThrowIfNullOrWhiteSpace(by);
 
         ValidateNonBlockingTargetState(targetState);
-        FindItem(state, executionUnit);
+        var item = FindItem(state, executionUnit);
+        AssertNotRetired(item, targetState);
 
         return ApplyTransition(state, executionUnit, targetState, new RunEvent
         {
@@ -108,7 +109,8 @@ public static class QueueManager
         ArgumentException.ThrowIfNullOrWhiteSpace(by);
 
         ValidateBlockingTargetState(targetState);
-        FindItem(state, executionUnit);
+        var item = FindItem(state, executionUnit);
+        AssertNotRetired(item, targetState);
 
         return ApplyTransition(
             state,
@@ -123,6 +125,104 @@ public static class QueueManager
                 By = by,
                 Reason = reason
             });
+    }
+
+    /// <summary>
+    /// G534 review repair: retire a queue item as a canonical backfill for a
+    /// packet retired outside queue tracking (packet-level
+    /// <c>lifecycle.yaml</c>, or historically via <c>automation
+    /// issue-retire</c>) — never as a way to reclassify completed or
+    /// in-flight work. Consistent with <c>automation issue-retire</c>'s own
+    /// refusal (G525): legal from any state except <see
+    /// cref="QueueItemState.Completed"/> (merged/finished work — retirement
+    /// only applies to work that can never be completed as authored), and
+    /// idempotent when the item is already <see cref="QueueItemState.Retired"/>
+    /// (no state churn, no duplicate run event — <see
+    /// cref="QueueRetireResult.WasRetired"/> is <see langword="false"/> so
+    /// the caller knows nothing changed). Once retired, the item becomes
+    /// terminal: see the <see cref="QueueItemState.Retired"/> source guard
+    /// in <see cref="TransitionNonBlocking"/> / <see cref="TransitionBlocking"/>,
+    /// which refuses every other transition away from it.
+    /// </summary>
+    /// <param name="linkedPrVerification">
+    /// G534 review repair: queue-state alone is not authoritative for
+    /// whether an item's linked PR is actually done — a stale
+    /// <c>Queued</c>/<c>Review</c>/<c>Fixing</c> item whose linked PR was
+    /// separately merged or closed must refuse retirement exactly like a
+    /// <see cref="QueueItemState.Completed"/> item does, and an
+    /// unverifiable linked PR must fail closed rather than being presumed
+    /// open. The caller resolves this (e.g. via <c>gh pr view</c>) before
+    /// calling — <see cref="QueueManager"/> never performs the lookup
+    /// itself. Defaults to <see cref="LinkedPrVerification.NotLinked"/> for
+    /// callers that already know the item has no linked PR.
+    /// </param>
+    public static QueueRetireResult Retire(
+        QueueState state,
+        string executionUnit,
+        string by,
+        DateTimeOffset ts,
+        LinkedPrVerification linkedPrVerification = LinkedPrVerification.NotLinked)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(by);
+
+        var item = FindItem(state, executionUnit);
+
+        if (item.State == QueueItemState.Completed)
+        {
+            throw new InvalidOperationException(
+                $"Cannot retire execution unit '{executionUnit}': item is completed (merged/finished work); "
+                + "retirement only applies to work that can never be completed as authored.");
+        }
+
+        if (item.State == QueueItemState.Retired)
+        {
+            return new QueueRetireResult
+            {
+                UpdatedState = state,
+                QueueItem = item,
+                WasRetired = false,
+                Event = null
+            };
+        }
+
+        // G534 review repair: queue-state can be stale — a Queued/Review/
+        // Fixing/etc. item whose linked PR was separately merged or closed
+        // must refuse retirement exactly like a Completed item does, and an
+        // unverifiable linked PR must fail closed rather than being
+        // presumed open.
+        if (linkedPrVerification == LinkedPrVerification.ConfirmedMergedOrClosed)
+        {
+            throw new InvalidOperationException(
+                $"Cannot retire execution unit '{executionUnit}': its linked PR is merged or closed "
+                + "(queue-state is stale); retirement only applies to work that can never be completed as authored.");
+        }
+
+        if (linkedPrVerification == LinkedPrVerification.Unverifiable)
+        {
+            throw new InvalidOperationException(
+                $"Cannot retire execution unit '{executionUnit}': its linked PR state could not be verified; "
+                + "refusing to retire on unverifiable evidence (fail closed).");
+        }
+
+        var runEvent = new RunEvent
+        {
+            Ts = ts,
+            ExecutionUnit = executionUnit,
+            Event = "retired",
+            By = by
+        };
+
+        var result = ApplyTransition(state, executionUnit, QueueItemState.Retired, runEvent);
+
+        return new QueueRetireResult
+        {
+            UpdatedState = result.UpdatedState,
+            QueueItem = FindItem(result.UpdatedState, executionUnit),
+            WasRetired = true,
+            Event = result.Event
+        };
     }
 
     /// <summary>
@@ -467,10 +567,34 @@ public static class QueueManager
 
     private static void ValidateNonBlockingTargetState(QueueItemState targetState)
     {
-        if (targetState is QueueItemState.Blocked or QueueItemState.ClarifyBlocked)
+        // G534 review repair: `retired` is no longer routed through the
+        // generic, source-state-agnostic non-blocking path — it has its own
+        // guarded entry point (see Retire) that refuses Completed and is
+        // idempotent on an already-Retired item. Excluding it here means a
+        // caller can never bypass that guard via TransitionNonBlocking.
+        if (targetState is QueueItemState.Blocked or QueueItemState.ClarifyBlocked or QueueItemState.Retired)
         {
             throw new InvalidOperationException(
                 $"Unsupported queue transition target state '{FormatState(targetState)}'.");
+        }
+    }
+
+    /// <summary>
+    /// G534 review repair: <see cref="QueueItemState.Retired"/> is terminal
+    /// (G525) — once an item is retired it must never be transitioned to any
+    /// other state through the generic non-blocking/blocking surfaces
+    /// (previously a Retired item could be silently reactivated to
+    /// <c>queued</c>/<c>active</c>/etc., since neither path asserted a
+    /// source state at all). The dedicated <see cref="Retire"/> method
+    /// handles the one legal exception (Retired → Retired, idempotent).
+    /// </summary>
+    private static void AssertNotRetired(QueueItem item, QueueItemState targetState)
+    {
+        if (item.State == QueueItemState.Retired)
+        {
+            throw new InvalidOperationException(
+                $"Cannot transition execution unit '{item.ExecutionUnit}' to '{FormatState(targetState)}': "
+                + "item is retired (G525 terminal state) and can never be reclassified through this surface.");
         }
     }
 
@@ -492,6 +616,9 @@ public static class QueueManager
             QueueItemState.Review => "review-started",
             QueueItemState.Fixing => "fix-requested",
             QueueItemState.Completed => "completed",
+            // G534 review repair: Retired now routes through the dedicated
+            // Retire method exclusively (see ValidateNonBlockingTargetState);
+            // it is never a legal target here.
             _ => throw new InvalidOperationException(
                 $"Unsupported queue transition target state '{FormatState(targetState)}'.")
         };

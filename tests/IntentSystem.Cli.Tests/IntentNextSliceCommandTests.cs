@@ -2,6 +2,8 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -256,6 +258,588 @@ public sealed class IntentNextSliceCommandTests
         var root = document.RootElement;
         Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
         Assert.Equal("G245", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_LifecycleRetiredPacket_NoQueueEntryAtAll_ExcludedAndNextRealCandidateSelected()
+    {
+        // G534 field finding: the SKS-G812 case — a packet retired via
+        // lifecycle.yaml with NO queue-state entry whatsoever (not even a
+        // "retired" queue item) was returned as the next-slice candidate
+        // instead of the next real one, because the selector's
+        // fallback loop only had a packet directory to go on. This is
+        // the "even when no queue entry exists" boundary the fix must
+        // hold — G244 has no queue-state item at all here.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: retired\nretired_reason: \"retired before queue tracking existed\"\n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": []
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G245", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_QueueStateRetiredWithNoLifecycleYaml_ExcludedAndNextRealCandidateSelected()
+    {
+        // G534 review repair: a unit already transitioned to Retired
+        // purely in queue-state.json (e.g. backfilled via the new
+        // `queue transition --to retired`) previously fell through the
+        // state-bucketing switch with NO bucket at all — the fallback
+        // (all-directories) loop's only queue-state-derived exclusion was
+        // `completed.Contains(...)`, so a queue-Retired-but-no-
+        // lifecycle.yaml unit was never excluded and could be
+        // re-surfaced. No lifecycle.yaml exists for G244 here — only the
+        // queue-state Retired entry is the signal.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "retired via queue transition",
+                  "state": "retired",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G245", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_QueueRetiredAndLifecycleRetired_Agreement_ExcludedAndNextRealCandidateSelected()
+    {
+        // G534 review repair: "agreement" case — both signals say retired.
+        // Ordinary exclusion, no lifecycle-metadata-diagnostic warning (this
+        // is not a contradiction; nothing needs reconciling).
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: retired\n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "retired via both signals",
+                  "state": "retired",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G245", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()).ToArray();
+        Assert.DoesNotContain("lifecycle-metadata-diagnostic", warnings);
+    }
+
+    [Fact]
+    public void Execute_LifecycleActiveContradictsQueueRetired_ExcludedWithDiagnostic()
+    {
+        // G534 review repair: "active-vs-retired", direction 1 — an explicit
+        // `lifecycle: ready` does NOT override a queue-state Retired record.
+        // This is a genuine contradiction: still excluded, and surfaced as an
+        // actionable diagnostic so it can be reconciled.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: ready\n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "contradiction: queue retired, lifecycle ready",
+                  "state": "retired",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G245", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()).ToArray();
+        Assert.Contains("lifecycle-metadata-diagnostic", warnings);
+        var notes = root.GetProperty("notes").EnumerateArray().Select(n => n.GetString()).ToArray();
+        Assert.Contains(notes, note => note!.Contains("G244", StringComparison.Ordinal)
+            && note.Contains("contradict", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Execute_LifecycleRetiredContradictsQueueNotRetired_ExcludedWithDiagnostic()
+    {
+        // G534 review repair (round 2): "active-vs-retired", direction 2 —
+        // a packet lifecycle already marked retired excludes the unit even
+        // though a PRESENT queue entry does not (yet) agree. Exclusion
+        // itself pre-dates G534 (G474/G525) and must keep working
+        // unchanged — but this contradiction must now ALSO be diagnosed
+        // (previously silent), so a later, unrelated candidate can never
+        // hide the inconsistent earlier unit.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: retired\n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "lifecycle retired, queue not yet caught up",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G245", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()).ToArray();
+        Assert.Contains("lifecycle-metadata-diagnostic", warnings);
+        var notes = root.GetProperty("notes").EnumerateArray().Select(n => n.GetString()).ToArray();
+        Assert.Contains(notes, note => note!.Contains("G244", StringComparison.Ordinal)
+            && note.Contains("contradict", StringComparison.OrdinalIgnoreCase)
+            && note.Contains("queued", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_LifecycleRetiredContradictsQueueActive_MarkdownFormat_IncludesDiagnostic()
+    {
+        // G534 review repair (round 2): the same reverse-direction
+        // contradiction, verified in the `--format markdown` renderer too
+        // — the Markdown output must not silently omit the diagnostic
+        // note/warning that the JSON output carries.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: retired\n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "lifecycle retired, queue active",
+                  "state": "active",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var markdown = writer.ToString();
+        Assert.Contains("lifecycle-metadata-diagnostic", markdown, StringComparison.Ordinal);
+        Assert.Contains("G244", markdown, StringComparison.Ordinal);
+        Assert.Contains("contradict", markdown, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_LifecycleActiveContradictsQueueRetired_MarkdownFormat_IncludesDiagnostic()
+    {
+        // G534 review repair (round 2): direction 1's diagnostic, verified
+        // in the `--format markdown` renderer too.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: ready\n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G244",
+                  "title": "contradiction: queue retired, lifecycle ready",
+                  "state": "retired",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--format", "markdown"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var markdown = writer.ToString();
+        Assert.Contains("lifecycle-metadata-diagnostic", markdown, StringComparison.Ordinal);
+        Assert.Contains("G244", markdown, StringComparison.Ordinal);
+        Assert.Contains("contradict", markdown, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_UnknownLifecycleValue_MalformedSksG812NeverSelectedEvenAsOnlyCandidate()
+    {
+        // G534 review repair: the literal field-finding shape — an
+        // unrecognized (e.g. typo'd) lifecycle value must fail closed and
+        // never silently become publishable, even when it is the only
+        // packet directory available (no other candidate to fall back to).
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/SKS-G812/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/SKS-G812/lifecycle.yaml",
+            "lifecycle: retird\n");
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": []
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.NotEqual("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.False(root.TryGetProperty("candidate", out _), "no candidate should be selected");
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()).ToArray();
+        Assert.Contains("lifecycle-metadata-diagnostic", warnings);
+        var notes = root.GetProperty("notes").EnumerateArray().Select(n => n.GetString()).ToArray();
+        Assert.Contains(notes, note => note!.Contains("SKS-G812", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_BlankLifecycleValue_ExcludedWithDiagnostic()
+    {
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteFile(
+            ".intent-cli/issues/G244/lifecycle.yaml",
+            "lifecycle: \n");
+        workspace.WriteFile(
+            ".intent-cli/issues/G245/github-body.md",
+            BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-04-28T23:00:00Z",
+              "items": []
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G245", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()).ToArray();
+        Assert.Contains("lifecycle-metadata-diagnostic", warnings);
+    }
+
+    [Fact]
+    public void Execute_EndToEnd_EnqueueThenRetiredBackfillThenSelection_RequiresNoManualQueueStateEdits()
+    {
+        // G534 end-to-end fixture: proves all three field-finding fixes work
+        // together through the real command surface, with the only
+        // queue-state.json write being the initial empty schema skeleton
+        // every repo bootstraps with before any queue command has ever run
+        // (not a hand-authored queue entry). Every subsequent queue-state
+        // mutation goes through `queue enqueue` / `queue transition` only:
+        //   1. `queue enqueue` on a 2-space-list-item packet (SKS-G824 shape,
+        //      defect a) enqueues G900 as Queued.
+        //   2. `queue transition --to retired` (defect b) backfills G900 to
+        //      Retired without ever hand-editing queue-state.json.
+        //   3. `queue enqueue` enqueues a second unit, G901, as Queued.
+        //   4. `intent next-slice` (defect c, the publish selector) must
+        //      skip the queue-Retired G900 and select G901 as the real next
+        //      candidate.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-19T00:00:00Z",
+              "items": []
+            }
+            """);
+
+        workspace.WriteFile(
+            ".intent-cli/issues/G900/packet.yaml",
+            BuildTwoSpaceListPacketYaml("G900", "G900 Retirement Candidate"));
+        workspace.WriteFile(
+            ".intent-cli/issues/G900/github-body.md",
+            BuildCompleteContractBody());
+
+        using (var enqueueFirstWriter = new StringWriter())
+        {
+            var enqueueFirstExitCode = QueueEnqueueCommand.Execute(
+                workspace.Context,
+                ["G900"],
+                enqueueFirstWriter);
+            Assert.Equal(0, enqueueFirstExitCode);
+            Assert.Contains(
+                "Queue enqueue processed for execution unit 'G900'.",
+                enqueueFirstWriter.ToString(),
+                StringComparison.Ordinal);
+        }
+
+        using (var transitionWriter = new StringWriter())
+        {
+            var transitionExitCode = QueueTransitionCommand.Execute(
+                workspace.Context,
+                ["G900", "retired"],
+                transitionWriter);
+            Assert.Equal(0, transitionExitCode);
+            Assert.Contains(
+                "Transitioned G900 to retired",
+                transitionWriter.ToString(),
+                StringComparison.Ordinal);
+        }
+
+        workspace.WriteFile(
+            ".intent-cli/issues/G901/packet.yaml",
+            BuildTwoSpaceListPacketYaml("G901", "G901 Next Real Candidate"));
+        workspace.WriteFile(
+            ".intent-cli/issues/G901/github-body.md",
+            BuildCompleteContractBody());
+
+        using (var enqueueSecondWriter = new StringWriter())
+        {
+            var enqueueSecondExitCode = QueueEnqueueCommand.Execute(
+                workspace.Context,
+                ["G901"],
+                enqueueSecondWriter);
+            Assert.Equal(0, enqueueSecondExitCode);
+            Assert.Contains(
+                "Queue enqueue processed for execution unit 'G901'.",
+                enqueueSecondWriter.ToString(),
+                StringComparison.Ordinal);
+        }
+
+        using var nextSliceWriter = new StringWriter();
+        var nextSliceExitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run"],
+            nextSliceWriter);
+
+        Assert.Equal(0, nextSliceExitCode);
+        using var document = JsonDocument.Parse(nextSliceWriter.ToString());
+        var root = document.RootElement;
+        Assert.Equal("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.Equal("G901", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
+
+        var finalQueueState = QueueStateSerializer.Deserialize(
+            File.ReadAllText(workspace.Context.GetQueueStatePath()));
+        Assert.Equal(
+            QueueItemState.Retired,
+            finalQueueState.Items.Single(item => item.ExecutionUnit == "G900").State);
+        Assert.Equal(
+            QueueItemState.Queued,
+            finalQueueState.Items.Single(item => item.ExecutionUnit == "G901").State);
+    }
+
+    private static string BuildTwoSpaceListPacketYaml(string executionUnit, string title)
+    {
+        // G534: the documented (new-schema) packet format, with list items
+        // indented at the SAME column as their parent key (the common,
+        // previously-rejected convention) — quoted and unquoted scalars.
+        return $"""
+        implementation_issue_packet:
+          issue_title: "{title}"
+          issue_kind: "feature"
+          source_execution_unit: "{executionUnit}"
+          goal: "goal"
+          in_scope:
+          - "in scope item"
+          out_of_scope:
+          - out of scope item
+          target_repo: "J-Tech-Japan/intent-system"
+          target_path: "."
+          target_part: "part"
+          dependencies: []
+          technical_baseline:
+          - "C# / .NET"
+          project_local_guide:
+          - "AGENTS.md"
+          intent_baseline:
+          - "queue insertion stays thin"
+          intent_references:
+          - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs: []
+          acceptance_criteria:
+          - acceptance criterion
+          verification_evidence:
+          - "tests-passing"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+
+        review_context_packet:
+          source_execution_unit: "{executionUnit}"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+          - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs: []
+          acceptance_criteria:
+          - acceptance criterion
+          deterministic_review_checks: []
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
+        """;
     }
 
     [Fact]

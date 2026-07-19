@@ -55,6 +55,15 @@ internal static class IntentNextSliceCommand
     // convert it via `intent-cli packet retire` instead of publishing it.
     internal const string WarningLegacyRetirementMarker = "legacy-retirement-marker-needs-machine-metadata";
 
+    // G534 review repair: a packet's lifecycle.yaml is unreadable, blank,
+    // missing its required key, carries an unrecognized value, or
+    // contradicts queue-state (queue says Retired but lifecycle explicitly
+    // says ready). The packet is excluded from selection (fail closed —
+    // ambiguous/contradictory retirement evidence must never resolve to
+    // "publishable") and the operator/agent is told to repair or reconcile
+    // the sidecar instead of publishing the packet as-is.
+    internal const string WarningLifecycleMetadataDiagnostic = "lifecycle-metadata-diagnostic";
+
     private const string UsageLine =
         "Usage: intent-cli intent next-slice --dry-run [--domain <name>] [--target-repo <owner/repo>] [--runtime-creation-allowed] [--format json|markdown]";
 
@@ -227,6 +236,17 @@ internal static class IntentNextSliceCommand
         var wip = new List<string>();
         var queued = new List<string>();
         var completed = new HashSet<string>(StringComparer.Ordinal);
+        // G534 review repair: a unit already transitioned to Retired purely
+        // in queue-state.json (e.g. via `queue transition --to retired`,
+        // now that G534 makes that a valid target — or historically via
+        // `automation issue-retire`, which writes queue-state only, never
+        // packet.yaml's lifecycle.yaml sidecar) fell through this switch
+        // with NO bucket at all, so the fallback (all-directories) loop
+        // below — whose ONLY queue-state-derived exclusion check was
+        // `completed.Contains(...)` — never excluded it and could
+        // re-surface it as a next-slice candidate. Track retired units
+        // explicitly and exclude them the same way completed ones are.
+        var retired = new HashSet<string>(StringComparer.Ordinal);
         if (queueState is not null)
         {
             foreach (var item in queueState.Items)
@@ -256,6 +276,10 @@ internal static class IntentNextSliceCommand
 
                     case QueueItemState.Completed:
                         completed.Add(item.ExecutionUnit);
+                        break;
+
+                    case QueueItemState.Retired:
+                        retired.Add(item.ExecutionUnit);
                         break;
                 }
             }
@@ -308,6 +332,12 @@ internal static class IntentNextSliceCommand
         // candidates. Stale human-only markers (STATUS: ABSORBED) are excluded
         // from selection too and surfaced as a repair recommendation.
         var legacyRetirementMarkerUnits = new List<string>();
+        // G534 review repair: diagnostics for unreadable/blank/unknown
+        // lifecycle.yaml sidecars and queue-vs-lifecycle contradictions —
+        // surfaced the same way legacy human markers are, so the operator
+        // knows exactly which packet needs a repair and why, instead of the
+        // selector silently resolving ambiguous evidence either direction.
+        var lifecycleDiagnostics = new List<string>();
 
         if (Directory.Exists(packetRoot) && !bindingsFailedClosed)
         {
@@ -343,7 +373,7 @@ internal static class IntentNextSliceCommand
                     continue;
                 }
 
-                if (PacketLifecycle.IsRetired(directory))
+                if (IsExcludedByLifecycle(executionUnit, directory, queueState, lifecycleDiagnostics))
                 {
                     continue;
                 }
@@ -370,6 +400,14 @@ internal static class IntentNextSliceCommand
                         continue;
                     }
 
+                    // G534 review repair: queue-Retired exclusion (with any
+                    // lifecycle contradiction/diagnostic) is now handled
+                    // exclusively inside IsExcludedByLifecycle below, so a
+                    // unit that's Retired only in queue-state still reaches
+                    // that check instead of being filtered out here first
+                    // (which would make ValidActive+queueRetired
+                    // contradiction diagnostics unreachable).
+
                     if (!MatchesExecutionUnitRegex(executionUnitRegex, executionUnit))
                     {
                         continue;
@@ -380,7 +418,7 @@ internal static class IntentNextSliceCommand
                         continue;
                     }
 
-                    if (PacketLifecycle.IsRetired(directory))
+                    if (IsExcludedByLifecycle(executionUnit, directory, queueState, lifecycleDiagnostics))
                     {
                         continue;
                     }
@@ -433,6 +471,17 @@ internal static class IntentNextSliceCommand
             }
         }
 
+        if (lifecycleDiagnostics.Count > 0)
+        {
+            // G534 review repair: unreadable/blank/unknown lifecycle.yaml or a
+            // queue-vs-lifecycle contradiction. Fail closed — the packet is
+            // excluded from selection above; surface the exact reason here so
+            // the operator/agent can repair or reconcile it instead of the
+            // selector silently resolving ambiguous evidence either direction.
+            warnings.Add(WarningLifecycleMetadataDiagnostic);
+            notes.AddRange(lifecycleDiagnostics);
+        }
+
         return new IntentNextSliceResult
         {
             Domain = domain,
@@ -452,6 +501,94 @@ internal static class IntentNextSliceCommand
             StateLayout = stateLayout,
             Warnings = warnings,
             Notes = notes
+        };
+    }
+
+    /// <summary>
+    /// G534 review repair: combines queue-state retirement evidence with the
+    /// packet's own <c>lifecycle.yaml</c> evidence explicitly, instead of
+    /// consulting only one signal or treating an unreadable/malformed
+    /// sidecar as if no sidecar existed:
+    /// <list type="bullet">
+    /// <item>either signal alone recording retirement excludes the unit;</item>
+    /// <item>an explicit <c>lifecycle: ready</c> does NOT override a
+    /// queue-state <c>Retired</c> record, and a non-publishable
+    /// <c>lifecycle.yaml</c> does NOT get overridden by a queue-state entry
+    /// that is present but NOT <c>Retired</c> (queued/active/review/fixing/
+    /// blocked/etc.) — both directions are contradictions, still excluded,
+    /// and surfaced as a diagnostic naming both the lifecycle path/state and
+    /// the queue path/state so they can be reconciled;</item>
+    /// <item>agreement (both signals retired) and a lifecycle-only
+    /// retirement with NO queue entry at all are NOT contradictions — they
+    /// exclude silently, exactly as before;</item>
+    /// <item>an unreadable, blank, missing-key, or unrecognized lifecycle
+    /// value is <see cref="PacketLifecycleState.Invalid"/> — excluded and
+    /// diagnosed (fail closed) regardless of queue state, since ambiguous
+    /// retirement evidence must never resolve to "publishable";</item>
+    /// <item>no sidecar at all (<see cref="PacketLifecycleState.Absent"/>) is
+    /// not an error — it defers entirely to the queue-state signal.</item>
+    /// </list>
+    /// </summary>
+    private static bool IsExcludedByLifecycle(
+        string executionUnit,
+        string directory,
+        QueueState? queueState,
+        List<string> lifecycleDiagnostics)
+    {
+        var outcome = PacketLifecycle.ReadState(directory);
+        var queueItem = queueState?.Items.FirstOrDefault(item =>
+            string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
+        var isQueueRetired = queueItem?.State == QueueItemState.Retired;
+
+        switch (outcome.State)
+        {
+            case PacketLifecycleState.Invalid:
+                lifecycleDiagnostics.Add(
+                    $"packet '{executionUnit}' has unreadable or malformed lifecycle metadata at "
+                    + $"{outcome.SidecarPath} ({outcome.Detail}); excluded from next-slice selection "
+                    + "until the sidecar is repaired or removed (ambiguous retirement evidence fails closed).");
+                return true;
+
+            case PacketLifecycleState.ValidRetired:
+                if (queueItem is not null && queueItem.State != QueueItemState.Retired)
+                {
+                    // Reverse-direction contradiction: lifecycle says
+                    // non-publishable, but a queue entry exists and is NOT
+                    // Retired — the unit is still excluded (lifecycle wins
+                    // for exclusion purposes, same as G474/G525 predate
+                    // this fix), but the disagreement is diagnosed so a
+                    // later, unrelated candidate cannot silently hide it.
+                    lifecycleDiagnostics.Add(
+                        $"packet '{executionUnit}' has contradictory retirement evidence: lifecycle.yaml at "
+                        + $"{outcome.SidecarPath} declares it non-publishable ('{outcome.Metadata?.Lifecycle}') "
+                        + $"but queue-state records it as '{FormatQueueStateForDiagnostic(queueItem.State)}'; "
+                        + "excluded from next-slice selection until the contradiction is reconciled.");
+                }
+
+                return true;
+
+            case PacketLifecycleState.ValidActive when isQueueRetired:
+                lifecycleDiagnostics.Add(
+                    $"packet '{executionUnit}' has contradictory retirement evidence: queue-state records "
+                    + $"it as retired but {outcome.SidecarPath} declares 'lifecycle: ready'; excluded from "
+                    + "next-slice selection until the contradiction is reconciled.");
+                return true;
+
+            case PacketLifecycleState.ValidActive:
+                return false;
+
+            case PacketLifecycleState.Absent:
+            default:
+                return isQueueRetired;
+        }
+    }
+
+    private static string FormatQueueStateForDiagnostic(QueueItemState state)
+    {
+        return state switch
+        {
+            QueueItemState.ClarifyBlocked => "clarify-blocked",
+            _ => state.ToString().ToLowerInvariant()
         };
     }
 

@@ -536,6 +536,178 @@ public sealed class QueueManagerTests
                 BaseTime));
     }
 
+    // ─── G534 review repair: guarded/idempotent/terminal Retire ──────────────
+
+    [Fact]
+    public void Retire_GivenQueuedItem_TransitionsToRetiredAndEmitsRetiredEvent()
+    {
+        var state = CreateState(QueueItemState.Queued);
+
+        var result = QueueManager.Retire(state, "A1", "intent-cli", BaseTime);
+
+        Assert.True(result.WasRetired);
+        Assert.Equal(QueueItemState.Retired, FindItem(result.UpdatedState, "A1").State);
+        Assert.NotNull(result.Event);
+        Assert.Equal("retired", result.Event!.Event);
+        Assert.Equal("A1", result.Event.ExecutionUnit);
+        Assert.Equal("intent-cli", result.Event.By);
+    }
+
+    [Fact]
+    public void Retire_GivenActiveOrBlockedItem_TransitionsToRetired()
+    {
+        var activeState = CreateState(QueueItemState.Active);
+        var activeResult = QueueManager.Retire(activeState, "A1", "intent-cli", BaseTime);
+        Assert.True(activeResult.WasRetired);
+        Assert.Equal(QueueItemState.Retired, FindItem(activeResult.UpdatedState, "A1").State);
+
+        var blockedItem = CreateItem("A1", QueueItemState.Blocked) with
+        {
+            BlockedBy = ["dependency-incomplete: B1"]
+        };
+        var blockedState = CreateState([blockedItem]);
+        var blockedResult = QueueManager.Retire(blockedState, "A1", "intent-cli", BaseTime);
+        Assert.True(blockedResult.WasRetired);
+        Assert.Equal(QueueItemState.Retired, FindItem(blockedResult.UpdatedState, "A1").State);
+    }
+
+    [Fact]
+    public void Retire_GivenCompletedItem_ThrowsWithoutMutation()
+    {
+        var state = CreateState(QueueItemState.Completed);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => QueueManager.Retire(state, "A1", "intent-cli", BaseTime));
+
+        Assert.Contains("completed", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(QueueItemState.Completed, FindItem(state, "A1").State);
+    }
+
+    [Fact]
+    public void Retire_GivenCompletedItemWithLinkedPr_ThrowsWithoutMutation()
+    {
+        // G534 review repair: a Completed item carrying merged/linked-PR
+        // evidence must refuse retirement exactly like any other Completed
+        // item — retirement never reclassifies finished work.
+        var mergedItem = CreateItem("A1", QueueItemState.Completed) with
+        {
+            LinkedPr = "https://github.com/org/repo/pull/42"
+        };
+        var state = CreateState([mergedItem]);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => QueueManager.Retire(state, "A1", "intent-cli", BaseTime));
+
+        Assert.Contains("completed", exception.Message, StringComparison.OrdinalIgnoreCase);
+        var unchangedItem = FindItem(state, "A1");
+        Assert.Equal(QueueItemState.Completed, unchangedItem.State);
+        Assert.Equal("https://github.com/org/repo/pull/42", unchangedItem.LinkedPr);
+    }
+
+    [Fact]
+    public void Retire_GivenAlreadyRetiredItem_IsIdempotentWithNoMutationOrDuplicateEvent()
+    {
+        var retiredItem = CreateItem("A1", QueueItemState.Retired);
+        var state = CreateState([retiredItem]);
+
+        var result = QueueManager.Retire(state, "A1", "intent-cli", BaseTime);
+
+        Assert.False(result.WasRetired);
+        Assert.Null(result.Event);
+        Assert.Same(state, result.UpdatedState);
+        Assert.Equal(QueueItemState.Retired, FindItem(result.UpdatedState, "A1").State);
+
+        // Calling it again produces the exact same no-op — no event ever
+        // appears on a re-run, however many times it is retried.
+        var secondResult = QueueManager.Retire(result.UpdatedState, "A1", "intent-cli", BaseTime);
+        Assert.False(secondResult.WasRetired);
+        Assert.Null(secondResult.Event);
+    }
+
+    [Fact]
+    public void Retire_GivenUnknownExecutionUnit_ThrowsInvalidOperationException()
+    {
+        var state = CreateState(QueueItemState.Queued);
+
+        Assert.Throws<InvalidOperationException>(
+            () => QueueManager.Retire(state, "does-not-exist", "intent-cli", BaseTime));
+    }
+
+    [Fact]
+    public void TransitionNonBlocking_GivenRetiredTargetState_ThrowsUnsupported()
+    {
+        // G534 review repair: `retired` is exclusively reached via the
+        // dedicated, guarded Retire method now — the generic non-blocking
+        // path must never accept it as a target, even for a non-retired
+        // source item.
+        var state = CreateState(QueueItemState.Queued);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => QueueManager.TransitionNonBlocking(
+                state,
+                "A1",
+                QueueItemState.Retired,
+                "intent-cli",
+                BaseTime));
+
+        Assert.Contains("Unsupported queue transition target state 'retired'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TransitionNonBlocking_GivenRetiredItem_RefusesReactivationToActive()
+    {
+        var retiredItem = CreateItem("A1", QueueItemState.Retired);
+        var state = CreateState([retiredItem]);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => QueueManager.TransitionNonBlocking(
+                state,
+                "A1",
+                QueueItemState.Active,
+                "intent-cli",
+                BaseTime));
+
+        Assert.Contains("retired", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("terminal", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(QueueItemState.Retired, FindItem(state, "A1").State);
+    }
+
+    [Fact]
+    public void TransitionNonBlocking_GivenRetiredItem_RefusesReactivationToQueued()
+    {
+        var retiredItem = CreateItem("A1", QueueItemState.Retired);
+        var state = CreateState([retiredItem]);
+
+        Assert.Throws<InvalidOperationException>(
+            () => QueueManager.TransitionNonBlocking(
+                state,
+                "A1",
+                QueueItemState.Queued,
+                "intent-cli",
+                BaseTime));
+
+        Assert.Equal(QueueItemState.Retired, FindItem(state, "A1").State);
+    }
+
+    [Fact]
+    public void TransitionBlocking_GivenRetiredItem_RefusesReclassificationToBlocked()
+    {
+        var retiredItem = CreateItem("A1", QueueItemState.Retired);
+        var state = CreateState([retiredItem]);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => QueueManager.TransitionBlocking(
+                state,
+                "A1",
+                QueueItemState.Blocked,
+                "reason",
+                "intent-cli",
+                BaseTime));
+
+        Assert.Contains("retired", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(QueueItemState.Retired, FindItem(state, "A1").State);
+    }
+
     private static QueueState CreateState(QueueItemState itemState)
     {
         return CreateState([CreateItem("A1", itemState)]);

@@ -516,6 +516,116 @@ retired になった item は自動的に WIP gating から外れます:
 
 ---
 
+### Queue の堅牢化: list parsing・retired backfill・lifecycle を考慮した selection (G534)
+
+実際の hand-authored な packet と queue state に対する、関連する 3 つの
+field finding をここでまとめて修正します。
+
+**`queue enqueue` が両方の YAML list-item convention を受け付ける。**
+packet reader(現行の `implementation_issue_packet` /
+`review_context_packet` schema 用の `ProjectionPacketSerializer`、および
+legacy な `execution_unit` / `implementation_issue` fallback 用の
+`ProjectionPacketRuntimeReader`)は、これまで block-sequence の list item
+を「4 スペース + `"- "`」というちょうど renderer 自身が生成する形式に
+インデントされている場合にのみ list item として認識していました。より
+一般的な、各 list item が親 key と同じカラムに置かれる 2 スペース
+convention を使う hand-authored(または他ツールが生成した)packet は、
+quoted / unquoted を問わずすべての item で `field line is missing ':''`
+として全面的に拒否されていました。両方の reader は、カラム数を数える
+のではなく内容(先頭の空白を除去した行が `"- "` で始まる、または
+ちょうど `"-"` である)で list item を検出するようになったため、どちら
+の convention でもパースできます — さらに同じファイル内で異なる field
+ごとに convention を混在させることも可能です。
+
+**`queue transition --to retired` が queue-state エントリを backfill
+する — guarded・idempotent・terminal な transition として。**
+`intent-cli packet retire`(`lifecycle.yaml` のみを書き込み、
+`queue-state.json` には一切触れない)で retire された packet や、queue
+tracking より前に `automation issue-retire` で retire された packet は、
+JSON ファイルを手編集することなく、その queue-state item を直接
+`retired` としてマークする必要が生じることがあります。`retired` は
+transition target として受け付けられるようになりましたが —
+`queue transition <execution-unit> retired` — 他の non-blocking target と
+異なり、汎用的で source state を問わない transition path は通りません。
+`automation issue-retire` 自身の refusal(G525)と一貫した、専用の
+guarded な entry point(`QueueManager.Retire`)を持ちます:
+
+- `Completed` 以外のどの state からも legal です — completed な item は
+  mutation も run event もゼロのまま retirement を refuse します。
+  retirement は authored 通りには決して完了できない作業にのみ適用され
+  るためです;
+- **linked PR こそが authoritative な evidence であり、queue-state
+  自体ではありません** — queue-state は stale になり得るため、何かを
+  mutate する前に CLI boundary がその item の `linked_pr`(存在すれば)
+  を `gh pr view` 経由で解決し、その PR が **merged または closed**
+  であると確認された場合は retirement を拒否します — queue-state が
+  まだ非 `Completed`(`Queued`/`Review`/`Fixing`)と言っている item で
+  あってもです。linked PR の state が解決できない場合(lookup 失敗、
+  parse 不能・誤った repo の URL、曖昧な response)も retirement は
+  refuse します — fail closed であり、open だと推定することは決してあり
+  ません。linked PR が一切無い item は、この check を完全にスキップし
+  ます(検証するものが無いため)。この lookup が retirement path の中で
+  GitHub に到達することが許されている唯一の場所です —
+  `QueueManager.Retire` 自体は network-free のままで、既に検証済みの
+  evidence を受け取るだけです;
+- 既に `Retired` な item に対しては idempotent です — 何も変更しない
+  no-op であり、何度再実行しても重複した `retired` run event が追記
+  されることはありません;
+- 一度適用されると terminal です — retired な item は `queue
+  transition` を通じて他のどの state(`queued`、`active`、`completed`、
+  `blocked` など)にも二度と transition できません。汎用的な
+  non-blocking/blocking transition path は、現在の state が `Retired`
+  の場合には即座に refuse するようになり、以前は静かに許されていた
+  reactivation の抜け道を塞ぎました。
+
+item は queue-state に既に存在している必要があります(存在しなければ
+先に `queue enqueue` で作成してください)。サポートされていない target
+を指定した場合は引き続き refuse され、許可されている target の完全な
+一覧(今回 `retired` を含むようになったもの)が表示されます。
+
+**publish selector は queue-state と packet-lifecycle の evidence を
+明示的に組み合わせ、曖昧な lifecycle metadata に対しては fail closed
+する。** `intent next-slice` は各 candidate の `lifecycle.yaml`(存在
+すれば)を、4 つの明示的な state のいずれかとして読み取ります —
+absent(sidecar が無い。エラーではない)、valid-active
+(`lifecycle: ready`)、valid-retired
+(`absorbed`/`retired`/`superseded`)、invalid(unreadable、`lifecycle`
+key の欠落、blank、または未知の値)— そしてそれを queue-state の
+`Retired` signal と組み合わせます:
+
+- どちらか一方の signal だけでも retirement を記録していれば unit は
+  除外されます — これは queue-state エントリが一切無い場合(lifecycle
+  のみによる retirement)や、`lifecycle.yaml` が一切無い場合(例えば
+  `automation issue-retire` や `queue transition --to retired` 経由の
+  queue のみによる retirement)でも成り立ちます;
+- 明示的な `lifecycle: ready` は queue-state の `Retired` レコードを
+  上書き**せず**、また non-publishable な `lifecycle.yaml` も、
+  *存在する* queue-state エントリが `Retired` ではない
+  (`queued`/`active`/`review`/`fixing`/…)からといって上書きされること
+  は**ありません** — どちらの方向も contradiction であり、それでも
+  除外されます。そして今回、どちらの方向も actionable な diagnostic
+  (`lifecycle-metadata-diagnostic` warning。unit 名・sidecar path・
+  両方の state を記した note 付き)として表示されるようになりました —
+  以前はどちらの方向も黙って解決されていました。後続の、無関係な
+  candidate が、先行する unit の矛盾した evidence を隠してしまうことは
+  もう決してありません;
+- agreement(両方の signal が retired)や、queue エントリが**一切無い**
+  lifecycle のみによる retirement は contradiction ではなく、以前と
+  同じく黙って除外されます;
+- invalid な lifecycle metadata(unreadable、blank、key の欠落、または
+  未知の値)は、queue state に関わらず unit を除外し、同じ diagnostic
+  を発生させます — 曖昧な retirement evidence は決して
+  「publishable」に解決されてはならないためです。したがって malformed
+  な sidecar は、それが唯一の packet directory であっても、次の
+  candidate として静かに浮上することは決してありません。
+
+これら 3 つの修正を組み合わせることで、repo は `queue enqueue` /
+`queue transition` / `intent next-slice` だけを使って、行き詰まった
+retirement や queue tracking 以前の retirement から、`queue-state.json`
+を一切手編集することなく完全に復旧できます。
+
+---
+
 ### facet を意識した context 供給 (G530)
 
 G529 の 4 つの semantic facet（`vocabulary`、`invariant`、`decider`、

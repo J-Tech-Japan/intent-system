@@ -57,6 +57,36 @@ public sealed class QueueEnqueueCommandTests
     }
 
     [Fact]
+    public void Execute_GivenTwoSpaceListItemPacket_EnqueuesSuccessfully()
+    {
+        // G534 field finding: a verbatim previously-failing packet shape —
+        // the documented `implementation_issue_packet` schema with YAML
+        // list items indented at the SAME column as their parent key
+        // (quoted AND unquoted scalars) — used to throw "field line is
+        // missing ':''" on every list item, rejecting every real
+        // hand-authored packet using this common convention.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(CreateQueueState()));
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G38", "packet.yaml"),
+            CreateTwoSpaceListItemPacketYaml());
+        using var writer = new StringWriter();
+
+        var exitCode = QueueEnqueueCommand.Execute(CreateContext(repoRoot), ["G38"], writer);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Queue enqueue processed for execution unit 'G38'.", writer.ToString(), StringComparison.Ordinal);
+        var updatedState = QueueStateSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+        var selectedItem = updatedState.Items.Single(item => item.ExecutionUnit == "G38");
+        Assert.Equal(QueueItemState.Queued, selectedItem.State);
+        Assert.Equal(["G3", "G4"], selectedItem.Dependencies);
+    }
+
+    [Fact]
     public void Execute_GivenExistingQueueItem_SkipsWithoutMutatingFiles()
     {
         using var tempDirectory = new TemporaryDirectory();
@@ -222,6 +252,61 @@ public sealed class QueueEnqueueCommandTests
           require_explicit_contract_check: true
           required_checks:
             - "queue insertion remains thin"
+        """;
+    }
+
+    /// <summary>G534: the documented (new-schema) packet format, with list
+    /// items indented at the SAME column as their parent key — quoted and
+    /// unquoted — the exact shape that previously threw "field line is
+    /// missing ':''" before this fix.</summary>
+    private static string CreateTwoSpaceListItemPacketYaml()
+    {
+        return """
+        implementation_issue_packet:
+          issue_title: "G38 Queue Enqueue Command"
+          issue_kind: "feature"
+          source_execution_unit: "G38"
+          goal: "Enqueue issue packet into queue artifacts."
+          in_scope:
+          - "queue enqueue command"
+          out_of_scope:
+          - workflow execution
+          target_repo: "submodules/intent-system"
+          target_path: "."
+          target_part: "cli queue enqueue command"
+          dependencies:
+          - "G4"
+          - G3
+          technical_baseline:
+          - "C# / .NET"
+          project_local_guide:
+          - "AGENTS.md"
+          intent_baseline:
+          - "queue insertion stays thin"
+          intent_references:
+          - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+          - "intents/intent-cli/specs/03-queue-json-and-jsonl-schema.md"
+          acceptance_criteria:
+          - queue item inserted
+          verification_evidence:
+          - "tests-passing"
+          review_mode: "deterministic-review"
+          completion_action: "wait-for-deterministic-review"
+          landing_policy: "merge-after-review"
+
+        review_context_packet:
+          source_execution_unit: "G38"
+          parent_intent_root: "intents/intent-cli/intent-tree/00-map.md"
+          intent_references:
+          - "ICL.P.PRODUCT_GOAL"
+          rules_and_specs:
+          - "intents/intent-cli/specs/03-queue-json-and-jsonl-schema.md"
+          acceptance_criteria:
+          - queue item inserted
+          deterministic_review_checks:
+          - "queue insertion remains thin"
+          clarification_return_path: "intents/intent-cli/clarifications/open.md"
         """;
     }
 

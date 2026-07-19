@@ -85,7 +85,13 @@ internal static class ProjectionPacketRuntimeReader
                     "Projection packet YAML must declare a section before its nested fields.");
             }
 
-            if (line.StartsWith("    - ", StringComparison.Ordinal))
+            // G534 review repair: accept a list item indented at the SAME
+            // column as its parent key (the common convention) or nested
+            // one level deeper — see the identical fix and rationale in
+            // ProjectionPacketSerializer.ParseSections (IntentSystem.Projection),
+            // which this legacy fallback parser mirrors.
+            var listItemCandidate = line.TrimStart(' ');
+            if (listItemCandidate.StartsWith("- ", StringComparison.Ordinal) || listItemCandidate == "-")
             {
                 if (currentListKey is null
                     || !currentSection.TryGetValue(currentListKey, out var listValue)
@@ -95,7 +101,8 @@ internal static class ProjectionPacketRuntimeReader
                         $"Projection packet YAML contains list item without a list field: '{line.Trim()}'.");
                 }
 
-                list.Add(ParseScalar(line[6..]));
+                var itemText = listItemCandidate.Length > 1 ? listItemCandidate[2..] : string.Empty;
+                list.Add(ParseScalar(itemText));
                 continue;
             }
 
