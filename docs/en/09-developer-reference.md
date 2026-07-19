@@ -239,6 +239,13 @@ All three surfaces apply the full order strictly — none of them fall back to
   Omitting `--domain` entirely does not request cross-candidate scoping, so
   multiple candidates with different (but each individually derivable)
   domains may still coexist in one broad-scan result.
+- `automation stalled-work` (G532) also applies this order — see below —
+  but only once a candidate's execution unit is itself corroborated by real
+  packet/queue linkage. `--domain` is a REQUIRED argument for
+  `stalled-work`, so for a corroborated candidate it is always available to
+  stand in for linkage that is silent on domain; but `--domain` scopes the
+  scan, it does not by itself identify an otherwise-unidentified candidate
+  as a member of it — an uncorroborated candidate is still excluded.
 
 ### Stalled-work detection (G523)
 
@@ -275,28 +282,82 @@ drifted out of sync with reality (an open PR already closes the issue, but
 `intent-pr-created` was never applied or was removed) never produces a
 false `worker claim` recommendation.
 
-**Domain isolation is grounded in packet/queue metadata, consistent with
-G522 — never in a title-prefix regex match.** A `<unit>: ...` title prefix
-is derived for every GitHub issue/PR candidate, but it is used ONLY to
-locate that candidate's `.intent-cli/issues/<unit>/packet.yaml` — the
-packet's own declared `domain:` field is the sole authority consulted
-against the requested `--domain`. A candidate is included in `items[]` only
-when its packet-declared domain matches the requested `--domain` exactly. A
-candidate whose packet-declared domain contradicts `--domain`, or whose
-domain cannot be derived at all (no packet.yaml, or no `domain:` field on
-it), is FAIL-CLOSED: excluded from `items[]` and reported instead in
-`excluded[]` (`kind`, `execution_unit`, `issue`/`pr`, `reason`, `detail`).
-`reason` is `domain-contradiction` (with `detail` naming the specific
-conflicting packet-declared domain) or `domain-underivable` (with `detail`
-naming the candidate domains scanned from `intents/*/` AND the exact,
-runnable re-invocation — `intent-cli automation stalled-work --domain <name>
---repo <owner/repo> --format json` — inherited from the G522 underivable
-diagnostic contract). Unlike the other G522 surfaces (where an explicit
-`--domain` can stand alone for a single operator-named execution unit), this
-is a broad multi-candidate scan over a shared repo's issues/PRs — an
-explicit `--domain` alone is never trusted to apply to a candidate whose own
-metadata cannot corroborate it, so a candidate never silently joins the scan
-and never silently disappears.
+**Execution-unit and domain identification (G532)**
+
+The candidate execution unit is the LEADING ID token of the issue/PR title —
+`^[A-Z][A-Z0-9]*-G?[0-9]+` (an alphanumeric prefix, e.g. `SKS-G815` or
+`Z4R-G3`) or a bare `^G[0-9]+` (e.g. `G523`), with a mandatory RIGHT boundary
+(no letter/digit immediately after) — not everything before the first colon.
+A title like `"SKS-G815 G812 sub-slice 1: ..."` resolves to `SKS-G815`,
+never the whole pre-colon phrase; a title like `"G12abc: ..."` never
+truncates to `G12`. This leading token is trusted only when a real
+`.intent-cli/issues/<token>/packet.yaml` corroborates it. When it is absent,
+or present but uncorroborated, the candidate is matched instead against
+every packet under `.intent-cli/issues/*/packet.yaml` by that packet's own
+declared `source_execution_unit` (nested
+`implementation_issue_packet.source_execution_unit` first, bare
+`source_execution_unit` as alias) appearing as a whole token anywhere in the
+title. Exactly ONE matching packet FILE is required to corroborate — not
+merely one distinct declared unit VALUE. Two or more matching packet files
+are ambiguous (`execution-unit-ambiguous`, naming every candidate path)
+even if their declared units happen to be identical strings (a duplicate
+declaration across files is a data-integrity problem, never collapsed by
+value); a single packet whose own nested field and top-level alias name the
+same unit is still one file and is unaffected. Ambiguity is never resolved
+by guessing (e.g. picking the longest match or the first-sorted directory).
+
+This execution-unit string is used ONLY to locate the candidate's
+`.intent-cli/issues/<unit>/packet.yaml` — never as the domain-membership
+decision itself. Domain is read from that packet's nested
+`implementation_issue_packet.domain` field first, falling back to a
+top-level `domain:` field as a compatibility alias when the nested field is
+absent.
+
+For `merged-not-closed-out`, the execution unit and its corroborating
+linkage come from queue-state instead of a title: a merged PR's own PR
+number is matched against a queue item's `linked_pr`, but that bare number
+match alone is NOT sufficient corroboration on a shared/multi-repo
+queue-state (a coincidental same-number PR in an unrelated repo). The queue
+item's own declared `linked_issue` (repo + number) must additionally match
+one of the merged PR's OWN GitHub-reported closing-issue references for the
+scanned repo — a missing, wrong-repo, or non-corresponding `linked_issue`
+fails closed into `excluded[]` rather than being assumed. Every ACTIVE
+(non-completed) queue item referencing the same merged PR is collected
+first — exactly one is required; two or more (whether they collapse to the
+same repo+issue with different execution units, or one validates while
+another does not) is ambiguous (`execution-unit-ambiguous`, naming every
+attempted queue item's unit, state, and linkage, plus the queue-state path)
+regardless of JSON ordering. A completed duplicate alongside one genuinely
+active item is NOT ambiguous — only active items compete for authority.
+
+**Domain confirmation applies the same G522 order as every other
+execution-unit-resolving surface** (`--domain` > packet-declared domain >
+fail-loud) — but ONLY for a candidate whose execution unit is itself
+corroborated by real packet/queue linkage as described above. For such a
+candidate, since `--domain` is a REQUIRED argument for `stalled-work`, it is
+always available to stand in for linkage that is silent on domain — the
+candidate is excluded from `items[]` only on a genuine CONTRADICTION between
+`--domain` and a packet that actively declares a different domain. This is
+narrower than an earlier (PR #1148) tightening that fail-closed on ANY
+missing/absent packet-declared domain, including cases where the candidate's
+execution unit itself was never corroborated by anything — that broader
+tightening excluded exactly the stalls this surface exists to find when the
+identification logic itself was wrong (field findings against a downstream
+adopter, 2026-07-15 and 2026-07-18), each papered over with a team
+workaround instead of surfaced.
+
+A candidate whose execution unit could NOT be corroborated at all — no
+leading token's packet.yaml exists, and no packet's declared
+`source_execution_unit` matches the title — is still excluded
+(`domain-underivable`): an explicit `--domain` SCOPES the scan, it does not
+by itself establish that an otherwise-unidentified candidate is a member of
+it. `excluded[]` (`kind`, `execution_unit`, `issue`/`pr`, `reason`,
+`detail`) reports every exclusion — `domain-contradiction` (naming the
+specific conflicting packet-declared domain and the derivation attempted:
+which of the nested field / top-level alias was checked, at which
+packet.yaml path), `domain-underivable` (uncorroborated execution unit), or
+`execution-unit-ambiguous` (naming every candidate packet path that matched)
+— always with its reason and the derivation attempted, never silent.
 
 This slice is detection only — consuming the surface from the orchestrator
 wake procedure and from an external heartbeat are separate follow-up slices.

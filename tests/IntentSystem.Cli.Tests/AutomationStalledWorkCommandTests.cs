@@ -7,6 +7,7 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(AutomationStalledWorkSharedStateCollection.Name)]
 public sealed class AutomationStalledWorkCommandTests : IDisposable
 {
     private static readonly DateTimeOffset FixedNow = new(2026, 7, 14, 12, 0, 0, TimeSpan.Zero);
@@ -179,7 +180,10 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         workspace.WriteQueueState(BuildQueueStateJson("G500", QueueItemState.Review,
             linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200",
             linkedIssueNumber: 1199));
-        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED");
+        // G532 review repair: the merged PR must itself GitHub-report the
+        // queue item's linked_issue among its closing references — a bare
+        // linked_pr number match alone is no longer sufficient.
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
 
         using var writer = new StringWriter();
@@ -311,12 +315,17 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_NoPacketYamlAtAll_FailsClosedAsUnderivable_NeverJoinsItems()
+    public void Execute_NoPacketYamlAtAll_UncorroboratedCandidate_StillFailsClosedAsUnderivable()
     {
-        // PR #1148 review repair (finding 1): missing packet metadata must
-        // NOT be trusted just because an explicit --domain was passed — it
-        // is fail-closed (excluded), not fail-open (included with a
-        // warning), for this multi-candidate scan.
+        // G532 review repair: an explicit --domain SCOPES the scan; it does
+        // not by itself establish that an otherwise-unidentified candidate
+        // (no packet.yaml anywhere corroborates it) is a member of that
+        // domain. This is distinct from the case G532 actually fixed —
+        // Execute_PacketDeclaresDomainOnlyNested_NotDomainUnderivable_ConfirmsRequestedDomain
+        // below, where a REAL, corroborating packet exists but is merely
+        // silent on domain. Only a corroborated-but-silent candidate is
+        // rescued by an explicit --domain; a fully uncorroborated one
+        // remains fail-closed, exactly like the original PR #1148 policy.
         using var workspace = new StalledWorkWorkspace();
         // No packet.yaml written for this execution unit at all.
         var issue = BuildIssue(9999, "SKS-G512: From a different domain naming convention", FixedNow.AddHours(-26), "intent-target");
@@ -332,11 +341,11 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         using var doc = JsonDocument.Parse(writer.ToString());
         Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
         var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        // The leading-token guess is still shown for human readability, but
+        // was never trusted for the domain decision.
         Assert.Equal("SKS-G512", excludedItem.GetProperty("execution_unit").GetString());
         Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
-        // PR #1148 review re-repair: the detail must name candidate domains
-        // AND the exact, runnable re-invocation — pinned here in JSON.
-        Assert.Contains("Candidate domains:", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Contains("could not be corroborated", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
         Assert.Contains(
             "Re-invoke with: intent-cli automation stalled-work --domain <name> --repo J-Tech-Japan/intent-system --format json",
             excludedItem.GetProperty("detail").GetString(),
@@ -344,11 +353,9 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_NoPacketYamlAtAll_Markdown_PinsExactReinvocationCommand()
+    public void Execute_NoPacketYamlAtAll_Markdown_PinsUnderivableReasonAndReinvocation()
     {
-        // Same underivable fixture as above, rendered as markdown — the
-        // exact re-invocation command must survive both output formats so
-        // docs, schema, and rendering cannot drift independently.
+        // Same uncorroborated fixture as above, rendered as markdown.
         using var workspace = new StalledWorkWorkspace();
         var issue = BuildIssue(9999, "SKS-G512: From a different domain naming convention", FixedNow.AddHours(-26), "intent-target");
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
@@ -363,7 +370,6 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         var output = writer.ToString();
         Assert.Contains("SKS-G512", output, StringComparison.Ordinal);
         Assert.Contains("domain-underivable", output, StringComparison.Ordinal);
-        Assert.Contains("Candidate domains:", output, StringComparison.Ordinal);
         Assert.Contains(
             "Re-invoke with: intent-cli automation stalled-work --domain <name> --repo J-Tech-Japan/intent-system --format json",
             output,
@@ -381,7 +387,7 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         workspace.WriteQueueState(BuildQueueStateJson("SKS-G700", QueueItemState.Review,
             linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1300",
             linkedIssueNumber: 1299));
-        var mergedPr = BuildPr(1300, "SKS-G700: Some other domain's merged change", FixedNow.AddHours(-3), state: "MERGED");
+        var mergedPr = BuildPr(1300, "SKS-G700: Some other domain's merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1299);
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
 
         using var writer = new StringWriter();
@@ -395,6 +401,474 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
         Assert.Equal("SKS-G700", excludedItem.GetProperty("execution_unit").GetString());
         Assert.Equal("domain-contradiction", excludedItem.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_LinkedIssueRepoDiffersFromMergedPrRepo_FailsClosedNotCorroborated()
+    {
+        // G532 review repair: a bare `linked_pr: "1300"` number match alone
+        // is not sufficient corroboration on a shared/multi-repo
+        // queue-state — here the queue item's OWN declared linked_issue
+        // names a DIFFERENT repo than the one being scanned, so it must not
+        // corroborate this merged PR even though the PR number matches and
+        // the merged PR's own closing reference happens to cite the same
+        // issue NUMBER (for the scanned repo).
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            "G500", QueueItemState.Review,
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200",
+            linkedIssueNumber: 1199,
+            linkedIssueRepo: "SomeOtherOrg/unrelated-repo"));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal("G500", excludedItem.GetProperty("execution_unit").GetString());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+        Assert.Contains("bare number only", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_LinkedIssueNumberNotAmongPrClosingReferences_FailsClosedNotCorroborated()
+    {
+        // The queue item declares a linked_issue for the correct repo, but
+        // the merged PR's OWN GitHub-reported closing references cite a
+        // DIFFERENT issue number — no genuine correspondence, so it must
+        // not corroborate.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            "G500", QueueItemState.Review,
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200",
+            linkedIssueNumber: 1199));
+        // Merged PR #1200's own closing reference cites issue #4321, not
+        // #1199 — a genuine mismatch, not a coincidental number collision.
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 4321);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_QueueItemHasNoLinkedIssueAtAll_FailsClosedNotCorroborated()
+    {
+        // A queue item with no linked_issue at all cannot be cross-checked
+        // against the merged PR's own closing references — fail closed
+        // rather than trusting the bare linked_pr number match alone.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            "G500", QueueItemState.Review,
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200",
+            linkedIssueNumber: null));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+        Assert.Contains("(none)", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_TwoActiveQueueItemsSameValidRepoIssueDifferentUnits_ReportedAsAmbiguous()
+    {
+        // G532 review repair: two active queue items both linked to the
+        // same merged PR — and both declaring the SAME valid repo+issue
+        // that genuinely appears in the PR's own closing references — must
+        // never be resolved by picking whichever is first in JSON order.
+        // Two different execution units both claiming the same issue is a
+        // data-integrity problem, not something --domain or corroboration
+        // logic should silently pick a winner for.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WritePacketDomain("G501", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            BuildQueueItem("G500", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199),
+            BuildQueueItem("G501", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199)));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonExecutionUnitAmbiguous, excludedItem.GetProperty("reason").GetString());
+        var detail = excludedItem.GetProperty("detail").GetString();
+        Assert.Contains("G500", detail, StringComparison.Ordinal);
+        Assert.Contains("G501", detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_TwoActiveQueueItemsOneValidOneInvalidLinkage_StillAmbiguousRegardlessOfOrder()
+    {
+        // Mixed valid/invalid linkage: one active item's linked_issue
+        // genuinely corroborates the merged PR, the other's does not. The
+        // mere presence of two ACTIVE matches is itself the ambiguity —
+        // it must not be resolved by silently preferring whichever item
+        // happens to validate, in either JSON order.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WritePacketDomain("G502", "intent-cli");
+        // G500 -> #1199 (matches the merged PR's own closing reference);
+        // G502 -> #9999 (does not).
+        workspace.WriteQueueState(BuildQueueStateJson(
+            BuildQueueItem("G502", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 9999),
+            BuildQueueItem("G500", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199)));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonExecutionUnitAmbiguous, excludedItem.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_OneActiveOneCompletedQueueItemForSamePr_UsesTheSoleActiveItem()
+    {
+        // A completed duplicate alongside one genuinely active item is NOT
+        // ambiguous — only ACTIVE (non-completed) items compete for
+        // authority; a stale/completed leftover must not block detection
+        // of the one real stall.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WritePacketDomain("G503", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            BuildQueueItem("G503", QueueItemState.Completed,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199),
+            BuildQueueItem("G500", QueueItemState.Review,
+                linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200", linkedIssueNumber: 1199)));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal("G500", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_TitleWithSubSliceSuffixNotImmediatelyFollowedByColon_ResolvesLeadingIdTokenOnly()
+    {
+        // G532 regression fixture: field finding #1 (design@sekiban-as-a-
+        // service-orch, 2026-07-15, PR #1748). The prior "everything before
+        // the first colon" rule parsed this title as unit "SKS-G815 G812
+        // sub-slice 1" — packet lookup then failed and the candidate was
+        // wrongly excluded. The correct unit is the LEADING ID token alone.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("SKS-G815", "sekiban-as-a-service");
+        var issue = BuildIssue(1748, "SKS-G815 G812 sub-slice 1: Something narrow", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "sekiban-as-a-service", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal("SKS-G815", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_PacketDeclaresDomainOnlyNested_NotDomainUnderivable_ConfirmsRequestedDomain()
+    {
+        // G532 regression fixture: field finding #4 (design@sekiban-as-a-
+        // service-orch, 2026-07-18, SKS-G823 / issue #1757). Domain
+        // derivation must read the nested
+        // implementation_issue_packet.domain field — the top-level domain:
+        // alias is not the only source.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteNestedPacket("SKS-G823", "sekiban-as-a-service");
+        var issue = BuildIssue(1757, "SKS-G823: Nested domain only", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "sekiban-as-a-service", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal("SKS-G823", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_PacketDeclaresBothNestedAndTopLevelDomain_NestedWinsOverTopLevelAlias()
+    {
+        // The nested field is first-class; a disagreeing top-level alias
+        // must not shadow it merely by appearing earlier in the file.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketWithDisagreeingTopLevelAndNestedDomain(
+            "G960", topLevelDomain: "wrong-domain", nestedDomain: "intent-cli");
+        var issue = BuildIssue(1960, "G960: Nested domain takes priority", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal("G960", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_TitleWithNoLeadingIdToken_FallsBackToSourceExecutionUnitMatchBeforeExclusion()
+    {
+        // G532 acceptance criterion: "a title with no leading ID token
+        // falls back to source_execution_unit matching before exclusion."
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteNestedPacket("G900", "intent-cli");
+        var issue = BuildIssue(1900, "Freeform title mentioning G900 mid-sentence", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal("G900", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_TitleWithNoLeadingIdTokenAndNoMatchingPacketAnywhere_ReportedAsUnderivableNotSilentlyDropped()
+    {
+        // The worst case (no leading token, no packet anywhere corroborates
+        // it) must be REPORTED — in excluded[] with a structured reason and
+        // diagnostics — rather than silently disappearing. It must NOT be
+        // silently included either: an explicit --domain scopes the scan,
+        // it does not identify an otherwise-unidentified candidate as
+        // belonging to it.
+        using var workspace = new StalledWorkWorkspace();
+        var issue = BuildIssue(1901, "Completely freeform title with no identifiable unit", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(string.Empty, excludedItem.GetProperty("execution_unit").GetString());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Execute_PacketDeclaresContradictingDomain_DetailNamesDerivationAttempted()
+    {
+        // G532 acceptance criterion: every excluded item's diagnostics must
+        // name not just the reason but the derivation attempted.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G950", "sekiban-as-a-service");
+        var issue = BuildIssue(1950, "G950: Not ours", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Contains("Derivation attempted", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Contains("implementation_issue_packet.domain", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Contains("top-level `domain:` alias", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_PacketExistsButDeclaresNoDomainField_CorroboratedAndRescuedByExplicitDomain()
+    {
+        // G532's core fix, precisely scoped: a REAL, corroborating packet
+        // (folder exists, packet.yaml is readable, its own
+        // source_execution_unit matches) that simply never declares a
+        // domain — neither nested nor top-level — is rescued by an
+        // explicit --domain, unlike a fully uncorroborated candidate (see
+        // Execute_NoPacketYamlAtAll_UncorroboratedCandidate_StillFailsClosedAsUnderivable).
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketWithNoDomainField("G970");
+        var issue = BuildIssue(1970, "G970: Packet exists but is silent on domain", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("excluded").GetArrayLength());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal("G970", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_TitleWithLetterImmediatelyAfterLeadingIdDigits_NeverTruncatesToAShorterUnit()
+    {
+        // G532 review repair: the leading-token regex needs a right
+        // boundary. Without one, "G12abc" would wrongly parse as "G12" —
+        // here a packet for "G12" exists (and would confirm the requested
+        // domain if wrongly matched), but the title's real token "G12abc"
+        // does not correspond to it, and no packet declares
+        // source_execution_unit "G12abc" either — so this must stay
+        // uncorroborated and excluded, never silently included via the
+        // truncated "G12" guess.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G12", "intent-cli");
+        var issue = BuildIssue(1912, "G12abc: Looks like G12 but is not", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+        // Never the truncated guess — the boundary rejects it entirely, so
+        // there is no leading-token guess left to show either.
+        Assert.Equal(string.Empty, excludedItem.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_TitleMatchesTwoDistinctDeclaredExecutionUnits_ReportedAsAmbiguousNotGuessed()
+    {
+        // G532 review repair: when a freeform title (no leading ID token)
+        // contains tokens matching TWO different packets' declared
+        // source_execution_unit, the execution unit is genuinely ambiguous
+        // — it must never be resolved by picking the longest match or the
+        // first sorted directory.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteNestedPacket("G12", "intent-cli");
+        workspace.WriteNestedPacket("G34", "intent-cli");
+        var issue = BuildIssue(1934, "Combine G12 and G34 into one follow-up", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonExecutionUnitAmbiguous, excludedItem.GetProperty("reason").GetString());
+        Assert.Equal(string.Empty, excludedItem.GetProperty("execution_unit").GetString());
+        var detail = excludedItem.GetProperty("detail").GetString();
+        Assert.Contains("ambiguous", detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("G12", detail, StringComparison.Ordinal);
+        Assert.Contains("G34", detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_TwoPacketFilesDeclareIdenticalSourceExecutionUnit_ReportedAsAmbiguousNotCollapsed()
+    {
+        // G532 review repair: two DISTINCT packet files that happen to
+        // declare the identical source_execution_unit value (a duplicate
+        // declaration — here with contradictory domains) must never be
+        // collapsed into one corroborated match by string equality. Exactly
+        // one matching packet FILE is required, not one distinct value.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteNestedPacketAtFolder("G50-copy-a", "G50", "intent-cli");
+        workspace.WriteNestedPacketAtFolder("G50-copy-b", "G50", "sekiban-as-a-service");
+        var issue = BuildIssue(1950, "Freeform title mentioning G50 mid-sentence", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonExecutionUnitAmbiguous, excludedItem.GetProperty("reason").GetString());
+        Assert.Equal(string.Empty, excludedItem.GetProperty("execution_unit").GetString());
+        var detail = excludedItem.GetProperty("detail").GetString();
+        Assert.Contains("G50-copy-a", detail, StringComparison.Ordinal);
+        Assert.Contains("G50-copy-b", detail, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -443,7 +917,7 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         var publishedIssue = BuildIssue(1147, "G523: Ours", FixedNow.AddHours(-26), "intent-target");
         var prCreatedIssue = BuildIssue(1143, "G521: Document agmsg", FixedNow.AddDays(-2), "intent-pr-created");
         var reviewPr = BuildPr(1144, "G521: Document agmsg", FixedNow.AddHours(-1.5), state: "OPEN", closingIssueNumber: 1143);
-        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED");
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(
             issues: [publishedIssue, prCreatedIssue],
             prs: [reviewPr],
@@ -509,43 +983,66 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
                 : Array.Empty<GitHubPrClosingIssueReference>(),
         };
 
-    private static string BuildQueueStateJson(string executionUnit, QueueItemState state, string linkedPr, int linkedIssueNumber)
+    private static string BuildQueueStateJson(
+        string executionUnit,
+        QueueItemState state,
+        string linkedPr,
+        int? linkedIssueNumber,
+        string linkedIssueRepo = "J-Tech-Japan/intent-system") =>
+        BuildQueueStateJson(BuildQueueItem(executionUnit, state, linkedPr, linkedIssueNumber, linkedIssueRepo));
+
+    /// <summary>
+    /// G532 review repair: overload accepting multiple queue items, so a
+    /// fixture can pin the "two+ active queue items reference the same
+    /// merged PR" ambiguity — the prior FirstOrDefault selection picked
+    /// whichever item happened to be first in JSON order.
+    /// </summary>
+    private static string BuildQueueStateJson(params QueueItem[] items)
     {
         var queueState = new QueueState
         {
             SchemaVersion = "1",
             UpdatedAt = FixedNow,
-            Items = new[]
-            {
-                new QueueItem
-                {
-                    ExecutionUnit = executionUnit,
-                    Title = $"{executionUnit} title",
-                    State = state,
-                    Dependencies = Array.Empty<string>(),
-                    BlockedBy = Array.Empty<string>(),
-                    ClarificationReturnPath = string.Empty,
-                    PacketPaths = new PacketPaths
-                    {
-                        Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml",
-                        Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
-                        ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
-                    },
-                    LinkedIssue = new LinkedIssue
-                    {
-                        Repo = "J-Tech-Japan/intent-system",
-                        Number = linkedIssueNumber,
-                        Url = $"https://github.com/J-Tech-Japan/intent-system/issues/{linkedIssueNumber}",
-                    },
-                    LinkedPr = linkedPr,
-                    WorkerRole = "Claude",
-                    ReviewRole = "Codex",
-                    Priority = "normal",
-                },
-            },
+            Items = items,
         };
         return QueueStateSerializer.Serialize(queueState);
     }
+
+    private static QueueItem BuildQueueItem(
+        string executionUnit,
+        QueueItemState state,
+        string linkedPr,
+        int? linkedIssueNumber,
+        string linkedIssueRepo = "J-Tech-Japan/intent-system") => new()
+        {
+            ExecutionUnit = executionUnit,
+            Title = $"{executionUnit} title",
+            State = state,
+            Dependencies = Array.Empty<string>(),
+            BlockedBy = Array.Empty<string>(),
+            ClarificationReturnPath = string.Empty,
+            PacketPaths = new PacketPaths
+            {
+                Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
+                ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
+            },
+            // G532 review repair: nullable, so a fixture can pin "no
+            // linked_issue at all" — the queue-linkage corroboration check
+            // must fail closed for that case.
+            LinkedIssue = linkedIssueNumber is int number
+                ? new LinkedIssue
+                {
+                    Repo = linkedIssueRepo,
+                    Number = number,
+                    Url = $"https://github.com/{linkedIssueRepo}/issues/{number}",
+                }
+                : null,
+            LinkedPr = linkedPr,
+            WorkerRole = "Claude",
+            ReviewRole = "Codex",
+            Priority = "normal",
+        };
 
     private sealed class FakeLister : IGitHubAutomationCandidateLister
     {
@@ -607,6 +1104,72 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
             Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, "packet.yaml"), $"domain: {domain}\n");
+        }
+
+        /// <summary>
+        /// G532: writes a packet.yaml declaring `domain:` and
+        /// `source_execution_unit:` ONLY under the nested
+        /// `implementation_issue_packet:` section — no top-level alias —
+        /// so a test can pin the nested-first-class derivation contract
+        /// (SKS-G823 regression) and the source_execution_unit fallback
+        /// match independently of the top-level alias path.
+        /// </summary>
+        public void WriteNestedPacket(string executionUnit, string domain)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                Path.Combine(dir, "packet.yaml"),
+                $"implementation_issue_packet:\n  source_execution_unit: {executionUnit}\n  domain: {domain}\n");
+        }
+
+        /// <summary>
+        /// G532 review repair: writes a packet.yaml at an arbitrary FOLDER
+        /// name declaring an arbitrary source_execution_unit — used to pin
+        /// that two distinct packet FILES declaring the identical unit
+        /// value are still ambiguous (never collapsed by string equality),
+        /// e.g. a duplicate declaration across two folders.
+        /// </summary>
+        public void WriteNestedPacketAtFolder(string folderName, string declaredExecutionUnit, string domain)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", folderName);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                Path.Combine(dir, "packet.yaml"),
+                $"implementation_issue_packet:\n  source_execution_unit: {declaredExecutionUnit}\n  domain: {domain}\n");
+        }
+
+        /// <summary>
+        /// G532: writes a packet.yaml whose top-level `domain:` disagrees
+        /// with its nested `implementation_issue_packet.domain` — used to
+        /// pin that the nested field takes priority over the top-level
+        /// alias, not just "whichever appears first in the file".
+        /// </summary>
+        public void WritePacketWithDisagreeingTopLevelAndNestedDomain(
+            string executionUnit, string topLevelDomain, string nestedDomain)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                Path.Combine(dir, "packet.yaml"),
+                $"domain: {topLevelDomain}\nimplementation_issue_packet:\n  source_execution_unit: {executionUnit}\n  domain: {nestedDomain}\n");
+        }
+
+        /// <summary>
+        /// G532 review repair: writes a packet.yaml that identifies the
+        /// execution unit (so it IS corroborated — the folder exists and
+        /// the packet is readable) but declares NO domain field anywhere,
+        /// neither nested nor top-level. This is the one case an explicit
+        /// --domain is still allowed to rescue: packet/queue linkage
+        /// identifies the candidate, it is simply silent on domain.
+        /// </summary>
+        public void WritePacketWithNoDomainField(string executionUnit)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                Path.Combine(dir, "packet.yaml"),
+                $"implementation_issue_packet:\n  source_execution_unit: {executionUnit}\n  target_repo: J-Tech-Japan/intent-system\n");
         }
 
         public void Dispose()

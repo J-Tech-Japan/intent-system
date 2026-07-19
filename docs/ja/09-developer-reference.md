@@ -230,6 +230,14 @@ binding fallback は、packet 自身の `domain:` フィールドが別の値を
   cross-candidate なスコープを要求したことにはならないため、
   （個別に導出可能な）異なる domain を持つ複数の候補が 1 回の broad-scan
   結果に共存することがあります。
+- `automation stalled-work`（G532）もこの順序を適用します — 詳細は後述。
+  ただし、candidate の execution unit 自体が実在する packet/queue の
+  linkage によって裏付けられている場合に限ります。`stalled-work` では
+  `--domain` が必須引数のため、裏付けが取れている candidate については、
+  その linkage が domain について沈黙していても明示的な domain が常に
+  代わりに使えます。しかし `--domain` は scan の範囲を指定するものであり、
+  それ単体で身元不明の candidate をそのメンバーだと認定するものではない
+  ため、裏付けが取れない candidate は引き続き除外されます。
 
 ### stalled-work 検出 (G523)
 
@@ -267,30 +275,94 @@ completion label が実態とずれてしまっていても（intent-pr-created 
 既にその issue を close している場合）、誤って `worker claim` を推奨する
 ことはありません。
 
-**domain isolation は（title-prefix の正規表現一致ではなく）G522 と同様に
-packet/queue metadata に基づきます。** すべての GitHub issue/PR candidate
-について `<unit>: ...` というタイトル prefix を導出しますが、これは
-その candidate の `.intent-cli/issues/<unit>/packet.yaml` を特定するため
-だけに使われます — 要求された `--domain` と照合する唯一の権威は、
-その packet 自身が宣言する `domain:` フィールドです。candidate が
-`items[]` に含まれるのは、packet が宣言する domain が要求された
-`--domain` と完全に一致する場合のみです。packet が宣言する domain が
-`--domain` と矛盾する candidate、あるいは domain を全く導出できない
-candidate（packet.yaml が無い、またはそれに `domain:` フィールドが
-無い）は FAIL-CLOSED になります: `items[]` から除外され、代わりに
-`excluded[]`（`kind`、`execution_unit`、`issue`/`pr`、`reason`、
-`detail`）に報告されます。`reason` は `domain-contradiction`
-（`detail` に矛盾している具体的な packet-declared domain を明示）
-または `domain-underivable`（`detail` に `intents/*/` からスキャンした
-候補 domain **と** 正確に実行可能な再実行コマンド —
-`intent-cli automation stalled-work --domain <name> --repo <owner/repo>
---format json` — の両方を明示。G522 の underivable diagnostic 契約を
-継承）のいずれかです。（単一の operator 指定 execution unit に対しては
-明示的な `--domain` 単独で成立する）他の G522 サーフェスとは異なり、
-これは共有 repo の issue/PR にまたがる broad multi-candidate scan です
-— 明示的な `--domain` だけでは、自身のメタデータで裏付けが取れない
-candidate に適用されると信頼することはありません。したがって
-candidate が黙って scan に紛れ込むことも、黙って消えることもありません。
+**execution unit と domain の特定 (G532)**
+
+candidate の execution unit は、issue/PR タイトルの先頭 ID トークン —
+`^[A-Z][A-Z0-9]*-G?[0-9]+`（英数字の prefix。例: `SKS-G815`、`Z4R-G3`）
+または単純な `^G[0-9]+`（例: `G523`）で、直後に文字・数字が続かない
+（右境界必須）— であり、最初のコロンより前すべてではありません。
+`"SKS-G815 G812 sub-slice 1: ..."` のようなタイトルは `SKS-G815` に
+解決され、コロン前のフレーズ全体にはなりません。`"G12abc: ..."` の
+ようなタイトルが `G12` に切り詰められることもありません。この先頭
+トークンは、実在する `.intent-cli/issues/<token>/packet.yaml` が
+裏付ける場合にのみ信頼されます。先頭トークンが無い、または裏付けが
+取れない場合は、`.intent-cli/issues/*/packet.yaml` の各 packet が
+宣言する `source_execution_unit`（nested の
+`implementation_issue_packet.source_execution_unit` を優先し、bare な
+`source_execution_unit` を alias として使用）がタイトル中の独立した
+トークンとして現れるかどうかで candidate を照合します。裏付けとして
+認められるのは、ちょうど 1 つの packet ファイルが一致した場合のみで
+あり、単に宣言された unit の値が 1 種類であることではありません。
+2 つ以上の packet ファイルが一致した場合は、宣言している unit の
+文字列がたまたま同じであっても（重複宣言はそれ自体がデータ整合性の
+問題であり、値によって 1 つにまとめられることはありません）、
+（最長一致を選ぶなどして）推測することなく、ambiguous
+（`execution-unit-ambiguous`、一致したすべての candidate パスを明示）
+として報告されます。1 つの packet が自身の nested フィールドと
+top-level alias の両方で同じ unit を宣言している場合は、それでも
+1 ファイルであり、影響を受けません。
+
+この execution-unit 文字列は candidate の
+`.intent-cli/issues/<unit>/packet.yaml` を特定するためだけに使われます
+— domain 所属の判定そのものには使いません。domain は、その packet の
+nested `implementation_issue_packet.domain` フィールドを最初に読み、
+それが無い場合のみ top-level `domain:` フィールドを互換 alias として
+使用します。
+
+`merged-not-closed-out` では、execution unit とその裏付けとなる
+linkage はタイトルではなく queue-state から得られます: merged PR
+自身の PR 番号を queue item の `linked_pr` と照合しますが、その
+bare な番号一致だけでは、shared/multi-repo な queue-state に対する
+裏付けとして十分ではありません（無関係な repo にたまたま同じ番号の
+PR が存在する可能性があるため）。queue item 自身が宣言する
+`linked_issue`（repo + number）が、scan 対象の repo について
+merged PR 自身が GitHub 上で報告する closing-issue reference の
+いずれかと一致することも追加で必要です — `linked_issue` が無い、
+repo が違う、対応する issue が無い場合は、単なる仮定ではなく
+`excluded[]` へ fail-closed します。同じ merged PR を参照する
+ACTIVE（非 Completed）な queue item は、まず全件を収集します —
+必要なのはちょうど 1 件のみで、2 件以上（同じ repo+issue に
+collapse するが execution unit が異なる場合も、一方だけが
+妥当性検証を通る場合も含む）は、JSON の並び順に関わらず ambiguous
+（`execution-unit-ambiguous`、試みたすべての queue item の unit・
+state・linkage と queue-state のパスを明示）になります。Completed
+になった重複が、本当に active な item 1 件と共存している場合は
+ambiguous とはみなされません — 権威を争うのは active な item
+同士のみです。
+
+**domain の確認は、他の execution-unit を解決するすべてのサーフェスと
+同じ G522 の順序（`--domain` > packet-declared domain > fail-loud）を
+適用します。** ただし、candidate の execution unit 自体が上記の
+実在する packet/queue の linkage によって裏付けられている場合に
+限ります。そのような candidate について、
+`stalled-work` では `--domain` が必須引数のため、その linkage が
+domain について沈黙していても常に明示的な `--domain` が代わりに
+使えます — candidate が `items[]` から除外されるのは、`--domain` と、
+実際に別の domain を宣言している packet とが本当に矛盾する場合のみです。
+これは PR #1148 での従来の締め付け — packet-declared domain が
+無い/導出できない場合を、明示的な `--domain` があっても常に
+fail-closed とする方針、しかも candidate の execution unit 自体が
+何によっても裏付けられていない場合も含む — よりも狭い範囲です。
+その従来の広い締め付けは、identification のロジック自体が誤っていた
+ときに、まさにこのサーフェスが見つけるべき stall を除外してしまい
+ました（下流 adopter に対する field finding、2026-07-15 と
+2026-07-18。いずれも表面化されずチームの workaround で覆い隠されて
+いました）。
+
+execution unit が全く裏付けられない candidate（先頭トークンの
+packet.yaml が存在せず、かつどの packet の `source_execution_unit`
+もタイトルに一致しない）は、引き続き除外されます
+（`domain-underivable`）: 明示的な `--domain` は scan の範囲を
+指定するものであり、それ単体で身元不明の candidate をそのメンバーだと
+認定するものではないからです。`excluded[]`（`kind`、`execution_unit`、
+`issue`/`pr`、`reason`、`detail`）はすべての除外を報告します —
+`domain-contradiction`（矛盾している具体的な packet-declared domain と
+試みた derivation — nested フィールドと top-level alias のどちらを、
+どの packet.yaml パスで確認したか — を明示）、`domain-underivable`
+（execution unit が裏付けられなかった場合）、`execution-unit-ambiguous`
+（一致したすべての candidate packet パスを明示）のいずれかであり、
+常に理由と試みた derivation とともに報告され、黙って消えることは
+ありません。
 
 このスライスは検出のみです — orchestrator wake procedure や外部
 heartbeat からこのサーフェスを利用する部分は、別の後続スライスです。
