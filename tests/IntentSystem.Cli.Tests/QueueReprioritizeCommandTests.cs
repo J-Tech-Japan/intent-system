@@ -301,64 +301,28 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         Assert.Single(events);
     }
 
-    // ─── G537 round-3 review repair: dedup bound to a content fingerprint,
-    // never wall-clock ordering ─────────────────────────────────────────────
+    // ─── G537 round-4 review repair: dedup bound to a durable injective
+    // priority_revision counter, never content fingerprinting or wall-clock
+    // ordering ───────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Execute_RoundTripStaleCollision_ThirdMutationGetsItsOwnEvent()
+    public void Execute_RevisitedByteIdenticalPrestate_RepeatedTransitionStillGetsItsOwnEvent()
     {
-        // The reproduction from round 2's review: normal->high reason R
-        // completes; high->normal reason S completes; normal->high reason
-        // R is requested AGAIN. The third request's UNTAGGED reason text
-        // is byte-identical to the first event's — but the first event's
-        // content fingerprint is now stale (the second transition's write
-        // changed queue-state.json), so the third mutation must get its
-        // OWN new event.
+        // The round-4 review's exact counter-example to round 3's content
+        // fingerprint: seed queue-state.json with UpdatedAt EQUAL to the
+        // fixed clock used for every operation below. After normal->high
+        // (R) then high->normal (S) — both under that SAME fixed clock —
+        // the file's priority/state/updated_at genuinely revisit the
+        // ORIGINAL prestate bytes (asserted explicitly below, ignoring
+        // only the priority_revision counter itself). A content
+        // fingerprint of the whole file would be fooled into treating the
+        // stale first event as pending for the third (repeated) request;
+        // the durable `priority_revision` counter cannot be, because it
+        // never repeats a value once consumed.
         using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
-
-        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 1, 0, 0, TimeSpan.Zero);
-        Assert.Equal(0, QueueReprioritizeCommand.Execute(
-            workspace.Context, ["G537", "--priority", "high", "--reason", "R", "--write"], new StringWriter()));
-
-        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 2, 0, 0, TimeSpan.Zero);
-        Assert.Equal(0, QueueReprioritizeCommand.Execute(
-            workspace.Context, ["G537", "--priority", "normal", "--reason", "S", "--write"], new StringWriter()));
-
-        QueueReprioritizeCommand.UtcNowFactory = () => new DateTimeOffset(2026, 7, 19, 3, 0, 0, TimeSpan.Zero);
-        using var thirdWriter = new StringWriter();
-        var thirdExitCode = QueueReprioritizeCommand.Execute(
-            workspace.Context,
-            ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
-            thirdWriter);
-
-        Assert.Equal(0, thirdExitCode);
-        using var document = JsonDocument.Parse(thirdWriter.ToString());
-        Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
-
-        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
-        Assert.Equal("high", stateAfter.Items.Single().Priority);
-
-        // THREE distinct mutations -> THREE events, one per mutation.
-        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
-        Assert.Equal(3, events.Count);
-        Assert.All(events, e => Assert.Equal("priority-changed", e.Event));
-        // Every event's own fingerprint tag is distinct (each was computed
-        // against a genuinely different pre-mutation queue-state.json).
-        Assert.Equal(3, events.Select(e => e.Reason).Distinct(StringComparer.Ordinal).Count());
-    }
-
-    [Fact]
-    public void Execute_RoundTripStaleCollision_SameFixedClockAcrossAllThreeOperations_StillGetsThreeEvents()
-    {
-        // The EXACT round-3 review reproduction: UtcNowFactory returns ONE
-        // identical timestamp for all three successful operations, so
-        // `Ts` can never discriminate between them at all. The content
-        // fingerprint must still correctly produce three distinct events,
-        // since it never looks at time.
-        using var workspace = new ReprioritizeWorkspace();
-        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
         var fixedNow = new DateTimeOffset(2026, 7, 19, 4, 0, 0, TimeSpan.Zero);
+        var originalRaw = BuildQueueStateWithUpdatedAt(("G537", QueueItemState.Queued, "normal", linkedIssue: null), fixedNow);
+        workspace.WriteQueueState(originalRaw);
         QueueReprioritizeCommand.UtcNowFactory = () => fixedNow;
 
         Assert.Equal(0, QueueReprioritizeCommand.Execute(
@@ -366,6 +330,12 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         Assert.Equal(0, QueueReprioritizeCommand.Execute(
             workspace.Context, ["G537", "--priority", "normal", "--reason", "S", "--write"], new StringWriter()));
 
+        // Prove the revisit is real: every field except priority_revision
+        // is now byte-for-byte identical to the original prestate.
+        var afterTwoOpsRaw = File.ReadAllText(workspace.QueueStatePath);
+        Assert.Equal(StripPriorityRevision(originalRaw), StripPriorityRevision(afterTwoOpsRaw));
+        Assert.NotEqual(originalRaw, afterTwoOpsRaw); // only priority_revision differs (0 -> 2)
+
         using var thirdWriter = new StringWriter();
         var thirdExitCode = QueueReprioritizeCommand.Execute(
             workspace.Context,
@@ -378,16 +348,22 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
 
         var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
         Assert.Equal(3, events.Count);
-        Assert.All(events, e => Assert.Equal(fixedNow, e.Ts)); // confirms Ts truly never discriminated here
-        Assert.Equal(3, events.Select(e => e.Reason).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(events, e => Assert.Equal(fixedNow, e.Ts)); // clock never discriminated
+        Assert.Contains(events, e => e.Reason!.EndsWith("(revision 0->1)", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Reason!.EndsWith("(revision 1->2)", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Reason!.EndsWith("(revision 2->3)", StringComparison.Ordinal));
+
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("high", stateAfter.Items.Single().Priority);
+        Assert.Equal(3, stateAfter.Items.Single().PriorityRevision);
     }
 
     [Fact]
     public void Execute_ClockRollback_StillGetsItsOwnEventAndNeverDedupesAgainstAnEarlierTimestampedEvent()
     {
-        // Round-3 review: a clock rollback between operations (op2's
-        // UtcNowFactory value is EARLIER than op1's) must not break
-        // anything, since the fingerprint never consults time at all.
+        // A clock rollback between operations (op2's UtcNowFactory value
+        // is EARLIER than op1's) must not break anything, since the
+        // revision counter never consults time at all.
         using var workspace = new ReprioritizeWorkspace();
         workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
 
@@ -409,6 +385,7 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
 
         var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
         Assert.Equal("normal", stateAfter.Items.Single().Priority);
+        Assert.Equal(2, stateAfter.Items.Single().PriorityRevision);
 
         var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
         Assert.Equal(2, events.Count);
@@ -417,14 +394,14 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     [Fact]
     public void Execute_StaleHistoricalEventWithDifferentReasonText_NeverSuppressesTheNewEvent()
     {
-        // "Wrong reason": a stale event sharing the SAME (correct, matching)
-        // generation fingerprint but a DIFFERENT reason string must still
-        // never dedupe — isolates that the reason text is independently
-        // required, not merely a side effect of a mismatched fingerprint.
+        // "Wrong reason": a stale event sharing the SAME (correct,
+        // matching) revision pair but a DIFFERENT reason string must
+        // still never dedupe — isolates that the reason text is
+        // independently required, not merely a side effect of a
+        // mismatched revision.
         using var workspace = new ReprioritizeWorkspace();
         workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
-        var matchingGenerationId = QueueReprioritizeCommand.ComputeGenerationId(File.ReadAllText(workspace.QueueStatePath));
-        SeedHistoricalEvent(workspace, "G537", $"priority changed from 'normal' to 'high': OLD_REASON (generation {matchingGenerationId})");
+        SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': OLD_REASON (revision 0->1)");
 
         using var writer = new StringWriter();
         var exitCode = QueueReprioritizeCommand.Execute(
@@ -443,12 +420,11 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     [Fact]
     public void Execute_StaleHistoricalEventWithOppositeDirection_NeverSuppressesTheNewEvent()
     {
-        // "Wrong direction": same matching fingerprint, but the event
+        // "Wrong direction": same matching revision pair, but the event
         // records the OPPOSITE transition — must never dedupe.
         using var workspace = new ReprioritizeWorkspace();
         workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
-        var matchingGenerationId = QueueReprioritizeCommand.ComputeGenerationId(File.ReadAllText(workspace.QueueStatePath));
-        SeedHistoricalEvent(workspace, "G537", $"priority changed from 'high' to 'normal': R (generation {matchingGenerationId})");
+        SeedHistoricalEvent(workspace, "G537", "priority changed from 'high' to 'normal': R (revision 0->1)");
 
         using var writer = new StringWriter();
         var exitCode = QueueReprioritizeCommand.Execute(
@@ -467,12 +443,12 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     [Fact]
     public void Execute_StaleHistoricalEventForDifferentExecutionUnit_NeverSuppressesTheNewEvent()
     {
-        // "Wrong unit": same matching fingerprint AND reason text, but for
-        // a DIFFERENT execution unit — must never dedupe this unit's request.
+        // "Wrong unit": same matching revision pair AND reason text, but
+        // for a DIFFERENT execution unit — must never dedupe this unit's
+        // request.
         using var workspace = new ReprioritizeWorkspace();
         workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
-        var matchingGenerationId = QueueReprioritizeCommand.ComputeGenerationId(File.ReadAllText(workspace.QueueStatePath));
-        SeedHistoricalEvent(workspace, "G999", $"priority changed from 'normal' to 'high': R (generation {matchingGenerationId})");
+        SeedHistoricalEvent(workspace, "G999", "priority changed from 'normal' to 'high': R (revision 0->1)");
 
         using var writer = new StringWriter();
         var exitCode = QueueReprioritizeCommand.Execute(
@@ -489,10 +465,10 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_HistoricalEventMissingGenerationTagEntirely_NeverSuppressesTheNewEvent()
+    public void Execute_HistoricalEventMissingRevisionTagEntirely_NeverSuppressesTheNewEvent()
     {
         // "Malformed/missing generation": a historical event predating
-        // this fix (or hand-edited) with no fingerprint tag at all, but
+        // this fix (or hand-edited) with no revision tag at all, but
         // otherwise-matching unit/reason — a tagged expected reason can
         // never exact-match an untagged one, so this must never dedupe.
         using var workspace = new ReprioritizeWorkspace();
@@ -510,22 +486,21 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
         var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
         Assert.Equal(2, events.Count);
-        Assert.Contains(events, e => e.Reason!.Contains("(generation ", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Reason!.Contains("(revision ", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Execute_GenuinePendingEventWithMatchingFingerprint_IsDedupedAsRetry()
+    public void Execute_GenuinePendingEventWithMatchingRevisionPair_IsDedupedAsRetry()
     {
         // Direct fixture for the genuine-retry path (complementary to the
         // WriteQueueStateOverride fault-injection test above): an event
-        // already recorded with the CORRECT fingerprint for the CURRENT,
-        // still-unmutated queue-state.json, exactly matching unit/event/
-        // reason, must be recognized as the pending audit for an
-        // in-progress attempt and never duplicated.
+        // already recorded with the CORRECT from/to revision pair for the
+        // CURRENT, still-unmutated queue-state.json, exactly matching
+        // unit/event/reason, must be recognized as the pending audit for
+        // an in-progress attempt and never duplicated.
         using var workspace = new ReprioritizeWorkspace();
         workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
-        var matchingGenerationId = QueueReprioritizeCommand.ComputeGenerationId(File.ReadAllText(workspace.QueueStatePath));
-        SeedHistoricalEvent(workspace, "G537", $"priority changed from 'normal' to 'high': R (generation {matchingGenerationId})");
+        SeedHistoricalEvent(workspace, "G537", "priority changed from 'normal' to 'high': R (revision 0->1)");
 
         using var writer = new StringWriter();
         var exitCode = QueueReprioritizeCommand.Execute(
@@ -539,10 +514,65 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
 
         var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
         Assert.Equal("high", stateAfter.Items.Single().Priority);
+        Assert.Equal(1, stateAfter.Items.Single().PriorityRevision);
 
         // Still exactly ONE event — recognized as the pending retry, not duplicated.
         var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
         Assert.Single(events);
+    }
+
+    [Fact]
+    public void Execute_LegacyItemMissingPriorityRevisionField_MigratesAsZero()
+    {
+        // Legacy migration semantics: a hand-authored/pre-G537
+        // queue-state.json with no `priority_revision` field at all
+        // deserializes it as 0 — the first reprioritize on such an item
+        // records revision 0->1, same as a brand-new item.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-05-08T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G537",
+                  "title": "legacy item, no priority_revision field",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "Claude",
+                  "review_role": "Codex",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var stateAfter = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal(1, stateAfter.Items.Single().PriorityRevision);
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        Assert.Contains(events, e => e.Reason!.EndsWith("(revision 0->1)", StringComparison.Ordinal));
+    }
+
+    private static string StripPriorityRevision(string queueStateJson) =>
+        System.Text.RegularExpressions.Regex.Replace(queueStateJson, @",?\s*""priority_revision""\s*:\s*\d+", string.Empty);
+
+    private static string BuildQueueStateWithUpdatedAt(
+        (string ExecutionUnit, QueueItemState State, string Priority, LinkedIssue? LinkedIssue) item, DateTimeOffset updatedAt)
+    {
+        var raw = BuildQueueState(item);
+        var state = QueueStateSerializer.Deserialize(raw) with { UpdatedAt = updatedAt };
+        return QueueStateSerializer.Serialize(state);
     }
 
     private static void SeedHistoricalEvent(ReprioritizeWorkspace workspace, string executionUnit, string reason) =>

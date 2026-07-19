@@ -1027,35 +1027,49 @@ reason string byte-identical to the first event's, so a naive dedup on
 execution unit + event name + reason text alone would wrongly treat that
 stale historical event as the pending audit for the third mutation.
 
-**Round-3 review repair — wall-clock ordering is not a safe generation
-marker; the dedup match is now a content fingerprint, not a timestamp
-comparison.** The round-2 `Ts >= UpdatedAt` bound breaks in three ways: at
-timestamp equality (`UtcNowFactory` fixed to one value across several
-operations — or genuine same-tick production writes) it cannot
-distinguish "my own immediately-preceding failed attempt" from an older,
-unrelated transition; a clock rollback can move a later write's
-`UpdatedAt` *behind* an earlier one; and the write path never guaranteed
-`changedAt` strictly advances past the current `UpdatedAt` in the first
-place. The generation marker is now a **SHA-256 digest of the exact
-pre-mutation `queue-state.json` bytes**, read at the top of the current
-invocation, appended to the recorded reason (e.g. `... (generation
-3f9a2b7c1d4e5f60)`). This needs no clock at all:
+**Round-3 review repair (superseded by round 4 below) — the dedup match
+was next bound to a SHA-256 content fingerprint of the pre-mutation
+`queue-state.json` bytes,** to eliminate all wall-clock dependence from
+round 2's `Ts >= UpdatedAt` bound (which broke at timestamp equality, on
+clock rollback, and because the write path never guaranteed `changedAt`
+strictly advances past `UpdatedAt` in the first place).
 
-- A genuine retry (failed attempt, then re-run) starts from the
-  IDENTICAL un-mutated file — the failed attempt never wrote it — so the
-  retry computes the exact same fingerprint and finds its own
-  already-recorded event, regardless of what any clock did in between.
-- Any other, older transition necessarily read `queue-state.json`
-  *before* at least one subsequent successful write changed its content
-  (this command's own transitions always change the item's `priority`
-  field, and typically `updated_at` too) — so its fingerprint differs
-  and can never collide with the current generation's fingerprint. Same-
-  tick collisions and clock rollback/future-skew are structurally
-  impossible to trigger, since no timestamp is compared at all.
-- A historical event with no fingerprint tag at all (data predating this
-  fix, or hand-edited) can never exact-match a freshly-computed tagged
-  reason, so it is correctly treated as unrelated history rather than a
-  pending retry.
+**Round-4 review repair — a content fingerprint identifies BYTES, and
+this state machine can revisit identical bytes; the dedup token is now a
+durable, injective `priority_revision` counter, not a fingerprint of
+anything.** The round-3 fingerprint is collision-resistant for different
+content, but genuinely revisitable: `normal→high(R)` then `high→normal(S)`
+under one fixed clock reproduces the *exact original file bytes* (same
+priority, same `updated_at`, same everything) — a real revisit, not a
+hypothetical one. A subsequent `normal→high(R)` request then computes the
+identical fingerprint and tagged reason as the first event, so the
+fingerprint-based dedup wrongly treats that stale first event as pending
+for the third, genuinely distinct mutation.
+
+`QueueItem` now carries `priority_revision` — a plain `int`, deliberately
+NOT `required`, so a legacy `queue-state.json` predating this field
+simply deserializes it as `0` (the correct migration semantics: revision
+counting starts from the first `queue reprioritize` ever applied to a
+given item). Every successful `--write` bumps it by exactly 1. The
+recorded reason now carries the `fromRevision->toRevision` pair (e.g.
+`... (revision 0->1)`), and the dedup match is an exact match on that
+tagged reason (plus execution unit + event name), same as before — only
+the tag's *source* changed:
+
+- `toRevision` can mathematically never be produced by two distinct
+  successful mutations of the same item: each mutation strictly consumes
+  the "next" integer in the durably-persisted sequence, and once
+  consumed it is never the "next" one again — **regardless of whether
+  every other field of `queue-state.json` later cycles back to
+  byte-identical content**, since the counter itself is part of that same
+  durable content and only ever moves forward.
+- A genuine retry (failed queue-state write, then re-run) reads the SAME
+  `fromRevision` from the still-unmutated file both times — the failed
+  attempt never wrote the bump — so it computes the identical
+  `fromRevision->toRevision` pair and finds its own already-recorded
+  event.
+- A historical event with no revision tag at all (data predating this
+  fix, or hand-edited) can never exact-match a freshly-tagged reason.
 
 ---
 

@@ -82,11 +82,10 @@ internal static class QueueReprioritizeCommand
             return 1;
         }
 
-        var queueStateRawText = File.ReadAllText(queueStatePath);
         QueueState queueState;
         try
         {
-            queueState = QueueStateSerializer.Deserialize(queueStateRawText);
+            queueState = QueueStateSerializer.Deserialize(File.ReadAllText(queueStatePath));
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
         {
@@ -149,7 +148,23 @@ internal static class QueueReprioritizeCommand
         }
 
         var changedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
-        var updatedItem = item with { Priority = requestedPriority! };
+        // Round-4 review repair: `PriorityRevision` is the durable,
+        // injective operation identity — read fresh from the
+        // not-yet-mutated item, exactly once per invocation. It is never
+        // decremented and never reused: every successful write below
+        // bumps it by exactly 1, so `toRevision` can mathematically never
+        // be produced by two distinct successful mutations of this item,
+        // REGARDLESS of whether every other field of `queue-state.json`
+        // (priority, updated_at, ...) later cycles back to byte-identical
+        // content. A content fingerprint of the whole file cannot make
+        // this guarantee — the state machine can genuinely revisit
+        // identical bytes (e.g. normal->high->normal under a fixed clock
+        // reproduces the exact original file) — but a monotonic counter
+        // durably persisted IN that same file can never repeat a value it
+        // has already consumed.
+        var fromRevision = item.PriorityRevision;
+        var toRevision = fromRevision + 1;
+        var updatedItem = item with { Priority = requestedPriority!, PriorityRevision = toRevision };
         var newItems = queueState.Items.ToArray();
         newItems[index0] = updatedItem;
         var updatedState = queueState with { Items = newItems, UpdatedAt = changedAt };
@@ -162,41 +177,18 @@ internal static class QueueReprioritizeCommand
         //
         // - If the event append fails, queue-state is never touched: no
         //   durable change happened at all, and a plain retry starts
-        //   fresh.
+        //   fresh — it will recompute the SAME `fromRevision`/`toRevision`
+        //   pair, since `item.PriorityRevision` on disk is unchanged.
         // - If the event append succeeds but the queue-state write then
         //   fails, the audit trail already proves the attempted change
         //   and its reason even though the state file doesn't yet
         //   reflect it. Re-running this EXACT command detects the
-        //   already-recorded event and skips re-appending — it only
-        //   retries the queue-state write, so convergence never produces
-        //   a duplicate event.
-        //
-        // Round-3 review repair: wall-clock ordering (`Ts >= UpdatedAt`)
-        // is not a safe generation marker — at timestamp equality
-        // (`UtcNowFactory` fixed to one value across several operations,
-        // or genuine same-tick production writes) it cannot tell "my own
-        // immediately-preceding failed attempt" apart from an older,
-        // fully-completed transition, and a clock rollback/future-skewed
-        // `UpdatedAt` can invalidate the bound entirely in either
-        // direction. The generation marker is now a content fingerprint —
-        // a SHA-256 digest of the EXACT pre-mutation `queue-state.json`
-        // bytes read at the top of THIS invocation, appended to the
-        // recorded reason. This needs no clock at all:
-        //
-        // - A genuine retry (failed attempt, then re-run) starts from the
-        //   IDENTICAL un-mutated file — the failed attempt never wrote it
-        //   — so the retry computes the SAME fingerprint and finds its
-        //   own already-recorded event.
-        // - Any other, older transition necessarily read queue-state.json
-        //   BEFORE at least one subsequent successful write changed its
-        //   content (this command's own transitions always change the
-        //   item's `priority` field, and typically `updated_at` too) — so
-        //   its fingerprint differs and can never collide with the
-        //   current generation's fingerprint, regardless of what any
-        //   clock did in between.
-        var generationId = ComputeGenerationId(queueStateRawText);
+        //   already-recorded event (same `toRevision`, since queue-state
+        //   still shows the old `PriorityRevision`) and skips
+        //   re-appending — it only retries the queue-state write, so
+        //   convergence never produces a duplicate event.
         var expectedReason = $"priority changed from '{item.Priority}' to '{requestedPriority}': {reason}";
-        var taggedReason = $"{expectedReason} (generation {generationId})";
+        var taggedReason = $"{expectedReason} (revision {fromRevision}->{toRevision})";
         var alreadyAudited = RunsLogHasMatchingPriorityChangedEvent(runLogPath, executionUnit!, taggedReason);
 
         if (!alreadyAudited)
@@ -260,34 +252,23 @@ internal static class QueueReprioritizeCommand
             return false;
         }
 
-        // Round-3 review repair: the match is now purely content-based —
-        // an EXACT match on `taggedReason` (which embeds the current
-        // pre-mutation queue-state content fingerprint) is both necessary
-        // and sufficient. No timestamp/ordering comparison is involved at
-        // all, so clock behavior (same-tick collisions, rollback,
-        // future-skew) cannot affect this decision either way. An older
-        // event lacking a fingerprint tag entirely (pre-round-3 data) or
-        // carrying a DIFFERENT fingerprint never matches and is correctly
-        // treated as unrelated history, not a pending retry.
+        // Round-4 review repair: the match is now purely on `taggedReason`,
+        // which embeds the durable, injective `fromRevision->toRevision`
+        // pair — necessary and sufficient, both for correctness and
+        // because it can never spuriously match. Unlike a content
+        // fingerprint of the whole file (round 3), `toRevision` can never
+        // be produced twice by two distinct successful mutations of this
+        // item, even if the state machine revisits byte-identical
+        // `queue-state.json` content overall (e.g. normal->high->normal
+        // under a fixed clock) — the revision counter itself is part of
+        // that durable content and only ever moves forward. An older
+        // event lacking a revision tag entirely (pre-round-4 data) or
+        // carrying a DIFFERENT revision pair never matches and is
+        // correctly treated as unrelated history, not a pending retry.
         return events.Any(runEvent =>
             string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal)
             && string.Equals(runEvent.Event, PriorityChangedEventName, StringComparison.Ordinal)
             && string.Equals(runEvent.Reason, taggedReason, StringComparison.Ordinal));
-    }
-
-    /// <summary>
-    /// G537 round-3 review repair: a strictly content-addressed,
-    /// clock-independent generation identity for the pre-mutation
-    /// <c>queue-state.json</c> bytes — a SHA-256 digest (hex, truncated to
-    /// 16 characters; 64 bits of entropy is ample for this narrow,
-    /// same-file-scoped disambiguation purpose). Always computable and
-    /// never malformed/missing, since it is a pure function of the exact
-    /// text already successfully read and parsed earlier in <see cref="Execute"/>.
-    /// </summary>
-    internal static string ComputeGenerationId(string queueStateRawText)
-    {
-        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(queueStateRawText));
-        return Convert.ToHexString(hash)[..16];
     }
 
     private static void AppendPriorityChangedEvent(string runLogPath, RunEvent runEvent)

@@ -1094,39 +1094,53 @@ event と byte-identical になるため、execution unit + event name +
 reason text だけに頼る素朴な dedup は、その stale な historical event
 を 3 番目の mutation の pending audit だと誤認してしまいます。
 
-**Round-3 review repair — wall-clock ordering は安全な generation
-marker ではありません。dedup の match は今や timestamp 比較ではなく
-content fingerprint です。** round 2 の `Ts >= UpdatedAt` という束縛は
-3 つの方法で破綻します: timestamp が等しい場合(`UtcNowFactory` が
-複数の operation にわたって同じ値を返す場合——あるいは本物の
-production での同一 tick write の場合)、「自分自身の直前の失敗した
-attempt」と、無関係な古い transition とを区別できません。clock
-rollback は、より後の write の `UpdatedAt` を、より前の write よりも
-**前**に動かしてしまう可能性があります。そして write path は、そもそも
-`changedAt` が現在の `UpdatedAt` を厳密に上回ることを保証していません
-でした。generation marker は今や、**現在の invocation の先頭で read
-した、mutation 前の `queue-state.json` の正確な bytes の SHA-256
-digest** であり、記録される reason に追記されます(例:
-`... (generation 3f9a2b7c1d4e5f60)`)。これは一切 clock を必要と
-しません:
+**Round-3 review repair(round 4 で置き換え済み)— dedup の match は
+次に、mutation 前の `queue-state.json` bytes の SHA-256 content
+fingerprint に束縛されました。** これは round 2 の `Ts >= UpdatedAt`
+という束縛(timestamp が等しい場合や clock rollback で破綻し、そもそも
+`changedAt` が `UpdatedAt` を厳密に上回ることも保証していなかった)から
+wall-clock への依存を完全に排除するためでした。
 
-- 本物の retry(失敗した attempt の後の re-run)は、全く同じ
-  未 mutate な file から始まります——失敗した attempt はそれを
-  書き込んでいません——そのため retry は全く同じ fingerprint を
-  計算し、間で clock が何をしていたかに関わらず、自分自身の既に
-  記録された event を見つけます。
-- 他の、より古い transition は、必然的に、その後 少なくとも 1 回の
-  成功した write がその内容を変更する**前**に `queue-state.json` を
-  read しています(このコマンド自身の transition は常に item の
-  `priority` field を、多くの場合 `updated_at` も変更します)——その
-  ため fingerprint が異なり、現在の generation の fingerprint と
-  衝突することは決してありません。同一 tick の collision や clock
-  rollback/future-skew は、そもそも timestamp を一切比較しないため、
-  構造的に発生し得ません。
-- fingerprint tag を全く持たない historical event(この fix より前の
-  データ、あるいは手作業で編集されたもの)は、新たに計算された tagged
-  reason と exact-match することは決してないため、pending retry では
-  なく無関係な履歴として正しく扱われます。
+**Round-4 review repair — content fingerprint は bytes を識別するもの
+であり、この state machine は同一の bytes を再訪しうる。dedup token は
+今や、何かの fingerprint ではなく、durable かつ injective な
+`priority_revision` counter です。** round 3 の fingerprint は異なる
+content に対しては collision-resistant ですが、genuinely revisit
+可能です: 1 つの固定 clock のもとで `normal→high(R)`、続いて
+`high→normal(S)` を行うと、**元の file の bytes そのもの**が再現されて
+しまいます(同じ priority、同じ `updated_at`、その他すべて同じ)——
+これは仮定ではなく本物の revisit です。その後の `normal→high(R)`
+request は、最初の event と同一の fingerprint と tagged reason を計算
+してしまうため、fingerprint ベースの dedup は、その stale な最初の
+event を、正当に異なる 3 番目の mutation の pending event だと誤認
+します。
+
+`QueueItem` は今や `priority_revision` を持ちます——単なる `int` で、
+意図的に `required` にはしていません。そのため、この field より前の
+legacy な `queue-state.json` は、単に `0` として deserialize されます
+(正しい migration semantics です: revision の計測は、その item に
+初めて `queue reprioritize` が適用された時点から始まります)。成功した
+`--write` は必ずそれを 1 だけ進めます。記録される reason は今や
+`fromRevision->toRevision` のペアを持ちます(例: `... (revision
+0->1)`)。dedup の match は、その tagged reason(に加えて execution
+unit + event name)への exact match のままです——変わったのは tag の
+**source** だけです:
+
+- `toRevision` は、同一 item に対する 2 つの異なる成功した mutation
+  によって生成されることが数学的に決してありません: 各 mutation は、
+  durable に永続化された sequence の「次」の整数を厳密に消費し、一度
+  消費されると二度と「次」にはなりません——**`queue-state.json` の
+  他のすべての field が後で byte-identical な content に戻っても
+  関係ありません**。counter 自身がその同じ durable な content の一部
+  であり、常に前にしか進まないためです。
+- 本物の retry(失敗した queue-state write の後の re-run)は、両方の
+  試行で、依然として未 mutate な file から同じ `fromRevision` を
+  read します——失敗した attempt はその bump を書き込んでいません
+  ——そのため同一の `fromRevision->toRevision` ペアを計算し、自分
+  自身の既に記録された event を見つけます。
+- revision tag を全く持たない historical event(この fix より前の
+  データ、あるいは手作業で編集されたもの)は、新たに tag された
+  reason と exact-match することは決してありません。
 
 ---
 
