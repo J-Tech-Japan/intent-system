@@ -291,10 +291,16 @@ candidate の execution unit は、issue/PR タイトルの先頭 ID トーク�
 `implementation_issue_packet.source_execution_unit` を優先し、bare な
 `source_execution_unit` を alias として使用）がタイトル中の独立した
 トークンとして現れるかどうかで candidate を照合します。裏付けとして
-認められるのは、ちょうど 1 つの異なる packet が一致した場合のみです
-— 2 つ以上の異なる packet の宣言する unit が同じタイトルに一致する
-場合は、（最長一致を選ぶなどして）推測することなく、ambiguous
-（`execution-unit-ambiguous`）として報告されます。
+認められるのは、ちょうど 1 つの packet ファイルが一致した場合のみで
+あり、単に宣言された unit の値が 1 種類であることではありません。
+2 つ以上の packet ファイルが一致した場合は、宣言している unit の
+文字列がたまたま同じであっても（重複宣言はそれ自体がデータ整合性の
+問題であり、値によって 1 つにまとめられることはありません）、
+（最長一致を選ぶなどして）推測することなく、ambiguous
+（`execution-unit-ambiguous`、一致したすべての candidate パスを明示）
+として報告されます。1 つの packet が自身の nested フィールドと
+top-level alias の両方で同じ unit を宣言している場合は、それでも
+1 ファイルであり、影響を受けません。
 
 この execution-unit 文字列は candidate の
 `.intent-cli/issues/<unit>/packet.yaml` を特定するためだけに使われます
@@ -303,12 +309,23 @@ nested `implementation_issue_packet.domain` フィールドを最初に読み、
 それが無い場合のみ top-level `domain:` フィールドを互換 alias として
 使用します。
 
+`merged-not-closed-out` では、execution unit とその裏付けとなる
+linkage はタイトルではなく queue-state から得られます: merged PR
+自身の PR 番号を queue item の `linked_pr` と照合しますが、その
+bare な番号一致だけでは、shared/multi-repo な queue-state に対する
+裏付けとして十分ではありません（無関係な repo にたまたま同じ番号の
+PR が存在する可能性があるため）。queue item 自身が宣言する
+`linked_issue`（repo + number）が、scan 対象の repo について
+merged PR 自身が GitHub 上で報告する closing-issue reference の
+いずれかと一致することも追加で必要です — `linked_issue` が無い、
+repo が違う、対応する issue が無い場合は、単なる仮定ではなく
+`excluded[]` へ fail-closed します。
+
 **domain の確認は、他の execution-unit を解決するすべてのサーフェスと
 同じ G522 の順序（`--domain` > packet-declared domain > fail-loud）を
-適用します。** ただし、candidate の execution unit 自体が実在する
-packet/queue の linkage（一致した packet.yaml、あるいは
-`merged-not-closed-out` の場合は既に一致した queue-state item）に
-よって裏付けられている場合に限ります。そのような candidate について、
+適用します。** ただし、candidate の execution unit 自体が上記の
+実在する packet/queue の linkage によって裏付けられている場合に
+限ります。そのような candidate について、
 `stalled-work` では `--domain` が必須引数のため、その linkage が
 domain について沈黙していても常に明示的な `--domain` が代わりに
 使えます — candidate が `items[]` から除外されるのは、`--domain` と、

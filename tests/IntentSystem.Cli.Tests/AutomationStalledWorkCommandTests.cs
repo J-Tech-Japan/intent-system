@@ -180,7 +180,10 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         workspace.WriteQueueState(BuildQueueStateJson("G500", QueueItemState.Review,
             linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200",
             linkedIssueNumber: 1199));
-        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED");
+        // G532 review repair: the merged PR must itself GitHub-report the
+        // queue item's linked_issue among its closing references — a bare
+        // linked_pr number match alone is no longer sufficient.
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
 
         using var writer = new StringWriter();
@@ -384,7 +387,7 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         workspace.WriteQueueState(BuildQueueStateJson("SKS-G700", QueueItemState.Review,
             linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1300",
             linkedIssueNumber: 1299));
-        var mergedPr = BuildPr(1300, "SKS-G700: Some other domain's merged change", FixedNow.AddHours(-3), state: "MERGED");
+        var mergedPr = BuildPr(1300, "SKS-G700: Some other domain's merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1299);
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
 
         using var writer = new StringWriter();
@@ -398,6 +401,101 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
         Assert.Equal("SKS-G700", excludedItem.GetProperty("execution_unit").GetString());
         Assert.Equal("domain-contradiction", excludedItem.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_LinkedIssueRepoDiffersFromMergedPrRepo_FailsClosedNotCorroborated()
+    {
+        // G532 review repair: a bare `linked_pr: "1300"` number match alone
+        // is not sufficient corroboration on a shared/multi-repo
+        // queue-state — here the queue item's OWN declared linked_issue
+        // names a DIFFERENT repo than the one being scanned, so it must not
+        // corroborate this merged PR even though the PR number matches and
+        // the merged PR's own closing reference happens to cite the same
+        // issue NUMBER (for the scanned repo).
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            "G500", QueueItemState.Review,
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200",
+            linkedIssueNumber: 1199,
+            linkedIssueRepo: "SomeOtherOrg/unrelated-repo"));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal("G500", excludedItem.GetProperty("execution_unit").GetString());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+        Assert.Contains("bare number only", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_LinkedIssueNumberNotAmongPrClosingReferences_FailsClosedNotCorroborated()
+    {
+        // The queue item declares a linked_issue for the correct repo, but
+        // the merged PR's OWN GitHub-reported closing references cite a
+        // DIFFERENT issue number — no genuine correspondence, so it must
+        // not corroborate.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            "G500", QueueItemState.Review,
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200",
+            linkedIssueNumber: 1199));
+        // Merged PR #1200's own closing reference cites issue #4321, not
+        // #1199 — a genuine mismatch, not a coincidental number collision.
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 4321);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Execute_MergedNotClosedOut_QueueItemHasNoLinkedIssueAtAll_FailsClosedNotCorroborated()
+    {
+        // A queue item with no linked_issue at all cannot be cross-checked
+        // against the merged PR's own closing references — fail closed
+        // rather than trusting the bare linked_pr number match alone.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G500", "intent-cli");
+        workspace.WriteQueueState(BuildQueueStateJson(
+            "G500", QueueItemState.Review,
+            linkedPr: "https://github.com/J-Tech-Japan/intent-system/pull/1200",
+            linkedIssueNumber: null));
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal("domain-underivable", excludedItem.GetProperty("reason").GetString());
+        Assert.Contains("(none)", excludedItem.GetProperty("detail").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -641,6 +739,37 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_TwoPacketFilesDeclareIdenticalSourceExecutionUnit_ReportedAsAmbiguousNotCollapsed()
+    {
+        // G532 review repair: two DISTINCT packet files that happen to
+        // declare the identical source_execution_unit value (a duplicate
+        // declaration — here with contradictory domains) must never be
+        // collapsed into one corroborated match by string equality. Exactly
+        // one matching packet FILE is required, not one distinct value.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteNestedPacketAtFolder("G50-copy-a", "G50", "intent-cli");
+        workspace.WriteNestedPacketAtFolder("G50-copy-b", "G50", "sekiban-as-a-service");
+        var issue = BuildIssue(1950, "Freeform title mentioning G50 mid-sentence", FixedNow.AddHours(-26), "intent-target");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+        var excludedItem = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.ReasonExecutionUnitAmbiguous, excludedItem.GetProperty("reason").GetString());
+        Assert.Equal(string.Empty, excludedItem.GetProperty("execution_unit").GetString());
+        var detail = excludedItem.GetProperty("detail").GetString();
+        Assert.Contains("G50-copy-a", detail, StringComparison.Ordinal);
+        Assert.Contains("G50-copy-b", detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_RequiresDomainFlag()
     {
         using var workspace = new StalledWorkWorkspace();
@@ -686,7 +815,7 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         var publishedIssue = BuildIssue(1147, "G523: Ours", FixedNow.AddHours(-26), "intent-target");
         var prCreatedIssue = BuildIssue(1143, "G521: Document agmsg", FixedNow.AddDays(-2), "intent-pr-created");
         var reviewPr = BuildPr(1144, "G521: Document agmsg", FixedNow.AddHours(-1.5), state: "OPEN", closingIssueNumber: 1143);
-        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED");
+        var mergedPr = BuildPr(1200, "G500: Some merged change", FixedNow.AddHours(-3), state: "MERGED", closingIssueNumber: 1199);
         AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(
             issues: [publishedIssue, prCreatedIssue],
             prs: [reviewPr],
@@ -752,7 +881,12 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
                 : Array.Empty<GitHubPrClosingIssueReference>(),
         };
 
-    private static string BuildQueueStateJson(string executionUnit, QueueItemState state, string linkedPr, int linkedIssueNumber)
+    private static string BuildQueueStateJson(
+        string executionUnit,
+        QueueItemState state,
+        string linkedPr,
+        int? linkedIssueNumber,
+        string linkedIssueRepo = "J-Tech-Japan/intent-system")
     {
         var queueState = new QueueState
         {
@@ -774,12 +908,17 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
                         Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
                         ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
                     },
-                    LinkedIssue = new LinkedIssue
-                    {
-                        Repo = "J-Tech-Japan/intent-system",
-                        Number = linkedIssueNumber,
-                        Url = $"https://github.com/J-Tech-Japan/intent-system/issues/{linkedIssueNumber}",
-                    },
+                    // G532 review repair: nullable, so a fixture can pin
+                    // "no linked_issue at all" — the queue-linkage
+                    // corroboration check must fail closed for that case.
+                    LinkedIssue = linkedIssueNumber is int number
+                        ? new LinkedIssue
+                        {
+                            Repo = linkedIssueRepo,
+                            Number = number,
+                            Url = $"https://github.com/{linkedIssueRepo}/issues/{number}",
+                        }
+                        : null,
                     LinkedPr = linkedPr,
                     WorkerRole = "Claude",
                     ReviewRole = "Codex",
@@ -867,6 +1006,22 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
             File.WriteAllText(
                 Path.Combine(dir, "packet.yaml"),
                 $"implementation_issue_packet:\n  source_execution_unit: {executionUnit}\n  domain: {domain}\n");
+        }
+
+        /// <summary>
+        /// G532 review repair: writes a packet.yaml at an arbitrary FOLDER
+        /// name declaring an arbitrary source_execution_unit — used to pin
+        /// that two distinct packet FILES declaring the identical unit
+        /// value are still ambiguous (never collapsed by string equality),
+        /// e.g. a duplicate declaration across two folders.
+        /// </summary>
+        public void WriteNestedPacketAtFolder(string folderName, string declaredExecutionUnit, string domain)
+        {
+            var dir = Path.Combine(RootPath, ".intent-cli", "issues", folderName);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                Path.Combine(dir, "packet.yaml"),
+                $"implementation_issue_packet:\n  source_execution_unit: {declaredExecutionUnit}\n  domain: {domain}\n");
         }
 
         /// <summary>

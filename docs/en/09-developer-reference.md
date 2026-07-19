@@ -297,10 +297,14 @@ every packet under `.intent-cli/issues/*/packet.yaml` by that packet's own
 declared `source_execution_unit` (nested
 `implementation_issue_packet.source_execution_unit` first, bare
 `source_execution_unit` as alias) appearing as a whole token anywhere in the
-title. Exactly one DISTINCT matching packet is required to corroborate —
-two or more different packets' declared units both appearing in the same
-title is reported as ambiguous (`execution-unit-ambiguous`) rather than
-resolved by guessing (e.g. picking the longest match).
+title. Exactly ONE matching packet FILE is required to corroborate — not
+merely one distinct declared unit VALUE. Two or more matching packet files
+are ambiguous (`execution-unit-ambiguous`, naming every candidate path)
+even if their declared units happen to be identical strings (a duplicate
+declaration across files is a data-integrity problem, never collapsed by
+value); a single packet whose own nested field and top-level alias name the
+same unit is still one file and is unaffected. Ambiguity is never resolved
+by guessing (e.g. picking the longest match or the first-sorted directory).
 
 This execution-unit string is used ONLY to locate the candidate's
 `.intent-cli/issues/<unit>/packet.yaml` — never as the domain-membership
@@ -309,11 +313,20 @@ decision itself. Domain is read from that packet's nested
 top-level `domain:` field as a compatibility alias when the nested field is
 absent.
 
+For `merged-not-closed-out`, the execution unit and its corroborating
+linkage come from queue-state instead of a title: a merged PR's own PR
+number is matched against a queue item's `linked_pr`, but that bare number
+match alone is NOT sufficient corroboration on a shared/multi-repo
+queue-state (a coincidental same-number PR in an unrelated repo). The queue
+item's own declared `linked_issue` (repo + number) must additionally match
+one of the merged PR's OWN GitHub-reported closing-issue references for the
+scanned repo — a missing, wrong-repo, or non-corresponding `linked_issue`
+fails closed into `excluded[]` rather than being assumed.
+
 **Domain confirmation applies the same G522 order as every other
 execution-unit-resolving surface** (`--domain` > packet-declared domain >
 fail-loud) — but ONLY for a candidate whose execution unit is itself
-corroborated by real packet/queue linkage (a matched packet.yaml, or — for
-`merged-not-closed-out` — an already-matched queue-state item). For such a
+corroborated by real packet/queue linkage as described above. For such a
 candidate, since `--domain` is a REQUIRED argument for `stalled-work`, it is
 always available to stand in for linkage that is silent on domain — the
 candidate is excluded from `items[]` only on a genuine CONTRADICTION between

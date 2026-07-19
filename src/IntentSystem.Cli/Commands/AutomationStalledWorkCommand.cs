@@ -394,11 +394,41 @@ internal static class AutomationStalledWorkCommand
                 : null;
             var prRef = new StalledWorkRef { Number = pr.Number, Url = pr.Url };
 
-            // The queue-state match itself IS corroborating packet/queue
-            // linkage — this candidate's execution unit was not guessed
-            // from a title at all, it came from an already-matched queue
-            // item — so it is always treated as corroborated here, even if
-            // packet.yaml itself was since cleaned up from disk.
+            // G532 review repair: MatchesLinkedPr alone (a bare PR number,
+            // possibly with no repository identity at all) is not enough
+            // corroboration — on a shared/multi-repo queue-state, a bare
+            // `linked_pr: "1300"` could coincidentally match an unrelated
+            // repo's PR #1300. Cross-check the queue item's OWN declared
+            // linked_issue (repo + number) against this merged PR's own
+            // GitHub-reported closing references for the scanned repo —
+            // genuine correspondence, not a number coincidence. Missing,
+            // wrong-repo, or non-corresponding linkage fails closed.
+            if (!QueueItemLinkedIssueCorroboratesPr(matchedItem.LinkedIssue, pr, repo))
+            {
+                excluded.Add(new StalledWorkExcluded
+                {
+                    Kind = KindMergedNotClosedOut,
+                    ExecutionUnit = matchedItem.ExecutionUnit,
+                    Issue = issueRef,
+                    Pr = prRef,
+                    Reason = PacketDomainResolution.ReasonUnderivable,
+                    Detail =
+                        $"queue-state item `{matchedItem.ExecutionUnit}` links PR `{prToken}` by bare number only — "
+                        + $"its declared linked_issue ({(matchedItem.LinkedIssue is { } li ? $"{li.Repo}#{li.Number}" : "(none)")}) "
+                        + $"does not match any of merged PR #{pr.Number}'s own GitHub-reported closing references for "
+                        + $"`{repo}`. A bare PR-number match alone is not sufficient corroboration on a shared/"
+                        + "multi-repo queue-state; excluded rather than assumed.",
+                });
+                continue;
+            }
+
+            // The exact-linkage cross-check above IS corroborating
+            // packet/queue linkage — this candidate's execution unit was
+            // not guessed from a title, it came from a queue item whose
+            // OWN declared linked_issue was just verified against the
+            // merged PR's own GitHub-reported closing references — so it
+            // is treated as corroborated here, even if packet.yaml itself
+            // was since cleaned up from disk.
             var packetDeclaredDomain = ReadPacketDeclaredDomain(context, matchedItem.ExecutionUnit);
             var resolution = new ExecutionUnitResolution(
                 matchedItem.ExecutionUnit, Corroborated: true, IsAmbiguous: false, CandidatePacketPaths: Array.Empty<string>());
@@ -609,6 +639,38 @@ internal static class AutomationStalledWorkCommand
     }
 
     /// <summary>
+    /// G532 review repair: <see cref="MatchesLinkedPr"/> alone (a bare PR
+    /// number, or a URL) is not sufficient corroboration for a queue item
+    /// on a shared/multi-repo queue-state, where a bare number could
+    /// coincidentally match an unrelated repo's PR of the same number. True
+    /// only when the queue item declares a <c>linked_issue</c> with BOTH a
+    /// repo matching the scanned <paramref name="repo"/> AND an issue
+    /// number that genuinely appears among <paramref name="pr"/>'s own
+    /// GitHub-reported closing-issue references for that repo — a missing,
+    /// wrong-repo, or non-corresponding linked_issue fails closed.
+    /// </summary>
+    private static bool QueueItemLinkedIssueCorroboratesPr(
+        LinkedIssue? linkedIssue, GitHubAutomationPrCandidate pr, string repo)
+    {
+        if (linkedIssue is not { Number: { } linkedIssueNumber })
+        {
+            return false;
+        }
+        if (!string.Equals(linkedIssue.Repo, repo, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        foreach (var reference in pr.ClosingIssuesReferences)
+        {
+            if (reference.Number == linkedIssueNumber && ReferenceMatchesRepo(reference, repo))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// G532 review repair: resolves the candidate execution unit from an
     /// issue/PR title, requiring CORROBORATION by a real packet before
     /// trusting either identification path — first via the leading ID token
@@ -682,12 +744,18 @@ internal static class AutomationStalledWorkCommand
     /// each packet's own declared <c>source_execution_unit</c> (nested
     /// <c>implementation_issue_packet.source_execution_unit</c> first, bare
     /// <c>source_execution_unit</c> as alias) appearing as a whole token
-    /// anywhere in the title. Exactly one DISTINCT matching declared unit is
-    /// required to corroborate — zero matches is simply uncorroborated, and
-    /// two or more distinct matches is genuinely ambiguous (never resolved
-    /// by picking the longest or first-sorted match) and is reported as
-    /// such via <see cref="ExecutionUnitResolution.IsAmbiguous"/>. Read-only;
-    /// a missing or unreadable packet is skipped rather than failing the
+    /// anywhere in the title. Exactly one matching PACKET FILE is required
+    /// to corroborate — not merely one distinct declared unit VALUE. Two
+    /// packet files that happen to declare the identical
+    /// <c>source_execution_unit</c> are two separate, possibly
+    /// contradictory (e.g. different declared domains) sources of truth,
+    /// and are never collapsed by their string value into one; that is
+    /// reported the same as any other multi-match, via
+    /// <see cref="ExecutionUnitResolution.IsAmbiguous"/>, naming every
+    /// candidate path. Zero matches is simply uncorroborated. A single
+    /// packet whose OWN nested field and top-level alias both name the same
+    /// unit is still one packet file and is unaffected. Read-only; a
+    /// missing or unreadable packet is skipped rather than failing the
     /// whole scan.
     /// </summary>
     private static ExecutionUnitResolution MatchExecutionUnitBySourceExecutionUnit(CliContext context, string title)
@@ -732,20 +800,20 @@ internal static class AutomationStalledWorkCommand
             matches.Add((declaredUnit, packetYamlPath));
         }
 
-        var distinctUnits = matches.Select(m => m.Unit).Distinct(StringComparer.Ordinal).ToArray();
-        if (distinctUnits.Length == 0)
+        if (matches.Count == 0)
         {
             return new ExecutionUnitResolution(string.Empty, Corroborated: false, IsAmbiguous: false, CandidatePacketPaths: Array.Empty<string>());
         }
 
-        if (distinctUnits.Length == 1)
+        if (matches.Count == 1)
         {
-            var paths = matches.Where(m => m.Unit == distinctUnits[0]).Select(m => m.Path).ToArray();
-            return new ExecutionUnitResolution(distinctUnits[0], Corroborated: true, IsAmbiguous: false, CandidatePacketPaths: paths);
+            return new ExecutionUnitResolution(matches[0].Unit, Corroborated: true, IsAmbiguous: false, CandidatePacketPaths: [matches[0].Path]);
         }
 
-        // Two or more DISTINCT declared units both appear as tokens in this
-        // title — genuinely ambiguous. Fail closed rather than guessing.
+        // Two or more matching PACKET FILES — genuinely ambiguous even if
+        // their declared unit strings happen to be identical (a duplicate
+        // declaration across files is itself a data-integrity problem, not
+        // a corroboration). Fail closed rather than guessing.
         var allPaths = matches.Select(m => m.Path).ToArray();
         return new ExecutionUnitResolution(string.Empty, Corroborated: false, IsAmbiguous: true, CandidatePacketPaths: allPaths);
     }
