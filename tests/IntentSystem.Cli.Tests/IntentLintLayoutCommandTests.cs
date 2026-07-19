@@ -396,6 +396,65 @@ public sealed class IntentLintLayoutCommandTests
     }
 
     [Fact]
+    public void Execute_NodeWithTrailingJunkAfterFlowList_ReportsErrorAndExitsNonzero()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets: [vocabulary] trailing-junk\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("MALFORMED-FACETS", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_NodeWithTabIndentedFacetsDeclaration_ReportsErrorNeverSilentlyClean()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\n\tfacets: [vocabulary]\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.NotEqual(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("MALFORMED-FACETS", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("clean", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execute_NodeWithEscapedQuoteInFacetValue_ParsesAndValidatesTheDecodedValue()
+    {
+        using var tmp = new TemporaryDirectory();
+        var hostRoot = tmp.CreateDirectory("host");
+        CreateMinimalTreeDomain(hostRoot, "auth");
+        // Decodes to `vocabulary"quoted` — not one of the four allowed
+        // values, so this must surface as an INVALID-FACET error naming the
+        // DECODED value, proving the escape was actually resolved rather
+        // than corrupting the scan.
+        File.WriteAllText(
+            Path.Combine(hostRoot, "intents", "auth", "identity", "mission.md"),
+            "---\nfacets: [\"vocabulary\\\"quoted\"]\n---\n# Mission\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IntentLintLayoutCommand.Execute(CreateContext(hostRoot), ["--domain", "auth"], writer);
+
+        Assert.NotEqual(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("INVALID-FACET", output, StringComparison.Ordinal);
+        Assert.Contains("vocabulary\"quoted", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_NodeWithNoFacetsFrontmatter_StaysBackwardCompatible()
     {
         using var tmp = new TemporaryDirectory();

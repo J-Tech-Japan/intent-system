@@ -144,13 +144,9 @@ internal static class IntentSearchCommand
                 // doing line-level substring matching with an empty query.
                 // Skip past any frontmatter block so the snippet shows the
                 // node's actual title/prose, not the "---" delimiter.
-                // Both the frontmatter extraction and the line split operate
-                // on the same normalized (LF-only) text, so the offset math
-                // stays correct regardless of the file's original line endings.
-                var normalizedContent = content.Replace("\r\n", "\n", StringComparison.Ordinal);
-                var body = IntentNodeFacets.TryExtractFrontmatterBlock(normalizedContent, out var frontmatter)
-                    ? normalizedContent[(4 + frontmatter.Length + 4)..]
-                    : normalizedContent;
+                var body = IntentNodeFacets.TryExtractFrontmatterBlock(content, out _, out var bodyAfterFrontmatter)
+                    ? bodyAfterFrontmatter
+                    : content;
                 var firstLine = body
                     .Split('\n')
                     .Select(line => line.Trim())
