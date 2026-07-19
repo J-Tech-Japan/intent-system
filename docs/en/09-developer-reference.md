@@ -1130,6 +1130,27 @@ still protects against a non-cooperating writer (any tool that mutates
 itself is what makes two *cooperating* `queue reprioritize` invocations
 mutually exclusive.
 
+**Round-7 review repair — the lock could still leak on a throwing
+test callback, one boundary short of the round-6 guarantee.** The
+test-only `OnLockAcquiredForTest` hook fired *before* entering the
+`try`/`finally` that disposes the acquired lock stream. Any exception
+from that callback (or, by the same shape, any future post-acquisition
+code accidentally placed ahead of the `try`) would leave the OS-level
+lock handle undisposed — a subsequent independent invocation would stay
+locked out until GC/finalization eventually closed the handle, an
+unbounded and non-deterministic window.
+
+Every post-acquisition operation, including the callback, now runs
+*inside* the `try`/`finally` that disposes the lock stream — acquisition
+and the guarded region are adjacent with nothing but the callback
+invocation between them. A callback (or any post-acquisition step) that
+throws still releases the lock immediately as the exception unwinds,
+before any other invocation could observe it as unavailable for longer
+than necessary. A new deterministic test seeds a throwing callback,
+confirms the first call propagates the exception with the queue/runs
+state left byte-unchanged, and then confirms a second, independent call
+acquires the same lock immediately and completes normally.
+
 ---
 
 ### Facet-aware context supply (G530)

@@ -1209,6 +1209,28 @@ re-read、そして最終的な commit にわたってそれを保持し続け�
 保護であり続けます。一方、lock 自体が、2 つの **cooperating** な
 `queue reprioritize` invocation を互いに排他的にするものです。
 
+**Round-7 review repair — round 6 の保証には、throw する test callback
+によって lock が leak しうる境界がまだ一箇所残っていました。**
+test 専用の `OnLockAcquiredForTest` hook は、取得した lock stream を
+dispose する `try`/`finally` に入る**前**に発火していました。この
+callback から例外が飛ぶと(あるいは、同じ形で、`try` より前に誤って
+配置された将来の post-acquisition コードから飛んでも)、OS-level の
+lock handle が dispose されないまま残ってしまい——後続の独立した
+invocation は、GC/finalization がいずれ handle を閉じるまで、
+unbounded かつ non-deterministic な期間 lock され続けてしまいます。
+
+callback を含む、lock 取得後のすべての操作は、今や lock stream を
+dispose する `try`/`finally` の**内側**で実行されます——取得と
+guarded region は隣接しており、その間にあるのは callback の呼び出し
+だけです。callback (あるいは他の post-acquisition のステップ) が
+throw しても、他の invocation がそれを「利用不可」として観測できる
+期間を必要以上に長くする前に、例外が unwind する過程で lock は
+直ちに解放されます。新しい deterministic な test は、throw する
+callback を仕込んで、1 回目の call が例外を伝播しつつ queue/runs の
+state が byte 単位で変化していないことを確認し、その上で 2 回目の
+独立した call が同じ lock を直ちに取得して正常に完了することを
+確認します。
+
 ---
 
 ### facet を意識した context 供給 (G530)

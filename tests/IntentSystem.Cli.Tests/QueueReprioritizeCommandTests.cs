@@ -761,6 +761,64 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
         Assert.True(document.RootElement.GetProperty("changed").GetBoolean());
     }
 
+    // ─── G537 round-7 review repair: exception-safe lock release ──────────
+
+    [Fact]
+    public void Execute_CallbackThrowsAfterLockAcquired_LockStillReleasedDeterministically()
+    {
+        // Round-7 review: OnLockAcquiredForTest previously fired BEFORE
+        // entering the try/finally that disposes lockStream. A throwing
+        // callback would therefore leak the acquired OS-level lock handle
+        // undisposed, leaving a subsequent independent Execute locked out
+        // until GC/finalization. This proves the fix: the callback now
+        // runs inside the try/finally, so even when it throws, the lock
+        // is released deterministically and a second call can proceed
+        // immediately — with the queue/runs state left byte-unchanged by
+        // the failed first call.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G537", QueueItemState.Queued, "normal", linkedIssue: null)));
+
+        QueueReprioritizeCommand.OnLockAcquiredForTest = () =>
+        {
+            QueueReprioritizeCommand.OnLockAcquiredForTest = null;
+            throw new InvalidOperationException("simulated callback failure");
+        };
+
+        using var firstWriter = new StringWriter();
+        var thrown = Assert.Throws<InvalidOperationException>(() =>
+            QueueReprioritizeCommand.Execute(
+                workspace.Context,
+                ["G537", "--priority", "high", "--reason", "R (first, throws)", "--write", "--format", "json"],
+                firstWriter));
+        Assert.Equal("simulated callback failure", thrown.Message);
+
+        // The failed first call must never have reached the write path.
+        var stateAfterFirst = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("normal", stateAfterFirst.Items.Single().Priority);
+        Assert.Equal(0, stateAfterFirst.Items.Single().PriorityRevision);
+        Assert.False(File.Exists(workspace.RunsLogPath));
+
+        // A second, fully independent invocation must acquire the same
+        // lock immediately (proving it was released, not leaked) and
+        // succeed normally.
+        using var secondWriter = new StringWriter();
+        var secondExitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G537", "--priority", "high", "--reason", "R (second, after throw)", "--write", "--format", "json"],
+            secondWriter);
+
+        Assert.Equal(0, secondExitCode);
+        using var secondDoc = JsonDocument.Parse(secondWriter.ToString());
+        Assert.True(secondDoc.RootElement.GetProperty("changed").GetBoolean());
+
+        var stateAfterSecond = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("high", stateAfterSecond.Items.Single().Priority);
+        Assert.Equal(1, stateAfterSecond.Items.Single().PriorityRevision);
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        var runEvent = Assert.Single(events);
+        Assert.Contains("second, after throw", runEvent.Reason, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Execute_StaleHistoricalEventForDifferentExecutionUnit_NeverSuppressesTheNewEvent()
     {

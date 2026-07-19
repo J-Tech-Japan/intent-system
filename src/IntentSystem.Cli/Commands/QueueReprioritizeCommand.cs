@@ -111,12 +111,20 @@ internal static class QueueReprioritizeCommand
                     error: $"another 'queue reprioritize' invocation currently holds the exclusive lock at {lockPath}; refusing to proceed concurrently (avoids a lost-update race). Retry once it completes."));
                 return 1;
             }
-
-            OnLockAcquiredForTest?.Invoke();
         }
 
+        // G537 round-7 review repair: every post-acquisition operation —
+        // including the test-only callback — must run inside the
+        // try/finally that disposes lockStream. Invoking the callback
+        // before entering try/finally left a window where a throwing
+        // callback would leak the OS-level lock handle undisposed.
         try
         {
+            if (write)
+            {
+                OnLockAcquiredForTest?.Invoke();
+            }
+
             return ExecuteUnderLock(context, queueStatePath, executionUnit!, requestedPriority!, reason!, write, format, writer);
         }
         finally
