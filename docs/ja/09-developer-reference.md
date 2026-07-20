@@ -241,7 +241,7 @@ binding fallback は、packet 自身の `domain:` フィールドが別の値を
 
 ### stalled-work 検出 (G523)
 
-`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] --format json|markdown`
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] --format json|markdown`
 は、保留中の pipeline transition を age 付きで一覧化する **read-only** な
 サーフェスです。これにより、1 回の orchestrator wake（あるいは外部の
 heartbeat）だけで、人間が GitHub label・PR state・queue-state を手で
@@ -268,6 +268,37 @@ queue-state、`runs.jsonl` を変更することは一切ありません — inf
 - `merged-not-closed-out` — MERGED 状態の PR に紐づく queue-state item が
   まだ `Completed` になっていない（closeout — `pr-merged` +
   `closeout-recorded` の runs event — がまだ記録されていない）。
+- `backlog-ready-idle` (G544) — 最後に残っていた未カバーの stall class:
+  **ready だが一度も着手されていない** 作業。以下がすべて成立したときに
+  発火します: (1) 対象 domain の WIP が空である — open な PR が
+  一つも存在せず(PR 自体が `intent-target` を持つことは無いため、
+  open な PR が存在すればそれは何かが in flight であることを意味する)、
+  かつ `intent-target` を持つ open な issue が、その domain に属すると
+  解決される(あるいは属さないと確定できる)ものが一つも無い —
+  execution unit が全く corroborate できない issue は、すべての domain を
+  blocking すると保守的に扱われます。ここでは false な「idle」報告の方が
+  危険な方向だからです; (2) `issue publish-flow` preflight 自身が使うのと
+  **同じ** canonical selector(`intent next-slice` の candidate selection
+  — dependency/blocked-by、lifecycle、domain、contract-completeness の
+  すべての gate を含み、別のヒューリスティックではない)が publishable な
+  (`issue-cut-ready`) candidate を報告する; (3) `runs.jsonl` に
+  `--backlog-idle-minutes`(デフォルト **45** 分)以上、活動が記録されて
+  いない。ここでの「活動」は `runs.jsonl` の全行にわたる `ts` の
+  **最大値** です — これは他のどの kind とも異なるシグナルです。
+  この candidate はまだ publish されていないため、そもそも構造的に
+  自分自身の GitHub timestamp を持たないからです。`runs.jsonl` が
+  欠落・空・パース不能な場合、baseline を確立できないため
+  `excluded[]`(`activity-data-unusable`)へ fail closed します —
+  推測された age が使われることは決してありません。
+  `recommended_action` は、対象ユニットの canonical な publish
+  コマンド(`intent-cli issue publish-flow <unit> --repo <r> --write
+  --format json`)です。field incident、2026-07-20(G539 closeout の
+  直後): WIP は空で、4 つの authored packet(G540–G543)が
+  `issue-cut-ready` かつ未公開の状態であったにもかかわらず、
+  `stalled-work` は `stalled: false` と報告し続けていました — 復旧には
+  明示的な人間/design 側からの WAKE メッセージが必要でした。
+  `backlog_idle_minutes_threshold` は、すべての result で
+  `stale_minutes_threshold` と並んで報告されます。
 
 **informational なカテゴリ (G533)** — `is_informational: true`、
 `recommended_action` は（transition コマンドではなく）説明的な prose、
@@ -319,11 +350,12 @@ age は可視性のためだけに報告されます:
 （番号 + url）、`age_minutes`、`is_informational`、`recommended_action`
 を報告します。`--stale-minutes` は、指定した閾値より新しい item を
 除外します（デフォルトは `0` — すべてを age 付きで報告し、閾値は
-呼び出し側が選ぶ）— これは 6 つすべての kind に一律に適用されます。
-`claimed-but-silent` は、そもそも item が検討される前に、それ自身の
-`--claimed-silent-minutes` 閾値でも追加でゲートされます（そのため
-`--stale-minutes` を上げるだけでは、`claimed-but-silent` の item が
-自身の閾値より早く現れることは決してありません）。`age_minutes` は、
+呼び出し側が選ぶ）— これは 7 つすべての kind に一律に適用されます。
+`claimed-but-silent` と `backlog-ready-idle` は、そもそも item が
+検討される前に、それぞれ自身の `--claimed-silent-minutes` /
+`--backlog-idle-minutes` 閾値でも追加でゲートされます（そのため
+`--stale-minutes` を上げるだけでは、いずれの kind の item も
+自身の閾値より早く現れることはありません）。`age_minutes` は、
 GitHub が label 適用時刻や、専用の per-issue fetch 無しでの timeline
 event を公開していないため、該当する GitHub entity の
 `createdAt`/`updatedAt` タイムスタンプからの近似値です。

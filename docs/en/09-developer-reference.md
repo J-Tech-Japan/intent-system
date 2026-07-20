@@ -249,7 +249,7 @@ All three surfaces apply the full order strictly — none of them fall back to
 
 ### Stalled-work detection (G523)
 
-`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] --format json|markdown`
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] --format json|markdown`
 is a **read-only** inventory of pending pipeline transitions with ages, so a
 single orchestrator wake (or an external heartbeat) can detect and recover a
 stalled pipeline without a human cross-checking GitHub labels, PR state, and
@@ -273,6 +273,33 @@ is always a runnable `intent-cli` command):
 - `merged-not-closed-out` — a MERGED PR's linked queue-state item is not yet
   `Completed` (closeout — `pr-merged` + `closeout-recorded` runs events —
   has not been recorded).
+- `backlog-ready-idle` (G544) — the last uncovered stall class: work that is
+  **ready but never started**. Fires when ALL of the following hold: (1) WIP
+  is empty for the requested domain — no open PR exists at all (a PR never
+  itself carries `intent-target`, so any open PR means something is in
+  flight), and no open issue carrying `intent-target` resolves (or fails to
+  rule itself out) as belonging to the domain — an issue whose execution
+  unit cannot be corroborated at all is conservatively treated as blocking
+  EVERY domain, since a false "idle" report is the dangerous direction here;
+  (2) the SAME canonical selector `issue publish-flow` preflight itself uses
+  (`intent next-slice`'s candidate selection — dependency/blocked-by,
+  lifecycle, domain, and contract-completeness gates all included, not a
+  separate heuristic) reports a publishable (`issue-cut-ready`) candidate;
+  (3) no `runs.jsonl` activity has been recorded for at least
+  `--backlog-idle-minutes` (default **45**). "Activity" here is the MAXIMUM
+  `ts` across every row in `runs.jsonl` — a different signal than every
+  other kind's GitHub-entity-timestamp approach, since by construction
+  nothing has been published yet for this candidate to carry a GitHub
+  timestamp of its own. A missing, empty, or unparseable `runs.jsonl` can
+  never establish a baseline and fails closed into `excluded[]`
+  (`activity-data-unusable`), never a guessed age. `recommended_action` is
+  the canonical publish command for the named unit (`intent-cli issue
+  publish-flow <unit> --repo <r> --write --format json`). Field incident,
+  2026-07-20 (immediately after the G539 closeout): WIP was empty, four
+  authored packets (G540–G543) were `issue-cut-ready` and unpublished, and
+  `stalled-work` reported `stalled: false` regardless — recovery required an
+  explicit human/design WAKE message. `backlog_idle_minutes_threshold` is
+  reported alongside `stale_minutes_threshold` in every result.
 
 **Informational categories (G533)** — `is_informational: true`,
 `recommended_action` is descriptive prose (never a transition command), age
@@ -320,10 +347,11 @@ Each item reports `kind`, `execution_unit`, `issue` and/or `pr` (number +
 url), `age_minutes`, `is_informational`, and `recommended_action`.
 `--stale-minutes` filters out items younger than the given threshold
 (default `0` — report everything with its age; callers pick their own
-threshold) — this applies uniformly across all six kinds; `claimed-but-silent`
-additionally gates on its OWN `--claimed-silent-minutes` threshold before an
-item is even considered (so raising `--stale-minutes` alone can never make a
-`claimed-but-silent` item appear earlier than its own threshold allows).
+threshold) — this applies uniformly across all seven kinds; `claimed-but-silent`
+and `backlog-ready-idle` each additionally gate on their OWN
+`--claimed-silent-minutes` / `--backlog-idle-minutes` threshold before an
+item is even considered (so raising `--stale-minutes` alone can never make
+either kind appear earlier than its own threshold allows).
 `age_minutes` is approximated from the relevant GitHub entity's
 `createdAt`/`updatedAt` timestamp, since GitHub does not expose
 per-label-application timestamps or per-issue timeline events without a
