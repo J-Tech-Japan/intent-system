@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -61,12 +62,22 @@ public sealed class AutomationRunsAuditCommandTests : IDisposable
     [Fact]
     public void Execute_RegressionFixture_MissingTsAndBy_2026_07_20_Incident1()
     {
-        // G542 field incident #1 (2026-05-26, discovered 2026-07-20): a row
-        // missing `ts` and `by`. `ts` is losslessly derivable from the
+        // G542 field incident #1 (2026-05-26, discovered 2026-07-20; host
+        // commit 5e011f97): the SKS-G592 `metadata-update.completed-closeout`
+        // row, missing `ts` and `by`. `ts` is losslessly derivable from the
         // record's own `timestamp`; `by` has no within-record source.
+        //
+        // Repair round 2: the literal byte content of host commit 5e011f97
+        // is outside this child implementation repo's boundary (G300/G330/
+        // G333 -- child implementation loops never inspect parent host
+        // state, and that commit lives in the host repo, not intent-system).
+        // This fixture instead reconciles on every detail available from
+        // the review itself -- the exact execution unit (SKS-G592) and
+        // event name (metadata-update.completed-closeout) -- while the
+        // missing-field/derivation shape matches the original field report.
         using var workspace = new RunsAuditWorkspace();
         workspace.WriteRunsLog(
-            """{"execution_unit":"G278","event":"issue-created","timestamp":"2026-05-26T10:00:00Z"}""");
+            """{"execution_unit":"SKS-G592","event":"metadata-update.completed-closeout","timestamp":"2026-05-26T10:00:00Z"}""");
 
         using var writer = new StringWriter();
         var exitCode = AutomationRunsAuditCommand.Execute(workspace.Context, ["--format", "json"], writer);
@@ -91,38 +102,94 @@ public sealed class AutomationRunsAuditCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_RegressionFixture_MissingExecutionUnit_BothStatusShapes_2026_07_20_Incident2()
+    public void Execute_RegressionFixture_MissingExecutionUnit_FullSixteenRowBatch_BothStatusShapes_2026_07_20_Incident2()
     {
-        // G542 field incident #2 (2026-06-02, discovered 2026-07-20): 16
-        // rows missing `execution_unit`, in two documented derivation
-        // shapes: skip-next-slice-due-to-wip (wip[0].eu) and
-        // pr-merged-closeout (stage1.eu). This fixture covers both shapes.
+        // G542 field incident #2 (2026-06-02, discovered 2026-07-20; host
+        // commit 6a5a71c0): 16 rows missing `execution_unit`, composed of
+        // nine `skip-next-slice-due-to-wip` rows (wip[0].eu) and seven
+        // `pr-merged-closeout` rows (stage1.eu).
+        //
+        // Repair round 2: the literal byte content of host commit 6a5a71c0
+        // is outside this child implementation repo's boundary (G300/G330/
+        // G333) -- it lives in the host repo, not intent-system, and
+        // fetching it would mean inspecting parent host state a child
+        // implementation loop must never touch. This fixture instead
+        // reconciles on the exact composition the review itself stated
+        // (nine wip-shaped rows, seven stage1-shaped rows = sixteen), with
+        // each row's JSON key order deliberately varied across the batch
+        // (ts-first, event-first, by-first, wip/stage1-first, and extra
+        // unrelated fields interleaved) -- proving the derivation logic is
+        // correct regardless of field order, since the true field order of
+        // the original rows cannot be verified from here.
         using var workspace = new RunsAuditWorkspace();
         workspace.WriteRunsLog(
-            """{"ts":"2026-06-02T09:00:00Z","event":"skip-next-slice-due-to-wip","by":"automation host-loop-wake (G490)","wip":[{"eu":"G200","stage":"review"}]}""",
-            """{"ts":"2026-06-02T09:05:00Z","event":"pr-merged-closeout","by":"intent-cli closeout pr","stage1":{"eu":"G201"}}""");
+            // Nine skip-next-slice-due-to-wip rows (wip[0].eu source).
+            """{"ts":"2026-06-02T09:00:00Z","event":"skip-next-slice-due-to-wip","by":"automation host-loop-wake (G490)","wip":[{"eu":"G210","stage":"review"}]}""",
+            """{"event":"skip-next-slice-due-to-wip","ts":"2026-06-02T09:01:00Z","by":"automation host-loop-wake (G490)","wip":[{"eu":"G211","stage":"fixing"}]}""",
+            """{"by":"automation host-loop-wake (G490)","ts":"2026-06-02T09:02:00Z","event":"skip-next-slice-due-to-wip","wip":[{"eu":"G212","stage":"review"},{"eu":"G213","stage":"queued"}]}""",
+            """{"ts":"2026-06-02T09:03:00Z","wip":[{"eu":"G214","stage":"review"}],"event":"skip-next-slice-due-to-wip","by":"automation host-loop-wake (G490)"}""",
+            """{"ts":"2026-06-02T09:04:00Z","event":"skip-next-slice-due-to-wip","by":"automation host-loop-wake (G490)","wip":[{"stage":"review","eu":"G215"}]}""",
+            """{"ts":"2026-06-02T09:05:00Z","event":"skip-next-slice-due-to-wip","by":"automation host-loop-wake (G490)","wip":[{"eu":"G216","stage":"clarification"}],"reason":"WIP cap reached"}""",
+            """{"ts":"2026-06-02T09:06:00Z","event":"skip-next-slice-due-to-wip","by":"automation host-loop-wake (G490)","wip":[{"eu":"G217","stage":"review"}]}""",
+            """{"ts":"2026-06-02T09:07:00Z","event":"skip-next-slice-due-to-wip","by":"automation host-loop-wake (G490)","wip":[{"eu":"G218","stage":"fixing"}]}""",
+            """{"ts":"2026-06-02T09:08:00Z","event":"skip-next-slice-due-to-wip","by":"automation host-loop-wake (G490)","wip":[{"eu":"G219","stage":"review"}]}""",
+            // Seven pr-merged-closeout rows (stage1.eu source).
+            """{"ts":"2026-06-02T09:10:00Z","event":"pr-merged-closeout","by":"intent-cli closeout pr","stage1":{"eu":"G220"}}""",
+            """{"event":"pr-merged-closeout","ts":"2026-06-02T09:11:00Z","by":"intent-cli closeout pr","stage1":{"eu":"G221"}}""",
+            """{"by":"intent-cli closeout pr","ts":"2026-06-02T09:12:00Z","event":"pr-merged-closeout","stage1":{"eu":"G222"}}""",
+            """{"ts":"2026-06-02T09:13:00Z","stage1":{"eu":"G223"},"event":"pr-merged-closeout","by":"intent-cli closeout pr"}""",
+            """{"ts":"2026-06-02T09:14:00Z","event":"pr-merged-closeout","by":"intent-cli closeout pr","stage1":{"pr":1234,"eu":"G224"}}""",
+            """{"ts":"2026-06-02T09:15:00Z","event":"pr-merged-closeout","by":"intent-cli closeout pr","stage1":{"eu":"G225","pr":1235}}""",
+            """{"ts":"2026-06-02T09:16:00Z","event":"pr-merged-closeout","by":"intent-cli closeout pr","stage1":{"eu":"G226"},"reason":"stage1 merge closeout"}""");
 
         using var writer = new StringWriter();
-        var exitCode = AutomationRunsAuditCommand.Execute(workspace.Context, ["--format", "json"], writer);
+        var exitCode = AutomationRunsAuditCommand.Execute(workspace.Context, ["--write", "--format", "json"], writer);
 
         Assert.Equal(0, exitCode);
         using var document = JsonDocument.Parse(writer.ToString());
         var rows = document.RootElement.GetProperty("malformed_rows").EnumerateArray().ToArray();
-        Assert.Equal(2, rows.Length);
+        Assert.Equal(16, rows.Length);
+        Assert.Equal(16, document.RootElement.GetProperty("repairs_applied").GetInt32());
 
-        var wipRow = rows.Single(r => r.GetProperty("line").GetInt32() == 1);
-        var wipRepair = Assert.Single(wipRow.GetProperty("repairs").EnumerateArray());
-        Assert.Equal("execution_unit", wipRepair.GetProperty("field").GetString());
-        Assert.Equal("G200", wipRepair.GetProperty("value").GetString());
-        Assert.Equal("within-record", wipRepair.GetProperty("derivation").GetString());
-        Assert.Equal("wip[0].eu", wipRepair.GetProperty("source").GetString());
+        var expectedWipEus = new[] { "G210", "G211", "G212", "G214", "G215", "G216", "G217", "G218", "G219" };
+        var expectedStage1Eus = new[] { "G220", "G221", "G222", "G223", "G224", "G225", "G226" };
 
-        var stage1Row = rows.Single(r => r.GetProperty("line").GetInt32() == 2);
-        var stage1Repair = Assert.Single(stage1Row.GetProperty("repairs").EnumerateArray());
-        Assert.Equal("execution_unit", stage1Repair.GetProperty("field").GetString());
-        Assert.Equal("G201", stage1Repair.GetProperty("value").GetString());
-        Assert.Equal("within-record", stage1Repair.GetProperty("derivation").GetString());
-        Assert.Equal("stage1.eu", stage1Repair.GetProperty("source").GetString());
+        var wipRows = rows.Where(r => r.GetProperty("line").GetInt32() is >= 1 and <= 9).ToArray();
+        Assert.Equal(9, wipRows.Length);
+        foreach (var row in wipRows)
+        {
+            var repair = Assert.Single(row.GetProperty("repairs").EnumerateArray());
+            Assert.Equal("execution_unit", repair.GetProperty("field").GetString());
+            Assert.Equal("within-record", repair.GetProperty("derivation").GetString());
+            Assert.Equal("wip[0].eu", repair.GetProperty("source").GetString());
+            Assert.Contains(repair.GetProperty("value").GetString(), expectedWipEus);
+        }
+
+        var stage1Rows = rows.Where(r => r.GetProperty("line").GetInt32() is >= 10 and <= 16).ToArray();
+        Assert.Equal(7, stage1Rows.Length);
+        foreach (var row in stage1Rows)
+        {
+            var repair = Assert.Single(row.GetProperty("repairs").EnumerateArray());
+            Assert.Equal("execution_unit", repair.GetProperty("field").GetString());
+            Assert.Equal("within-record", repair.GetProperty("derivation").GetString());
+            Assert.Equal("stage1.eu", repair.GetProperty("source").GetString());
+            Assert.Contains(repair.GetProperty("value").GetString(), expectedStage1Eus);
+        }
+
+        // Every repaired row re-audits clean, and every derived execution
+        // unit landed correctly (including the multi-entry wip[] row,
+        // where the FIRST entry — not a later one — must win).
+        var rewritten = File.ReadAllText(workspace.RunsLogPath);
+        Assert.Contains("\"execution_unit\":\"G212\"", rewritten, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"execution_unit\":\"G213\"", rewritten, StringComparison.Ordinal);
+
+        using var secondWriter = new StringWriter();
+        var secondExitCode = AutomationRunsAuditCommand.Execute(workspace.Context, ["--format", "json"], secondWriter);
+        Assert.Equal(0, secondExitCode);
+        using var secondDocument = JsonDocument.Parse(secondWriter.ToString());
+        // Only the 16 repaired rows plus their runs-repair audit events —
+        // all clean of missing required fields now.
+        Assert.True(secondDocument.RootElement.GetProperty("clean").GetBoolean());
     }
 
     [Fact]
@@ -277,6 +344,74 @@ public sealed class AutomationRunsAuditCommandTests : IDisposable
 
         // The garbage line is left completely untouched.
         Assert.Equal("not-json-at-all { garbage", File.ReadAllText(workspace.RunsLogPath).TrimEnd('\n'));
+    }
+
+    [Fact]
+    public void Execute_RowWithAllFourKeysPresent_ButInvalidTsValue_IsNeverSilentlyDropped_G542Repair1()
+    {
+        // G542 repair round 1: a row can have all four required KEYS
+        // present as non-empty JSON strings (so RunsLogRowInspector's own
+        // narrower presence check sees nothing wrong) yet still fail
+        // RunLogSerializer.DeserializeLine -- the REAL contract publish-
+        // flow enforces -- because a value fails to parse, e.g. `ts` is
+        // not a real timestamp. Before this repair, that row vanished
+        // from the audit (and could report a false-clean audit) even
+        // though publish-flow correctly rejected the same row. It must
+        // now always survive as an offender.
+        using var workspace = new RunsAuditWorkspace();
+        workspace.WriteRunsLog(
+            """{"ts":"not-a-real-timestamp","execution_unit":"G300","event":"issue-created","by":"issue-publish-flow"}""");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationRunsAuditCommand.Execute(workspace.Context, ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.False(document.RootElement.GetProperty("clean").GetBoolean());
+        var row = Assert.Single(document.RootElement.GetProperty("malformed_rows").EnumerateArray());
+        Assert.Equal(1, row.GetProperty("line").GetInt32());
+        Assert.True(row.GetProperty("unparseable").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(row.GetProperty("unparseable_detail").GetString()));
+        Assert.Empty(row.GetProperty("repairs").EnumerateArray());
+    }
+
+    [Fact]
+    public void Execute_Write_PreservesUtf8BomAndCrlfLineEndings_ByteExact_G542Repair2()
+    {
+        // G542 repair round 2: reading with File.ReadAllText auto-detects
+        // and silently strips a UTF-8 BOM, and the default WriteAllText
+        // encoding never re-adds one -- a plain string-equality assertion
+        // cannot detect that loss. This fixture writes a raw UTF-8 BOM
+        // plus CRLF line endings at the byte level, repairs one row via
+        // --write, and re-reads the file as raw bytes to prove the BOM,
+        // every line ending, and every unrelated byte survive untouched.
+        using var workspace = new RunsAuditWorkspace();
+        const string validLine = """{"ts":"2026-05-10T10:00:00Z","execution_unit":"G50","event":"issue-created","by":"issue-publish-flow"}""";
+        const string malformedLine = """{"execution_unit":"G278","event":"issue-created","timestamp":"2026-05-26T10:00:00Z"}""";
+
+        var utf8Bom = new byte[] { 0xEF, 0xBB, 0xBF };
+        var contentBytes = Encoding.UTF8.GetBytes(validLine + "\r\n" + malformedLine + "\r\n");
+        File.WriteAllBytes(workspace.RunsLogPath, utf8Bom.Concat(contentBytes).ToArray());
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationRunsAuditCommand.Execute(workspace.Context, ["--write", "--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        var resultBytes = File.ReadAllBytes(workspace.RunsLogPath);
+
+        // The BOM is still the first three bytes.
+        Assert.Equal(utf8Bom, resultBytes[..3]);
+
+        var resultText = Encoding.UTF8.GetString(resultBytes, 3, resultBytes.Length - 3);
+        var lines = resultText.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+
+        // The valid first line is byte-for-byte unchanged, and CRLF (not
+        // LF) endings are preserved throughout, including after the
+        // repaired line and the appended runs-repair audit event.
+        Assert.Equal(validLine, lines[0]);
+        Assert.Contains(malformedLine.TrimStart('{'), lines[1], StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", resultText.Replace("\r\n", string.Empty), StringComparison.Ordinal);
+        Assert.EndsWith("\r\n", Encoding.UTF8.GetString(resultBytes), StringComparison.Ordinal);
     }
 
     [Fact]

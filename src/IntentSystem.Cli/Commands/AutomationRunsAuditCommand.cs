@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Supervisor.Models;
@@ -85,7 +86,15 @@ internal static class AutomationRunsAuditCommand
             return 0;
         }
 
-        var originalContent = File.ReadAllText(runLogPath);
+        // G542 repair round 1: read raw bytes ourselves rather than
+        // File.ReadAllText — that overload auto-detects and SILENTLY
+        // STRIPS a UTF-8 BOM from the decoded string, and the later
+        // File.WriteAllText default encoding (UTF8NoBOM) would never add
+        // it back, dropping the file's byte-order-mark on any --write
+        // even though every JSON line is otherwise untouched. The
+        // detected BOM (if any) is carried through untouched and
+        // reattached verbatim on write.
+        var (originalContent, bomPrefix) = ReadTextPreservingBom(runLogPath);
         var rawLines = originalContent.Split('\n');
 
         var findings = new List<RunsLogRowFinding>();
@@ -110,11 +119,27 @@ internal static class AutomationRunsAuditCommand
             catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
             {
                 totalRows++;
-                var finding = RunsLogRowInspector.Inspect(lineNumber, jsonPart);
-                if (finding is not null)
-                {
-                    findings.Add(finding);
-                }
+
+                // G542 repair round 1: RunsLogRowInspector.Inspect only
+                // checks that the four required keys are PRESENT as
+                // non-empty JSON strings — it does not itself validate,
+                // e.g., that `ts` parses as a real DateTimeOffset. A row
+                // can pass that narrower check yet still fail
+                // RunLogSerializer.DeserializeLine (the actual contract
+                // publish-flow enforces) for a reason Inspect never
+                // modeled, such as a malformed `ts` VALUE. When that
+                // happens, Inspect returns null ("looks structurally
+                // fine") even though DeserializeLine just proved it is
+                // NOT fine — falling back to a bare `continue` here would
+                // silently drop the row from the audit (and potentially
+                // report a clean audit) while publish-flow correctly
+                // rejects the same row. DeserializeLine's own failure is
+                // therefore always preserved as an offender, using the
+                // exception's message when Inspect has nothing more
+                // specific to say.
+                var finding = RunsLogRowInspector.Inspect(lineNumber, jsonPart)
+                    ?? RunsLogRowFinding.CreateUnparseable(lineNumber, exception.Message);
+                findings.Add(finding);
                 continue;
             }
 
@@ -227,9 +252,17 @@ internal static class AutomationRunsAuditCommand
             }
 
             var patchedContent = string.Join('\n', patchedLines);
-            var appended = string.Concat(repairEvents.Select(evt => RunLogSerializer.SerializeLine(evt) + "\n"));
-            var separator = patchedContent.Length > 0 && !patchedContent.EndsWith('\n') ? "\n" : string.Empty;
-            File.WriteAllText(runLogPath, patchedContent + separator + appended);
+
+            // G542 repair round 2: newly appended `runs-repair` events use
+            // the SAME line-ending convention already dominant in the
+            // file (CRLF if the file uses it, LF otherwise) rather than
+            // unconditionally LF — appending bare `\n` lines onto a CRLF
+            // file would itself introduce a new, mixed-line-ending byte
+            // difference the file never had before.
+            var lineEnding = originalContent.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+            var appended = string.Concat(repairEvents.Select(evt => RunLogSerializer.SerializeLine(evt) + lineEnding));
+            var separator = patchedContent.Length > 0 && !patchedContent.EndsWith('\n') ? lineEnding : string.Empty;
+            WriteTextPreservingBom(runLogPath, patchedContent + separator + appended, bomPrefix);
         }
 
         EmitResult(writer, format, BuildResult(repo, domain, runLogPath, totalRows, rows, write, applyInferred, repairsApplied));
@@ -261,6 +294,44 @@ internal static class AutomationRunsAuditCommand
     private static (string JsonPart, string TrailingCr) SplitTrailingCarriageReturn(string rawLine)
     {
         return rawLine.EndsWith('\r') ? (rawLine[..^1], "\r") : (rawLine, string.Empty);
+    }
+
+    private static readonly byte[] Utf8BomBytes = { 0xEF, 0xBB, 0xBF };
+
+    /// <summary>
+    /// G542 repair round 1: reads runs.jsonl as raw bytes and decodes with
+    /// a fixed UTF-8 codec (never <see cref="File.ReadAllText(string)"/>'s
+    /// auto-detecting overload, which silently strips a UTF-8 BOM from the
+    /// returned string with no way to tell afterward whether one was ever
+    /// there). Returns the decoded content plus the exact BOM byte prefix
+    /// (empty when absent) so a later write can reattach it byte-for-byte.
+    /// </summary>
+    private static (string Content, byte[] BomPrefix) ReadTextPreservingBom(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        if (bytes.Length >= Utf8BomBytes.Length
+            && bytes[0] == Utf8BomBytes[0] && bytes[1] == Utf8BomBytes[1] && bytes[2] == Utf8BomBytes[2])
+        {
+            return (Encoding.UTF8.GetString(bytes, Utf8BomBytes.Length, bytes.Length - Utf8BomBytes.Length), Utf8BomBytes);
+        }
+
+        return (Encoding.UTF8.GetString(bytes), Array.Empty<byte>());
+    }
+
+    /// <summary>Writes UTF-8 bytes with <paramref name="bomPrefix"/> reattached verbatim (empty = no BOM), never the encoding's own default preamble handling.</summary>
+    private static void WriteTextPreservingBom(string path, string content, byte[] bomPrefix)
+    {
+        var contentBytes = Encoding.UTF8.GetBytes(content);
+        if (bomPrefix.Length == 0)
+        {
+            File.WriteAllBytes(path, contentBytes);
+            return;
+        }
+
+        var combined = new byte[bomPrefix.Length + contentBytes.Length];
+        Buffer.BlockCopy(bomPrefix, 0, combined, 0, bomPrefix.Length);
+        Buffer.BlockCopy(contentBytes, 0, combined, bomPrefix.Length, contentBytes.Length);
+        File.WriteAllBytes(path, combined);
     }
 
     private static RunEvent BuildRepairEvent(int line, string executionUnit, IReadOnlyList<RunsLogFieldRepair> repairs, string derivation, DateTimeOffset utcNow)
