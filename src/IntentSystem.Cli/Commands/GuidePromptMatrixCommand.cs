@@ -1482,13 +1482,16 @@ Hard rules:
     {
         writer.WriteLine("# Guide prompt matrix");
         writer.WriteLine();
-        writer.WriteLine("Canonical matrix of the four operational modes (timer-loop based).");
-        writer.WriteLine();
-        writer.WriteLine("> There is also an OPTIONAL, preview agmsg **orchestrator-message mode** where a single");
-        writer.WriteLine("> scheduled orchestrator paces loopless implementation/review receivers over agmsg instead of");
-        writer.WriteLine("> independent timers. It does not replace these timer-loop modes; the two must not run for the");
-        writer.WriteLine("> same domain/repo at once. Generate its setup/startup/troubleshooting guidance with");
+        writer.WriteLine("> **PRIMARY for multi-thread setups:** the four-thread agmsg **orchestrator-message mode**");
+        writer.WriteLine("> (design / orchestrator / implementation / review) is the practiced, maintained model — a");
+        writer.WriteLine("> single orchestrator thread paces loopless implementation/review receivers over agmsg instead");
+        writer.WriteLine("> of independent timers. Generate its setup/startup/troubleshooting guidance with");
         writer.WriteLine("> `intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> --agent <a> --format markdown`.");
+        writer.WriteLine("> The timer-loop matrix below remains fully supported as the simpler ALTERNATIVE for a");
+        writer.WriteLine("> domain/repo that does not run an orchestrator thread; the two must not run for the same");
+        writer.WriteLine("> domain/repo at once.");
+        writer.WriteLine();
+        writer.WriteLine("Canonical matrix of the four timer-loop operational modes (the alternative setup).");
         writer.WriteLine();
 
         foreach (var entry in entries)

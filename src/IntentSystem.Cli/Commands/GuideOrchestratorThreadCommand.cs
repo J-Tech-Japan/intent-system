@@ -4,16 +4,19 @@ using System.Text.Json.Serialization;
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
-/// G487: read-only guide surface for an OPTIONAL agmsg-backed orchestrator
-/// thread (ADR-012 / spec-26). Renders paste-ready prompts for an orchestrator
-/// thread plus the implementation/review threads it delegates to, and pins the
-/// operating contract: agmsg is a message/progress/completion signal layer
-/// ONLY; <c>intent-cli</c> and GitHub remain authoritative for domain status,
-/// queue-state, issue/PR facts, labels, CI, and closeout. The existing
-/// timer-loop mode stays valid; orchestrator-message mode is opt-in and MUST
-/// NOT also launch implement/review recurring timer loops for the same
-/// domain/repo (no mixed-mode timer races). Host-state-free; never launches an
-/// AI provider; never sends agmsg messages itself.
+/// G487: read-only guide surface for the PRIMARY agmsg-backed four-thread
+/// orchestrator model (design / orchestrator / implementation / review over
+/// agmsg; ADR-012 / spec-26; G540 repositions this as primary, superseding
+/// the earlier preview/opt-in framing). Renders paste-ready prompts for an
+/// orchestrator thread plus the implementation/review threads it delegates
+/// to, and pins the operating contract: agmsg is a message/progress/
+/// completion signal layer ONLY; <c>intent-cli</c> and GitHub remain
+/// authoritative for domain status, queue-state, issue/PR facts, labels, CI,
+/// and closeout. Timer-loop mode remains the fully supported, simpler
+/// ALTERNATIVE for setups without an orchestrator thread; orchestrator-message
+/// mode MUST NOT also launch implement/review recurring timer loops for the
+/// same domain/repo (no mixed-mode timer races). Host-state-free; never
+/// launches an AI provider; never sends agmsg messages itself.
 ///
 /// G489: a host repo can legitimately hold several intent domains (e.g.
 /// <c>sekiban-as-a-service</c>, <c>sekiban-wasm-runtime</c>, <c>intent-cli</c>),
@@ -123,20 +126,29 @@ internal static class GuideOrchestratorThreadCommand
         {
             SetupIntake = BuildSetupIntake(values),
             Summary =
-                "Optional agmsg-backed orchestrator thread (ADR-012 / spec-26). agmsg carries natural-language "
-                + "delegation / progress / completion / blocker signals between threads; it is NOT workflow state. "
-                + "intent-cli and GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, "
-                + "CI, and closeout.",
+                "PRIMARY agmsg-backed four-thread orchestrator model (ADR-012 / spec-26): design / orchestrator / "
+                + "implementation / review coordinate over agmsg. agmsg carries natural-language delegation / "
+                + "progress / completion / blocker signals between threads; it is NOT workflow state. intent-cli and "
+                + "GitHub remain authoritative for domain status, queue-state, issue/PR facts, labels, CI, and "
+                + "closeout. Timer-loop mode remains fully supported as the simpler ALTERNATIVE for setups without "
+                + "an orchestrator thread (see Mode separation).",
             ModeSeparation = new OrchestratorModeSeparation
             {
                 TimerLoopMode =
-                    "Existing mode and still fully supported: implementation and review threads run on recurring "
-                    + "timers and use intent-cli `worker next-action` / host review-next-slice as their source of truth. "
-                    + "Use `intent-cli guide prompt-matrix` / `guide prompt-template` to set these up. No orchestrator "
-                    + "thread is required.",
+                    "ALTERNATIVE — fully supported, simpler setup for a domain/repo that does not run an orchestrator "
+                    + "thread: implementation and review threads run on recurring timers and use intent-cli `worker "
+                    + "next-action` / host review-next-slice as their source of truth. Use `intent-cli guide "
+                    + "prompt-matrix` / `guide prompt-template` to set these up. Trade-off vs the primary model: "
+                    + "simpler to start (no agmsg team, no orchestrator thread), but each receiver polls "
+                    + "independently rather than being paced by a coordinating orchestrator, and there is no design"
+                    + "↔orchestrator double-check on packet readiness before a receiver picks it up.",
                 OrchestratorMessageMode =
-                    "Opt-in mode: a fourth orchestrator thread delegates to implementation/review threads over agmsg "
-                    + "instead of relying on independent timers. Choose ONE mode per domain/repo.",
+                    "PRIMARY model: a fourth orchestrator thread delegates to implementation/review threads over "
+                    + "agmsg instead of relying on independent timers, coordinating alongside the design thread. "
+                    + "This is the practiced, maintained model (G520–G539: wake contract, stalled-work, "
+                    + "heartbeat, issue-retire, priority override, publish reliability). It is still being hardened "
+                    + "in places, but that is a factual maturity note, not a caveat that it is optional or "
+                    + "secondary. Choose ONE mode per domain/repo.",
                 MixedModeWarning =
                     "Do NOT run both modes for the same domain/repo. In orchestrator-message mode, do NOT launch the "
                     + "implementation/review recurring timer loops for that domain/repo — two drivers (a timer AND the "
@@ -182,6 +194,20 @@ internal static class GuideOrchestratorThreadCommand
                     + "release-prep packet. The orchestrator may publish and coordinate that release-prep packet ONLY "
                     + "after it exists and is `issue-cut-ready` — it must not pick the version, decide scope, or author "
                     + "the release notes/packet itself from a vague \"prepare a release\" instruction.",
+                DoubleCheckRule =
+                    "DESIGN↔ORCHESTRATOR DOUBLE-CHECK (G540): neither thread decides design content alone. Four "
+                    + "categories of design decision are always consulted between design and orchestrator before "
+                    + "they take effect: (1) intent shaping and clarifications, (2) packet content and acceptance "
+                    + "criteria, (3) release scope and version selection, and (4) prioritization rulings (e.g. "
+                    + "`queue reprioritize`). The orchestrator NEVER authors design content unilaterally — it "
+                    + "inspects, publishes, and delegates already-authored, `issue-cut-ready` packets, and escalates "
+                    + "to design (packet-needed) rather than inventing intent, acceptance criteria, release scope, "
+                    + "or priority. DESIGN NEVER bypasses the orchestrator for workflow transitions — publish/"
+                    + "delegate/review/closeout label and state transitions stay the orchestrator's canonical "
+                    + "responsibility, even when design authored the underlying packet. This formalizes the "
+                    + "de-facto practice already in effect: the orchestrator escalates missing/incomplete packets "
+                    + "to design; design rules on decomposition and prioritization; the orchestrator refuses to "
+                    + "author packets.",
             },
             DomainRouting = new OrchestratorDomainRouting
             {
@@ -1742,6 +1768,7 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
         writer.WriteLine($"- **missing packet** — {guide.RoleBoundary.MissingPacketResponse}");
         writer.WriteLine($"- **release-prep** — {guide.RoleBoundary.ReleasePrepRule}");
+        writer.WriteLine($"- **design↔orchestrator double-check** — {guide.RoleBoundary.DoubleCheckRule}");
         writer.WriteLine();
         writer.WriteLine("Structured packet-needed message (orchestrator → design):");
         writer.WriteLine();
@@ -2407,9 +2434,10 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine("guide orchestrator-thread");
         writer.WriteLine(UsageLine);
         writer.WriteLine();
-        writer.WriteLine("Renders paste-ready prompts for an OPTIONAL agmsg-backed orchestrator thread plus the");
-        writer.WriteLine("implementation/review threads it delegates to. agmsg is a signal layer only; intent-cli and");
-        writer.WriteLine("GitHub remain authoritative. Existing timer-loop mode stays valid and is not replaced.");
+        writer.WriteLine("Renders paste-ready prompts for the PRIMARY agmsg-backed four-thread orchestrator model");
+        writer.WriteLine("(design/orchestrator/implementation/review) plus the implementation/review threads it");
+        writer.WriteLine("delegates to. agmsg is a signal layer only; intent-cli and GitHub remain authoritative.");
+        writer.WriteLine("Timer-loop mode remains fully supported as the simpler alternative and is not replaced.");
         writer.WriteLine();
         writer.WriteLine("--mode single-domain (default) scopes the orchestrator to one domain and treats other-domain");
         writer.WriteLine("items visible in a shared host repo as out of scope. --mode multi-domain requires explicit");
@@ -2618,6 +2646,10 @@ internal sealed record OrchestratorRoleBoundary
 
     [JsonPropertyName("release_prep_rule")]
     public required string ReleasePrepRule { get; init; }
+
+    /// <summary>G540: neither thread decides design content alone — intent shaping, packet content/acceptance criteria, release scope, and prioritization rulings are always consulted between design and orchestrator.</summary>
+    [JsonPropertyName("double_check_rule")]
+    public required string DoubleCheckRule { get; init; }
 }
 
 internal sealed record OrchestratorModeSeparation

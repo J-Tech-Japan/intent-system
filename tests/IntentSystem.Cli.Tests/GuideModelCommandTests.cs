@@ -32,6 +32,31 @@ public sealed class GuideModelCommandTests
     }
 
     [Fact]
+    public void Execute_Markdown_HasExecutionOrchestrationModel_AsPrimaryForMultiThread_G540()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideModelCommand.Execute(
+            CreateContext(),
+            [],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        var output = writer.ToString();
+        Assert.Contains("## Execution orchestration model (PRIMARY for autonomous multi-thread execution)", output, StringComparison.Ordinal);
+        Assert.Contains("### Four threads", output, StringComparison.Ordinal);
+        Assert.Contains("design — authors intent", output, StringComparison.Ordinal);
+        Assert.Contains("orchestrator — inspects canonical intent-cli/GitHub state", output, StringComparison.Ordinal);
+        Assert.Contains("implementation — a loopless receiver", output, StringComparison.Ordinal);
+        Assert.Contains("review — a loopless receiver", output, StringComparison.Ordinal);
+        Assert.Contains("message-driven steady state", output, StringComparison.Ordinal);
+        Assert.Contains("- **alternative** —", output, StringComparison.Ordinal);
+        Assert.Contains("Timer-loop mode remains fully supported", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("opt-in", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("preview", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("experimental", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Execute_JsonFormat_EmitsStructuredFields()
     {
         using var writer = new StringWriter();
@@ -54,6 +79,33 @@ public sealed class GuideModelCommandTests
         Assert.Contains("Codex / Claude coding agent", roles);
         Assert.Contains("intent-cli", roles);
         Assert.Contains("Host git repository", roles);
+    }
+
+    [Fact]
+    public void Execute_Json_CarriesExecutionOrchestrationModel_AsPrimary_G540()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideModelCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var model = document.RootElement.GetProperty("execution_orchestration_model");
+
+        Assert.Contains("PRIMARY", model.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("G540", model.GetProperty("summary").GetString(), StringComparison.Ordinal);
+
+        var roles = model.GetProperty("roles").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Equal(4, roles.Length);
+        Assert.Contains(roles, r => r.StartsWith("design —", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.StartsWith("orchestrator —", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.StartsWith("implementation —", StringComparison.Ordinal));
+        Assert.Contains(roles, r => r.StartsWith("review —", StringComparison.Ordinal));
+
+        Assert.True(model.TryGetProperty("message_driven_steady_state", out _));
+        Assert.Contains("Timer-loop mode remains fully supported", model.GetProperty("alternative").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -57,6 +57,30 @@ internal static class GuideModelCommand
         return new GuideModelResult
         {
             PrimaryModel = "chat-first / CLI-internal: the human product owner stays in chat with a Codex/Claude coding agent, and the agent calls `intent-cli` internally for rules, workflows, questions, status, and validation.",
+            ExecutionOrchestrationModel = new GuideModelExecutionOrchestration
+            {
+                Summary = "G540: for autonomous, multi-thread execution once intents are authored, the PRIMARY "
+                    + "collaboration model is FOUR-THREAD agmsg orchestration — design / orchestrator / "
+                    + "implementation / review coordinate over agmsg, with the orchestrator pacing loopless "
+                    + "implementation/review receivers instead of independent timers. This is the practiced, "
+                    + "maintained model (G520-G539: wake contract, stalled-work, heartbeat, issue-retire, "
+                    + "priority override, publish reliability). Full setup/reference: "
+                    + "`intent-cli guide orchestrator-thread --domain <d> --target-repo <owner/repo> --agent <a> --format markdown`.",
+                Roles = new[]
+                {
+                    "design — authors intent, packet content and acceptance criteria, release scope, and prioritization rulings; consulted by the orchestrator before any of those take effect (double-check rule).",
+                    "orchestrator — inspects canonical intent-cli/GitHub state, publishes exactly one already-authored `issue-cut-ready` packet per wake, delegates implementation/review over agmsg, tracks CI/review, and closes out approved PRs; never authors design content unilaterally.",
+                    "implementation — a loopless receiver that implements exactly the delegated execution unit via `worker next-action` / `worker claim` / `worker complete`.",
+                    "review — a loopless receiver that reviews exactly the delegated PR via the canonical review surfaces.",
+                },
+                MessageDrivenSteadyState = "Implementation/review agmsg replies (accepted/progress/completed/blocked) "
+                    + "wake the orchestrator directly, so routine fast polling is not required in steady state; an "
+                    + "explicit orchestrator timer remains supported only as a fallback/legacy option.",
+                Alternative = "Timer-loop mode remains fully supported as the simpler ALTERNATIVE for a domain/repo "
+                    + "that does not run an orchestrator thread: implementation and review threads self-schedule on "
+                    + "recurring timers instead. Exactly one mode per domain/repo — the two must never run "
+                    + "simultaneously for the same domain/repo. See `intent-cli guide prompt-matrix` for its setup.",
+            },
             Roles = new[]
             {
                 new GuideModelRole
@@ -137,6 +161,21 @@ internal static class GuideModelCommand
         writer.WriteLine("## Primary model");
         writer.WriteLine();
         writer.WriteLine(model.PrimaryModel);
+        writer.WriteLine();
+
+        writer.WriteLine("## Execution orchestration model (PRIMARY for autonomous multi-thread execution)");
+        writer.WriteLine();
+        writer.WriteLine(model.ExecutionOrchestrationModel.Summary);
+        writer.WriteLine();
+        writer.WriteLine("### Four threads");
+        writer.WriteLine();
+        foreach (var role in model.ExecutionOrchestrationModel.Roles)
+        {
+            writer.WriteLine($"- {role}");
+        }
+        writer.WriteLine();
+        writer.WriteLine($"- **message-driven steady state** — {model.ExecutionOrchestrationModel.MessageDrivenSteadyState}");
+        writer.WriteLine($"- **alternative** — {model.ExecutionOrchestrationModel.Alternative}");
         writer.WriteLine();
 
         writer.WriteLine("## Roles");
@@ -230,6 +269,10 @@ internal sealed record GuideModelResult
     [JsonPropertyName("primary_model")]
     public required string PrimaryModel { get; init; }
 
+    /// <summary>G540: the PRIMARY model for autonomous, multi-thread execution once intents are authored — four-thread agmsg orchestration, with timer-loop mode as the documented simpler alternative.</summary>
+    [JsonPropertyName("execution_orchestration_model")]
+    public required GuideModelExecutionOrchestration ExecutionOrchestrationModel { get; init; }
+
     [JsonPropertyName("roles")]
     public required IReadOnlyList<GuideModelRole> Roles { get; init; }
 
@@ -250,4 +293,19 @@ internal sealed record GuideModelRole
 
     [JsonPropertyName("responsibilities")]
     public required IReadOnlyList<string> Responsibilities { get; init; }
+}
+
+internal sealed record GuideModelExecutionOrchestration
+{
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("roles")]
+    public required IReadOnlyList<string> Roles { get; init; }
+
+    [JsonPropertyName("message_driven_steady_state")]
+    public required string MessageDrivenSteadyState { get; init; }
+
+    [JsonPropertyName("alternative")]
+    public required string Alternative { get; init; }
 }

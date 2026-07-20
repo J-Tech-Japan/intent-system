@@ -22,13 +22,32 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("## Mode separation", output, StringComparison.Ordinal);
         Assert.Contains("timer-loop mode", output, StringComparison.Ordinal);
         Assert.Contains("orchestrator-message mode", output, StringComparison.Ordinal);
-        // The existing timer-loop mode is preserved, not replaced.
-        Assert.Contains("still fully supported", output, StringComparison.Ordinal);
+        // G540: orchestrator-message mode is the PRIMARY model; timer-loop
+        // mode is the fully supported, simpler ALTERNATIVE — preserved, not
+        // replaced or removed.
+        Assert.Contains("PRIMARY model", output, StringComparison.Ordinal);
+        Assert.Contains("ALTERNATIVE — fully supported", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Opt-in mode", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("preview", output, StringComparison.OrdinalIgnoreCase);
         // Mixed-mode timer race is explicitly forbidden.
         Assert.Contains("do NOT launch the implementation/review recurring timer loops", output, StringComparison.Ordinal);
         // agmsg is signal-only; intent-cli/GitHub authoritative.
         Assert.Contains("agmsg", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli and GitHub remain authoritative", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Markdown_HasDesignOrchestratorDoubleCheckRule_G540()
+    {
+        var output = RunMarkdown(["--domain", "estivo", "--target-repo", "J-Tech-Japan/intent-system", "--agent", "claude"]);
+
+        Assert.Contains("design↔orchestrator double-check", output, StringComparison.Ordinal);
+        Assert.Contains("intent shaping and clarifications", output, StringComparison.Ordinal);
+        Assert.Contains("packet content and acceptance criteria", output, StringComparison.Ordinal);
+        Assert.Contains("release scope and version selection", output, StringComparison.Ordinal);
+        Assert.Contains("prioritization rulings", output, StringComparison.Ordinal);
+        Assert.Contains("NEVER authors design content unilaterally", output, StringComparison.Ordinal);
+        Assert.Contains("DESIGN NEVER bypasses the orchestrator for workflow transitions", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1657,7 +1676,7 @@ public sealed class GuideOrchestratorThreadCommandTests
     }
 
     [Fact]
-    public void Execute_Help_ExplainsOptionalAndNonReplacing()
+    public void Execute_Help_ExplainsPrimaryAndNonReplacing()
     {
         using var writer = new StringWriter();
         var exitCode = GuideOrchestratorThreadCommand.Execute(
@@ -1666,7 +1685,8 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Equal(0, exitCode);
         var output = writer.ToString();
         Assert.Contains("guide orchestrator-thread", output, StringComparison.Ordinal);
-        Assert.Contains("OPTIONAL", output, StringComparison.Ordinal);
+        Assert.Contains("PRIMARY", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("OPTIONAL agmsg-backed", output, StringComparison.Ordinal);
         Assert.Contains("not replaced", output, StringComparison.Ordinal);
     }
 

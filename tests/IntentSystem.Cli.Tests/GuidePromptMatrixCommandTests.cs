@@ -25,10 +25,18 @@ public sealed class GuidePromptMatrixCommandTests
         Assert.Contains("host-loop", output, StringComparison.Ordinal);
         Assert.Contains("child-oneshot", output, StringComparison.Ordinal);
         Assert.Contains("host-oneshot", output, StringComparison.Ordinal);
-        // G508: the optional agmsg orchestrator-message mode is discoverable from
-        // the prompt matrix, and the timer-loop modes are not removed.
+        // G508/G540: the PRIMARY agmsg orchestrator-message mode is discoverable
+        // first from the prompt matrix, and the timer-loop modes (the simpler
+        // alternative) are not removed.
         Assert.Contains("orchestrator-message mode", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli guide orchestrator-thread", output, StringComparison.Ordinal);
+        Assert.Contains("PRIMARY for multi-thread setups", output, StringComparison.Ordinal);
+        Assert.Contains("ALTERNATIVE for a", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("OPTIONAL, preview", output, StringComparison.Ordinal);
+        // The orchestrator note appears before the timer-loop matrix heading.
+        Assert.True(
+            output.IndexOf("PRIMARY for multi-thread setups", StringComparison.Ordinal)
+            < output.IndexOf("Canonical matrix of the four timer-loop", StringComparison.Ordinal));
     }
 
     [Fact]
