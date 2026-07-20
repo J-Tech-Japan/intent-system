@@ -1409,10 +1409,11 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_BacklogReadyIdle_DoesNotFire_WithOpenPr()
+    public void Execute_BacklogReadyIdle_DoesNotFire_WithOpenPrHavingNoClosingIssueReference()
     {
-        // Any open PR is treated as in-flight work, regardless of label
-        // state -- a PR never itself carries intent-target.
+        // An open PR with no closing-issue reference for this repo cannot
+        // have its domain corroborated by anything -- conservatively
+        // blocks, exactly like an uncorroborated open intent-target issue.
         using var workspace = new StalledWorkWorkspace();
         workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
         workspace.WriteQueueState(BuildReadyQueueStateJson("G600"));
@@ -1431,6 +1432,236 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.DoesNotContain(
             doc.RootElement.GetProperty("items").EnumerateArray(),
             item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+    }
+
+    [Fact]
+    public void Execute_BacklogReadyIdle_DoesNotFire_WithOpenPrClosingSameDomainIssue_G544Repair()
+    {
+        // G544 review repair: a PR's domain is resolved through its CLOSING
+        // ISSUE (never the PR's own title) -- an open PR whose closing
+        // issue is confirmed to belong to THIS domain genuinely blocks.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(BuildReadyQueueStateJson("G600"));
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G599", FixedNow.AddMinutes(-100)));
+        workspace.WritePacketDomain("G601", "intent-cli");
+        var sourceIssue = BuildIssue(1501, "G601: in-flight for this domain", FixedNow.AddHours(-2), "intent-target", "intent-pr-created");
+        var openPr = BuildPr(1600, "G601: PR for in-flight work", FixedNow.AddHours(-1), state: "OPEN", closingIssueNumber: 1501);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [sourceIssue], prs: [openPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+    }
+
+    [Fact]
+    public void Execute_BacklogReadyIdle_Fires_WhenOpenPrClosesIssueConfirmedForDifferentDomain_G544Repair()
+    {
+        // G544 review repair: an open PR whose closing issue is CONCLUSIVELY
+        // confirmed to belong to a DIFFERENT domain must not suppress this
+        // domain's detection.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(BuildReadyQueueStateJson("G600"));
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G599", FixedNow.AddMinutes(-100)));
+        workspace.WritePacketDomain("SKS-G700", "sekiban-as-a-service");
+        var otherDomainIssue = BuildIssue(1502, "SKS-G700: in-flight for another domain", FixedNow.AddHours(-2), "intent-target", "intent-pr-created");
+        var otherDomainPr = BuildPr(1601, "SKS-G700: PR for another domain", FixedNow.AddHours(-1), state: "OPEN", closingIssueNumber: 1502);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [otherDomainIssue], prs: [otherDomainPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var item = Assert.Single(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+        Assert.Equal("G600", item.GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_BacklogReadyIdle_DoesNotFire_WithUnmetDependency_G544Repair()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G600",
+                  "title": "G600 title",
+                  "state": "queued",
+                  "dependencies": ["G599"],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G598", FixedNow.AddMinutes(-100)));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+    }
+
+    [Fact]
+    public void Execute_BacklogReadyIdle_DoesNotFire_WithNonEmptyBlockedBy_G544Repair()
+    {
+        // G544 review repair regression: before the shared canonical
+        // selector's fallback loop was fixed, a queue-known blocked_by-
+        // blocked unit could still be resurrected as issue-cut-ready and
+        // wrongly fire backlog-ready-idle.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G600",
+                  "title": "G600 title",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": ["waiting on operator decision"],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G598", FixedNow.AddMinutes(-100)));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+    }
+
+    [Fact]
+    public void Execute_BacklogReadyIdle_DoesNotFire_WithOpenClarification_G544Repair()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(BuildReadyQueueStateJson("G600"));
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G599", FixedNow.AddMinutes(-100)));
+        workspace.WriteFile(
+            "intents/intent-cli/clarifications/open.md",
+            "## Open Questions\n\n- [ ] Genuinely open question blocking publish.\n");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+    }
+
+    [Fact]
+    public void Execute_BacklogReadyIdle_Fires_WithLaterEligibleUnit_WhenEarlierUnitIsBlocked_G544Repair()
+    {
+        // Canonical selector order is preserved: the earlier-authored unit
+        // is blocked_by-blocked, so the LATER, eligible unit is the one
+        // backlog-ready-idle names -- never the blocked one, and never a
+        // refusal to fire just because SOME unit is blocked.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G601/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-01T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G600",
+                  "title": "authored first, blocked_by-blocked",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": ["waiting on operator decision"],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                },
+                {
+                  "execution_unit": "G601",
+                  "title": "authored second, eligible",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+        workspace.WriteFile(".intent-cli/runs.jsonl", BuildRunsLogLine("G598", FixedNow.AddMinutes(-100)));
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister();
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var item = Assert.Single(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle);
+        Assert.Equal("G601", item.GetProperty("execution_unit").GetString());
     }
 
     [Fact]

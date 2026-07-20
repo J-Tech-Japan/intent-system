@@ -270,14 +270,20 @@ queue-state、`runs.jsonl` を変更することは一切ありません — inf
   `closeout-recorded` の runs event — がまだ記録されていない）。
 - `backlog-ready-idle` (G544) — 最後に残っていた未カバーの stall class:
   **ready だが一度も着手されていない** 作業。以下がすべて成立したときに
-  発火します: (1) 対象 domain の WIP が空である — open な PR が
-  一つも存在せず(PR 自体が `intent-target` を持つことは無いため、
-  open な PR が存在すればそれは何かが in flight であることを意味する)、
-  かつ `intent-target` を持つ open な issue が、その domain に属すると
-  解決される(あるいは属さないと確定できる)ものが一つも無い —
-  execution unit が全く corroborate できない issue は、すべての domain を
-  blocking すると保守的に扱われます。ここでは false な「idle」報告の方が
-  危険な方向だからです; (2) `issue publish-flow` preflight 自身が使うのと
+  発火します: (1) 対象 domain の WIP が空である — その domain に属すると
+  解決される open な PR が一つも無く、かつ `intent-target` を持つ open な
+  issue が、その domain に属すると解決される(あるいは属さないと確定
+  できる)ものも一つも無い。PR 自体が `intent-target` を持つことは無いため、
+  PR の domain はその CLOSING ISSUE を通じて(PR 自身のタイトルではなく)
+  解決されます — この surface の他の箇所と同じ execution-unit/domain の
+  corroboration ルールを使います。domain を全く corroborate できない
+  candidate(PR/issue のいずれでも)— closing-issue のリンクが無い、
+  closing issue が open issue の中に見つからない、execution unit が
+  corroborate できない、等 — は、すべての domain を blocking すると
+  保守的に扱われます。ここでは false な「idle」報告の方が危険な方向だから
+  です。対象 domain と異なる domain に属すると **確定的に** confirm
+  された candidate だけが例外として扱われます; (2) `issue publish-flow`
+  preflight 自身が使うのと
   **同じ** canonical selector(`intent next-slice` の candidate selection
   — dependency/blocked-by、lifecycle、domain、contract-completeness の
   すべての gate を含み、別のヒューリスティックではない)が publishable な
@@ -1089,6 +1095,21 @@ reorder は **stable** な sort を使うため、すべての item が enqueue
 のデフォルト値(`"normal"`)を持つ host——つまり実質的に priority が
 設定されていない host——では、G537 以前の挙動と byte-identical な
 出力になります。
+
+**G544 review repair — all-packet fallback も同じ dependency/blocked-by
+gate を維持します。** primary の `queued`-ordered loop が eligible な
+candidate を一つも見つけられなかった場合、`next-slice` は
+`.intent-cli/issues/*` 配下のすべての packet directory を再列挙する
+fallback へ移ります(queue-state に一切 entry を持たない runtime-created
+packet をカバーするため)。この fallback は、primary loop がある
+queue-known な unit を reject するのに使ったのと同じ dependency/
+blocked-by gate を再適用しておらず、その unit を `issue-cut-ready` として
+無条件に復活させてしまっていました。fallback は現在、queue-state が
+`Queued` として追跡しているすべての unit に対して同一の gate を適用
+します——queue-state に entry が無い unit(gate する対象が無い)は
+影響を受けません。この問題は、G544 の `backlog-ready-idle` 検出が
+この同じ selector が誤って `issue-cut-ready` を報告しないことに依存
+していたために顕在化しました。
 
 `QueueItem.Priority` は schema level では引き続き単なる、validate
 されない `string` です(変更なし)——`queue reprioritize` だけが

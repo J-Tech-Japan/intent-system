@@ -457,6 +457,24 @@ internal static class IntentNextSliceCommand
                         continue;
                     }
 
+                    // G544 review repair: this fallback re-enumerates EVERY
+                    // packet directory once the primary `queued`-ordered
+                    // loop above finds no eligible candidate — but it was
+                    // never re-applying the SAME dependency/blocked-by gate
+                    // that loop just used to reject this exact unit,
+                    // silently resurrecting a queue-known ineligible unit
+                    // (unmet dependency, or a non-empty `blocked_by`) as
+                    // `issue-cut-ready`. Apply the identical gate here for
+                    // any unit queue-state tracks as Queued — a unit with NO
+                    // queue-state entry at all (a runtime-created packet)
+                    // has nothing to gate on and is unaffected, matching
+                    // this loop's pre-existing behavior for that case.
+                    if (queuedItemByUnit.TryGetValue(executionUnit, out var fallbackQueuedItem)
+                        && !IsDependencyAndBlockedByEligible(fallbackQueuedItem, completed))
+                    {
+                        continue;
+                    }
+
                     if (IsExcludedByLifecycle(executionUnit, directory, queueState, lifecycleDiagnostics))
                     {
                         continue;

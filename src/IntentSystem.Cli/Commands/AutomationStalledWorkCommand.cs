@@ -31,10 +31,12 @@ namespace IntentSystem.Cli.Commands;
 ///   recommendation mid-repair).</item>
 /// <item><c>merged-not-closed-out</c> — a MERGED PR's linked queue item is
 ///   not <see cref="QueueItemState.Completed"/>.</item>
-/// <item><c>backlog-ready-idle</c> — WIP is empty for the domain (no open
-///   <c>intent-target</c> issue confirmed for it, no open PR at all), the
-///   canonical selector (<see cref="IntentNextSliceCommand.Analyze"/>) has a
-///   publishable candidate, and no runs.jsonl activity for longer than
+/// <item><c>backlog-ready-idle</c> — WIP is empty for the domain (no open PR
+///   or <c>intent-target</c> issue confirmed for it, each resolved through
+///   its own closing-issue/packet linkage — a confirmed OTHER-domain PR or
+///   issue does not block), the canonical selector
+///   (<see cref="IntentNextSliceCommand.Analyze"/>) has a publishable
+///   candidate, and no runs.jsonl activity for longer than
 ///   <c>--backlog-idle-minutes</c> (G544 — the last uncovered stall class:
 ///   work that is ready but never started).</item>
 /// </list>
@@ -854,17 +856,18 @@ internal static class AutomationStalledWorkCommand
 
     /// <summary>
     /// G544: WIP is empty for <paramref name="domain"/> when (a) no open PR
-    /// exists at all — a PR never itself carries <c>intent-target</c>, so
-    /// any open PR means work is in flight regardless of label state — and
+    /// resolves (or fails to rule itself out) as belonging to
+    /// <paramref name="domain"/> — see <see cref="PrBlocksDomainWip"/> — and
     /// (b) no open issue carrying <c>intent-target</c> resolves (or fails to
-    /// rule itself out) as belonging to <paramref name="domain"/>. An issue
-    /// whose execution unit cannot be corroborated at all is conservatively
-    /// treated as blocking EVERY domain's WIP-empty check (unlike every
-    /// other collector here, which excludes an uncorroborated candidate from
-    /// firing) — the risk here runs the other way: falsely reporting the
-    /// backlog idle when something IS actually in flight would recommend a
-    /// publish nothing should stop, so an unresolved candidate must never be
-    /// silently ignored.
+    /// rule itself out) as belonging to it either. In both cases, a
+    /// candidate whose domain cannot be corroborated at all is
+    /// conservatively treated as blocking EVERY domain's WIP-empty check
+    /// (unlike every other collector here, which excludes an uncorroborated
+    /// candidate from firing) — the risk here runs the other way: falsely
+    /// reporting the backlog idle when something IS actually in flight would
+    /// recommend a publish nothing should stop, so an unresolved candidate
+    /// must never be silently ignored. Only a candidate CONCLUSIVELY
+    /// confirmed to belong to a DIFFERENT domain is excused.
     /// </summary>
     private static bool DomainWipIsEmpty(
         CliContext context,
@@ -874,9 +877,17 @@ internal static class AutomationStalledWorkCommand
         IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
         string repo)
     {
-        if (openPrs.Any(pr => IsOpen(pr.State)))
+        foreach (var pr in openPrs)
         {
-            return false;
+            if (!IsOpen(pr.State))
+            {
+                continue;
+            }
+
+            if (PrBlocksDomainWip(context, domain, candidateDomains, openIssues, pr, repo))
+            {
+                return false;
+            }
         }
 
         foreach (var issue in openIssues)
@@ -915,6 +926,70 @@ internal static class AutomationStalledWorkCommand
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// G544 review repair: a PR never itself carries <c>intent-target</c>,
+    /// so its domain is corroborated through its CLOSING ISSUE (never the
+    /// PR's own title, which is not guaranteed to mirror the issue's) using
+    /// the same resolution rules every other collector in this file already
+    /// applies to issues. A PR with no closing-issue reference for
+    /// <paramref name="repo"/>, or whose closing issue cannot be found among
+    /// <paramref name="openIssues"/> or corroborated to a packet, or that
+    /// closes more than one issue where any single reference is uncertain
+    /// or same-domain, conservatively BLOCKS this domain's WIP-empty check.
+    /// Only a PR whose EVERY closing reference is conclusively confirmed to
+    /// belong to a DIFFERENT domain is excused.
+    /// </summary>
+    private static bool PrBlocksDomainWip(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
+        GitHubAutomationPrCandidate pr,
+        string repo)
+    {
+        var closingReferences = pr.ClosingIssuesReferences
+            .Where(reference => reference.Number > 0 && ReferenceMatchesRepo(reference, repo))
+            .ToArray();
+
+        if (closingReferences.Length == 0)
+        {
+            // No closing-issue link for this repo at all — this PR's domain
+            // cannot be corroborated by anything. Conservatively blocks.
+            return true;
+        }
+
+        foreach (var reference in closingReferences)
+        {
+            var matchedIssue = openIssues.FirstOrDefault(candidate => candidate.Number == reference.Number);
+            if (matchedIssue is null)
+            {
+                // The closing issue is not among the open issues this scan
+                // fetched (closed, or an unresolvable mismatch) — cannot
+                // corroborate; conservatively blocks.
+                return true;
+            }
+
+            var resolution = ResolveExecutionUnit(context, matchedIssue.Title);
+            if (!resolution.Corroborated)
+            {
+                return true;
+            }
+
+            var packetDeclaredDomain = ReadPacketDeclaredDomain(context, resolution.ExecutionUnit);
+            if (TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo, out _, out _))
+            {
+                // Confirmed to belong to THIS domain — genuinely in flight.
+                return true;
+            }
+
+            // This reference confirmed a DIFFERENT domain — keep checking
+            // any remaining closing references before excusing the PR.
+        }
+
+        // Every closing reference resolved to a confirmed OTHER domain.
+        return false;
     }
 
     /// <summary>

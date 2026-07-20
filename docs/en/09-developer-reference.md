@@ -275,12 +275,18 @@ is always a runnable `intent-cli` command):
   has not been recorded).
 - `backlog-ready-idle` (G544) — the last uncovered stall class: work that is
   **ready but never started**. Fires when ALL of the following hold: (1) WIP
-  is empty for the requested domain — no open PR exists at all (a PR never
-  itself carries `intent-target`, so any open PR means something is in
-  flight), and no open issue carrying `intent-target` resolves (or fails to
-  rule itself out) as belonging to the domain — an issue whose execution
-  unit cannot be corroborated at all is conservatively treated as blocking
-  EVERY domain, since a false "idle" report is the dangerous direction here;
+  is empty for the requested domain — no open PR resolves as belonging to
+  it, and no open issue carrying `intent-target` resolves as belonging to it
+  either (or fails to rule itself out). A PR never itself carries
+  `intent-target`; its domain is instead resolved through its CLOSING ISSUE
+  (never the PR's own title), using the same execution-unit/domain
+  corroboration rules used everywhere else in this surface. A candidate
+  (PR or issue) whose domain cannot be corroborated at all — no closing-
+  issue link, the closing issue not found among open issues, or its
+  execution unit uncorroborated — is conservatively treated as blocking
+  EVERY domain, since a false "idle" report is the dangerous direction
+  here; only a candidate CONCLUSIVELY confirmed to belong to a DIFFERENT
+  domain is excused;
   (2) the SAME canonical selector `issue publish-flow` preflight itself uses
   (`intent next-slice`'s candidate selection — dependency/blocked-by,
   lifecycle, domain, and contract-completeness gates all included, not a
@@ -1022,6 +1028,19 @@ before that per-candidate gate loop runs. Because the reorder uses a
 **stable** sort, a host where every item carries the enqueue default
 (`"normal"`) — i.e. no priorities meaningfully set — produces
 byte-identical output to pre-G537 behavior.
+
+**G544 review repair — the all-packet fallback preserves the same
+dependency/blocked-by gate.** When the primary `queued`-ordered loop finds
+no eligible candidate, `next-slice` falls back to re-enumerating every
+packet directory under `.intent-cli/issues/*` (covering runtime-created
+packets with no queue-state entry at all). That fallback was NOT
+re-applying the dependency/blocked-by gate the primary loop had just used
+to reject a queue-known unit — silently resurrecting it as `issue-cut-ready`
+regardless. The fallback now applies the identical gate to any unit
+queue-state tracks as `Queued`; a unit with no queue-state entry (nothing to
+gate on) is unaffected. This was surfaced by G544's `backlog-ready-idle`
+detection, which depends on this same selector never reporting a false
+`issue-cut-ready`.
 
 `QueueItem.Priority` remains a plain, unvalidated `string` at the schema
 level (unchanged) — `queue reprioritize` is the only writer that
