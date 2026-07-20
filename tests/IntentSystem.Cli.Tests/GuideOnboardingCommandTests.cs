@@ -61,6 +61,38 @@ public sealed class GuideOnboardingCommandTests
     }
 
     [Fact]
+    public void Execute_FirstCallSequence_ReachesOrchestratorThreadChecklist_G540()
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideOnboardingCommand.Execute(
+            CreateContext(),
+            ["--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var sequence = document.RootElement.GetProperty("first_call_sequence");
+        var steps = sequence.EnumerateArray().ToArray();
+
+        var orchestratorStep = Assert.Single(steps, s => s.GetProperty("command").GetString()!
+            .StartsWith("intent-cli guide orchestrator-thread", StringComparison.Ordinal));
+        Assert.Contains("PRIMARY four-thread agmsg orchestration", orchestratorStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+        Assert.Contains("double-check", orchestratorStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+
+        // Reachable early in the sequence — right after `guide model`, ahead
+        // of rules/commands/workflow discovery.
+        var modelOrder = steps.Single(s => s.GetProperty("command").GetString()!
+            .StartsWith("intent-cli guide model", StringComparison.Ordinal)).GetProperty("order").GetInt32();
+        var orchestratorOrder = orchestratorStep.GetProperty("order").GetInt32();
+        Assert.Equal(modelOrder + 1, orchestratorOrder);
+
+        // guide model's own purpose now names the primary execution orchestration model too.
+        var modelStep = steps.Single(s => s.GetProperty("command").GetString()!
+            .StartsWith("intent-cli guide model", StringComparison.Ordinal));
+        Assert.Contains("PRIMARY execution orchestration model", modelStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_FirstCallSequence_DoesNotIncludeMutatingCommands()
     {
         using var writer = new StringWriter();

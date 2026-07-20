@@ -27,6 +27,15 @@ public sealed class GuideWorkflowSuggestCommandTests
     [InlineData("新しい intent-cli オーケストレーションを使ってみたい", "orchestrator-setup")]
     [InlineData("agmsg orchestrator を試したい", "orchestrator-setup")]
     [InlineData("オーケストレーションスレッドを使いたい", "orchestrator-setup")]
+    // G540 repair round 1: a GENERIC multi-thread implementation/review goal
+    // (no literal "orchestrator"/"agmsg" mention) must still route to
+    // orchestrator-setup rather than falling through to an ordinary review
+    // or single-issue implementation classification. EN/JA parity required.
+    [InlineData("I want to set up multiple threads for implementation and review", "orchestrator-setup")]
+    [InlineData("set up a multi-thread implementation and review workflow", "orchestrator-setup")]
+    [InlineData("run implementation and review in parallel across four threads", "orchestrator-setup")]
+    [InlineData("実装とレビューのために複数スレッドをセットアップしたい", "orchestrator-setup")]
+    [InlineData("マルチスレッドで実装とレビューを行いたい", "orchestrator-setup")]
     [InlineData("xyzzy mumble", "unknown")]
     public void Execute_ClassifiesGoalIntoExpectedWorkflow(string goal, string expectedWorkflow)
     {
@@ -63,6 +72,29 @@ public sealed class GuideWorkflowSuggestCommandTests
         var summary = document.RootElement.GetProperty("summary").GetString()!;
         Assert.Contains("loopless", summary, StringComparison.Ordinal);
         Assert.Contains("signal layer only", summary, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("I want to set up multiple threads for implementation and review")]
+    [InlineData("実装とレビューのために複数スレッドをセットアップしたい")]
+    public void Execute_GenericMultiThreadGoal_RoutesToOrchestratorSetup_NotOrdinaryReview_G540(string goal)
+    {
+        using var writer = new StringWriter();
+        var exitCode = GuideWorkflowSuggestCommand.Execute(
+            CreateContext(),
+            ["--goal", goal, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+
+        // The PRIMARY four-thread orchestrator setup is recommended first —
+        // this must never fall through to an ordinary single-PR review
+        // classification just because the goal also mentions "review".
+        Assert.Equal("orchestrator-setup", document.RootElement.GetProperty("workflow").GetString());
+
+        var commands = document.RootElement.GetProperty("recommended_commands").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(commands, c => c!.StartsWith("intent-cli guide orchestrator-thread", StringComparison.Ordinal));
     }
 
     [Fact]

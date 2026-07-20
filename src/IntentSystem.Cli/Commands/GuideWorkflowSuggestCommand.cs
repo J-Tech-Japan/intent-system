@@ -125,6 +125,24 @@ internal static class GuideWorkflowSuggestCommand
             return (WorkflowOrchestratorSetup, matched);
         }
 
+        // G540 repair round 1: a GENERIC multi-thread implementation/review
+        // goal — one that asks for parallel/multiple implementation+review
+        // threads without literally saying "orchestrator" — must still route
+        // to the PRIMARY four-thread orchestrator-setup recommendation, not
+        // fall through and classify as an ordinary single-PR review or
+        // single-issue implementation goal.
+        if (ContainsAny(new[]
+            {
+                "multi-thread", "multi thread", "multiple threads", "four-thread", "four thread",
+                "multiple agents", "several threads", "parallel implementation",
+                "implementation and review threads", "implementation and review agents",
+                "複数スレッド", "マルチスレッド", "複数エージェント", "並列で実装とレビュー",
+                "実装とレビューのスレッド", "実装とレビューを並行",
+            }))
+        {
+            return (WorkflowOrchestratorSetup, matched);
+        }
+
         if (ContainsAny(new[] { "clarif", "ambiguous", "blocker", "曖昧", "未決" }))
         {
             return (WorkflowClarification, matched);
