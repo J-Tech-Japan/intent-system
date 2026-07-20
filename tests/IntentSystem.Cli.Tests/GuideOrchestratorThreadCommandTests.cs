@@ -355,6 +355,17 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("/loop 30m", output, StringComparison.Ordinal);
         Assert.Contains("intent-cli automation heartbeat --domain intent-cli --repo J-Tech-Japan/intent-system --format json", output, StringComparison.Ordinal);
         Assert.Contains("exactly ONE", output, StringComparison.Ordinal);
+        // G539 repair round 1: silence is reserved for a healthy stale=false
+        // result ONLY — a command failure or malformed output must be
+        // surfaced visibly (never silently swallowed/retried), while still
+        // never fabricating or sending a nudge from broken input.
+        Assert.Contains("- **failure visibility** —", output, StringComparison.Ordinal);
+        Assert.Contains("silence is reserved for this healthy case ONLY", output, StringComparison.Ordinal);
+        Assert.Contains("is NEVER silent", output, StringComparison.Ordinal);
+        Assert.Contains("state the failure explicitly in this wake's own turn output", output, StringComparison.Ordinal);
+        Assert.Contains("visible to the operator watching this live session", output, StringComparison.Ordinal);
+        Assert.Contains("never fabricating or sending an agmsg nudge from broken input", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("stay silent this wake and retry next", output, StringComparison.Ordinal);
         Assert.Contains("### Watchdog checks", output, StringComparison.Ordinal);
         Assert.Contains("HITL", output, StringComparison.Ordinal);
         Assert.Contains("orchestrator staleness", output, StringComparison.Ordinal);
@@ -475,6 +486,23 @@ public sealed class GuideOrchestratorThreadCommandTests
         Assert.Contains("/loop 30m", watchdog.GetProperty("loop_setup_prompt").GetString(), StringComparison.Ordinal);
         Assert.Contains("Codex automation", watchdog.GetProperty("loop_setup_prompt").GetString(), StringComparison.Ordinal);
         Assert.Contains("exactly ONE", watchdog.GetProperty("loop_setup_prompt").GetString(), StringComparison.Ordinal);
+
+        // G539 repair round 1: the loop prompt must not tell the watchdog to
+        // stay silent on a command failure or malformed output — silence is
+        // reserved for a healthy stale=false result ONLY; a failure must be
+        // surfaced visibly (never silently swallowed/retried), while still
+        // never fabricating or sending a nudge from broken input.
+        var loopPrompt = watchdog.GetProperty("loop_setup_prompt").GetString()!;
+        Assert.Contains("silence is reserved for this healthy case ONLY", loopPrompt, StringComparison.Ordinal);
+        Assert.Contains("is NEVER silent", loopPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("stay silent this wake and retry next", loopPrompt, StringComparison.Ordinal);
+
+        var failureVisibility = watchdog.GetProperty("failure_visibility_rule").GetString()!;
+        Assert.Contains("healthy `stale=false`", failureVisibility, StringComparison.Ordinal);
+        Assert.Contains("surfaced VISIBLY", failureVisibility, StringComparison.Ordinal);
+        Assert.Contains("never silently swallowed or silently retried", failureVisibility, StringComparison.Ordinal);
+        Assert.Contains("never fabricating or sending an agmsg nudge from broken input", failureVisibility, StringComparison.Ordinal);
+
         Assert.Equal(
             "intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json",
             watchdog.GetProperty("heartbeat_command_example").GetString());

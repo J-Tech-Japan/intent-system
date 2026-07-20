@@ -597,9 +597,21 @@ authenticate します)、壊れた瞬間にオペレーターの画面上で可
   `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
   を実行し、結果の `stale` フィールドが `true` であれば `message_body` をそのまま
   agmsg send スクリプト経由で orchestrator に送ります(正確に **1 通**)。`stale` が
-  `false` であれば何も送らず静かに終了します。heartbeat コマンドの失敗や不正な/
-  オブジェクトでない出力は、この wake は沈黙して次の wake でリトライする理由として
-  扱います — 壊れた入力からメッセージを捏造することは決してありません。
+  `false` であれば何も送らず静かに終了します — 沈黙は **この健全なケースにのみ**
+  許されます。heartbeat コマンドの実行失敗や不正な/オブジェクトでない出力は
+  **決して沈黙しません**: この wake 自身の turn 出力で、生きたこのセッションを
+  監視しているオペレーターに見える形で、失敗を明示的に述べます — これこそが、
+  retire された見えない外部スケジューラに対して in-session の watchdog が持つ
+  正確な優位性です(下記 Retired を参照)— その一方で、壊れた入力から agmsg の
+  nudge を捏造・送信することは決してありません。実際に送信されるメッセージは、
+  本物の `stale=true` 結果の場合だけです。
+- **failure visibility** — 沈黙は健全な `stale=false` の heartbeat 結果にのみ
+  許されます。heartbeat コマンドの実行失敗や不正な/オブジェクトでない出力は、
+  この wake の watchdog 自身の turn 出力で **可視的に** 表面化させなければ
+  なりません — 決して黙って飲み込んだり、黙ってリトライしたりしません。沈黙した
+  失敗こそが、このスライスが外部 OS スケジューラを retire する理由そのものだから
+  です — その一方で、壊れた入力から agmsg の nudge を捏造・送信することは決して
+  ありません。実際に送信されるメッセージは、本物の `stale=true` 結果の場合だけです。
 - **チェック内容** — design/HITL inbox で未読の人間向けエスカレーションを確認
   (design ロールの `inbox.sh`)、read-only な intent-cli/GitHub の事実
   (`worker next-action --github-only`、open PR/CI/label 状態)を最後に確認した

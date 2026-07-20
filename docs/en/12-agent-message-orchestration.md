@@ -652,10 +652,22 @@ visible on the operator's screen the moment it breaks.
   `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`;
   when the result's `stale` field is `true`, send its `message_body` verbatim
   to the orchestrator via the agmsg send script (exactly **one** message);
-  when `stale` is `false`, send nothing and exit quietly. Treat a heartbeat
-  command failure or malformed/non-object output as a reason to stay silent
-  this wake and retry next wake — never fabricate a message from broken
-  input.
+  when `stale` is `false`, send nothing and exit quietly — silence is
+  reserved for this healthy case **only**. A heartbeat command execution
+  failure or malformed/non-object output is **never** silent: state the
+  failure explicitly in this wake's own turn output, visible to the operator
+  watching this live session — the exact advantage an in-session watchdog
+  has over the retired invisible external scheduler (see Retired below) —
+  while still never fabricating or sending an agmsg nudge from broken input;
+  only a genuine `stale=true` result ever produces a sent message.
+- **Failure visibility** — silence is reserved for a healthy `stale=false`
+  heartbeat result ONLY. A heartbeat command execution failure or
+  malformed/non-object output must be surfaced **visibly** in the watchdog's
+  own turn output this wake — never silently swallowed or silently retried,
+  since silent failure is exactly the defect this slice retires the external
+  OS scheduler for — while still never fabricating or sending an agmsg nudge
+  from broken input; only a genuine `stale=true` result ever produces a sent
+  message.
 - **Checks** — the design/HITL inbox for unread human-facing escalations
   (`inbox.sh` on the design role); orchestrator staleness via read-only
   intent-cli/GitHub facts (`worker next-action --github-only`, open PR/CI/

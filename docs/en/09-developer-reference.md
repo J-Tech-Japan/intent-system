@@ -1453,6 +1453,59 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
 
 ---
 
+### Safety-net repositioning: design-thread watchdog recommended, external OS scheduler retired (G539)
+
+G526's external cron/launchd heartbeat recommendation failed silently on
+**every run for five continuous days** (2026-07-15..07-20) — the wrapper's
+`gh`/agmsg auth lives in a login keychain a cron job cannot reach, so it
+never got past the credential step. A 105-minute stall on 2026-07-20 (G538 /
+PR #1179) went unrecovered even though `automation stalled-work` correctly
+detected it (`pr-created-not-reviewing, age=105m`); only a human ping
+surfaced it. `intent-cli guide orchestrator-thread` is repositioned
+accordingly:
+
+- **Design-thread watchdog (recommended default)** — a watchdog loop run
+  from the **design** thread at a **30-minute-class** interval: it calls
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo>
+  --format json` and, when `stale=true`, sends AT MOST ONE canonical nudge
+  to the orchestrator using the returned `message_body` — completely silent
+  otherwise. It runs INSIDE a live, human-monitored agent session rather
+  than an invisible external process, needs no separate credential/keychain
+  setup, and is visible on the operator's screen the moment it breaks. The
+  pre-existing watchdog safety rules (never duplicate a delegation, never
+  clear a permission prompt, never cancel in-flight work, never force-close,
+  never hand-edit durable state) and stop condition are preserved verbatim.
+- **Failure visibility is not the same as staleness.** Silence is reserved
+  for a healthy `stale=false` heartbeat result ONLY. A heartbeat command
+  execution failure or malformed/non-object output must be surfaced VISIBLY
+  in the watchdog's own turn output this wake — never silently swallowed or
+  silently retried, since silent failure is exactly the defect this slice
+  retires the external OS scheduler for — while still never fabricating or
+  sending an agmsg nudge from broken input; only a genuine `stale=true`
+  result ever produces a sent message.
+- **Orchestrator-side long-interval automation (selectable alternative)** —
+  the same `automation heartbeat` call, run directly from a long-interval
+  automation (Codex automation or Claude same-thread `/loop`) IN THE
+  ORCHESTRATOR'S OWN THREAD at a 30-60 minute-class interval, instead of the
+  design thread. Trade-off: design-side (recommended) keeps the orchestrator
+  strictly loopless at the cost of one extra hop (design watchdog to
+  orchestrator); orchestrator-side removes that hop but requires the
+  orchestrator itself to run a recurring loop — exactly what
+  orchestrator-message mode is designed to avoid in steady state.
+- **External OS-scheduler heartbeat is RETIRED.** The cron/launchd
+  recommendation is retired outright (not merely demoted): credential-store
+  access, invisible failure, and running entirely outside the agmsg model
+  are all disqualifying. `intent-cli automation heartbeat` /
+  `automation stalled-work` themselves are UNCHANGED and remain
+  scheduler-agnostic — any scheduler, including cron, can still call them —
+  the guide simply no longer recommends an external OS scheduler as the
+  mechanism. The 5-minute in-session orchestrator fallback timer (legacy,
+  discouraged) is unchanged in meaning.
+
+Full detail: [Agent-message orchestration](12-agent-message-orchestration.md).
+
+---
+
 ## Version flow
 
 The repository version policy lives in `eng/version.json` — the single source of

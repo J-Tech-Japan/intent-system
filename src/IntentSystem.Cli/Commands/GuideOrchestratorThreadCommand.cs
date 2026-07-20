@@ -643,9 +643,20 @@ internal static class GuideOrchestratorThreadCommand
                     + "30 minutes, with a prompt that on each wake runs `intent-cli automation heartbeat --domain "
                     + "<domain> --repo <owner/repo> --format json`; when the result's `stale` field is `true`, send "
                     + "its `message_body` verbatim to the orchestrator via the agmsg send script (exactly ONE "
-                    + "message); when `stale` is `false`, send nothing and exit quietly. Treat a heartbeat command "
-                    + "failure or malformed/non-object output as a reason to stay silent this wake and retry next "
-                    + "wake — never fabricate a message from broken input."),
+                    + "message); when `stale` is `false`, send nothing and exit quietly — silence is reserved for "
+                    + "this healthy case ONLY. A heartbeat command execution failure or malformed/non-object output "
+                    + "is NEVER silent: state the failure explicitly in this wake's own turn output, visible to the "
+                    + "operator watching this live session — the exact advantage an in-session watchdog has over "
+                    + "the retired invisible external scheduler (see the fallback timer / retired-cron notes) — "
+                    + "while still never fabricating or sending an agmsg nudge from broken input; only a genuine "
+                    + "`stale=true` heartbeat result ever produces a sent message."),
+                FailureVisibilityRule =
+                    "Silence is reserved for a healthy `stale=false` heartbeat result ONLY. A heartbeat command "
+                    + "execution failure or malformed/non-object output must be surfaced VISIBLY in the watchdog's "
+                    + "own turn output this wake — never silently swallowed or silently retried, since silent "
+                    + "failure is exactly the defect this slice retires the external OS scheduler for — while "
+                    + "still never fabricating or sending an agmsg nudge from broken input; only a genuine "
+                    + "`stale=true` result ever produces a sent message.",
                 HeartbeatCommandExample =
                     "intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json",
                 Checks = new[]
@@ -2204,6 +2215,8 @@ internal static class GuideOrchestratorThreadCommand
         writer.WriteLine();
         writer.WriteLine(guide.DesignWatchdog.LoopSetupPrompt);
         writer.WriteLine();
+        writer.WriteLine($"- **failure visibility** — {guide.DesignWatchdog.FailureVisibilityRule}");
+        writer.WriteLine();
         writer.WriteLine("Heartbeat command:");
         writer.WriteLine();
         writer.WriteLine("```");
@@ -2820,6 +2833,10 @@ internal sealed record OrchestratorDesignWatchdog
 
     [JsonPropertyName("loop_setup_prompt")]
     public required string LoopSetupPrompt { get; init; }
+
+    /// <summary>G539 repair round 1: silence is reserved for a healthy stale=false heartbeat result — a command failure or malformed output must be surfaced visibly, never silently swallowed/retried, and never fabricated into a sent nudge.</summary>
+    [JsonPropertyName("failure_visibility_rule")]
+    public required string FailureVisibilityRule { get; init; }
 
     [JsonPropertyName("heartbeat_command_example")]
     public required string HeartbeatCommandExample { get; init; }
