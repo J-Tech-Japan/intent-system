@@ -124,12 +124,14 @@ public sealed class VersionPolicyTests : IDisposable
     public void EngVersionJson_InThisRepo_IsReadableAndHasExpectedNextVersion()
     {
         // Smoke-test: the actual eng/version.json in the repository must
-        // be parseable and must point to 0.4.0 as the next development line
-        // (post-v0.3.15 release bump, see G528 — v0.3.15 was published to
+        // be parseable and must point to 0.5.0 as the next development line
+        // (post-v0.4.0 release bump, see G538 — v0.4.0 was published to
         // GitHub Releases + NuGet, so the policy moves the development line
-        // forward to 0.4.0 — a minor bump, since three new automation
-        // commands plus a visible fail-loud behavior change justify more
-        // than a patch — while recording 0.3.15 as the published stable).
+        // forward to 0.5.0 — a minor bump, since the batch ships two new
+        // commands (`intent facet-check`, `queue reprioritize`), a new
+        // intent-tree schema surface (`facets`), new stalled-work kinds, and
+        // a new transition target (`retired`) — while recording 0.4.0 as
+        // the published stable).
         var repoRoot = FindRepoRoot();
         if (repoRoot is null)
         {
@@ -139,8 +141,8 @@ public sealed class VersionPolicyTests : IDisposable
         var policy = VersionPolicy.TryReadFromRepo(repoRoot);
 
         Assert.NotNull(policy);
-        Assert.Equal("0.4.0", policy.NextVersion);
-        Assert.Equal("0.3.15", policy.StableVersion);
+        Assert.Equal("0.5.0", policy.NextVersion);
+        Assert.Equal("0.4.0", policy.StableVersion);
     }
 
     private static string? FindRepoRoot()

@@ -1464,104 +1464,110 @@ literal:
 
 ```json
 {
-  "stableVersion": "0.3.15",
-  "nextVersion": "0.4.0"
+  "stableVersion": "0.4.0",
+  "nextVersion": "0.5.0"
 }
 ```
 
 | Stage | Version form | How it is derived |
 | --- | --- | --- |
-| Local pack / install | `0.4.0-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
-| Main CI preview | `0.4.0-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
-| Release candidate (optional) | `0.4.0-rc.N` | Publishing the GitHub Release for tag `v0.4.0-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
-| Stable release | `0.4.0` | Publishing the GitHub Release for tag `v0.4.0` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
-| Post-release main builds | `0.4.1-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.4.1` |
+| Local pack / install | `0.5.0-<sha>-<G-unit>` | `nextVersion` from `eng/version.json` (G468) |
+| Main CI preview | `0.5.0-preview.<run>.<attempt>` | `nextVersion` from `eng/version.json` |
+| Release candidate (optional) | `0.5.0-rc.N` | Publishing the GitHub Release for tag `v0.5.0-rc.N` triggers `release.yml` (`on: release: published`); the tag supplies the version |
+| Stable release | `0.5.0` | Publishing the GitHub Release for tag `v0.5.0` triggers `release.yml` (`on: release: published`); the tag supplies the version (`-p:Version=<tag>` wins) |
+| Post-release main builds | `0.5.1-preview.<run>.<attempt>` | After bumping `nextVersion` to `0.5.1` |
 
-**After releasing `v0.4.0`**, bump both fields in `eng/version.json`:
+**After releasing `v0.5.0`**, bump both fields in `eng/version.json`:
 
 ```json
 {
-  "stableVersion": "0.4.0",
-  "nextVersion": "0.4.1"
+  "stableVersion": "0.5.0",
+  "nextVersion": "0.5.1"
 }
 ```
 
 This ensures the next main-branch CI build (and local pack) immediately produces
-`0.4.1-preview.<run>.<attempt>` / `0.4.1-<sha>-<G-unit>` rather than continuing to
-emit `0.4.0` (which would collide with the stable release version).
+`0.5.1-preview.<run>.<attempt>` / `0.5.1-<sha>-<G-unit>` rather than continuing to
+emit `0.5.0` (which would collide with the stable release version).
 
-### Next release readiness (v0.4.0)
+### Next release readiness (v0.5.0)
 
-**`v0.3.15` shipped** (GitHub Release + NuGet) and the version policy was bumped
-to the `0.4.0` development line — a **minor** bump, not a patch: three new
-automation commands plus a visible fail-loud behavior change justify more than
-a patch release. The repository is now on the in-development **`0.4.0`**
-`nextVersion`; G528 is **prepare-only** — it bumps the version metadata and
-docs and adds no publish steps. The version-bump merge does **not** create a
-GitHub Release or tag. After it merges and the
-[release-readiness gate](release-notes-v0.4.0.md#release-readiness-gate-g528)
+**`v0.4.0` shipped** (GitHub Release + NuGet) and the version policy was bumped
+to the `0.5.0` development line — a **minor** bump, not a patch: the batch
+ships two new commands (`intent facet-check`, `queue reprioritize`), a new
+intent-tree schema surface (`facets`), new stalled-work kinds, and a new
+transition target (`retired`) — more than a patch release justifies. The
+repository is now on the in-development **`0.5.0`** `nextVersion`; G538 is
+**prepare-only** — it bumps the version metadata and docs and adds no publish
+steps. The version-bump merge does **not** create a GitHub Release or tag.
+After it merges and the
+[release-readiness gate](release-notes-v0.5.0.md#release-readiness-gate-g538)
 holds, a **maintainer/operator (or external release automation) creates and
-publishes the GitHub Release** for `v0.4.0`; publishing that Release fires
+publishes the GitHub Release** for `v0.5.0`; publishing that Release fires
 `.github/workflows/release.yml` (`on: release: published`), which builds and
 publishes the NuGet package and the per-platform binary artifacts. Full
 changelog and operator checklist:
-[release-notes-v0.4.0.md](release-notes-v0.4.0.md).
+[release-notes-v0.5.0.md](release-notes-v0.5.0.md).
 
-**To ship in `v0.4.0` (changes since `v0.3.15`) — orchestrator stall-prevention
-batch, fail-loud domain resolution, and a parser fix:**
+**To ship in `v0.5.0` (changes since `v0.4.0`) — semantic facets, stalled-work
+correctness, queue robustness, label supersession, publish reliability, and
+priority override:**
 
-- **Three new automation commands** — `automation stalled-work` (G523),
-  `automation heartbeat` (G526), and `automation issue-retire` (G525): a
-  read-only pending-transition inventory, a read-only wrapper of it that
-  emits a ready-to-send reconcile message for an external low-frequency
-  scheduler, and a canonical atomic transition to retire a published issue
-  that can never be started as authored.
-- **Fail-loud domain resolution** (G522) — execution-unit-resolving surfaces
-  (`automation queue-seed-from-packet`, `review closeout-plan`,
-  `automation publish-recovery`) now resolve domain as: explicit `--domain`
-  wins (erroring on contradiction with the packet's own `domain:` field) >
-  the packet-declared domain > fail loud naming candidate domains and the
-  exact re-invocation — never a silent fallback to the host's config-default
-  domain. **Migration:** any script or automation that relied on the previous
-  silent fallback must now either pass `--domain` explicitly or ensure the
-  resolved packet.yaml declares its `domain:` field.
-- **Orchestrator wake contract** (G524) — publish and delegate in the SAME
-  wake (no more "deferred to the next wake"); the message cap is reframed as
-  "at most one delegation per receiver per wake"; a new end-of-wake
-  `automation stalled-work` check with a never-defer rule; the receiver
-  completion-or-blocked report is now a REQUIRED FINAL STEP of every
-  delegation; and dispatch roster verification (`team.sh`) before every send.
-- **Managed review worktrees + design-alignment checks** (G520) — review
-  worktrees are enforced under the managed root
-  (`.intent-cli/worktrees/review-<unit>`), never `/tmp`; a review `completed`
-  reply missing design-alignment evidence (packet, review-context, intent
-  tree, ADR/decision notes) is now incomplete.
-- **Codex monitor (beta) guidance** (G521) — a setup preflight and three new
-  troubleshooting entries (silent launcher, static TUI, doubled responses)
-  for the agmsg Codex bridge.
-- **Packet-yaml parser fix** (G527) — `PreparedPacketYamlScalarParser`'s
-  quote-balance check is now delimiter-aware, fixing the exact field
-  incident where a double-quoted value merely containing an apostrophe was
-  wrongly rejected.
+- **Semantic facets** (G529–G531) — a closed set of four `facets:` values
+  (`vocabulary`, `invariant`, `decider`, `acceptance-property`) an intent-tree
+  node may declare in its frontmatter; `intent-cli context collect` and
+  `packet draft` now supply a facet-classified `## Facet context` section as
+  the preferred, localized semantic context ahead of the unclassified
+  queue-state/clarification context; and read-only `intent facet-check`
+  points a change proposal at the facet nodes it should respect, surfacing
+  naming collisions and coverage gaps without ever gating.
+- **stalled-work correctness** (G532–G533) — leading-ID/nested-domain
+  execution-unit identification is corroborated against real packet/queue
+  linkage rather than trusted from a title alone; `--domain` is a required,
+  authoritative scoping input; and three new informational kinds
+  (`repair-pending`, `rereview-pending`, `claimed-but-silent`) stop
+  mid-repair and mid-rereview PRs from being misreported with a wrong
+  `review-start` recommendation.
+- **Queue robustness** (G534) — packet readers accept both YAML list-item
+  indentation conventions; `retired` is now a guarded, terminal `queue
+  transition` target (verified against the linked PR's real GitHub state
+  before applying); and `intent next-slice` combines queue-state and
+  packet-lifecycle retirement evidence explicitly, fail-closed on
+  contradiction.
+- **Label supersession** (G535) — `automation pr-transition --transition
+  request-update` now clears a stale `intent-pr-rereview-ready` in the same
+  write, closing a deadlock where `worker claim` refused a PR that
+  `request-update` had marked for repair.
+- **Publish reliability** (G536) — `issue publish-flow`'s idempotent rerun
+  now independently verifies and restores all three durable artifacts (the
+  GitHub issue, the queue-state entry, the `runs.jsonl` event) instead of
+  trusting one signal for all three, and fails loud rather than silently
+  leaving state inconsistent.
+- **Priority override** (G537) — the new `queue reprioritize` command sets a
+  queued, unpublished execution unit's priority under a durable, revision-
+  counted, lock-protected audit protocol; `intent next-slice` selects
+  eligible candidates priority-class-first (high > normal > low, stable
+  tiebreak by authoring order), with dependency/WIP/clarification/lifecycle
+  gates always dominating priority.
 - Orchestrator mode remains **preview/experimental**: opt-in, still being
   hardened, with the timer-loop mode fully supported and unchanged. See
   [Agent-message orchestration](12-agent-message-orchestration.md).
 
-**Release-readiness verification (run before merging the `v0.4.0` version
+**Release-readiness verification (run before merging the `v0.5.0` version
 bump):**
 
 ```bash
 # 1. Confirm the version policy records the release-to-be-cut.
-cat eng/version.json   # stableVersion 0.3.15 (published), nextVersion 0.4.0 (to release)
+cat eng/version.json   # stableVersion 0.4.0 (published), nextVersion 0.5.0 (to release)
 
 # 2. Build and confirm the display version identity (version + git SHA + G-unit).
 dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release
 dotnet run --project src/IntentSystem.Cli -c Release --no-build -- --version
-#   expected shape: intent-cli 0.4.0-<sha>-G52x   (NOT a stale literal)
+#   expected shape: intent-cli 0.5.0-<sha>-G53x   (NOT a stale literal)
 
 # 3. Pack and confirm the NuGet package version matches the policy.
 dotnet pack src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release -o .artifacts/packages
-ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.4.0.nupkg
+ls .artifacts/packages/   # JTechJapan.IntentSystem.Cli.0.5.0.nupkg
 
 # 4. Confirm package metadata (id / command / license / project URL).
 dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
@@ -1569,11 +1575,12 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
 ```
 
 After the version-bump merge lands on `main`, a maintainer/operator (or external
-release automation) creates and publishes the GitHub Release for `v0.4.0`;
+release automation) creates and publishes the GitHub Release for `v0.5.0`;
 publishing it triggers `release.yml` (`on: release: published`) to build and
 publish the NuGet package and the per-platform binary artifacts. Once it has
 published, apply the post-release `eng/version.json` bump above
-(`stableVersion → 0.4.0`, `nextVersion → 0.4.1`).
+(`stableVersion → 0.5.0`, `nextVersion → 0.5.1`) — deferred to the NEXT
+release-prep packet, not this one.
 
 ### Re-creating a deleted release tag (`v0.3.3`)
 
