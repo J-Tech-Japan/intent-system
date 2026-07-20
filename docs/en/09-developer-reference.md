@@ -1602,9 +1602,15 @@ priority override:**
   eligible candidates priority-class-first (high > normal > low, stable
   tiebreak by authoring order), with dependency/WIP/clarification/lifecycle
   gates always dominating priority.
-- Orchestrator mode remains **preview/experimental**: opt-in, still being
-  hardened, with the timer-loop mode fully supported and unchanged. See
-  [Agent-message orchestration](12-agent-message-orchestration.md).
+- **Historical note (v0.5.0-era, pre-G540/G541):** at the time `v0.5.0` shipped,
+  orchestrator mode was described here as preview/experimental and opt-in.
+  **That framing is superseded.** As of G540/G541, four-thread agmsg
+  orchestration (design/orchestrator/implementation/review) is the **PRIMARY**
+  documented collaboration model — the practiced, maintained workflow — with
+  timer-loop mode retained as the fully supported, simpler alternative. See
+  the current guidance in
+  [Agent-message orchestration](12-agent-message-orchestration.md) and
+  [ADR 0001](../adr/0001-four-thread-orchestration-primary-model.md).
 
 **Release-readiness verification (run before merging the `v0.5.0` version
 bump):**
