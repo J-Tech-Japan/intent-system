@@ -20,12 +20,12 @@ agent が内部で `intent-cli` を実行し、質問や結果を返します。
 3. [Intent Storming と intent の整理](03-intents.md)
 4. [packet 作成と issue 公開](04-packets-issues.md)
 4a. [GitHub ワークフローラベルで見る現在地](04a-workflow-labels.md) — ラベルの意味と読み方
-5. [実装ループの設定](05-implementation-loop.md)
-6. [レビュー / next-slice ループの設定](06-review-next-slice-loop.md)
+12. [agent メッセージオーケストレーション](12-agent-message-orchestration.md) — **primary**: 4 スレッド(design/orchestrator/implementation/review)の agmsg orchestrator モデル、single-domain と multi-domain のルーティング
+5. [実装ループの設定](05-implementation-loop.md) — timer-loop の **alternative** セットアップ
+6. [レビュー / next-slice ループの設定](06-review-next-slice-loop.md) — timer-loop の **alternative** セットアップ
 7. [ループがおかしいときの復旧](07-recovery.md)
 8. [コマンドリファレンス](08-command-reference.md) — agent 向け・パワーユーザー向けコマンド一覧
 9. [開発者リファレンス](09-developer-reference.md) — パッケージ化された実行、preview チャンネル、バージョンフロー
-12. [agent メッセージオーケストレーション](12-agent-message-orchestration.md) — オプションの agmsg orchestrator スレッド、single-domain と multi-domain のルーティング
 
 ## Intent Storming とは
 

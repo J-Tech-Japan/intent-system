@@ -2,9 +2,10 @@
 
 ← [Review standing policy](11-review-standing-policy.md) | [docs index](README.md)
 
-This page describes the **optional** agmsg-backed orchestrator thread and, in
-particular, how it stays safe when a single host repository holds **several
-intent domains**. The authoritative, paste-ready prompts come from installed
+This page describes the **primary** agmsg-backed four-thread orchestrator
+model (design / orchestrator / implementation / review) and, in particular,
+how it stays safe when a single host repository holds **several intent
+domains**. The authoritative, paste-ready prompts come from installed
 intent-cli guidance — do not copy prompts from this page by hand. Generate the
 current prompts with:
 
@@ -114,8 +115,8 @@ before acting on it. intent-cli never launches Claude/Codex or any AI provider.
 
 | Mode | Driver | Notes |
 |---|---|---|
-| **timer-loop mode** | recurring timers | Existing, fully supported. Implementation/review threads self-schedule and read `worker next-action` / host review-next-slice. No orchestrator required. |
-| **orchestrator-message mode** | a fourth orchestrator thread | Opt-in. The orchestrator paces the implementation/review threads over agmsg; at steady state this is message-driven, with a 30-minute-class design-thread watchdog loop as the RECOMMENDED default safety net (an orchestrator-side long-interval automation is the selectable alternative). An explicit 5-minute orchestrator timer remains supported as a fallback/legacy option. |
+| **orchestrator-message mode** | a fourth orchestrator thread | **PRIMARY.** The practiced, maintained model: the orchestrator paces the implementation/review threads over agmsg; at steady state this is message-driven, with a 30-minute-class design-thread watchdog loop as the RECOMMENDED default safety net (an orchestrator-side long-interval automation is the selectable alternative). An explicit 5-minute orchestrator timer remains supported as a fallback/legacy option. |
+| **timer-loop mode** | recurring timers | **ALTERNATIVE.** Fully supported, simpler setup for a domain/repo that does not run an orchestrator thread. Implementation/review threads self-schedule and read `worker next-action` / host review-next-slice. No orchestrator required. |
 
 Do **not** run both modes for the same domain/repo. In orchestrator-message
 mode, do not also launch the implementation/review recurring timer loops — two
