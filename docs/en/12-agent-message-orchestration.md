@@ -62,8 +62,8 @@ The full reference checklist follows the intake:
    over agmsg wake the orchestrator, so routine fast polling is not required;
    receivers stay loopless. Only schedule an orchestrator timer (Codex
    automation 5m or Claude `/loop 5m`) as an explicit fallback/legacy option
-   (see [Design-side watchdog](#design-side-watchdog-optional-safety-net) for
-   the recommended low-frequency safety net instead).
+   (see [Design-thread watchdog](#design-thread-watchdog-recommended-safety-net)
+   for the RECOMMENDED default safety net instead).
 8. **Cleanup** — on teardown, leave/despawn the roles through the agmsg scripts
    (`leave.sh` / `despawn.sh`) and stop any inbox watchers.
 
@@ -115,7 +115,7 @@ before acting on it. intent-cli never launches Claude/Codex or any AI provider.
 | Mode | Driver | Notes |
 |---|---|---|
 | **timer-loop mode** | recurring timers | Existing, fully supported. Implementation/review threads self-schedule and read `worker next-action` / host review-next-slice. No orchestrator required. |
-| **orchestrator-message mode** | a fourth orchestrator thread | Opt-in. The orchestrator paces the implementation/review threads over agmsg; at steady state this is message-driven, with an optional low-frequency design-side watchdog as the safety net. An explicit orchestrator timer remains supported as a fallback/legacy option. |
+| **orchestrator-message mode** | a fourth orchestrator thread | Opt-in. The orchestrator paces the implementation/review threads over agmsg; at steady state this is message-driven, with a 30-minute-class design-thread watchdog loop as the RECOMMENDED default safety net (an orchestrator-side long-interval automation is the selectable alternative). An explicit 5-minute orchestrator timer remains supported as a fallback/legacy option. |
 
 Do **not** run both modes for the same domain/repo. In orchestrator-message
 mode, do not also launch the implementation/review recurring timer loops — two
@@ -132,9 +132,10 @@ operator who intentionally wants scheduled polling instead of message-driven
 wakes. Either way, the implementation and review threads are long-lived but
 **loopless receivers** — they act only when the orchestrator delegates and
 never start their own recurring timer for the same domain/repo. The
-recommended safety net for the message-driven steady state is a low-frequency
-[design-side watchdog](#design-side-watchdog-optional-safety-net), not a fast
-orchestrator loop.
+RECOMMENDED default safety net for the message-driven steady state is a
+30-minute-class
+[design-thread watchdog](#design-thread-watchdog-recommended-safety-net), not
+a fast orchestrator loop.
 
 If an explicit fallback/legacy timer is used, schedule the orchestrator one of
 two ways:
@@ -626,99 +627,46 @@ First message — design → orchestrator (paste into the design thread):
   especially when monitor delivery did not appear live or the design session
   started after the orchestrator sent.
 
-## External heartbeat (recommended safety net)
+## Design-thread watchdog (recommended safety net)
 
-Field data (2026-06-28..07-14, 16 days): all 11 manually-recovered stalls were
-fixed by **one** inbound message — the orchestrator reconciles correctly
-within roughly 2 minutes of ANY wake. The **recommended** safety net is
-therefore a session-independent **external** scheduler (cron/launchd — *not*
-an in-session timer) running `intent-cli automation heartbeat` at a low,
-60-minute-class frequency: it stays completely silent while the pipeline is
-healthy, survives every agent/session restart, and bounds the worst-case
-stall by the staleness threshold plus the scheduler interval — with the
-recommended defaults (45m threshold + 60m interval ≈ 105m worst case), still
-dramatically below the measured 26-hour worst case, though **not literally 60
-minutes**; tighten the threshold or the interval if a tighter bound is
-required.
+In the message-driven steady state, implementation/review replies already
+wake the orchestrator, so a fast orchestrator loop is redundant — but
+something must still notice a stall the message-driven path itself cannot
+self-report. The **RECOMMENDED DEFAULT** safety net (G539, superseding G526's
+external-scheduler recommendation) is a watchdog loop run from the **design**
+thread at a **30-minute-class** interval: it calls `intent-cli automation
+heartbeat` and, when `stale=true`, sends **at most one** canonical nudge to
+the orchestrator using the returned `message_body` — completely silent
+otherwise. It runs **inside** a live, human-monitored agent session rather
+than an invisible external process, needs no separate credential/keychain
+setup (it authenticates the same way the rest of the session does), and is
+visible on the operator's screen the moment it breaks.
 
-- **Frequency** — 60-minute class (e.g. hourly): low enough to be silent
-  noise, frequent enough that the combined bound (threshold + interval, ≈105m
-  with the defaults) stays far below what was observed in the field.
-- **Command** —
-  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
-  wraps `automation stalled-work` (G523) and, when anything is stale, returns
-  a ready-to-send `message_body` naming each stale item and its canonical next
-  command; `stale=false` and no `message_body` when healthy.
-- **Copy-paste wrapper** (runs from cron/launchd, not inside an agent
-  session; requires `jq`):
-
-  ```sh
-  #!/bin/sh
-  # Runs from cron/launchd — NOT inside any agent session.
-  # Required environment: TEAM (agmsg team), FROM (this pinger's registered agmsg role,
-  # e.g. "heartbeat"), TO (recipient role, e.g. "orchestrator"), DOMAIN, REPO.
-  set -eu
-
-  if ! result=$(intent-cli automation heartbeat --domain "$DOMAIN" --repo "$REPO" --format json); then
-    printf 'heartbeat: intent-cli automation heartbeat failed\n' >&2
-    exit 1
-  fi
-
-  if ! printf '%s' "$result" | jq -e 'type == "object" and (.stale | type) == "boolean"' >/dev/null 2>&1; then
-    printf 'heartbeat: malformed output (expected an object with a boolean .stale)\n' >&2
-    exit 1
-  fi
-
-  stale=$(printf '%s' "$result" | jq -r '.stale')
-
-  if [ "$stale" = "true" ]; then
-    if ! printf '%s' "$result" | jq -e '(.message_body | type) == "string" and (.message_body | length) > 0' >/dev/null 2>&1; then
-      printf 'heartbeat: stale=true but .message_body is missing/empty\n' >&2
-      exit 1
-    fi
-    message=$(printf '%s' "$result" | jq -r '.message_body')
-    ~/.agents/skills/agmsg/scripts/send.sh "$TEAM" "$FROM" "$TO" "$message"
-  fi
-  ```
-
-- **At most one message per run** — `intent-cli` never sends a message or
-  launches an agent itself; it only computes text. The wrapper sends **at
-  most one** message per run (nothing when `stale` is false), matching the
-  G524 wake contract: any single reconcile message is sufficient to trigger a
-  full recovery wake. It fails **loudly** (non-zero exit, stderr message, no
-  send) on a heartbeat command failure, malformed/non-object JSON, a `.stale`
-  field that is not a boolean, or a `.message_body` that is missing/empty
-  when `.stale` is true — a broken safety net must never silently
-  masquerade as "healthy, nothing to report".
-- **Alternatives** — the design-side watchdog and the 5-minute in-session
-  orchestrator fallback timer remain supported as alternatives (see below),
-  but both showed measured weaknesses in the same field trial: the fallback
-  timer is fast polling the operator explicitly does not want, and the
-  design-side watchdog lives in the single most fragile component observed —
-  the design session itself died 8-9 times in 16 days, its monitor dead until
-  manually restored each time, and several stalls were only discovered when
-  that session happened to restart. Prefer the external heartbeat unless an
-  operator has a specific reason to run one of the alternatives instead.
-
-## Design-side watchdog (alternative safety net)
-
-In the message-driven steady state, implementation/review replies already wake
-the orchestrator, so a fast orchestrator loop is redundant. An **alternative**
-safety net (see External heartbeat above for the recommended option) is an
-**optional**, **low-frequency** watchdog run from the **design** thread: it
-checks whether HITL (human-in-the-loop) messages arrived and whether the
-orchestrator looks stalled, then sends **at most one** canonical repair/status
-request — it never drives routine orchestration itself.
-
-- **Frequency** — low only (e.g. tens of minutes to hours, not every 5m); a
-  fast watchdog loop recreates the same churn the message-driven model
-  removes.
+- **Frequency** — 30-minute class (e.g. every 30 minutes): quiet enough to
+  stay out of the way, frequent enough to bound a stall far below what the
+  field trial measured. A faster watchdog loop recreates the same churn the
+  message-driven model removes.
+- **Loop setup prompt** (paste into the design thread) — run `/loop 30m`
+  (Claude same-thread) or a Codex automation firing every 30 minutes, with a
+  prompt that on each wake runs
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`;
+  when the result's `stale` field is `true`, send its `message_body` verbatim
+  to the orchestrator via the agmsg send script (exactly **one** message);
+  when `stale` is `false`, send nothing and exit quietly. Treat a heartbeat
+  command failure or malformed/non-object output as a reason to stay silent
+  this wake and retry next wake — never fabricate a message from broken
+  input.
 - **Checks** — the design/HITL inbox for unread human-facing escalations
-  (`inbox.sh` on the design role), and orchestrator staleness via read-only
+  (`inbox.sh` on the design role); orchestrator staleness via read-only
   intent-cli/GitHub facts (`worker next-action --github-only`, open PR/CI/
-  label state) compared against the last known orchestrator activity.
-- **Action** — when staleness or an unanswered HITL message is detected, send
-  at most one canonical repair/status request to the orchestrator:
+  label state) compared against the last known orchestrator activity; and,
+  as the RECOMMENDED primary check, `intent-cli automation heartbeat`
+  itself — it wraps `automation stalled-work` (G523) and returns a
+  ready-to-send `message_body` naming every stale item and its canonical
+  next command.
+- **Action** — when staleness, an unanswered HITL message, or a heartbeat
+  `stale=true` result is detected, send **at most one** canonical
+  repair/status request or heartbeat nudge to the orchestrator:
 
   ```json
   {"type":"status-request","to":"orchestrator","from":"design-watchdog","ask":"non-destructive liveness check: reply with current state and next action, or confirm idle"}
@@ -727,7 +675,7 @@ request — it never drives routine orchestration itself.
 - **Stop condition** — stop or archive the watchdog once both the backlog and
   the human-decision (HITL) queues are drained.
 
-Watchdog safety rules **prohibit**:
+Watchdog safety rules **prohibit** (unchanged, verbatim):
 
 - duplicate delegation — the watchdog never re-sends or re-creates a
   delegation itself; only the orchestrator delegates;
@@ -739,20 +687,81 @@ Watchdog safety rules **prohibit**:
   any host metadata.
 
 An explicit orchestrator timer (Codex automation every 5m, or Claude
-same-thread `/loop 5m`) remains supported as fallback/legacy polling when an
-operator intentionally wants scheduled polling instead of the message-driven
-steady state — measured weakness: this is fast polling the operator
-explicitly does not want in steady state, which is exactly why the external
-heartbeat is now recommended instead. The external heartbeat, the
-design-side watchdog, and the orchestrator fallback timer are alternative
-safety nets, not all required together.
+same-thread `/loop 5m`) remains **supported** as fallback/legacy polling when
+an operator intentionally wants scheduled polling instead of the
+message-driven steady state — measured weakness: this is fast polling the
+operator explicitly does not want in steady state, which is exactly why the
+design-thread watchdog is the recommended default instead. The design-thread
+watchdog (recommended), the orchestrator-side long-interval automation
+(alternative, see below), and the 5-minute orchestrator fallback timer
+(legacy/discouraged) are alternative safety nets, not all required together.
 
 **Measured weakness** — field trial (2026-06-28..07-14): the design
 session — where this watchdog runs — died 8-9 times in 16 days, its monitor
 dead until manually restored each time; several stalls were only discovered
-when that session happened to restart on its own. A safety net that lives in
-the single most fragile component is a weaker guarantee than a
-session-independent external scheduler (see External heartbeat above).
+when that session happened to restart on its own. This remains a known
+limitation to weigh, but G539's field evidence (2026-07-15..07-20) showed the
+alternative — a session-independent external OS scheduler — is **strictly
+worse**: it failed **silently on every run for five continuous days**
+(credential-store access; see Retired below), versus a session that dies
+visibly and gets restarted by the operator. A watchdog that occasionally
+restarts but is visible when broken is a stronger guarantee than one that
+runs invisibly until an operator happens to check its logs.
+
+## Orchestrator-side long-interval automation (alternative safety net)
+
+The **selectable alternative** to the design-thread watchdog: the same
+`intent-cli automation heartbeat` call, run directly from a long-interval
+automation **in the orchestrator's own thread** (Codex automation or Claude
+same-thread `/loop`) rather than from the design thread. On each wake it
+calls `automation heartbeat` itself and, when stale, acts on the returned
+state in the **same** wake — there is no design-to-orchestrator message hop,
+because the orchestrator is the one running the check.
+
+- **Frequency** — 30-60 minute class — the same low-frequency band as the
+  recommended design-thread watchdog, never the fast 5-minute fallback timer.
+- **Trade-off** — design-side (recommended) keeps the orchestrator strictly
+  loopless — it only ever wakes from an inbound agmsg message, matching its
+  normal message-driven model, at the cost of one extra hop (design watchdog
+  to orchestrator). Orchestrator-side automation removes that hop (the
+  orchestrator wakes and acts on its own heartbeat check directly) but
+  requires the orchestrator itself to run a recurring loop — exactly the
+  pattern orchestrator-message mode is designed to avoid in steady state.
+  Choose orchestrator-side only when an operator has a specific reason to
+  prefer one fewer hop over keeping the orchestrator loopless.
+- **Command** —
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
+- **Setup prompt** (paste into the orchestrator thread) — run a Codex
+  automation or Claude same-thread `/loop` firing every 30-60 minutes in the
+  orchestrator thread; each wake runs `automation heartbeat` in addition to
+  the normal orchestrator wake checks, and when `stale` is `true` treats the
+  returned `message_body` as this wake's repair/escalation signal (still at
+  most one message per wake, per the G524 wake contract).
+
+### Retired: external OS-scheduler heartbeat (G526 → G539)
+
+**Retired.** The external cron/launchd OS-scheduler recommendation added by
+G526 is retired. Reasons:
+
+1. **Credential-store access** — the wrapper's `gh`/agmsg auth commonly lives
+   in a login keychain a cron job cannot reach, so it fails at the
+   credential step, not the logic.
+2. **Invisible failure** — a failed cron run writes to an OS log nobody
+   watches, so it is not actually a safety net.
+3. **Outside the agmsg model** — intent-cli coordinates through agmsg and
+   holds no thread of its own; an OS scheduler sits entirely outside that
+   model.
+
+**Field evidence**: every run failed silently from installation
+(2026-07-15) through 2026-07-20 — five continuous days — and a 105-minute
+stall on 2026-07-20 (G538 / PR #1179) went unrecovered even though
+`automation stalled-work` correctly detected it
+(`pr-created-not-reviewing, age=105m`); only a human ping surfaced it.
+
+`intent-cli automation heartbeat` itself is **unchanged** and remains
+scheduler-agnostic — any scheduler, including cron, can still call it — the
+guide simply no longer **recommends** an external OS scheduler as the
+mechanism.
 
 ## Monitor recovery
 

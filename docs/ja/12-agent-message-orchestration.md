@@ -58,7 +58,8 @@ intake の後に、完全なリファレンスチェックリストが続きま�
    orchestrator を起こすため、通常は高頻度のポーリングは不要。receiver は loopless の
    まま。orchestrator タイマー（Codex automation 5m または Claude `/loop 5m`）は
    明示的な fallback/legacy オプションとしてのみスケジュールする
-   （推奨される低頻度のセーフティネットは [design-side watchdog](#design-side-watchdog任意のセーフティネット) を参照）。
+   （RECOMMENDED なデフォルトのセーフティネットは
+   [design-thread watchdog](#design-thread-watchdog推奨されるセーフティネット) を参照）。
 8. **クリーンアップ** — 終了時は agmsg スクリプト（`leave.sh` / `despawn.sh`）でロールを
    leave/despawn し、inbox watcher を停止する。
 
@@ -106,7 +107,7 @@ orchestrator はそれに従って行動する前に、すべての主張を int
 | モード | ドライバー | 備考 |
 |---|---|---|
 | **timer-loop モード** | 定期タイマー | 既存・完全サポート。実装/レビュースレッドが自己スケジュールし、`worker next-action` / host review-next-slice を読む。orchestrator は不要。 |
-| **orchestrator-message モード** | 4 つ目の orchestrator スレッド | オプトイン。orchestrator が agmsg 経由で実装/レビュースレッドをペース配分する。定常状態はメッセージ駆動で、任意の低頻度 design-side watchdog をセーフティネットとする。明示的な orchestrator タイマーは fallback/legacy オプションとして引き続きサポートされる。 |
+| **orchestrator-message モード** | 4 つ目の orchestrator スレッド | オプトイン。orchestrator が agmsg 経由で実装/レビュースレッドをペース配分する。定常状態はメッセージ駆動で、30 分クラスの design-thread watchdog loop を RECOMMENDED なデフォルトのセーフティネットとする（orchestrator-side の長間隔 automation は選択可能な alternative）。明示的な 5 分の orchestrator タイマーは fallback/legacy オプションとして引き続きサポートされる。 |
 
 同じ domain/repo に対して両モードを同時に実行しては **いけません**。
 orchestrator-message モードでは、実装/レビューの定期タイマーループも起動しないでください。
@@ -122,9 +123,9 @@ implementation/review receiver はすでに accepted/progress/completed/blocked 
 向けの **fallback/legacy** ポーリングオプションとしてのみです。いずれの場合も、
 実装/レビュースレッドは長命ですが **ループを持たない受信側（loopless receiver）** であり、
 orchestrator が委譲したときだけ動作し、同じ domain/repo に対して自分の定期タイマーを
-起動しません。メッセージ駆動の定常状態に推奨されるセーフティネットは、高速な
-orchestrator ループではなく、低頻度の
-[design-side watchdog](#design-side-watchdog任意のセーフティネット) です。
+起動しません。メッセージ駆動の定常状態に RECOMMENDED なデフォルトのセーフティネットは、
+高速な orchestrator ループではなく、30 分クラスの
+[design-thread watchdog](#design-thread-watchdog推奨されるセーフティネット) です。
 
 明示的な fallback/legacy タイマーを使う場合、orchestrator のスケジュール方法は次の
 2 通りです:
@@ -573,105 +574,51 @@ resume）します。その後 orchestrator がループを自律的に駆動し
   エスカレーションを拾うには `inbox.sh` で design inbox を確認します — 特に monitor delivery が
   ライブで現れなかった場合や、design セッションが orchestrator の送信後に開始した場合。
 
-## external heartbeat（推奨セーフティネット）
-
-フィールドデータ(2026-06-28..07-14、16 日間): 手動でリカバリした 11 件のスタール
-すべてが **1 通** の inbound メッセージで解消されました — orchestrator はどんな wake
-に対しても約 2 分以内に正しく reconcile します。したがって **推奨** されるセーフティ
-ネットは、セッションに依存しない **外部** スケジューラ(cron/launchd — in-session
-タイマーでは *ない*)から `intent-cli automation heartbeat` を低頻度(60 分クラス)で
-実行することです: パイプラインが健全な間は完全に沈黙し、agent/session の再起動を
-すべて生き延び、最悪ケースのスタール時間を staleness の閾値とスケジューラの実行間隔の
-合計で抑え込みます — 推奨されるデフォルト値(45 分の閾値 + 60 分の実行間隔 ≈ 最悪
-ケースで 105 分)では、実測された 26 時間という最悪ケースを依然として大きく下回り
-ますが、文字通りの 60 分ではありません。より厳密な上限が必要な場合は、閾値または
-実行間隔を短くしてください。
-
-- **頻度** — 60 分クラス(例: 毎時)。沈黙したノイズとして扱えるほど低頻度で、かつ
-  合計の上限(閾値+実行間隔、デフォルト値では ≈105 分)がフィールドで観測された
-  最悪ケースを大きく下回るだけの頻度です。
-- **コマンド** —
-  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
-  は `automation stalled-work`(G523)をラップし、何かがスタールしている場合は
-  スタールした各項目とその canonical な次のコマンドを示す `message_body` を返します。
-  健全な場合は `stale=false` で `message_body` はありません。
-- **コピペ用ラッパー**(cron/launchd から実行、agent session の中ではない。`jq` が
-  必要):
-
-  ```sh
-  #!/bin/sh
-  # cron/launchd から実行される — agent session の中ではない。
-  # 必須の環境変数: TEAM(agmsg team)、FROM(この pinger 自身が登録している agmsg
-  # role、例えば "heartbeat")、TO(送信先の role、例えば "orchestrator")、DOMAIN、REPO。
-  set -eu
-
-  if ! result=$(intent-cli automation heartbeat --domain "$DOMAIN" --repo "$REPO" --format json); then
-    printf 'heartbeat: intent-cli automation heartbeat failed\n' >&2
-    exit 1
-  fi
-
-  if ! printf '%s' "$result" | jq -e 'type == "object" and (.stale | type) == "boolean"' >/dev/null 2>&1; then
-    printf 'heartbeat: malformed output (expected an object with a boolean .stale)\n' >&2
-    exit 1
-  fi
-
-  stale=$(printf '%s' "$result" | jq -r '.stale')
-
-  if [ "$stale" = "true" ]; then
-    if ! printf '%s' "$result" | jq -e '(.message_body | type) == "string" and (.message_body | length) > 0' >/dev/null 2>&1; then
-      printf 'heartbeat: stale=true but .message_body is missing/empty\n' >&2
-      exit 1
-    fi
-    message=$(printf '%s' "$result" | jq -r '.message_body')
-    ~/.agents/skills/agmsg/scripts/send.sh "$TEAM" "$FROM" "$TO" "$message"
-  fi
-  ```
-
-- **1 回の実行につき最大 1 通** — `intent-cli` は自分でメッセージを送ったり agent を
-  起動したりすることは一切ありません。テキストを計算するだけです。ラッパーは
-  1 回の実行につき **最大 1 通** だけ送ります(`stale` が false の場合は何も送りません)
-  — これは G524 の wake contract、すなわち 1 通の reconcile メッセージだけで
-  完全な recovery wake をトリガーするのに十分である、という契約と一致します。
-  heartbeat コマンド自体の失敗、不正な/オブジェクトでない JSON、boolean でない
-  `.stale`、`.stale` が true なのに欠落/空の `.message_body` の場合は、**大声で**
-  失敗します(非ゼロ終了・stderr メッセージ・送信なし)— 壊れたセーフティネットが
-  「健全で報告することは何もない」と黙って偽装することは決してありません。
-- **代替案** — design-side watchdog と 5 分ごとの in-session orchestrator fallback
-  タイマーは(下記の通り)引き続き代替案としてサポートされますが、どちらも同じ
-  フィールドトライアルで実測された弱点があります: fallback タイマーはオペレーターが
-  明示的に望んでいない高速ポーリングであり、design-side watchdog は観測された中で
-  最も脆弱な単一コンポーネントの中で動作しています — design session 自体が 16 日間で
-  8〜9 回死に、その monitor は手動で復旧するまで死んだままでした。いくつかのスタールは
-  そのセッションがたまたま再起動したときにしか発見されませんでした。特に代替案を
-  使う理由がない限り、external heartbeat を優先してください。
-
-## design-side watchdog（代替のセーフティネット）
+## design-thread watchdog（推奨されるセーフティネット）
 
 メッセージ駆動の定常状態では、implementation/review の返信がすでに orchestrator を
-起こしているため、高速な orchestrator ループは冗長です。**代替の** セーフティネット
-(推奨されるオプションについては上記の external heartbeat を参照)は、**design**
-スレッドから実行する **任意**・**低頻度** の watchdog です:
-HITL(human-in-the-loop)メッセージが届いているか、orchestrator が停滞していないかを
-確認し、**最大 1 通** の canonical な repair/status リクエストを送ります — ルーチンな
-オーケストレーションそのものは駆動しません。
+起こしているため、高速な orchestrator ループは冗長です — しかし、メッセージ駆動の
+経路自身が自己報告できないスタールは、依然として何かが検知しなければなりません。
+**RECOMMENDED なデフォルト** のセーフティネット(G539。G526 の外部スケジューラ推奨を
+supersede します)は、**design** スレッドから実行する **30 分クラス** の間隔の
+watchdog loop です: `intent-cli automation heartbeat` を呼び出し、`stale=true` の
+場合は返された `message_body` を使って orchestrator へ **最大 1 通** の canonical な
+nudge を送ります — それ以外は完全に沈黙します。生きた、人間が監視しているエージェント
+セッションの **内側** で動作するため、見えない外部プロセスとは異なり、別途の
+credential/keychain セットアップも不要で(セッションの他の部分と同じ方法で
+authenticate します)、壊れた瞬間にオペレーターの画面上で可視化されます。
 
-- **頻度** — 低頻度のみ（例: 数十分〜数時間ごと、5 分ごとではない）。高速な watchdog
+- **頻度** — 30 分クラス(例: 30 分ごと): 邪魔にならないほど静かで、フィールドトライアル
+  で実測されたスタールを大きく下回る上限に収まるだけの頻度です。高速な watchdog
   ループはメッセージ駆動モデルが取り除いたのと同じチャーンを再現してしまいます。
+- **loop setup プロンプト**(design スレッドに貼り付ける)— design スレッドで
+  `/loop 30m`(Claude 同一スレッド)、または 30 分ごとに発火する Codex automation を
+  実行します。プロンプトは各 wake で
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
+  を実行し、結果の `stale` フィールドが `true` であれば `message_body` をそのまま
+  agmsg send スクリプト経由で orchestrator に送ります(正確に **1 通**)。`stale` が
+  `false` であれば何も送らず静かに終了します。heartbeat コマンドの失敗や不正な/
+  オブジェクトでない出力は、この wake は沈黙して次の wake でリトライする理由として
+  扱います — 壊れた入力からメッセージを捏造することは決してありません。
 - **チェック内容** — design/HITL inbox で未読の人間向けエスカレーションを確認
-  （design ロールの `inbox.sh`）、および read-only な intent-cli/GitHub の事実
-  （`worker next-action --github-only`、open PR/CI/label 状態）を最後に確認した
-  orchestrator の活動と比較して orchestrator の停滞を確認します。
-- **アクション** — 停滞または未回答の HITL メッセージを検知したら、orchestrator へ
-  canonical な repair/status リクエストを最大 1 通だけ送ります:
+  (design ロールの `inbox.sh`)、read-only な intent-cli/GitHub の事実
+  (`worker next-action --github-only`、open PR/CI/label 状態)を最後に確認した
+  orchestrator の活動と比較して orchestrator の停滞を確認、そして RECOMMENDED な
+  primary チェックとして `intent-cli automation heartbeat` 自体 — これは
+  `automation stalled-work`(G523)をラップし、スタールした各項目とその canonical な
+  次のコマンドを示す `message_body` を返します。
+- **アクション** — 停滞、未回答の HITL メッセージ、または heartbeat の `stale=true`
+  結果を検知したら、orchestrator へ canonical な repair/status リクエストまたは
+  heartbeat の nudge を最大 1 通だけ送ります:
 
   ```json
   {"type":"status-request","to":"orchestrator","from":"design-watchdog","ask":"non-destructive liveness check: reply with current state and next action, or confirm idle"}
   ```
 
-- **停止条件** — backlog と human-decision（HITL）キューの両方がなくなったら watchdog を
+- **停止条件** — backlog と human-decision(HITL)キューの両方がなくなったら watchdog を
   停止またはアーカイブします。
 
-watchdog の安全ルールは次を **禁止** します:
+watchdog の安全ルールは次を **禁止** します(変更なし・逐語的に維持):
 
 - 重複した delegation — watchdog は自分で delegation を再送・再作成しません。
   delegation するのは orchestrator だけです。
@@ -682,20 +629,79 @@ watchdog の安全ルールは次を **禁止** します:
 - 推測的な durable-state の手術 — label、queue-state、host metadata の手編集は
   行いません。
 
-明示的な orchestrator タイマー（Codex automation 5 分ごと、または Claude 同一スレッド
-`/loop 5m`）は、オペレーターがメッセージ駆動の定常状態の代わりにスケジュールされた
-ポーリングを明示的に望む場合の fallback/legacy ポーリングとして引き続きサポートされ
-ます — 実測された弱点: これはオペレーターが明示的に望んでいない定常状態での高速
-ポーリングであり、まさにこれが external heartbeat が推奨されるようになった理由です。
-external heartbeat・design-side watchdog・orchestrator の fallback タイマーは代替の
-セーフティネットであり、すべてを同時に必要とするわけではありません。
+明示的な orchestrator タイマー(Codex automation 5 分ごと、または Claude 同一スレッド
+`/loop 5m`)は、オペレーターがメッセージ駆動の定常状態の代わりにスケジュールされた
+ポーリングを明示的に望む場合の fallback/legacy ポーリングとして引き続き **サポート**
+されます — 実測された弱点: これはオペレーターが明示的に望んでいない定常状態での高速
+ポーリングであり、まさにこれが design-thread watchdog が推奨されるデフォルトになった
+理由です。design-thread watchdog(推奨)、orchestrator-side の長間隔 automation
+(alternative、下記参照)、5 分の orchestrator fallback タイマー(legacy/discouraged)
+は代替のセーフティネットであり、すべてを同時に必要とするわけではありません。
 
 **実測された弱点** — フィールドトライアル(2026-06-28..07-14): この watchdog が動作する
 design session 自体が 16 日間で 8〜9 回死に、その monitor は手動で復旧するまで死んだ
 ままでした。いくつかのスタールは、そのセッションがたまたま再起動したときにしか
-発見されませんでした。最も脆弱な単一コンポーネントの中で動作するセーフティネットは、
-セッションに依存しない外部スケジューラ(上記の external heartbeat を参照)よりも
-弱い保証しか提供しません。
+発見されませんでした。これは引き続き考慮すべき既知の限界ですが、G539 のフィールド
+エビデンス(2026-07-15..07-20)は、代替案である、セッションに依存しない外部 OS
+スケジューラの方が **厳密に悪い** ことを示しました: 5 日間連続して **すべての実行が
+サイレントに失敗** しました(credential-store access が原因。下記の Retired を参照)
+— これは、目に見える形で死んで、オペレーターに再起動される session とは対照的です。
+時折再起動するが壊れたときには可視である watchdog は、オペレーターがログをたまたま
+確認するまで見えないまま動作するものより強い保証です。
+
+## orchestrator-side の長間隔 automation(代替のセーフティネット)
+
+design-thread watchdog に対する **選択可能な alternative** です: 同じ
+`intent-cli automation heartbeat` の呼び出しを、design スレッドではなく
+**orchestrator 自身のスレッド** の中で、長間隔の automation(Codex automation または
+Claude 同一スレッド `/loop`)から直接実行します。各 wake で `automation heartbeat`
+を自分自身で呼び出し、stale であれば **同じ** wake の中でその結果に対して行動します
+— design から orchestrator へのメッセージのホップは発生しません。なぜなら
+orchestrator 自身がそのチェックを実行しているからです。
+
+- **頻度** — 30〜60 分クラス — 推奨される design-thread watchdog と同じ低頻度帯で
+  あり、高速な 5 分の fallback タイマーとは異なります。
+- **トレードオフ** — design-side(推奨)は、orchestrator を厳密に loopless に
+  保ちます — inbound な agmsg メッセージからしか起きず、通常のメッセージ駆動モデルと
+  一致しますが、その代償として 1 つの追加ホップ(design watchdog から orchestrator
+  へ)が発生します。orchestrator-side の automation はそのホップを取り除きます
+  (orchestrator が自身の heartbeat チェックに対して直接起きて行動する)が、
+  orchestrator 自身が定期ループを実行する必要があります — これは orchestrator-message
+  モードが定常状態で避けるよう設計されているまさにそのパターンです。orchestrator-side
+  を選ぶのは、オペレーターが orchestrator を loopless に保つことよりも 1 ホップ少ない
+  ことを優先する特定の理由がある場合だけにしてください。
+- **コマンド** —
+  `intent-cli automation heartbeat --domain <domain> --repo <owner/repo> --format json`
+- **setup プロンプト**(orchestrator スレッドに貼り付ける)— orchestrator スレッドの
+  中で、30〜60 分ごとに発火する Codex automation または Claude 同一スレッド `/loop`
+  を実行します。各 wake は通常の orchestrator wake チェックに加えて
+  `automation heartbeat` を実行し、`stale` が `true` であれば返された `message_body`
+  をその wake の repair/escalation シグナルとして扱います(引き続き 1 wake につき
+  最大 1 通、G524 の wake contract に従います)。
+
+### Retired: 外部 OS スケジューラの heartbeat(G526 → G539)
+
+**Retired。** G526 が追加した外部 cron/launchd の OS スケジューラ推奨は retire
+されました。理由:
+
+1. **credential-store access** — ラッパーの `gh`/agmsg 認証は、多くの場合ログイン
+   keychain に存在し、cron ジョブはそこにアクセスできません。そのため、ロジックでは
+   なく認証情報のステップで失敗します。
+2. **invisible failure** — 失敗した cron の実行は誰も見ない OS ログに書き込まれる
+   だけなので、実際にはセーフティネットとして機能していません。
+3. **outside the agmsg model** — intent-cli は agmsg を経由して coordinate し、
+   自分自身のスレッドを持ちません。OS スケジューラはそのモデルの完全に外側に
+   位置します。
+
+**フィールドエビデンス**: インストール(2026-07-15)から 2026-07-20 まで — 5 日間
+連続して — すべての実行がサイレントに失敗し、2026-07-20 の 105 分のスタール
+(G538 / PR #1179)は、`automation stalled-work` が正しく検知した
+(`pr-created-not-reviewing, age=105m`)にもかかわらず回復されませんでした。
+人間による ping だけがそれを表面化させました。
+
+`intent-cli automation heartbeat` 自体は **変更なし** であり、引き続き
+scheduler-agnostic です — cron を含む任意のスケジューラが引き続き呼び出せます —
+ガイドが外部 OS スケジューラをメカニズムとして **推奨** しなくなっただけです。
 
 ## monitor リカバリ
 
