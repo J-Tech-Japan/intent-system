@@ -963,6 +963,109 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_GivenCrossDomainMalformedRunsRow_DoesNotBlock_WarnsNamingRunsAudit_G542()
+    {
+        // G542 field incident, 2026-07-20: publishing G539 (domain
+        // intent-cli) was refused by a legacy row belonging to the
+        // sekiban-as-a-service domain. Domain-scoped analysis must not
+        // fail closed on a row PROVABLY owned by a different domain — it
+        // becomes a warning naming `runs-audit` instead.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G999 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G999", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G999", title);
+
+        // The malformed row belongs to a DIFFERENT execution unit (G500)
+        // whose packet.yaml declares a DIFFERENT domain.
+        var otherPacketDir = Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "issues", "G500");
+        Directory.CreateDirectory(otherPacketDir);
+        File.WriteAllText(Path.Combine(otherPacketDir, "packet.yaml"), "domain: sekiban-as-a-service\nexecution_unit: G500\n");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        File.WriteAllText(
+            workspace.RunsLogPath,
+            """{"execution_unit":"G500","event":"issue-created","by":"issue-publish-flow"}""" + "\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G999", "--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        // Dry-run: NOT blocked (exit 0), unlike the same-domain/unresolvable
+        // case which still fails closed with exit 1.
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var warnings = document.RootElement.GetProperty("warnings").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(warnings, w => w!.Contains("runs-audit", StringComparison.Ordinal));
+        Assert.Contains(warnings, w => w!.Contains("sekiban-as-a-service", StringComparison.Ordinal));
+        Assert.Contains(warnings, w => w!.Contains("line 1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Execute_GivenSameDomainMalformedRunsRow_StillFailsClosed_G542()
+    {
+        // G542: domain scoping narrows the blast radius — it never weakens
+        // validation of the domain actually being published. A malformed
+        // row that resolves to the SAME domain being published must still
+        // fail closed exactly as before.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G999 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G999", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G999", title);
+
+        var otherPacketDir = Path.Combine(workspace.Context.RepoRoot, ".intent-cli", "issues", "G500");
+        Directory.CreateDirectory(otherPacketDir);
+        File.WriteAllText(Path.Combine(otherPacketDir, "packet.yaml"), "domain: intent-cli\nexecution_unit: G500\n");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        File.WriteAllText(
+            workspace.RunsLogPath,
+            """{"execution_unit":"G500","event":"issue-created","by":"issue-publish-flow"}""" + "\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G999", "--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("runs_malformed", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_GivenDomainUnresolvableMalformedRunsRow_StillFailsClosed_G542()
+    {
+        // G542: an unresolvable owning domain must NEVER be assumed to
+        // belong to someone else — fail closed exactly like before, since
+        // it could plausibly belong to the domain being published.
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G999 Fix issue publish-flow durable state synchronization";
+        workspace.WriteGithubBody("G999", BuildCompleteContractBody(title));
+        workspace.SeedQueueState("G999", title);
+
+        // No packet.yaml for G500 at all, and no intents/*/automation/bindings.md
+        // — owning domain is genuinely underivable.
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunsLogPath)!);
+        File.WriteAllText(
+            workspace.RunsLogPath,
+            """{"execution_unit":"G500","event":"issue-created","by":"issue-publish-flow"}""" + "\n");
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G999", "--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var error = document.RootElement.GetProperty("error").GetString();
+        Assert.Contains("runs_malformed", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_GivenQueueStateHasDuplicateExecutionUnitItems_FailsClosedRegardlessOfAgreement()
     {
         // G536 round-5 review repair: a second queue-state item for the

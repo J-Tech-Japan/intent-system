@@ -194,7 +194,8 @@ internal static class IssuePublishFlowCommand
         // through to the create path entirely, risking a SECOND GitHub
         // issue for the same execution unit.
         var analysis = PublishDurableArtifactAnalyzer.Analyze(
-            executionUnit!, repo!, queueStatePathForIdempotency, publishYamlPath, runLogPathForIdempotency);
+            executionUnit!, repo!, queueStatePathForIdempotency, publishYamlPath, runLogPathForIdempotency,
+            context, domain);
 
         if (analysis.IsInvalid)
         {
@@ -242,7 +243,8 @@ internal static class IssuePublishFlowCommand
                 runsAppended: false,
                 error: null,
                 titleSource: titleSource,
-                wouldRestore: analysis.HasExistingIssue ? analysis.Gaps : null);
+                wouldRestore: analysis.HasExistingIssue ? analysis.Gaps : null,
+                extraWarnings: analysis.Warnings);
             EmitResult(writer, dryRunResult, format);
             return 0;
         }
@@ -262,7 +264,8 @@ internal static class IssuePublishFlowCommand
                 runLogPathForIdempotency,
                 title,
                 titleSource,
-                analysis);
+                analysis,
+                context);
         }
 
         // G536 review repair: the analyzer found NO existing-issue identity
@@ -380,7 +383,8 @@ internal static class IssuePublishFlowCommand
                 runLogPathForIdempotency,
                 title,
                 titleSource,
-                githubSourcedAnalysis);
+                githubSourcedAnalysis,
+                context);
         }
 
         // G363 (PR #830 review repair): atomic-seed gate. The
@@ -580,7 +584,8 @@ internal static class IssuePublishFlowCommand
             publishYamlPatched: publishYamlPatched,
             runsAppended: runsAppended,
             error: null,
-            titleSource: titleSource);
+            titleSource: titleSource,
+            extraWarnings: analysis.Warnings);
         EmitResult(writer, successResult, format);
         return 0;
     }
@@ -612,7 +617,8 @@ internal static class IssuePublishFlowCommand
         string runLogPath,
         string? title,
         string? titleSource,
-        PublishDurableArtifactAnalysis analysis)
+        PublishDurableArtifactAnalysis analysis,
+        CliContext context)
     {
         var canonicalIssueNumber = analysis.CanonicalIssueNumber;
         var canonicalIssueUrl = analysis.CanonicalIssueUrl!;
@@ -692,7 +698,7 @@ internal static class IssuePublishFlowCommand
         // above and this re-read (or a write that silently no-opped) is
         // caught here rather than masked.
         var reAnalysis = PublishDurableArtifactAnalyzer.Analyze(
-            executionUnit, repo, queueStatePath, publishYamlPath, runLogPath);
+            executionUnit, repo, queueStatePath, publishYamlPath, runLogPath, context, domain);
         var fullySynced = reAnalysis.HasExistingIssue && !reAnalysis.IsInvalid && reAnalysis.Gaps.Count == 0;
 
         string? error = null;
@@ -733,7 +739,8 @@ internal static class IssuePublishFlowCommand
             publishYamlPatched: restoredArtifacts.Contains("publish_yaml"),
             runsAppended: restoredArtifacts.Contains("runs"),
             error: error,
-            titleSource: titleSource);
+            titleSource: titleSource,
+            extraWarnings: analysis.Warnings.Concat(reAnalysis.Warnings).Distinct(StringComparer.Ordinal).ToArray());
         EmitResult(writer, result, format);
         return fullySynced ? 0 : 1;
     }
@@ -949,7 +956,8 @@ internal static class IssuePublishFlowCommand
         bool runsAppended,
         string? error,
         string? titleSource = null,
-        IReadOnlyList<string>? wouldRestore = null)
+        IReadOnlyList<string>? wouldRestore = null,
+        IReadOnlyList<string>? extraWarnings = null)
     {
         var nextSteps = new List<string>();
         if (created)
@@ -994,9 +1002,15 @@ internal static class IssuePublishFlowCommand
             // The fallback case adds a `title-fallback` warning so a fallback
             // publish never fails silently.
             TitleSource = titleSource,
-            Warnings = string.Equals(titleSource, TitleSourceFallbackUntitled, StringComparison.Ordinal)
-                ? new[] { "title-fallback" }
-                : Array.Empty<string>(),
+            // G542: cross-domain malformed runs.jsonl rows surface here too
+            // (naming `runs-audit`) alongside the pre-existing title-fallback
+            // warning — domain-scoped analysis narrows the blast radius of a
+            // legacy row, it does not silence the finding entirely.
+            Warnings = (string.Equals(titleSource, TitleSourceFallbackUntitled, StringComparison.Ordinal)
+                    ? new[] { "title-fallback" }
+                    : Array.Empty<string>())
+                .Concat(extraWarnings ?? Array.Empty<string>())
+                .ToArray(),
             WouldRestore = wouldRestore,
             Error = error
         };

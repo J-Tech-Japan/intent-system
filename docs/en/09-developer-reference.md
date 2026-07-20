@@ -1506,6 +1506,90 @@ Full detail: [Agent-message orchestration](12-agent-message-orchestration.md).
 
 ---
 
+### Runs-log schema audit and repair; domain-scoped publish-flow validation (G542)
+
+Field incident, 2026-07-20: publishing G539 (domain `intent-cli`) was
+refused **twice** at durable-state analysis by legacy `runs.jsonl` rows
+belonging to the **sekiban-as-a-service** domain — first one row missing
+`ts`/`by`, then 16 rows missing `execution_unit`. The pre-G542 validator
+(`RunLogSerializer.DeserializeAll`) parses the whole file in one call and
+throws on the FIRST malformed row anywhere in it, regardless of domain — so
+each repair merely revealed the next offender, one at a time, and no
+canonical bulk-audit/repair surface existed.
+
+**`intent-cli automation runs-audit [--repo <r>] [--domain <d>] [--write]
+[--apply-inferred] --format json|markdown`** is a read-only-by-default
+surface that reports **every** malformed row in **one pass** — line number,
+missing required field(s) (`ts`, `event`, `execution_unit`, `by`), an
+inferred owning domain, and — when one exists — a repair derived from
+**within the record itself**:
+
+- **`ts`** ← the record's own `timestamp` field.
+- **`execution_unit`** ← `wip[0].eu` for a `skip-next-slice-due-to-wip` row,
+  or `stage1.eu` for a `pr-merged-closeout` row. In the real legacy rows the
+  branch discriminator lives one level down: every such row's own `event` is
+  the literal string `wake-summary`, and the branch is selected by that
+  record's own `status` field instead. A row whose `event` is directly
+  `skip-next-slice-due-to-wip` or `pr-merged-closeout` (no
+  `wake-summary`/`status` wrapper) is still matched the same way — direct-
+  event compatibility is intentionally retained alongside the
+  `wake-summary`/`status` shape, not replaced by it.
+
+These are the only two documented **within-record** derivations (design
+ruling, 2026-07-20) — the value already exists inside the record under a
+different key, so copying it into the canonical key is lossless
+normalization, not a guess. A field with **no** within-record source (most
+commonly `by`) is always reported `non_derivable`; the report may still
+carry an `inferred_suggestion` (the majority `by` value among valid peer
+rows of the same `event`, with its evidence, e.g. "all 12 peer record(s) of
+event 'issue-created' use by=issue-publish-flow"), but that is evidence, not
+the record — `runs.jsonl` is an audit trail, and writing "this record was
+authored by X" when the record does not say so records a fact that isn't
+there.
+
+- **`--write`** applies ONLY within-record repairs, appends one
+  `runs-repair` audit event per repair (naming the line, the repaired
+  field(s), the derivation class, and the source), and preserves every
+  other byte of the file — and every other byte of the repaired line itself
+  — untouched (the missing key/value pair is inserted immediately after the
+  line's opening `{`, nothing else moves). A row whose `execution_unit`
+  itself is missing with no within-record source is refused entirely under
+  `--write` (even for its OTHER derivable fields) — there is no safe unit to
+  attribute a `runs-repair` audit event to, and fabricating "unknown" would
+  itself be a guess on a durable trail.
+- **`--apply-inferred`** (separate, explicit, **never** implied by
+  `--write` alone; refused with a usage error if passed without `--write`)
+  additionally applies peer-convention `inferred_suggestion` values, in a
+  **separate** `runs-repair` event recording `derivation:
+  inferred-peer-convention` — the two derivation classes are never mixed
+  into the same audit event, even when they repair the same line.
+- Unparseable lines (not valid JSON, or valid JSON that isn't an object) are
+  reported with every required field listed as missing and are never
+  repaired by either mode.
+- Clean report + exit `0` when nothing is malformed.
+
+**`issue publish-flow` durable-state analysis is now domain-scoped.** The
+shared `PublishDurableArtifactAnalyzer` (G536) now parses `runs.jsonl`
+**line by line** instead of one whole-file `DeserializeAll` call, and
+resolves each malformed row's owning domain the same way `runs-audit` does
+(that unit's own `packet.yaml` `domain:` field when it still exists on
+disk; otherwise a unique match against exactly one candidate domain's
+`execution_unit_regex` from `intents/<domain>/automation/bindings.md`;
+otherwise a domain-like prefix in the row's `by` field, corroborated
+against a real domain directory). A malformed row that resolves to a
+domain **other than** the one being published becomes a **warning** naming
+`runs-audit` (surfaced in the result's `warnings`) instead of a hard block
+— publishing proceeds. A malformed row that resolves to the **same**
+domain, or whose owning domain cannot be resolved at all (never assumed to
+belong to someone else), still **fails closed** exactly as before — this
+narrows the blast radius of a legacy row, it does not weaken validation of
+the domain actually being published. `automation publish-recovery` was
+deliberately left on the legacy whole-file behavior (out of scope for this
+slice); `RunLogSerializer` / the RunEvent required-field contract are
+unchanged.
+
+---
+
 ## Version flow
 
 The repository version policy lives in `eng/version.json` — the single source of
