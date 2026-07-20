@@ -2,9 +2,10 @@
 
 ← [レビュー standing-policy](11-review-standing-policy.md) | [docs インデックス](README.md)
 
-このページは **オプションの** agmsg ベースの orchestrator スレッドと、特に
-1 つの host リポジトリが **複数の intent ドメイン** を保持する場合に、それを
-どう安全に保つかを説明します。権威ある貼り付け可能なプロンプトはインストール済み
+このページは **主要な(primary)** agmsg ベースの 4 スレッドの orchestrator
+モデル(design / orchestrator / implementation / review)と、特に 1 つの
+host リポジトリが **複数の intent ドメイン** を保持する場合に、それをどう
+安全に保つかを説明します。権威ある貼り付け可能なプロンプトはインストール済み
 の intent-cli ガイダンスから生成され、このページのプロンプトを手で写してはいけません。
 現在のプロンプトは次で生成します:
 
@@ -106,8 +107,8 @@ orchestrator はそれに従って行動する前に、すべての主張を int
 
 | モード | ドライバー | 備考 |
 |---|---|---|
-| **timer-loop モード** | 定期タイマー | 既存・完全サポート。実装/レビュースレッドが自己スケジュールし、`worker next-action` / host review-next-slice を読む。orchestrator は不要。 |
-| **orchestrator-message モード** | 4 つ目の orchestrator スレッド | オプトイン。orchestrator が agmsg 経由で実装/レビュースレッドをペース配分する。定常状態はメッセージ駆動で、30 分クラスの design-thread watchdog loop を RECOMMENDED なデフォルトのセーフティネットとする（orchestrator-side の長間隔 automation は選択可能な alternative）。明示的な 5 分の orchestrator タイマーは fallback/legacy オプションとして引き続きサポートされる。 |
+| **orchestrator-message モード** | 4 つ目の orchestrator スレッド | **PRIMARY。** 実践され、メンテナンスされているモデル。orchestrator が agmsg 経由で実装/レビュースレッドをペース配分する。定常状態はメッセージ駆動で、30 分クラスの design-thread watchdog loop を RECOMMENDED なデフォルトのセーフティネットとする(orchestrator-side の長間隔 automation は選択可能な alternative)。明示的な 5 分の orchestrator タイマーは fallback/legacy オプションとして引き続きサポートされる。 |
+| **timer-loop モード** | 定期タイマー | **ALTERNATIVE。** orchestrator スレッドを実行しない domain/repo 向けの、完全サポートされたよりシンプルなセットアップ。実装/レビュースレッドが自己スケジュールし、`worker next-action` / host review-next-slice を読む。orchestrator は不要。 |
 
 同じ domain/repo に対して両モードを同時に実行しては **いけません**。
 orchestrator-message モードでは、実装/レビューの定期タイマーループも起動しないでください。

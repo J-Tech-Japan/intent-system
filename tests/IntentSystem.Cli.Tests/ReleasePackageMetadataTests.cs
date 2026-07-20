@@ -27,6 +27,38 @@ public sealed class ReleasePackageMetadataTests
     }
 
     [Fact]
+    public void Csproj_DescriptionAndTags_NameOrchestrationModel_PackageIdAndLicenseUnchanged_G541()
+    {
+        var csproj = File.ReadAllText(CsprojPath());
+
+        // G541: the NuGet Description must name the primary four-thread
+        // orchestration model so a NuGet visitor learns the primary workflow,
+        // and PackageTags must gain orchestration-relevant tags — while
+        // package id, tool command, and license stay exactly as they were
+        // (diff-verified: same assertions as Csproj_PinsPublicPackageMetadata).
+        var descriptionMatch = System.Text.RegularExpressions.Regex.Match(csproj, "<Description>(.*?)</Description>", System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.True(descriptionMatch.Success, "csproj must declare a <Description>");
+        var description = descriptionMatch.Groups[1].Value;
+        Assert.Contains("orchestration", description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("four-thread", description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("timer-loop", description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("alternative", description, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("preview", description, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("experimental", description, StringComparison.OrdinalIgnoreCase);
+
+        var tagsMatch = System.Text.RegularExpressions.Regex.Match(csproj, "<PackageTags>(.*?)</PackageTags>");
+        Assert.True(tagsMatch.Success, "csproj must declare <PackageTags>");
+        var tags = tagsMatch.Groups[1].Value.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains(tags, t => t.Equals("agmsg", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tags, t => t.Equals("orchestration", StringComparison.OrdinalIgnoreCase));
+
+        // Package id, command, and license unchanged.
+        Assert.Contains("<PackageId>JTechJapan.IntentSystem.Cli</PackageId>", csproj, StringComparison.Ordinal);
+        Assert.Contains("<ToolCommandName>intent-cli</ToolCommandName>", csproj, StringComparison.Ordinal);
+        Assert.Contains("<PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>", csproj, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VersionPolicy_RecordsReleaseToBeCut_AheadOfPublishedStable()
     {
         var policy = VersionPolicy.TryReadFromRepo(FindRepoRoot());

@@ -1719,9 +1719,16 @@ queue の頑健性、label supersession、publish の信頼性、priority overri
   priority class を優先(high > normal > low、authoring order による安定した
   tiebreak)して候補を選択し、dependency/WIP/clarification/lifecycle の gate は
   常に priority に優先します。
-- orchestrator モードは引き続き **preview/experimental** です: オプトインで、まだ hardening 中であり、
-  timer-loop モードは完全サポート・不変です。
-  [エージェントメッセージオーケストレーション](12-agent-message-orchestration.md) を参照。
+- **historical な注記(v0.5.0 時点、G540/G541 以前):** `v0.5.0` の出荷時点では、
+  ここで orchestrator モードを preview/experimental かつオプトインと記述して
+  いました。**この位置づけは現在では置き換えられています。** G540/G541 以降、
+  4 スレッドの agmsg orchestration(design/orchestrator/implementation/
+  review)が **PRIMARY** な、実践され保守されているワークフローとして
+  documented collaboration model であり、timer-loop モードは完全サポートされる
+  よりシンプルな alternative として維持されます。現在のガイダンスは
+  [エージェントメッセージオーケストレーション](12-agent-message-orchestration.md)
+  と [ADR 0001](../adr/0001-four-thread-orchestration-primary-model.md) を
+  参照してください。
 
 **リリース準備の検証（`v0.5.0` version bump のマージ前に実行）:**
 

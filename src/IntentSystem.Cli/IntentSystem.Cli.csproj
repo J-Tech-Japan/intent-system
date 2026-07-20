@@ -42,8 +42,8 @@
     <Version Condition="'$(Version)' == '' AND '$(IntentSystemNextVersionFromPolicy)' != ''">$(IntentSystemNextVersionFromPolicy)</Version>
     <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
     <Authors>J-Tech-Japan</Authors>
-    <Description>Intent System CLI — deterministic support tooling for intent-driven development on GitHub. Install: dotnet tool install -g JTechJapan.IntentSystem.Cli. Command: intent-cli.</Description>
-    <PackageTags>intent-cli;dotnet-tool;intent-system</PackageTags>
+    <Description>Intent System CLI — deterministic support tooling for intent-driven development on GitHub. Primary model: four-thread agmsg orchestration (design/orchestrator/implementation/review); timer-loop mode remains a fully supported simpler alternative. Install: dotnet tool install -g JTechJapan.IntentSystem.Cli. Command: intent-cli.</Description>
+    <PackageTags>intent-cli;dotnet-tool;intent-system;agmsg;orchestration;ai-agent</PackageTags>
     <RepositoryUrl>https://github.com/J-Tech-Japan/intent-system</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <!--

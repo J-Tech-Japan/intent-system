@@ -63,7 +63,12 @@ repository and paste one of these prompts:
 > I want to work on `<owner>/<repo>` with intent-cli.
 > Ask intent-cli what phase I'm in and what I should decide next.
 
-**Start an implementation loop:**
+**Start four-thread agmsg orchestration (primary path):**
+
+> I want to start agmsg orchestrator mode for `<owner>/<repo>` with intent-cli.
+> Ask intent-cli for the orchestrator setup checklist.
+
+**Start an implementation loop (timer-loop alternative):**
 
 > Set up a child implementation loop for `<owner>/<repo>`.
 > Ask intent-cli for the next step.
@@ -88,11 +93,6 @@ repository and paste one of these prompts:
 > Inspect `<target>` with intent-cli.
 > Observe the real behavior, separate evidence from inference, and propose packet candidates.
 
-**Start agmsg orchestrator mode (preview):**
-
-> I want to start agmsg orchestrator mode for `<owner>/<repo>` with intent-cli.
-> Ask intent-cli for the orchestrator setup checklist.
-
 The agent runs `intent-cli` commands internally and brings back questions or
 results. You focus on intent, priorities, and approval decisions. In **grill**
 mode (`intent-cli grill`) the thread stays persistent — it builds an
@@ -110,23 +110,27 @@ each answer until a stop condition is reached.
   — agent-facing and power-user command surfaces.
 - **Developer reference:** [`docs/en/09-developer-reference.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/09-developer-reference.md)
   — packaged invocation smoke test, preview channel, version flow.
-- **Agent-message orchestration (preview):** [`docs/en/12-agent-message-orchestration.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/12-agent-message-orchestration.md)
-  — the optional agmsg orchestrator mode (日本語: [`docs/ja/12`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/12-agent-message-orchestration.md)).
+- **Agent-message orchestration (primary):** [`docs/en/12-agent-message-orchestration.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/12-agent-message-orchestration.md)
+  — the primary four-thread agmsg orchestrator model (日本語: [`docs/ja/12`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/12-agent-message-orchestration.md)).
 
-> **Orchestrator mode is preview/experimental.** By default, implementation and
-> review run as independent **timer loops** (fully supported, unchanged). The
-> optional **agmsg orchestrator mode** adds a fourth orchestrator thread that
-> paces the implementation and review threads over a local message bus instead
-> of timers: the normal steady state is message-driven — implementation/review
-> replies wake the orchestrator, so routine fast polling is not required — with
-> an optional low-frequency design-side watchdog as the safety net; an explicit
-> orchestrator timer remains supported only as a fallback/legacy polling
-> option. The implementation and review threads are always loopless receivers,
-> and you should not also run their recurring timers for the same route. It
-> covers single/multi-domain routing, next-slice publication, CI wait,
-> dependency planning, a safe stale-thread health check, and safe-repair vs
-> escalation. agmsg is a signal layer only — intent-cli and GitHub stay
-> authoritative. This mode is opt-in and still being hardened.
+> **Four-thread agmsg orchestration is the primary way to run intent-cli.** A
+> **design** thread authors intent and packets; an **orchestrator** thread
+> moves ready packets through the workflow and paces the loopless
+> **implementation** and **review** threads over a local message bus (agmsg)
+> instead of independent timers. The steady state is message-driven —
+> implementation/review replies wake the orchestrator, so routine fast polling
+> is not required — with a 30-minute-class design-thread watchdog loop as the
+> recommended default safety net; an explicit orchestrator timer remains
+> supported only as a fallback/legacy polling option. It covers
+> single/multi-domain routing, next-slice publication, CI wait, dependency
+> planning, a safe stale-thread health check, and safe-repair vs escalation.
+> agmsg is a signal layer only — intent-cli and GitHub stay authoritative.
+> This is the practiced, maintained model (still being hardened in places).
+>
+> **Timer loops remain a fully supported, simpler alternative:** implementation
+> and review run as independent timer loops with no orchestrator thread
+> required. Exactly one mode applies per domain/repo — never mix the two for
+> the same domain/repo.
 
 ---
 
