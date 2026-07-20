@@ -540,6 +540,54 @@ public sealed class IntentNextSliceCommandTests
     }
 
     [Fact]
+    public void Execute_OnlyQueuedUnitHasNonEmptyBlockedBy_FallbackNeverResurrectsIt_G544Repair()
+    {
+        // G544 review repair: when the primary `queued`-ordered loop finds
+        // NO eligible candidate (here: the only queued unit has a
+        // non-empty blocked_by), it falls back to re-enumerating every
+        // packet directory under .intent-cli/issues/*. That fallback was
+        // NOT re-applying the dependency/blocked-by gate the primary loop
+        // just used to reject this exact unit -- silently resurrecting a
+        // queue-known ineligible unit as issue-cut-ready. The gate must
+        // apply identically in both loops, so a unit blocked_by-blocked in
+        // queue-state is excluded no matter which loop would otherwise
+        // have selected it.
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G600/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-20T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G600",
+                  "title": "blocked_by-blocked slice",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": ["waiting on operator decision"],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context, ["--dry-run", "--runtime-creation-allowed"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.NotEqual("issue-cut-ready", root.GetProperty("recommended_outcome").GetString());
+        Assert.False(root.TryGetProperty("candidate", out _), "a blocked_by-blocked unit must never be resurrected as a candidate by the all-packet fallback.");
+    }
+
+    [Fact]
     public void Execute_HighPriorityUnitWithIncompleteDependency_IsNeverSelectedOverEligibleLowerPriorityUnit()
     {
         // G537 review repair: dependency completeness is an authoritative

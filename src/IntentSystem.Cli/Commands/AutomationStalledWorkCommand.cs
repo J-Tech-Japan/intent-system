@@ -31,6 +31,14 @@ namespace IntentSystem.Cli.Commands;
 ///   recommendation mid-repair).</item>
 /// <item><c>merged-not-closed-out</c> — a MERGED PR's linked queue item is
 ///   not <see cref="QueueItemState.Completed"/>.</item>
+/// <item><c>backlog-ready-idle</c> — WIP is empty for the domain (no open PR
+///   or <c>intent-target</c> issue confirmed for it, each resolved through
+///   its own closing-issue/packet linkage — a confirmed OTHER-domain PR or
+///   issue does not block), the canonical selector
+///   (<see cref="IntentNextSliceCommand.Analyze"/>) has a publishable
+///   candidate, and no runs.jsonl activity for longer than
+///   <c>--backlog-idle-minutes</c> (G544 — the last uncovered stall class:
+///   work that is ready but never started).</item>
 /// </list>
 ///
 /// Informational categories (G533 — age for visibility only,
@@ -138,6 +146,33 @@ internal static class AutomationStalledWorkCommand
     public const string KindClaimedButSilent = "claimed-but-silent";
 
     /// <summary>
+    /// G544: fires when WIP is empty for the requested domain (no open
+    /// <c>intent-target</c> issue confirmed for this domain, and no open PR
+    /// at all — a PR never carries <c>intent-target</c> itself, so any open
+    /// PR is treated as in-flight work), the canonical selector
+    /// (<see cref="IntentNextSliceCommand.Analyze"/> — the SAME evaluator
+    /// <c>issue publish-flow</c> preflight uses, so this is not a new
+    /// heuristic) reports a publishable candidate, and no runs.jsonl
+    /// activity has been recorded for longer than
+    /// <see cref="DefaultBacklogIdleMinutes"/> (override
+    /// <c>--backlog-idle-minutes</c>). Actionable — <c>recommended_action</c>
+    /// is the canonical publish command for the named unit. The last
+    /// measured field incident (2026-07-20, immediately after the G539
+    /// closeout) is exactly this shape: empty WIP, four ready packets,
+    /// <c>stalled-work</c> reporting healthy regardless.
+    /// </summary>
+    public const string KindBacklogReadyIdle = "backlog-ready-idle";
+
+    /// <summary>
+    /// G544: default <c>--backlog-idle-minutes</c> threshold (45 minutes) —
+    /// below G523's typical single-message recovery latency, matching
+    /// <see cref="AutomationHeartbeatCommand.DefaultStaleMinutes"/>, so a
+    /// healthy pipeline that publishes and moves on within its normal
+    /// rhythm never trips a false alarm.
+    /// </summary>
+    public const int DefaultBacklogIdleMinutes = 45;
+
+    /// <summary>
     /// G533: conservative default for <c>--claimed-silent-minutes</c> (12
     /// hours) — chosen so <c>claimed-but-silent</c> does not fire on an
     /// ordinary work session; only a genuinely long silence after claim.
@@ -173,7 +208,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -187,7 +222,7 @@ internal static class AutomationStalledWorkCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var staleMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -197,7 +232,7 @@ internal static class AutomationStalledWorkCommand
         AutomationStalledWorkResult result;
         try
         {
-            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes);
+            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
@@ -227,12 +262,19 @@ internal static class AutomationStalledWorkCommand
     /// <see cref="IOException"/> / <see cref="InvalidOperationException"/>
     /// on a GitHub read failure — callers decide how to report it.
     /// <paramref name="claimedSilentMinutes"/> defaults to
-    /// <see cref="DefaultClaimedSilentMinutes"/> so existing callers (e.g.
+    /// <see cref="DefaultClaimedSilentMinutes"/> and <paramref
+    /// name="backlogIdleMinutes"/> defaults to
+    /// <see cref="DefaultBacklogIdleMinutes"/>, so existing callers (e.g.
     /// <c>automation heartbeat</c>) keep compiling and get the conservative
-    /// default without needing their own override plumbing.
+    /// defaults without needing their own override plumbing.
     /// </summary>
     public static AutomationStalledWorkResult Analyze(
-        CliContext context, string domain, string repo, int staleMinutes, int claimedSilentMinutes = DefaultClaimedSilentMinutes)
+        CliContext context,
+        string domain,
+        string repo,
+        int staleMinutes,
+        int claimedSilentMinutes = DefaultClaimedSilentMinutes,
+        int backlogIdleMinutes = DefaultBacklogIdleMinutes)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
@@ -253,6 +295,7 @@ internal static class AutomationStalledWorkCommand
         CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded);
+        CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, items, excluded);
 
         var filtered = items
             .Where(item => item.AgeMinutes >= staleMinutes)
@@ -264,6 +307,7 @@ internal static class AutomationStalledWorkCommand
             Domain = domain,
             Repo = repo,
             StaleMinutesThreshold = staleMinutes,
+            BacklogIdleMinutesThreshold = backlogIdleMinutes,
             Stalled = filtered.Length > 0,
             Items = filtered,
             Excluded = excluded,
@@ -811,6 +855,278 @@ internal static class AutomationStalledWorkCommand
     }
 
     /// <summary>
+    /// G544: WIP is empty for <paramref name="domain"/> when (a) no open PR
+    /// resolves (or fails to rule itself out) as belonging to
+    /// <paramref name="domain"/> — see <see cref="PrBlocksDomainWip"/> — and
+    /// (b) no open issue carrying <c>intent-target</c> resolves (or fails to
+    /// rule itself out) as belonging to it either. In both cases, a
+    /// candidate whose domain cannot be corroborated at all is
+    /// conservatively treated as blocking EVERY domain's WIP-empty check
+    /// (unlike every other collector here, which excludes an uncorroborated
+    /// candidate from firing) — the risk here runs the other way: falsely
+    /// reporting the backlog idle when something IS actually in flight would
+    /// recommend a publish nothing should stop, so an unresolved candidate
+    /// must never be silently ignored. Only a candidate CONCLUSIVELY
+    /// confirmed to belong to a DIFFERENT domain is excused.
+    /// </summary>
+    private static bool DomainWipIsEmpty(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        string repo)
+    {
+        foreach (var pr in openPrs)
+        {
+            if (!IsOpen(pr.State))
+            {
+                continue;
+            }
+
+            if (PrBlocksDomainWip(context, domain, candidateDomains, openIssues, pr, repo))
+            {
+                return false;
+            }
+        }
+
+        foreach (var issue in openIssues)
+        {
+            if (!IsOpen(issue.State))
+            {
+                continue;
+            }
+
+            if (!LabelSet(issue.Labels).Contains(WorkerNextActionConstants.Labels.IntentTarget))
+            {
+                continue;
+            }
+
+            var resolution = ResolveExecutionUnit(context, issue.Title);
+            if (!resolution.Corroborated)
+            {
+                // Domain membership cannot be ruled out either way —
+                // conservatively treat as WIP rather than risk a false
+                // "idle" report.
+                return false;
+            }
+
+            var packetDeclaredDomain = ReadPacketDeclaredDomain(context, resolution.ExecutionUnit);
+            if (TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo, out _, out _))
+            {
+                // Confirmed to belong to THIS domain — genuinely in flight.
+                return false;
+            }
+
+            // TryConfirmDomain only returns false here on a genuine
+            // CONTRADICTION (a packet that actively declares a DIFFERENT
+            // domain — resolution.Corroborated is already true, so this is
+            // not the uncorroborated case handled above); a confirmed
+            // other-domain issue does not block this domain's WIP.
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// G544 review repair: a PR never itself carries <c>intent-target</c>,
+    /// so its domain is corroborated through its CLOSING ISSUE (never the
+    /// PR's own title, which is not guaranteed to mirror the issue's) using
+    /// the same resolution rules every other collector in this file already
+    /// applies to issues. A PR with no closing-issue reference for
+    /// <paramref name="repo"/>, or whose closing issue cannot be found among
+    /// <paramref name="openIssues"/> or corroborated to a packet, or that
+    /// closes more than one issue where any single reference is uncertain
+    /// or same-domain, conservatively BLOCKS this domain's WIP-empty check.
+    /// Only a PR whose EVERY closing reference is conclusively confirmed to
+    /// belong to a DIFFERENT domain is excused.
+    /// </summary>
+    private static bool PrBlocksDomainWip(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
+        GitHubAutomationPrCandidate pr,
+        string repo)
+    {
+        var closingReferences = pr.ClosingIssuesReferences
+            .Where(reference => reference.Number > 0 && ReferenceMatchesRepo(reference, repo))
+            .ToArray();
+
+        if (closingReferences.Length == 0)
+        {
+            // No closing-issue link for this repo at all — this PR's domain
+            // cannot be corroborated by anything. Conservatively blocks.
+            return true;
+        }
+
+        foreach (var reference in closingReferences)
+        {
+            var matchedIssue = openIssues.FirstOrDefault(candidate => candidate.Number == reference.Number);
+            if (matchedIssue is null)
+            {
+                // The closing issue is not among the open issues this scan
+                // fetched (closed, or an unresolvable mismatch) — cannot
+                // corroborate; conservatively blocks.
+                return true;
+            }
+
+            var resolution = ResolveExecutionUnit(context, matchedIssue.Title);
+            if (!resolution.Corroborated)
+            {
+                return true;
+            }
+
+            var packetDeclaredDomain = ReadPacketDeclaredDomain(context, resolution.ExecutionUnit);
+            if (TryConfirmDomain(domain, resolution, packetDeclaredDomain, candidateDomains, repo, out _, out _))
+            {
+                // Confirmed to belong to THIS domain — genuinely in flight.
+                return true;
+            }
+
+            // This reference confirmed a DIFFERENT domain — keep checking
+            // any remaining closing references before excusing the PR.
+        }
+
+        // Every closing reference resolved to a confirmed OTHER domain.
+        return false;
+    }
+
+    /// <summary>
+    /// G544: fires <see cref="KindBacklogReadyIdle"/> when WIP is empty for
+    /// <paramref name="domain"/> (<see cref="DomainWipIsEmpty"/>), the SAME
+    /// canonical selector <c>issue publish-flow</c> preflight itself uses
+    /// (<see cref="IntentNextSliceCommand.Analyze"/> — no separate
+    /// heuristic) reports a publishable candidate, and no <c>runs.jsonl</c>
+    /// activity has been recorded for at least <paramref
+    /// name="backlogIdleMinutes"/>. "Activity" here is the most recent
+    /// <c>ts</c> across every row in <c>runs.jsonl</c> — a different signal
+    /// than every other collector's GitHub-entity-timestamp approach, since
+    /// by construction nothing has been published yet for this candidate to
+    /// carry a GitHub timestamp of its own. A missing/unparseable/empty
+    /// runs.jsonl cannot establish a baseline and fails closed into
+    /// <c>excluded[]</c>, never a guessed age — same philosophy as
+    /// <see cref="ReasonActivityDataUnusable"/> above.
+    /// </summary>
+    private static void CollectBacklogReadyIdle(
+        CliContext context,
+        string domain,
+        IReadOnlyList<string> candidateDomains,
+        IReadOnlyList<GitHubAutomationIssueCandidate> openIssues,
+        IReadOnlyList<GitHubAutomationPrCandidate> openPrs,
+        string repo,
+        DateTimeOffset now,
+        int backlogIdleMinutes,
+        List<StalledWorkItem> items,
+        List<StalledWorkExcluded> excluded)
+    {
+        if (!DomainWipIsEmpty(context, domain, candidateDomains, openIssues, openPrs, repo))
+        {
+            return;
+        }
+
+        IntentNextSliceResult nextSlice;
+        try
+        {
+            nextSlice = IntentNextSliceCommand.Analyze(context, domain, repo, runtimeCreationAllowed: true);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            excluded.Add(new StalledWorkExcluded
+            {
+                Kind = KindBacklogReadyIdle,
+                ExecutionUnit = string.Empty,
+                Issue = null,
+                Pr = null,
+                Reason = ReasonActivityDataUnusable,
+                Detail = $"canonical next-slice candidate selection failed: {exception.Message}",
+            });
+            return;
+        }
+
+        if (nextSlice.Candidate is null
+            || !string.Equals(nextSlice.RecommendedOutcome, NextSliceReadinessClass.IssueCutReady, StringComparison.Ordinal))
+        {
+            // Nothing publishable right now (WIP-per-queue-state, a
+            // dependency/lifecycle/clarification gate, an incomplete
+            // contract, or a genuinely empty backlog) — never fires.
+            return;
+        }
+
+        var executionUnit = nextSlice.Candidate.ExecutionUnit;
+        var runLogPath = context.GetRunLogPath();
+        if (!File.Exists(runLogPath))
+        {
+            excluded.Add(new StalledWorkExcluded
+            {
+                Kind = KindBacklogReadyIdle,
+                ExecutionUnit = executionUnit,
+                Issue = null,
+                Pr = null,
+                Reason = ReasonActivityDataUnusable,
+                Detail = $"no runs log found at '{runLogPath}'; cannot establish a last-activity baseline for the idle threshold.",
+            });
+            return;
+        }
+
+        DateTimeOffset? lastActivity = null;
+        try
+        {
+            foreach (var runEvent in RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath)))
+            {
+                if (lastActivity is null || runEvent.Ts > lastActivity.Value)
+                {
+                    lastActivity = runEvent.Ts;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            excluded.Add(new StalledWorkExcluded
+            {
+                Kind = KindBacklogReadyIdle,
+                ExecutionUnit = executionUnit,
+                Issue = null,
+                Pr = null,
+                Reason = ReasonActivityDataUnusable,
+                Detail = $"runs log at '{runLogPath}' could not be parsed: {exception.Message}",
+            });
+            return;
+        }
+
+        if (lastActivity is null)
+        {
+            excluded.Add(new StalledWorkExcluded
+            {
+                Kind = KindBacklogReadyIdle,
+                ExecutionUnit = executionUnit,
+                Issue = null,
+                Pr = null,
+                Reason = ReasonActivityDataUnusable,
+                Detail = $"runs log at '{runLogPath}' contains no rows; cannot establish a last-activity baseline for the idle threshold.",
+            });
+            return;
+        }
+
+        var idleMinutes = ComputeAgeMinutesFromInstant(ClampToNow(lastActivity.Value, now), now);
+        if (idleMinutes < backlogIdleMinutes)
+        {
+            return;
+        }
+
+        items.Add(new StalledWorkItem
+        {
+            Kind = KindBacklogReadyIdle,
+            ExecutionUnit = executionUnit,
+            Issue = null,
+            Pr = null,
+            AgeMinutes = idleMinutes,
+            IsInformational = false,
+            RecommendedAction = $"intent-cli issue publish-flow {executionUnit} --repo {repo} --write --format json",
+        });
+    }
+
+    /// <summary>
     /// G532: aligns stalled-work's domain confirmation with the shared
     /// <see cref="PacketDomainResolution"/> order already used by every
     /// other execution-unit-resolving surface (explicit <c>--domain</c> >
@@ -1263,6 +1579,7 @@ internal static class AutomationStalledWorkCommand
         out string? repo,
         out int staleMinutes,
         out int claimedSilentMinutes,
+        out int backlogIdleMinutes,
         out string format,
         out string error)
     {
@@ -1270,6 +1587,7 @@ internal static class AutomationStalledWorkCommand
         repo = null;
         staleMinutes = 0;
         claimedSilentMinutes = DefaultClaimedSilentMinutes;
+        backlogIdleMinutes = DefaultBacklogIdleMinutes;
         format = FormatMarkdown;
         error = string.Empty;
 
@@ -1317,6 +1635,18 @@ internal static class AutomationStalledWorkCommand
                     claimedSilentMinutes = parsedSilentMinutes;
                     index++;
                     break;
+                case "--backlog-idle-minutes":
+                    if (index + 1 >= args.Length
+                        || !int.TryParse(args[index + 1], System.Globalization.NumberStyles.Integer,
+                            System.Globalization.CultureInfo.InvariantCulture, out var parsedBacklogIdleMinutes)
+                        || parsedBacklogIdleMinutes < 0)
+                    {
+                        error = "--backlog-idle-minutes requires a non-negative integer.";
+                        return false;
+                    }
+                    backlogIdleMinutes = parsedBacklogIdleMinutes;
+                    index++;
+                    break;
                 case "--format":
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
@@ -1356,6 +1686,7 @@ internal static class AutomationStalledWorkCommand
         writer.WriteLine($"# automation stalled-work — `{result.Domain}` / `{result.Repo}`");
         writer.WriteLine();
         writer.WriteLine($"- stale_minutes_threshold: {result.StaleMinutesThreshold}");
+        writer.WriteLine($"- backlog_idle_minutes_threshold: {result.BacklogIdleMinutesThreshold}");
         writer.WriteLine($"- stalled: {(result.Stalled ? "true" : "false")}");
         writer.WriteLine($"- items: {result.Items.Count}");
         writer.WriteLine($"- excluded: {result.Excluded.Count}");
@@ -1444,6 +1775,10 @@ internal sealed record AutomationStalledWorkResult
 
     [JsonPropertyName("stale_minutes_threshold")]
     public required int StaleMinutesThreshold { get; init; }
+
+    /// <summary>G544: the <c>--backlog-idle-minutes</c> threshold used to gate <c>backlog-ready-idle</c>.</summary>
+    [JsonPropertyName("backlog_idle_minutes_threshold")]
+    public required int BacklogIdleMinutesThreshold { get; init; }
 
     [JsonPropertyName("stalled")]
     public required bool Stalled { get; init; }

@@ -295,7 +295,7 @@ internal static class GuideOrchestratorThreadCommand
                     "The per-wake cap is AT MOST ONE DELEGATION PER RECEIVER (implementation, review) — NOT at-most-one-message overall (G524): this wake's actions may include a publish plus its same-wake delegation, one repair message per stalled receiver, one operator escalation, and handling any pending receiver reports, all together.",
                     "Before sending any agmsg message this wake, verify the recipient id against the team roster (`agmsg team.sh`) — treat an id not on the roster as an error, never a guess (G524).",
                     "Apply the design-thread escalation filter: keep routine progress / CI-wait / success / closeout / idle internal; surface to the design thread ONLY human-needed decisions, with structured evidence and the exact decision needed. Never hide a failure that needs a human.",
-                    Apply("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision."),
+                    Apply("End this wake with the stalled-work check (G523): `intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json`, and process every actionable item it reports before sleeping — never leave one for an unscheduled next wake; escalate explicitly if it is genuinely blocked on an operator decision. This includes a `backlog-ready-idle` item (G544, empty WIP + a ready packet + no activity past the idle threshold) — publish and delegate it in THIS wake, the same as any other issue-cut-ready candidate; only announce a following wake will handle it when that wake is actually scheduled."),
                 },
                 RepairVsEscalate = new OrchestratorRepairEscalate
                 {
@@ -414,7 +414,10 @@ internal static class GuideOrchestratorThreadCommand
                 Command = Apply("intent-cli automation stalled-work --domain <domain> --repo <owner/repo> --format json"),
                 NeverDeferRule =
                     "Process every actionable item the check reports in THIS wake — delegate, repair, or route to "
-                    + "closeout — before sleeping. Do not announce work for a future wake unless an explicit "
+                    + "closeout — before sleeping. This explicitly includes a `backlog-ready-idle` item (G544): WIP "
+                    + "is empty, a packet is ready to publish, and nothing has moved for the idle threshold — "
+                    + "publish it and delegate in THIS wake exactly like an `issue-cut-ready` candidate found any "
+                    + "other way, never left for later. Do not announce work for a future wake unless an explicit "
                     + "fallback/legacy timer is actually scheduled to run it; message-driven wakes have no other "
                     + "trigger to pick the deferred work back up.",
                 EscalateInsteadOfDeferRule =

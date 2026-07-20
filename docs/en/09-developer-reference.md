@@ -249,7 +249,7 @@ All three surfaces apply the full order strictly — none of them fall back to
 
 ### Stalled-work detection (G523)
 
-`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] --format json|markdown`
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] --format json|markdown`
 is a **read-only** inventory of pending pipeline transitions with ages, so a
 single orchestrator wake (or an external heartbeat) can detect and recover a
 stalled pipeline without a human cross-checking GitHub labels, PR state, and
@@ -273,6 +273,39 @@ is always a runnable `intent-cli` command):
 - `merged-not-closed-out` — a MERGED PR's linked queue-state item is not yet
   `Completed` (closeout — `pr-merged` + `closeout-recorded` runs events —
   has not been recorded).
+- `backlog-ready-idle` (G544) — the last uncovered stall class: work that is
+  **ready but never started**. Fires when ALL of the following hold: (1) WIP
+  is empty for the requested domain — no open PR resolves as belonging to
+  it, and no open issue carrying `intent-target` resolves as belonging to it
+  either (or fails to rule itself out). A PR never itself carries
+  `intent-target`; its domain is instead resolved through its CLOSING ISSUE
+  (never the PR's own title), using the same execution-unit/domain
+  corroboration rules used everywhere else in this surface. A candidate
+  (PR or issue) whose domain cannot be corroborated at all — no closing-
+  issue link, the closing issue not found among open issues, or its
+  execution unit uncorroborated — is conservatively treated as blocking
+  EVERY domain, since a false "idle" report is the dangerous direction
+  here; only a candidate CONCLUSIVELY confirmed to belong to a DIFFERENT
+  domain is excused;
+  (2) the SAME canonical selector `issue publish-flow` preflight itself uses
+  (`intent next-slice`'s candidate selection — dependency/blocked-by,
+  lifecycle, domain, and contract-completeness gates all included, not a
+  separate heuristic) reports a publishable (`issue-cut-ready`) candidate;
+  (3) no `runs.jsonl` activity has been recorded for at least
+  `--backlog-idle-minutes` (default **45**). "Activity" here is the MAXIMUM
+  `ts` across every row in `runs.jsonl` — a different signal than every
+  other kind's GitHub-entity-timestamp approach, since by construction
+  nothing has been published yet for this candidate to carry a GitHub
+  timestamp of its own. A missing, empty, or unparseable `runs.jsonl` can
+  never establish a baseline and fails closed into `excluded[]`
+  (`activity-data-unusable`), never a guessed age. `recommended_action` is
+  the canonical publish command for the named unit (`intent-cli issue
+  publish-flow <unit> --repo <r> --write --format json`). Field incident,
+  2026-07-20 (immediately after the G539 closeout): WIP was empty, four
+  authored packets (G540–G543) were `issue-cut-ready` and unpublished, and
+  `stalled-work` reported `stalled: false` regardless — recovery required an
+  explicit human/design WAKE message. `backlog_idle_minutes_threshold` is
+  reported alongside `stale_minutes_threshold` in every result.
 
 **Informational categories (G533)** — `is_informational: true`,
 `recommended_action` is descriptive prose (never a transition command), age
@@ -320,10 +353,11 @@ Each item reports `kind`, `execution_unit`, `issue` and/or `pr` (number +
 url), `age_minutes`, `is_informational`, and `recommended_action`.
 `--stale-minutes` filters out items younger than the given threshold
 (default `0` — report everything with its age; callers pick their own
-threshold) — this applies uniformly across all six kinds; `claimed-but-silent`
-additionally gates on its OWN `--claimed-silent-minutes` threshold before an
-item is even considered (so raising `--stale-minutes` alone can never make a
-`claimed-but-silent` item appear earlier than its own threshold allows).
+threshold) — this applies uniformly across all seven kinds; `claimed-but-silent`
+and `backlog-ready-idle` each additionally gate on their OWN
+`--claimed-silent-minutes` / `--backlog-idle-minutes` threshold before an
+item is even considered (so raising `--stale-minutes` alone can never make
+either kind appear earlier than its own threshold allows).
 `age_minutes` is approximated from the relevant GitHub entity's
 `createdAt`/`updatedAt` timestamp, since GitHub does not expose
 per-label-application timestamps or per-issue timeline events without a
@@ -994,6 +1028,19 @@ before that per-candidate gate loop runs. Because the reorder uses a
 **stable** sort, a host where every item carries the enqueue default
 (`"normal"`) — i.e. no priorities meaningfully set — produces
 byte-identical output to pre-G537 behavior.
+
+**G544 review repair — the all-packet fallback preserves the same
+dependency/blocked-by gate.** When the primary `queued`-ordered loop finds
+no eligible candidate, `next-slice` falls back to re-enumerating every
+packet directory under `.intent-cli/issues/*` (covering runtime-created
+packets with no queue-state entry at all). That fallback was NOT
+re-applying the dependency/blocked-by gate the primary loop had just used
+to reject a queue-known unit — silently resurrecting it as `issue-cut-ready`
+regardless. The fallback now applies the identical gate to any unit
+queue-state tracks as `Queued`; a unit with no queue-state entry (nothing to
+gate on) is unaffected. This was surfaced by G544's `backlog-ready-idle`
+detection, which depends on this same selector never reporting a false
+`issue-cut-ready`.
 
 `QueueItem.Priority` remains a plain, unvalidated `string` at the schema
 level (unchanged) — `queue reprioritize` is the only writer that

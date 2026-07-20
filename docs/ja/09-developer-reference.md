@@ -241,7 +241,7 @@ binding fallback は、packet 自身の `domain:` フィールドが別の値を
 
 ### stalled-work 検出 (G523)
 
-`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] --format json|markdown`
+`intent-cli automation stalled-work --domain <d> --repo <r> [--stale-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] --format json|markdown`
 は、保留中の pipeline transition を age 付きで一覧化する **read-only** な
 サーフェスです。これにより、1 回の orchestrator wake（あるいは外部の
 heartbeat）だけで、人間が GitHub label・PR state・queue-state を手で
@@ -268,6 +268,43 @@ queue-state、`runs.jsonl` を変更することは一切ありません — inf
 - `merged-not-closed-out` — MERGED 状態の PR に紐づく queue-state item が
   まだ `Completed` になっていない（closeout — `pr-merged` +
   `closeout-recorded` の runs event — がまだ記録されていない）。
+- `backlog-ready-idle` (G544) — 最後に残っていた未カバーの stall class:
+  **ready だが一度も着手されていない** 作業。以下がすべて成立したときに
+  発火します: (1) 対象 domain の WIP が空である — その domain に属すると
+  解決される open な PR が一つも無く、かつ `intent-target` を持つ open な
+  issue が、その domain に属すると解決される(あるいは属さないと確定
+  できる)ものも一つも無い。PR 自体が `intent-target` を持つことは無いため、
+  PR の domain はその CLOSING ISSUE を通じて(PR 自身のタイトルではなく)
+  解決されます — この surface の他の箇所と同じ execution-unit/domain の
+  corroboration ルールを使います。domain を全く corroborate できない
+  candidate(PR/issue のいずれでも)— closing-issue のリンクが無い、
+  closing issue が open issue の中に見つからない、execution unit が
+  corroborate できない、等 — は、すべての domain を blocking すると
+  保守的に扱われます。ここでは false な「idle」報告の方が危険な方向だから
+  です。対象 domain と異なる domain に属すると **確定的に** confirm
+  された candidate だけが例外として扱われます; (2) `issue publish-flow`
+  preflight 自身が使うのと
+  **同じ** canonical selector(`intent next-slice` の candidate selection
+  — dependency/blocked-by、lifecycle、domain、contract-completeness の
+  すべての gate を含み、別のヒューリスティックではない)が publishable な
+  (`issue-cut-ready`) candidate を報告する; (3) `runs.jsonl` に
+  `--backlog-idle-minutes`(デフォルト **45** 分)以上、活動が記録されて
+  いない。ここでの「活動」は `runs.jsonl` の全行にわたる `ts` の
+  **最大値** です — これは他のどの kind とも異なるシグナルです。
+  この candidate はまだ publish されていないため、そもそも構造的に
+  自分自身の GitHub timestamp を持たないからです。`runs.jsonl` が
+  欠落・空・パース不能な場合、baseline を確立できないため
+  `excluded[]`(`activity-data-unusable`)へ fail closed します —
+  推測された age が使われることは決してありません。
+  `recommended_action` は、対象ユニットの canonical な publish
+  コマンド(`intent-cli issue publish-flow <unit> --repo <r> --write
+  --format json`)です。field incident、2026-07-20(G539 closeout の
+  直後): WIP は空で、4 つの authored packet(G540–G543)が
+  `issue-cut-ready` かつ未公開の状態であったにもかかわらず、
+  `stalled-work` は `stalled: false` と報告し続けていました — 復旧には
+  明示的な人間/design 側からの WAKE メッセージが必要でした。
+  `backlog_idle_minutes_threshold` は、すべての result で
+  `stale_minutes_threshold` と並んで報告されます。
 
 **informational なカテゴリ (G533)** — `is_informational: true`、
 `recommended_action` は（transition コマンドではなく）説明的な prose、
@@ -319,11 +356,12 @@ age は可視性のためだけに報告されます:
 （番号 + url）、`age_minutes`、`is_informational`、`recommended_action`
 を報告します。`--stale-minutes` は、指定した閾値より新しい item を
 除外します（デフォルトは `0` — すべてを age 付きで報告し、閾値は
-呼び出し側が選ぶ）— これは 6 つすべての kind に一律に適用されます。
-`claimed-but-silent` は、そもそも item が検討される前に、それ自身の
-`--claimed-silent-minutes` 閾値でも追加でゲートされます（そのため
-`--stale-minutes` を上げるだけでは、`claimed-but-silent` の item が
-自身の閾値より早く現れることは決してありません）。`age_minutes` は、
+呼び出し側が選ぶ）— これは 7 つすべての kind に一律に適用されます。
+`claimed-but-silent` と `backlog-ready-idle` は、そもそも item が
+検討される前に、それぞれ自身の `--claimed-silent-minutes` /
+`--backlog-idle-minutes` 閾値でも追加でゲートされます（そのため
+`--stale-minutes` を上げるだけでは、いずれの kind の item も
+自身の閾値より早く現れることはありません）。`age_minutes` は、
 GitHub が label 適用時刻や、専用の per-issue fetch 無しでの timeline
 event を公開していないため、該当する GitHub entity の
 `createdAt`/`updatedAt` タイムスタンプからの近似値です。
@@ -1057,6 +1095,21 @@ reorder は **stable** な sort を使うため、すべての item が enqueue
 のデフォルト値(`"normal"`)を持つ host——つまり実質的に priority が
 設定されていない host——では、G537 以前の挙動と byte-identical な
 出力になります。
+
+**G544 review repair — all-packet fallback も同じ dependency/blocked-by
+gate を維持します。** primary の `queued`-ordered loop が eligible な
+candidate を一つも見つけられなかった場合、`next-slice` は
+`.intent-cli/issues/*` 配下のすべての packet directory を再列挙する
+fallback へ移ります(queue-state に一切 entry を持たない runtime-created
+packet をカバーするため)。この fallback は、primary loop がある
+queue-known な unit を reject するのに使ったのと同じ dependency/
+blocked-by gate を再適用しておらず、その unit を `issue-cut-ready` として
+無条件に復活させてしまっていました。fallback は現在、queue-state が
+`Queued` として追跡しているすべての unit に対して同一の gate を適用
+します——queue-state に entry が無い unit(gate する対象が無い)は
+影響を受けません。この問題は、G544 の `backlog-ready-idle` 検出が
+この同じ selector が誤って `issue-cut-ready` を報告しないことに依存
+していたために顕在化しました。
 
 `QueueItem.Priority` は schema level では引き続き単なる、validate
 されない `string` です(変更なし)——`queue reprioritize` だけが
