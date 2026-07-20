@@ -1650,7 +1650,14 @@ domain に関わらずファイル中の **最初の** malformed な行で例外
 
 - **`ts`** ← レコード自身の `timestamp` フィールドから。
 - **`execution_unit`** ← `skip-next-slice-due-to-wip` 行では `wip[0].eu` から、
-  `pr-merged-closeout` 行では `stage1.eu` から。
+  `pr-merged-closeout` 行では `stage1.eu` から。実際のレガシー行では判別子は
+  もう一段深い位置にある: そうした行はいずれも `event` がリテラル文字列
+  `wake-summary` であり、分岐はその代わりレコード自身の `status` フィールドで
+  選択される。`event` が直接 `skip-next-slice-due-to-wip` /
+  `pr-merged-closeout` である行(`wake-summary`/`status` のラッパーが無い形)も
+  引き続き同じように解決される — direct-event 互換性は
+  `wake-summary`/`status` 形式に置き換えられたのではなく、意図的に両方
+  サポートされている。
 
 これらが唯一の documented された **within-record** 導出です(design ruling、
 2026-07-20)— 値はすでに別のキーの下でレコード内部に存在しているため、

@@ -8,8 +8,16 @@ namespace IntentSystem.Cli.Commands;
 /// <c>event</c>, <c>execution_unit</c>, <c>by</c>), plus the two documented
 /// lossless within-record derivations (design ruling, 2026-07-20):
 /// <c>ts</c> ← the record's own <c>timestamp</c> field; <c>execution_unit</c>
-/// ← <c>wip[0].eu</c> for <c>skip-next-slice-due-to-wip</c> rows, or
-/// <c>stage1.eu</c> for <c>pr-merged-closeout</c> rows. Used by BOTH
+/// ← <c>wip[0].eu</c> for a <c>skip-next-slice-due-to-wip</c> row, or
+/// <c>stage1.eu</c> for a <c>pr-merged-closeout</c> row. The real legacy
+/// discriminator lives one level down: every legacy row's own <c>event</c>
+/// is the literal string <c>wake-summary</c>, and the branch above is
+/// selected by that record's <c>status</c> field instead (G542 repair round
+/// 2). A row whose <c>event</c> is directly <c>skip-next-slice-due-to-wip</c>
+/// or <c>pr-merged-closeout</c> (no <c>wake-summary</c>/<c>status</c>
+/// wrapper) is still matched the same way — direct-event compatibility is
+/// intentionally retained, not just the wake-summary/status shape. Used by
+/// BOTH
 /// <see cref="AutomationRunsAuditCommand"/> (the audit/repair surface) and
 /// <see cref="PublishDurableArtifactAnalyzer"/> (domain-scoped durable-state
 /// validation), so the two surfaces can never disagree about which rows are
@@ -33,6 +41,8 @@ internal static class RunsLogRowInspector
 
     public const string EventSkipNextSliceDueToWip = "skip-next-slice-due-to-wip";
     public const string EventPrMergedCloseout = "pr-merged-closeout";
+    public const string EventWakeSummary = "wake-summary";
+    public const string FieldStatus = "status";
 
     public const string DerivationWithinRecord = "within-record";
     public const string DerivationInferredPeerConvention = "inferred-peer-convention";
@@ -90,12 +100,25 @@ internal static class RunsLogRowInspector
             if (missing.Contains(FieldExecutionUnit))
             {
                 TryGetNonEmptyString(root, FieldEvent, out var eventForDerivation);
-                if (string.Equals(eventForDerivation, EventSkipNextSliceDueToWip, StringComparison.Ordinal)
+
+                // G542 repair round 2: the real legacy rows all carry
+                // event="wake-summary" — the branch discriminator lives in
+                // that record's own `status` field, not `event`. Direct-
+                // event compatibility (event itself equal to one of the two
+                // branch names, no wake-summary/status wrapper) is kept as
+                // a fallback so rows in that shape still derive too.
+                var discriminator = eventForDerivation;
+                if (string.Equals(eventForDerivation, EventWakeSummary, StringComparison.Ordinal))
+                {
+                    TryGetNonEmptyString(root, FieldStatus, out discriminator);
+                }
+
+                if (string.Equals(discriminator, EventSkipNextSliceDueToWip, StringComparison.Ordinal)
                     && TryGetWipFirstEu(root, out var wipEuRaw))
                 {
                     repairs[FieldExecutionUnit] = new RunsLogFieldRepair(FieldExecutionUnit, wipEuRaw, DerivationWithinRecord, SourceWipFirstEu);
                 }
-                else if (string.Equals(eventForDerivation, EventPrMergedCloseout, StringComparison.Ordinal)
+                else if (string.Equals(discriminator, EventPrMergedCloseout, StringComparison.Ordinal)
                     && TryGetStage1Eu(root, out var stage1EuRaw))
                 {
                     repairs[FieldExecutionUnit] = new RunsLogFieldRepair(FieldExecutionUnit, stage1EuRaw, DerivationWithinRecord, SourceStage1Eu);

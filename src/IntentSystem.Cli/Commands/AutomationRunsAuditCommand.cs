@@ -254,12 +254,14 @@ internal static class AutomationRunsAuditCommand
             var patchedContent = string.Join('\n', patchedLines);
 
             // G542 repair round 2: newly appended `runs-repair` events use
-            // the SAME line-ending convention already dominant in the
-            // file (CRLF if the file uses it, LF otherwise) rather than
-            // unconditionally LF — appending bare `\n` lines onto a CRLF
-            // file would itself introduce a new, mixed-line-ending byte
-            // difference the file never had before.
-            var lineEnding = originalContent.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+            // the file's actual dominant line-ending convention rather than
+            // unconditionally LF or a mere presence check for "\r\n" —
+            // appending bare `\n` lines onto a CRLF-majority file (or vice
+            // versa) would itself introduce a new, mixed-line-ending byte
+            // difference the file never had before. DetectDominantLineEnding
+            // counts CRLF occurrences against LONE-LF occurrences (an LF not
+            // immediately preceded by CR) across the whole original content.
+            var lineEnding = DetectDominantLineEnding(originalContent);
             var appended = string.Concat(repairEvents.Select(evt => RunLogSerializer.SerializeLine(evt) + lineEnding));
             var separator = patchedContent.Length > 0 && !patchedContent.EndsWith('\n') ? lineEnding : string.Empty;
             WriteTextPreservingBom(runLogPath, patchedContent + separator + appended, bomPrefix);
@@ -294,6 +296,38 @@ internal static class AutomationRunsAuditCommand
     private static (string JsonPart, string TrailingCr) SplitTrailingCarriageReturn(string rawLine)
     {
         return rawLine.EndsWith('\r') ? (rawLine[..^1], "\r") : (rawLine, string.Empty);
+    }
+
+    /// <summary>
+    /// G542 repair round 2: counts every CRLF occurrence against every LONE
+    /// LF occurrence (an <c>\n</c> not immediately preceded by <c>\r</c>)
+    /// across the whole original file content and returns whichever
+    /// convention strictly dominates. Deterministic tie rule (including the
+    /// zero-newlines/single-line case, where both counts are 0): <c>\n</c>
+    /// wins — CRLF must strictly outnumber lone LF to be selected.
+    /// </summary>
+    private static string DetectDominantLineEnding(string content)
+    {
+        var crlfCount = 0;
+        var loneLfCount = 0;
+        for (var index = 0; index < content.Length; index++)
+        {
+            if (content[index] != '\n')
+            {
+                continue;
+            }
+
+            if (index > 0 && content[index - 1] == '\r')
+            {
+                crlfCount++;
+            }
+            else
+            {
+                loneLfCount++;
+            }
+        }
+
+        return crlfCount > loneLfCount ? "\r\n" : "\n";
     }
 
     private static readonly byte[] Utf8BomBytes = { 0xEF, 0xBB, 0xBF };

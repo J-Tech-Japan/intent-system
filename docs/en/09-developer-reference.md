@@ -1525,8 +1525,15 @@ inferred owning domain, and — when one exists — a repair derived from
 **within the record itself**:
 
 - **`ts`** ← the record's own `timestamp` field.
-- **`execution_unit`** ← `wip[0].eu` for `skip-next-slice-due-to-wip` rows,
-  or `stage1.eu` for `pr-merged-closeout` rows.
+- **`execution_unit`** ← `wip[0].eu` for a `skip-next-slice-due-to-wip` row,
+  or `stage1.eu` for a `pr-merged-closeout` row. In the real legacy rows the
+  branch discriminator lives one level down: every such row's own `event` is
+  the literal string `wake-summary`, and the branch is selected by that
+  record's own `status` field instead. A row whose `event` is directly
+  `skip-next-slice-due-to-wip` or `pr-merged-closeout` (no
+  `wake-summary`/`status` wrapper) is still matched the same way — direct-
+  event compatibility is intentionally retained alongside the
+  `wake-summary`/`status` shape, not replaced by it.
 
 These are the only two documented **within-record** derivations (design
 ruling, 2026-07-20) — the value already exists inside the record under a
