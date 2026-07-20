@@ -1568,11 +1568,65 @@ intent-cli intent facet-check --domain <d> --terms CreateOrder,ShipPackage --for
   value, match_kind}]}], collisions: [...], unmatched}], coverage:
   {nodes: [...], gap, scope_status, scope_status_detail,
   scope_warnings: [{hint, reason}]} | null, warnings: [{path, reason}]}`。
-- この slice の Out of Scope（完全な境界は G531 issue を参照）:
+- この slice の Out of Scope(完全な境界は G531 issue を参照):
   semantic/embedding ベースのマッチング、あらゆる blocking/gating の
   挙動、reviewer guidance や orchestrator delegation preflight への
   組み込み、そしてどの domain tree への annotation も — このコマンドは
   読み取りと報告のみを行います。
+
+---
+
+### セーフティネットの再配置: design-thread watchdog を推奨に、外部 OS スケジューラを retire(G539)
+
+G526 の外部 cron/launchd heartbeat 推奨は、**5 日間連続してすべての実行が
+サイレントに失敗** しました(2026-07-15..07-20)— ラッパーの `gh`/agmsg 認証は
+ログイン keychain に存在し、cron ジョブはそこにアクセスできないため、認証情報の
+ステップを一度も通過できませんでした。2026-07-20 の 105 分のスタール
+(G538 / PR #1179)は、`automation stalled-work` が正しく検知した
+(`pr-created-not-reviewing, age=105m`)にもかかわらず回復されず、人間による
+ping だけがそれを表面化させました。`intent-cli guide orchestrator-thread` は
+これに応じて再配置されました:
+
+- **design-thread watchdog(推奨されるデフォルト)** — **design** スレッドから
+  実行する **30 分クラス** の間隔の watchdog loop: `intent-cli automation
+  heartbeat --domain <domain> --repo <owner/repo> --format json` を呼び出し、
+  `stale=true` の場合は返された `message_body` を使って orchestrator へ
+  最大 1 通の canonical な nudge を送ります — それ以外は完全に沈黙します。
+  生きた、人間が監視しているエージェントセッションの内側で動作するため、
+  見えない外部プロセスとは異なり、別途の credential/keychain セットアップも
+  不要で、壊れた瞬間にオペレーターの画面上で可視化されます。既存の watchdog
+  安全ルール(delegation を重複させない、permission プロンプトをクリアしない、
+  進行中の作業をキャンセルしない、強制クローズしない、durable state を
+  手編集しない)と停止条件は逐語的に維持されます。
+- **failure visibility は staleness とは異なります。** 沈黙は健全な
+  `stale=false` の heartbeat 結果にのみ許されます。heartbeat コマンドの
+  実行失敗や不正な/オブジェクトでない出力は、この wake の watchdog 自身の
+  turn 出力で可視的に表面化させなければなりません — 決して黙って飲み込んだり、
+  黙ってリトライしたりしません。沈黙した失敗こそが、このスライスが外部 OS
+  スケジューラを retire する理由そのものだからです — その一方で、壊れた入力
+  から agmsg の nudge を捏造・送信することは決してありません。実際に送信
+  されるメッセージは、本物の `stale=true` 結果の場合だけです。
+- **orchestrator-side の長間隔 automation(選択可能な alternative)** — 同じ
+  `automation heartbeat` の呼び出しを、design スレッドではなく
+  **orchestrator 自身のスレッド** の中で、30〜60 分クラスの間隔の長間隔
+  automation(Codex automation または Claude 同一スレッド `/loop`)から
+  直接実行します。トレードオフ: design-side(推奨)は、1 つの追加ホップ
+  (design watchdog から orchestrator へ)の代償として orchestrator を厳密に
+  loopless に保ちます。orchestrator-side はそのホップを取り除きますが、
+  orchestrator 自身が定期ループを実行する必要があります — これは
+  orchestrator-message モードが定常状態で避けるよう設計されているまさに
+  そのパターンです。
+- **外部 OS スケジューラの heartbeat は RETIRED です。** cron/launchd 推奨は
+  (単に降格されるのではなく)完全に retire されました: credential-store
+  access、invisible failure、agmsg モデルの完全に外側で動作すること、
+  いずれも失格の理由です。`intent-cli automation heartbeat` /
+  `automation stalled-work` 自体は **変更なし** であり、引き続き
+  scheduler-agnostic です — cron を含む任意のスケジューラが引き続き
+  呼び出せます — ガイドが外部 OS スケジューラをメカニズムとして推奨しなく
+  なっただけです。5 分の in-session orchestrator fallback タイマー
+  (legacy、discouraged)は意味が変わりません。
+
+詳細: [エージェントメッセージオーケストレーション](12-agent-message-orchestration.md)。
 
 ---
 
