@@ -164,11 +164,37 @@ Verify the `.sha256` sidecar before use.
 dotnet tool update -g JTechJapan.IntentSystem.Cli --version 0.5.0
 ```
 
-Everything in this release is additive: the two new commands
-(`intent facet-check`, `queue reprioritize`) are opt-in surfaces, `facets:`
-frontmatter is an optional annotation, and the new stalled-work kinds only
-add finer-grained classification to an existing read-only surface. No
-existing command's default behavior changes.
+This release is **compatibility-conscious and non-breaking in intent**, but
+not every change is purely additive — a few slices correct the behavior of
+already-shipped commands, and consumers relying on the corrected behavior
+should read these carefully:
+
+- **Additive, no action needed**: the two new commands
+  (`intent facet-check`, `queue reprioritize`) are opt-in surfaces, `facets:`
+  frontmatter is an optional annotation, and G533's new stalled-work kinds
+  only add finer-grained classification to an existing read-only surface.
+- **Corrective — existing command behavior changes**:
+  - **G535** — `automation pr-transition --transition request-update` now
+    also clears a stale `intent-pr-rereview-ready` label in the same write.
+    A caller that previously expected `request-update` to leave that label
+    untouched (e.g. re-applying it manually afterward) will see it gone.
+  - **G536** — `issue publish-flow`'s idempotent rerun now independently
+    verifies and restores all three durable artifacts instead of trusting
+    one signal for all three; a rerun that previously silently no-opped on
+    a partially-failed prior run may now perform additional writes (or fail
+    loud) where it previously did neither.
+  - **G532/G534** — `automation stalled-work`'s execution-unit/domain
+    identification is stricter (an uncorroborated candidate is now
+    excluded rather than possibly misattributed), and `intent next-slice`'s
+    retirement-evidence combination is stricter (a lifecycle/queue-state
+    contradiction that previously resolved silently in one direction now
+    excludes the candidate and raises a diagnostic instead). A candidate
+    that previously matched loosely may now be excluded or flagged where it
+    previously was not.
+
+No package id, license, or CLI argument/flag shape changes; every corrective
+change above is a bug fix to bring behavior in line with the documented
+intent of its own command, not a new command surface or a removed one.
 
 **Consumers running the sekiban-as-a-service-orch field-workaround set**
 (SKS-G8xx: title-convention workaround, duplicated top-level `domain:`

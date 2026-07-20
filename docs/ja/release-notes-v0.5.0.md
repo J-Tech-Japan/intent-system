@@ -158,11 +158,37 @@ dotnet tool install -g JTechJapan.IntentSystem.Cli --version 0.5.0
 dotnet tool update -g JTechJapan.IntentSystem.Cli --version 0.5.0
 ```
 
-この リリースはすべて加算的な変更です: 2 つの新しいコマンド(`intent facet-check`、
-`queue reprioritize`)はオプトインのサーフェスであり、`facets:` frontmatter は
-オプションの annotation であり、新しい stalled-work kind は既存の read-only な
-サーフェスへより細かい分類を追加するだけです。既存コマンドのデフォルト挙動は
-変更されません。
+本リリースは **compatibility-conscious かつ non-breaking な意図** で作られていますが、
+すべての変更が純粋に加算的というわけではありません — いくつかのスライスは既に
+出荷済みのコマンドの挙動を修正しており、その修正済みの挙動に依存しているコンシューマーは
+注意して読んでください:
+
+- **加算的で対応不要**: 2 つの新しいコマンド(`intent facet-check`、
+  `queue reprioritize`)はオプトインのサーフェスであり、`facets:` frontmatter は
+  オプションの annotation であり、G533 の新しい stalled-work kind は既存の
+  read-only なサーフェスへより細かい分類を追加するだけです。
+- **修正的 — 既存コマンドの挙動が変わります**:
+  - **G535** — `automation pr-transition --transition request-update` は今や、
+    同じ write の中で古い `intent-pr-rereview-ready` ラベルもクリアします。
+    以前は `request-update` がそのラベルに触れないことを期待していた呼び出し元
+    (例えば事後に手動で再適用していた場合)は、そのラベルが消えていることに
+    気づくはずです。
+  - **G536** — `issue publish-flow` の idempotent な再実行は、1 つのシグナルを
+    信頼して 3 つすべてを推測するのではなく、3 つの durable artifact すべてを
+    独立に検証・復元するようになりました。以前は部分的に失敗した先行実行に対して
+    黙って no-op していた再実行が、今後は追加の書き込みを行う(あるいは
+    fail loud する)ことがあります。
+  - **G532/G534** — `automation stalled-work` の execution-unit/domain 識別は
+    より厳格になりました(裏付けの無い candidate は、誤って帰属させられる
+    可能性があった従来と異なり、今後は除外されます)。`intent next-slice` の
+    retirement エビデンスの組み合わせもより厳格になりました(以前は一方向に
+    黙って解決されていた lifecycle/queue-state の矛盾が、今後は candidate を
+    除外し診断を発生させます)。以前は緩く一致していた candidate が、今後は
+    除外またはフラグ付けされる可能性があります。
+
+package id・ライセンス・CLI の引数/フラグの形状に変更はありません。上記の
+修正的な変更はいずれも、新しいコマンドサーフェスや廃止されたサーフェスではなく、
+各コマンド自身の documented intent に挙動を合わせるためのバグ修正です。
 
 **sekiban-as-a-service-orch のフィールドワークアラウンド一式**(SKS-G8xx:
 title-convention workaround、重複したトップレベルの `domain:` フィールド、
