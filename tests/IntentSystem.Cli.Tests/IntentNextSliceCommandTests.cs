@@ -317,6 +317,170 @@ public sealed class IntentNextSliceCommandTests
         Assert.Equal("G532", root.GetProperty("candidate").GetProperty("execution_unit").GetString());
     }
 
+    // ─── G543: legacy/out-of-enum priority values (e.g. "medium") ──────────
+
+    [Fact]
+    public void Execute_FieldScenario_MediumPriorityUnit_OutrankedByHighPriorityUnit_G543()
+    {
+        // G543 field observation, 2026-07-20: the host queue-state has 59
+        // items at priority "medium" — a value outside the documented
+        // high|normal|low enum. QueuePriorityClassification.Rank ranks any
+        // out-of-enum value the same as "normal" (between high and low).
+        // This proves "high" still outranks "medium" (authored later, but
+        // priority-first ordering still wins).
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G610/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G611/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-20T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G610",
+                  "title": "authored first, legacy medium priority",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "medium"
+                },
+                {
+                  "execution_unit": "G611",
+                  "title": "authored second, documented high priority",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "high"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("G611", document.RootElement.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_FieldScenario_MediumPriorityUnit_OutranksLowPriorityUnit_G543()
+    {
+        // The other half of the position proof: "medium" must still
+        // outrank "low", exactly like "normal" would, even though it is
+        // authored first (so authoring order alone would have picked it
+        // anyway — the assertion below is really pinned by the companion
+        // test above, which proves "medium" loses to "high").
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G612/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G613/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-20T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G612",
+                  "title": "authored first, documented low priority",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "low"
+                },
+                {
+                  "execution_unit": "G613",
+                  "title": "authored second, legacy medium priority",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "medium"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("G613", document.RootElement.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
+    [Fact]
+    public void Execute_MediumAndNormalPriorityUnits_ShareExactlyTheSameRank_AuthoringOrderTiebreaks_G543()
+    {
+        // "medium" doesn't just fall SOMEWHERE between high and low — it
+        // ranks IDENTICALLY to "normal", proven by the authoring-order
+        // tiebreak going to whichever of the two was authored first,
+        // regardless of which one is "medium" and which is "normal".
+        using var workspace = new IntentNextSliceWorkspace();
+        workspace.WriteFile(".intent-cli/issues/G614/github-body.md", BuildCompleteContractBody());
+        workspace.WriteFile(".intent-cli/issues/G615/github-body.md", BuildCompleteContractBody());
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-20T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "G614",
+                  "title": "authored first, legacy medium priority",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "medium"
+                },
+                {
+                  "execution_unit": "G615",
+                  "title": "authored second, documented normal priority",
+                  "state": "queued",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(workspace.Context, ["--dry-run"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        // "medium", authored FIRST, wins the tiebreak over "normal" —
+        // proving the two ranked identically (a real ordering difference
+        // between them would have picked "normal" regardless of order).
+        Assert.Equal("G614", document.RootElement.GetProperty("candidate").GetProperty("execution_unit").GetString());
+    }
+
     [Fact]
     public void Execute_HighPriorityUnitExcludedByLifecycleGate_NormalPriorityUnitStillSelected()
     {

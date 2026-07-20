@@ -41,6 +41,38 @@ public sealed class QueueTransitionCommandTests
     }
 
     [Fact]
+    public void Execute_GivenLegacyMediumPriorityItem_TransitionNeverRewritesPriority_G543()
+    {
+        // G543 acceptance criterion: no command rewrites priority values as
+        // an unrelated side effect. `queue transition` mutates State (and,
+        // for blocking transitions, BlockedBy) — it must never touch a
+        // pre-existing out-of-enum Priority value like the field-observed
+        // "medium", even though it re-serializes the whole QueueState.
+        using var tempDirectory = new TemporaryDirectory();
+        var repoRoot = tempDirectory.CreateDirectory("repo");
+        var queueState = CreateQueueState();
+        var withMediumPriority = queueState with
+        {
+            Items = queueState.Items
+                .Select(item => item.ExecutionUnit == "A2" ? item with { Priority = "medium" } : item)
+                .ToArray(),
+        };
+        tempDirectory.CreateFile(
+            Path.Combine("repo", ".intent-cli", "queue-state.json"),
+            QueueStateSerializer.Serialize(withMediumPriority));
+        using var writer = new StringWriter();
+
+        var exitCode = QueueTransitionCommand.Execute(CreateContext(repoRoot), ["A2", "completed"], writer);
+
+        Assert.Equal(0, exitCode);
+        var updatedState = QueueStateSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "queue-state.json")));
+        var updatedA2 = updatedState.Items.Single(item => item.ExecutionUnit == "A2");
+        Assert.Equal(QueueItemState.Completed, updatedA2.State);
+        Assert.Equal("medium", updatedA2.Priority);
+    }
+
+    [Fact]
     public void Execute_GivenBlockedTransitionWithReason_UpdatesBlockedByAndAppendsReasonedRunLog()
     {
         using var tempDirectory = new TemporaryDirectory();

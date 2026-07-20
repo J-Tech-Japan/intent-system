@@ -1066,6 +1066,55 @@ case-insensitive)。`next-slice` の ranking function は、認識できない
 そのため、手作業で書かれた、あるいは historical な `queue-state.json`
 ファイルがこの field によって fail closed することはありません。
 
+**Legacy / out-of-enum な priority 値とその ordering rule(G543)。**
+Field observation、2026-07-20: host の `queue-state.json`(1467 items)
+は `high` 1405、`medium` 59、`normal` 3 という分布であり、`medium` は
+documented された `high|normal|low` enum に含まれません。documented
+enum 自体は `medium` などの legacy 値を含むように拡張**しません**——
+その代わり、既存の out-of-enum なデータがどう振る舞うかを正確に定義し、
+実データに対する selector の挙動が undefined にならないようにします:
+
+- **priority が何のためのものか**: すでに **eligible** な candidate
+  だけを order します(上記のとおり、すべての gate が引き続き優先され
+  ます)。host のように 1467 items 中 1405 items が `high` である場合、
+  priority-first selection は `high` bucket 内では実質的に authoring
+  order に退化します——これは欠陥ではなく、ほぼすべての item が同じ
+  priority class を共有しているときにこの機構が生む自然な形です。
+- **すべての値(legacy 値を含む)に対する ordering rule**: `high` が
+  最初、`low` が最後にランクされ、**それ以外の値——欠けている値、空の
+  値、`medium` のような out-of-enum/legacy な文字列すべて——は明示的な
+  `normal` と全く同じにランクされ**、`high` と `low` の間に位置します。
+  これは total かつ deterministic です——selector の ordering position が
+  undefined になる priority 値は存在しません。
+  `QueuePriorityClassification.Rank`(`IntentSystem.Cli.Commands` 内)が
+  唯一の shared 実装であり、`next-slice` の ordering と(後述の)drift
+  report の両方がこれを使うため、この 2 つの surface が食い違うことは
+  ありません。リテラルの `"medium"` item を含む regression fixture が
+  この位置を証明しています。
+- **Migration recipe(新規 command は不要)**: `queue reprioritize
+  <execution-unit> --priority <high|normal|low> --reason <text> --write`
+  は、legacy 値からの canonical な migration path としてすでに機能して
+  います——validate されるのは *requested* 値だけで、documented enum に
+  対して検証されます。*既存の* 値は validation 無しに読み取られ、
+  report され(`old_priority`)、比較されます。そのため `medium`(他の
+  legacy 値も同様)にある item は、`queue-state.json` を hand-edit する
+  ことなく documented な値へ移行できます。下記で説明する fail-closed・
+  audited な `priority-changed` runs event はそのまま適用されます。
+- **Drift visibility**: **`intent-cli queue priority-drift [--format
+  json|markdown]`** は新しい read-only な report です——
+  `queue-state.json` や `runs.jsonl` を一切 mutate しません——存在する
+  distinct な priority 値ごとの item count を一覧表示し、常に
+  `high`/`normal`/`low` を(count が 0 でも)含めて report の形を安定
+  させ、documented enum の外にある値を flag します(`has_drift: true`、
+  `out_of_enum_values: [...]`)。out-of-enum な値は count の降順で
+  order され、tie は alphabetically に解決されます。これにより、
+  59 item の `medium` case を手書き script 無しに可視化できます。
+- **Silent な書き換えの禁止**: 無関係な操作の side effect として
+  `priority` を mutate する command はありません——例えば `queue
+  transition` は `state`/`blocked_by` を変更するために `QueueState`
+  全体を re-serialize しますが、同じ item に既存の `medium` 値があれば
+  byte-for-byte で変更されず残ります。
+
 **Review repair — `queue reprioritize --write` は fail-closed かつ
 repairable な write 順序を使います。** `queue-state.json` を必須の
 `priority-changed` runs event の追記より先に書き込むと、追記 step が
