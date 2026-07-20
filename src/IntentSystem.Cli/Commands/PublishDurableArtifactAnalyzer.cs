@@ -68,7 +68,9 @@ internal static class PublishDurableArtifactAnalyzer
         string repo,
         string queueStatePath,
         string publishYamlPath,
-        string runLogPath)
+        string runLogPath,
+        CliContext? context = null,
+        string? domain = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
@@ -87,7 +89,8 @@ internal static class PublishDurableArtifactAnalyzer
                 publishSignal.InvalidReason!, publishSignal.Detail!, publishYamlPath);
         }
 
-        var runsSignal = ReadRunsSignal(runLogPath, executionUnit);
+        var crossDomainWarnings = new List<string>();
+        var runsSignal = ReadRunsSignal(runLogPath, executionUnit, context, domain, crossDomainWarnings);
         if (runsSignal.Kind == ArtifactSignalKind.Invalid)
         {
             return PublishDurableArtifactAnalysis.Invalid(
@@ -110,7 +113,7 @@ internal static class PublishDurableArtifactAnalyzer
 
         if (present.Count == 0)
         {
-            return PublishDurableArtifactAnalysis.NoExistingIssue();
+            return PublishDurableArtifactAnalysis.NoExistingIssue(crossDomainWarnings);
         }
 
         // The confirmed target repo participates in reconciliation as its
@@ -146,7 +149,7 @@ internal static class PublishDurableArtifactAnalyzer
             gaps.Add(GapRunsEventMissing);
         }
 
-        return PublishDurableArtifactAnalysis.ExistingIssue(canonicalNumber, canonicalUrl!, gaps);
+        return PublishDurableArtifactAnalysis.ExistingIssue(canonicalNumber, canonicalUrl!, gaps, crossDomainWarnings);
     }
 
     private readonly record struct IdentityEntry(string Source, string? Repo, int? Number, string? Url);
@@ -355,7 +358,37 @@ internal static class PublishDurableArtifactAnalyzer
         return ArtifactSignal.Present(urlRepo, number, artifact.CreatedIssueUrl);
     }
 
-    private static ArtifactSignal ReadRunsSignal(string runLogPath, string executionUnit)
+    /// <summary>
+    /// G542: domain-scoped when both <paramref name="context"/> and
+    /// <paramref name="domain"/> are supplied — narrows the blast radius of
+    /// a legacy malformed row so one row belonging to an UNRELATED domain
+    /// can no longer block every domain's publish-flow. Field incident,
+    /// 2026-07-20: publishing G539 (domain <c>intent-cli</c>) was refused
+    /// twice by legacy rows belonging to the <c>sekiban-as-a-service</c>
+    /// domain.
+    ///
+    /// Parses runs.jsonl LINE BY LINE (not the single whole-file
+    /// <see cref="RunLogSerializer.DeserializeAll"/> parse) so a malformed
+    /// row does not abort parsing of every other line. A malformed row
+    /// whose owning domain (see <see cref="RunsLogRowInspector.ResolveOwningDomain"/>)
+    /// resolves to something OTHER than <paramref name="domain"/> is
+    /// recorded into <paramref name="crossDomainWarnings"/> and skipped —
+    /// never fails the analysis closed. A malformed row belonging to
+    /// <paramref name="domain"/> itself, or whose owning domain cannot be
+    /// resolved at all (never assume it belongs to someone else), still
+    /// fails closed exactly as before — this narrows the blast radius, it
+    /// never weakens validation of the domain actually being published.
+    /// When <paramref name="context"/> or <paramref name="domain"/> is
+    /// omitted, falls back to the original whole-file parse unchanged
+    /// (backward compatible for callers that have not opted into
+    /// domain scoping).
+    /// </summary>
+    private static ArtifactSignal ReadRunsSignal(
+        string runLogPath,
+        string executionUnit,
+        CliContext? context,
+        string? domain,
+        List<string> crossDomainWarnings)
     {
         if (!File.Exists(runLogPath))
         {
@@ -363,13 +396,58 @@ internal static class PublishDurableArtifactAnalyzer
         }
 
         IReadOnlyList<RunEvent> events;
-        try
+        if (context is null || string.IsNullOrWhiteSpace(domain))
         {
-            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            try
+            {
+                events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
+            {
+                return ArtifactSignal.Invalid(InvalidRunsMalformed, $"runs.jsonl could not be parsed: {exception.Message}");
+            }
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
+        else
         {
-            return ArtifactSignal.Invalid(InvalidRunsMalformed, $"runs.jsonl could not be parsed: {exception.Message}");
+            var content = File.ReadAllText(runLogPath);
+            var rawLines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+            var accumulated = new List<RunEvent>();
+            for (var index = 0; index < rawLines.Length; index++)
+            {
+                var rawLine = rawLines[index];
+                if (string.IsNullOrWhiteSpace(rawLine))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    accumulated.Add(RunLogSerializer.DeserializeLine(rawLine));
+                }
+                catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
+                {
+                    var lineNumber = index + 1;
+                    var finding = RunsLogRowInspector.Inspect(lineNumber, rawLine);
+                    var owningDomain = finding is not null
+                        ? RunsLogRowInspector.ResolveOwningDomain(context, finding.ExecutionUnit, finding.By, out _)
+                        : null;
+
+                    if (owningDomain is not null && !string.Equals(owningDomain, domain, StringComparison.Ordinal))
+                    {
+                        crossDomainWarnings.Add(
+                            $"runs.jsonl line {lineNumber} is malformed and could not be parsed ({exception.Message}), "
+                            + $"but is owned by domain '{owningDomain}', not '{domain}' — not blocking this publish. "
+                            + "Run `intent-cli automation runs-audit` to inspect/repair it.");
+                        continue;
+                    }
+
+                    return ArtifactSignal.Invalid(
+                        InvalidRunsMalformed,
+                        $"runs.jsonl line {lineNumber} could not be parsed: {exception.Message}");
+                }
+            }
+
+            events = accumulated;
         }
 
         var matching = events
@@ -556,18 +634,28 @@ internal sealed record PublishDurableArtifactAnalysis
 
     public bool IsFullySynced => HasExistingIssue && !IsInvalid && Gaps.Count == 0;
 
-    public static PublishDurableArtifactAnalysis NoExistingIssue() => new()
+    /// <summary>
+    /// G542: non-blocking findings — currently only cross-domain malformed
+    /// runs.jsonl rows (see <see cref="PublishDurableArtifactAnalyzer.ReadRunsSignal"/>),
+    /// each naming `runs-audit` as the surface to inspect/repair it. Empty
+    /// unless the caller opted into domain-scoped analysis.
+    /// </summary>
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+
+    public static PublishDurableArtifactAnalysis NoExistingIssue(IReadOnlyList<string>? warnings = null) => new()
     {
         HasExistingIssue = false,
         Gaps = Array.Empty<string>(),
+        Warnings = warnings ?? Array.Empty<string>(),
     };
 
-    public static PublishDurableArtifactAnalysis ExistingIssue(int? issueNumber, string issueUrl, IReadOnlyList<string> gaps) => new()
+    public static PublishDurableArtifactAnalysis ExistingIssue(int? issueNumber, string issueUrl, IReadOnlyList<string> gaps, IReadOnlyList<string>? warnings = null) => new()
     {
         HasExistingIssue = true,
         CanonicalIssueNumber = issueNumber,
         CanonicalIssueUrl = issueUrl,
         Gaps = gaps,
+        Warnings = warnings ?? Array.Empty<string>(),
     };
 
     public static PublishDurableArtifactAnalysis Invalid(string reason, string detail, string artifactPath) => new()

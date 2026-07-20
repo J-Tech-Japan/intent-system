@@ -1630,6 +1630,84 @@ ping だけがそれを表面化させました。`intent-cli guide orchestrator
 
 ---
 
+### runs-log スキーマ監査・修復と、domain-scoped な publish-flow validation (G542)
+
+フィールドインシデント、2026-07-20: G539(domain `intent-cli`)の publish が、
+**sekiban-as-a-service** domain に属するレガシーな `runs.jsonl` の行によって
+durable-state 分析で **2 回** 拒否されました — 最初は `ts`/`by` が欠落した 1 行、
+次に `execution_unit` が欠落した 16 行。G542 以前の validator
+(`RunLogSerializer.DeserializeAll`)はファイル全体を 1 回の呼び出しでパースし、
+domain に関わらずファイル中の **最初の** malformed な行で例外を投げるため、
+1 つ修復するたびに次の違反行が現れるだけで、canonical な一括監査/修復サーフェスは
+存在しませんでした。
+
+**`intent-cli automation runs-audit [--repo <r>] [--domain <d>] [--write]
+[--apply-inferred] --format json|markdown`** は、read-only をデフォルトとする
+サーフェスで、**1 pass** で **すべての** malformed な行を報告します —
+行番号、欠落している必須フィールド(`ts`、`event`、`execution_unit`、`by`)、
+推定される owning domain、そして存在する場合は **レコード自身の内部から**
+導出される修復値:
+
+- **`ts`** ← レコード自身の `timestamp` フィールドから。
+- **`execution_unit`** ← `skip-next-slice-due-to-wip` 行では `wip[0].eu` から、
+  `pr-merged-closeout` 行では `stage1.eu` から。
+
+これらが唯一の documented された **within-record** 導出です(design ruling、
+2026-07-20)— 値はすでに別のキーの下でレコード内部に存在しているため、
+canonical なキーへコピーすることは推測ではなく lossless な正規化です。
+within-record のソースが **無い** フィールド(最も典型的には `by`)は常に
+`non_derivable` として報告されます。report にはそれでも `inferred_suggestion`
+(同じ `event` の妥当な peer 行の中での多数派 `by` 値と、その evidence。例:
+"all 12 peer record(s) of event 'issue-created' use by=issue-publish-flow")
+が含まれることがありますが、それは evidence であってレコードそのものでは
+ありません — `runs.jsonl` は audit trail であり、レコードがそう言っていないのに
+「このレコードは X によって authored された」と書き込むことは、存在しない fact を
+記録することになります。
+
+- **`--write`** は within-record な修復のみを適用し、修復ごとに 1 つの
+  `runs-repair` audit event を追記し(行、修復されたフィールド、derivation
+  class、source を記録)、ファイルの他のすべてのバイト — および修復対象の
+  行自身の他のすべてのバイト — を変更しません(欠落しているキー/値のペアは、
+  行の先頭の `{` の直後に挿入されるだけで、他は一切動きません)。
+  `execution_unit` 自体が欠落しており within-record のソースが無い行は、
+  `--write` の下では(その行の他の導出可能なフィールドも含めて)完全に拒否
+  されます — `runs-repair` audit event を紐づけるための安全な unit が無く、
+  "unknown" を捏造することはそれ自体が durable trail 上の推測になってしまう
+  ためです。
+- **`--apply-inferred`**(独立した明示的なフラグで、`--write` だけでは
+  決して implied されず、`--write` なしで渡された場合は usage error として
+  拒否されます)は、peer-convention の `inferred_suggestion` 値をさらに
+  適用し、`derivation: inferred-peer-convention` を記録する **別の**
+  `runs-repair` event として記録します — 2 つの derivation class は、
+  たとえ同じ行を修復する場合でも、同じ audit event に混ぜられることは
+  決してありません。
+- パースできない行(有効な JSON でない、または JSON だがオブジェクトでない)は、
+  すべての必須フィールドが欠落しているものとして報告され、どちらのモードでも
+  決して修復されません。
+- 何も malformed でなければ clean report + exit `0`。
+
+**`issue publish-flow` の durable-state 分析は domain-scoped になりました。**
+共有される `PublishDurableArtifactAnalyzer`(G536)は、1 回の whole-file な
+`DeserializeAll` 呼び出しの代わりに、今や `runs.jsonl` を **行単位** で
+パースし、各 malformed な行の owning domain を `runs-audit` と同じ方法で
+解決します(その unit 自身の `packet.yaml` の `domain:` フィールドが
+ディスク上にまだ存在する場合はそれを使用。それ以外の場合は、
+`intents/<domain>/automation/bindings.md` の `execution_unit_regex` に
+一意に一致する候補 domain が 1 つだけあればそれを使用。それ以外の場合は、
+行の `by` フィールド内の domain らしい prefix を、実在する domain
+ディレクトリと突き合わせて corroborate)。**publish 対象と異なる** domain に
+解決された malformed な行は、hard block ではなく **warning**(`runs-audit`
+を名指しし、結果の `warnings` に表示)になります — publish は続行されます。
+**同じ** domain に解決された行、または owning domain がまったく解決できない
+行(他の誰かに属すると決して推測しない)は、以前と同様に **fail closed**
+します — これはレガシーな行の blast radius を狭めるものであり、publish
+対象の domain 自体の validation を弱めるものではありません。
+`automation publish-recovery` は意図的にレガシーな whole-file の挙動のまま
+残しています(このスライスのスコープ外)。`RunLogSerializer` /
+RunEvent の必須フィールド契約は変更されていません。
+
+---
+
 ## バージョンフロー
 
 リポジトリのバージョンポリシーは `eng/version.json` に記載されています。`stableVersion`
