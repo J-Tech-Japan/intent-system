@@ -300,9 +300,13 @@ internal static class IntentNextSliceCommand
             // as the in-class tiebreak. `OrderBy` (LINQ) is a STABLE sort,
             // so when every item ranks the same (no priorities set, or all
             // "normal" — the enqueue default), this is a byte-identical
-            // no-op versus the pre-G537 authoring-order behavior.
+            // no-op versus the pre-G537 authoring-order behavior. G543:
+            // ranking itself (including every out-of-enum/legacy value,
+            // e.g. field-observed "medium") is the single shared
+            // <see cref="QueuePriorityClassification.Rank"/> — see there
+            // for the documented, deterministic rule.
             queued = queued
-                .OrderBy(unit => PriorityRank(priorityByUnit.GetValueOrDefault(unit)))
+                .OrderBy(unit => QueuePriorityClassification.Rank(priorityByUnit.GetValueOrDefault(unit)))
                 .ToList();
         }
 
@@ -753,28 +757,6 @@ internal static class IntentNextSliceCommand
     }
 
     /// <summary>
-    /// G359: Returns true when the given <paramref name="executionUnit"/>
-    /// matches the domain's bindings.md <c>execution_unit_regex</c>. When
-    /// <paramref name="regex"/> is null (bindings file missing, field
-    /// missing, or invalid pattern) the filter is treated as "open" —
-    /// every unit passes so pre-G359 hosts and misconfigured bindings
-    /// never silently block all candidates.
-    /// </summary>
-    /// <summary>
-    /// G537: ranks a queue item's <c>priority</c> field for candidate
-    /// ordering — lower rank sorts earlier. Unrecognized, missing, or
-    /// empty values (including the pre-G537 default <c>"normal"</c>) all
-    /// rank the same as an explicit <c>"normal"</c>, so a host with no
-    /// priorities set (or all-normal) never changes ordering.
-    /// </summary>
-    private static int PriorityRank(string? priority) => priority?.Trim().ToLowerInvariant() switch
-    {
-        QueueReprioritizeCommand.PriorityHigh => 0,
-        QueueReprioritizeCommand.PriorityLow => 2,
-        _ => 1,
-    };
-
-    /// <summary>
     /// G537 review repair: the authoritative dependency/blocked-by
     /// eligibility gate for the `queued` candidate loop — mirrors
     /// <see cref="IntentSystem.Supervisor.QueueSelection.SelectNext"/>'s
@@ -801,6 +783,14 @@ internal static class IntentNextSliceCommand
         return true;
     }
 
+    /// <summary>
+    /// G359: Returns true when the given <paramref name="executionUnit"/>
+    /// matches the domain's bindings.md <c>execution_unit_regex</c>. When
+    /// <paramref name="regex"/> is null (bindings file missing, field
+    /// missing, or invalid pattern) the filter is treated as "open" —
+    /// every unit passes so pre-G359 hosts and misconfigured bindings
+    /// never silently block all candidates.
+    /// </summary>
     private static bool MatchesExecutionUnitRegex(Regex? regex, string executionUnit)
     {
         if (regex is null)

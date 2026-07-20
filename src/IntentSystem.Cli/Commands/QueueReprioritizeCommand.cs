@@ -32,9 +32,9 @@ internal static class QueueReprioritizeCommand
     private const string ModeDryRun = "dry-run";
     private const string ModeWrite = "write";
 
-    public const string PriorityHigh = "high";
-    public const string PriorityNormal = "normal";
-    public const string PriorityLow = "low";
+    public const string PriorityHigh = QueuePriorityClassification.High;
+    public const string PriorityNormal = QueuePriorityClassification.Normal;
+    public const string PriorityLow = QueuePriorityClassification.Low;
 
     public const string PriorityChangedEventName = "priority-changed";
     private const string ReprioritizeActor = "intent-cli";

@@ -180,6 +180,47 @@ public sealed class QueueReprioritizeCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_Write_MigratesLegacyMediumPriorityToDocumentedHigh_G543()
+    {
+        // G543: the canonical migration recipe for a legacy/out-of-enum
+        // priority value (e.g. the field-observed "medium", 59 items on
+        // the host) is this exact, already-working command -- only the
+        // REQUESTED value is validated against the documented enum; the
+        // OLD value is read/reported/compared with no validation at all,
+        // so an item currently at "medium" can move to any documented
+        // value without hand-editing queue-state.json. No new command was
+        // needed for this; this test locks the existing behavior in as
+        // the documented recipe.
+        using var workspace = new ReprioritizeWorkspace();
+        workspace.WriteQueueState(BuildQueueState(("G543", QueueItemState.Queued, "medium", linkedIssue: null)));
+        var changedAt = new DateTimeOffset(2026, 7, 20, 8, 0, 0, TimeSpan.Zero);
+        QueueReprioritizeCommand.UtcNowFactory = () => changedAt;
+
+        using var writer = new StringWriter();
+        var exitCode = QueueReprioritizeCommand.Execute(
+            workspace.Context,
+            ["G543", "--priority", "high", "--reason", "migrate legacy medium value off the enum", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal("write", root.GetProperty("mode").GetString());
+        Assert.Equal("medium", root.GetProperty("old_priority").GetString());
+        Assert.Equal("high", root.GetProperty("requested_priority").GetString());
+        Assert.True(root.GetProperty("changed").GetBoolean());
+
+        var updatedState = QueueStateSerializer.Deserialize(File.ReadAllText(workspace.QueueStatePath));
+        Assert.Equal("high", updatedState.Items.Single().Priority);
+
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunsLogPath));
+        var runEvent = Assert.Single(events);
+        Assert.Equal("priority-changed", runEvent.Event);
+        Assert.Contains("medium", runEvent.Reason, StringComparison.Ordinal);
+        Assert.Contains("high", runEvent.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_SamePriorityRequested_IsIdempotentNoOp()
     {
         using var workspace = new ReprioritizeWorkspace();

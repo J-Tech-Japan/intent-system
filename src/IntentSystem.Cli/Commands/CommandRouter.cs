@@ -128,7 +128,8 @@ internal static class CommandRouter
                 ["enqueue"] = QueueEnqueueCommand.Execute,
                 ["dispatch"] = QueueDispatchCommand.Execute,
                 ["transition"] = QueueTransitionCommand.Execute,
-                ["reprioritize"] = QueueReprioritizeCommand.Execute
+                ["reprioritize"] = QueueReprioritizeCommand.Execute,
+                ["priority-drift"] = QueuePriorityDriftCommand.Execute
             },
             ["issue"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

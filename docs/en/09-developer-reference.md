@@ -1002,6 +1002,53 @@ normalizes and validates it (`high`/`normal`/`low`, case-insensitive);
 `normal` rather than erroring, so hand-authored or historical
 `queue-state.json` files never fail closed on this field.
 
+**Legacy/out-of-enum priority values and their ordering rule (G543).**
+Field observation, 2026-07-20: the host `queue-state.json` (1467 items)
+has `high` 1405, `medium` 59, `normal` 3 — `medium` is not in the
+documented `high|normal|low` enum. The documented enum itself is **not**
+expanded to include `medium` or any other legacy value; instead, this
+defines exactly how out-of-enum data behaves, so the selector's behavior
+on real data is never undefined:
+
+- **What priority is for**: it only orders already-**eligible** candidates
+  (see above — every gate still dominates). With a host at 1405/1467
+  items on `high`, priority-first selection degenerates to authoring
+  order among the `high` bucket — not a defect, just the shape this
+  mechanism produces when almost everything shares one priority class.
+- **Ordering rule for every value, including legacy ones**: `high` ranks
+  first, `low` ranks last, and **every other value — missing, empty, or
+  any out-of-enum/legacy string such as `medium` — ranks exactly like an
+  explicit `normal`**, between `high` and `low`. This is total and
+  deterministic: there is no priority value for which the selector's
+  ordering position is undefined. `QueuePriorityClassification.Rank` (in
+  `IntentSystem.Cli.Commands`) is the single shared implementation both
+  `next-slice` ordering and the drift report (below) use, so the two
+  surfaces can never disagree. A regression fixture with a literal
+  `"medium"` item proves this position.
+- **Migration recipe (no new command needed)**: `queue reprioritize
+  <execution-unit> --priority <high|normal|low> --reason <text> --write`
+  already works as the canonical migration path off a legacy value —
+  only the *requested* value is validated against the documented enum;
+  the *existing* value is read, reported (`old_priority`), and compared
+  with **no** validation at all, so an item currently at `medium` (or any
+  other legacy value) can move to any documented value without
+  hand-editing `queue-state.json`. The same fail-closed, audited
+  `priority-changed` runs event described below applies unchanged.
+- **Drift visibility**: **`intent-cli queue priority-drift [--format
+  json|markdown]`** is a new, read-only report — never mutates
+  `queue-state.json` or `runs.jsonl` — listing the item count for every
+  distinct priority value present, always including `high`/`normal`/`low`
+  (even at zero) for a stable report shape, and flagging any value
+  outside that documented enum (`has_drift: true`,
+  `out_of_enum_values: [...]`). Out-of-enum values are ordered by count
+  descending (biggest drift first), tie-broken alphabetically. This is
+  how the 59-item `medium` case becomes visible without a hand-written
+  script.
+- **No silent rewriting**: no command mutates `priority` as a side effect
+  of an unrelated operation — e.g. `queue transition` re-serializes the
+  whole `QueueState` to change `state`/`blocked_by`, but a pre-existing
+  `medium` value on that same item survives byte-for-byte untouched.
+
 **Review repair — `queue reprioritize --write` uses a fail-closed,
 repairable write order.** Writing `queue-state.json` before appending the
 required `priority-changed` runs event could leave a durable priority
