@@ -347,13 +347,52 @@ is reported for visibility only:
   completion, failure, or any transition from silence alone. Once a PR
   exists for the issue (`intent-pr-created`), the PR-lifecycle kinds take
   over instead; detecting a repair-state PR that is itself stale beyond a
-  threshold is an explicit out-of-scope follow-up.
+  threshold is an explicit out-of-scope follow-up. **G545: exempts a unit
+  whose queue-state item is `state=blocked`** — consulted once per
+  `stalled-work` call, tolerant of a missing/malformed `queue-state.json`
+  (falls through to this kind's pre-G545 GitHub-labels-only behavior
+  unchanged, so a domain that never uses `queue-state.json` never loses
+  this detection). A queue-blocked unit is never reported here; see
+  `blocked-label-drift` below.
+- `blocked-label-drift` (G545) — a transitional GitHub/queue-state mismatch,
+  never a stall: the queue-state item for this unit is `state=blocked` (an
+  explicit `blocked_by` reason recorded via `queue transition <unit>
+  blocked --reason <text>`), but its GitHub issue does not yet carry
+  `intent-issue-blocked` — the label side hasn't been reconciled yet.
+  `recommended_action` names the exact canonical reconcile command
+  (`intent-cli automation issue-block --repo <r> --issue <n> --reason
+  "<blocked_by text>" --write --format json`). Once that command applies
+  the label, the same unit disappears from `stalled-work` entirely (neither
+  `claimed-but-silent` nor `blocked-label-drift` fires — GitHub and
+  queue-state agree). Field finding, 2026-07-21 (sekiban-as-a-service): 5
+  items (SKS-G818, SKS-G837, SKS-G835, SKS-G839, SKS-G840) were `state=blocked`
+  in queue-state with an explicit `blocked_by` dependency, yet each was
+  reported as `claimed-but-silent` every wake because `claimed-but-silent`
+  read only GitHub labels and no issue-level "blocked" representation
+  existed at all.
+
+**`intent-cli automation issue-block --repo <owner/repo> --issue <n>
+--reason <text> [--write] [--dry-run] [--format text|json]`** (and its
+`--clear` counterpart, `--reason` omitted) is the canonical, bounded
+transition that applies/removes `intent-issue-blocked` — the ONLY supported
+way to make GitHub agree with a queue-state `blocked` transition; raw `gh
+... edit --add-label`/`--remove-label` is never permitted. Dry-run by
+default. Idempotent both directions (`applied: false` with an explanatory
+`summary` if the label already reflects the requested state). `--reason` is
+required when applying (never permitted with `--clear`) — a blocked
+transition without a recorded reason is refused, mirroring `queue
+reprioritize`'s reason requirement. `intent-issue-blocked` coexists with
+`intent-issue-in-progress` rather than replacing it: the worker still owns
+the issue, it just cannot currently proceed. This command never touches
+`queue-state.json` or `runs.jsonl` — it exists purely to reconcile GitHub
+onto a `blocked` transition that already happened via `queue transition
+<unit> blocked --reason <text>` (unchanged by this slice).
 
 Each item reports `kind`, `execution_unit`, `issue` and/or `pr` (number +
 url), `age_minutes`, `is_informational`, and `recommended_action`.
 `--stale-minutes` filters out items younger than the given threshold
 (default `0` — report everything with its age; callers pick their own
-threshold) — this applies uniformly across all seven kinds; `claimed-but-silent`
+threshold) — this applies uniformly across all eight kinds; `claimed-but-silent`
 and `backlog-ready-idle` each additionally gate on their OWN
 `--claimed-silent-minutes` / `--backlog-idle-minutes` threshold before an
 item is even considered (so raising `--stale-minutes` alone can never make

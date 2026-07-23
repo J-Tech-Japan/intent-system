@@ -56,7 +56,15 @@ namespace IntentSystem.Cli.Commands;
 ///   <see cref="DefaultClaimedSilentMinutes"/> minutes) — the third measured
 ///   field stall class (silent completion / dead worker after claim).
 ///   Recommends a worker status check, never assumes completion or
-///   failure from silence alone.</item>
+///   failure from silence alone. EXEMPTS a unit whose queue-state item is
+///   <see cref="QueueItemState.Blocked"/> — see <c>blocked-label-drift</c>
+///   below (G545).</item>
+/// <item><c>blocked-label-drift</c> (G545) — a queue-blocked unit
+///   (<c>state=blocked</c>) whose GitHub labels have not yet been
+///   reconciled onto <see cref="WorkerNextActionConstants.Labels.IntentIssueBlocked"/>
+///   — never <c>claimed-but-silent</c>, since the unit is legitimately
+///   waiting, not silently stalled. Names the canonical <c>automation
+///   issue-block</c> reconcile command.</item>
 /// </list>
 ///
 /// Age is approximated from the relevant GitHub entity's `createdAt` /
@@ -144,6 +152,22 @@ internal static class AutomationStalledWorkCommand
     /// from silence alone).
     /// </summary>
     public const string KindClaimedButSilent = "claimed-but-silent";
+
+    /// <summary>
+    /// G545: an issue carrying <c>intent-target</c> + <c>intent-issue-in-progress</c>
+    /// (no PR yet) whose queue-state item is <c>state=blocked</c>, but whose
+    /// GitHub labels do not yet carry <see
+    /// cref="WorkerNextActionConstants.Labels.IntentIssueBlocked"/> — a
+    /// transitional GitHub/queue-state mismatch, never a stall: the unit is
+    /// legitimately waiting on its recorded <c>blocked_by</c> reason, it
+    /// simply hasn't been reconciled onto GitHub yet. Informational;
+    /// <c>recommended_action</c> names the canonical <c>automation
+    /// issue-block</c> reconcile command. Field finding, 2026-07-21
+    /// (sekiban-as-a-service): SKS-G818 and four peers were queue-blocked on
+    /// an explicit dependency but reported as <see cref="KindClaimedButSilent"/>
+    /// every wake because <c>claimed-but-silent</c> read only GitHub labels.
+    /// </summary>
+    public const string KindBlockedLabelDrift = "blocked-label-drift";
 
     /// <summary>
     /// G544: fires when WIP is empty for the requested domain (no open
@@ -294,7 +318,7 @@ internal static class AutomationStalledWorkCommand
         CollectPublishedNotDelegated(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         CollectPrCreatedNotReviewing(context, domain, candidateDomains, openIssues, openPrs, repo, now, items, excluded);
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
-        CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded);
+        CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
         CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, items, excluded);
 
         var filtered = items
@@ -717,8 +741,16 @@ internal static class AutomationStalledWorkCommand
         DateTimeOffset now,
         int claimedSilentMinutes,
         List<StalledWorkItem> items,
-        List<StalledWorkExcluded> excluded)
+        List<StalledWorkExcluded> excluded,
+        List<string> warnings)
     {
+        // G545: consulted once per call, not per issue. Missing/unparseable
+        // queue-state is never fatal to this kind — it simply means the
+        // blocked exemption below cannot be evaluated for any candidate,
+        // preserving the exact pre-G545 behavior (a domain that never uses
+        // queue-state.json must not lose claimed-but-silent detection).
+        var queueState = TryLoadQueueStateForClaimedButSilent(context, domain, repo, warnings);
+
         foreach (var issue in openIssues)
         {
             if (!IsOpen(issue.State))
@@ -748,6 +780,46 @@ internal static class AutomationStalledWorkCommand
             // collector in this file already follows.
             var resolution = ResolveExecutionUnit(context, issue.Title);
             var issueRef = new StalledWorkRef { Number = issue.Number, Url = issue.Url };
+
+            // G545 field finding (sekiban-as-a-service, 2026-07-21,
+            // SKS-G818): a unit legitimately `state=blocked` in queue-state
+            // (an explicit `blocked_by` reason recorded via `queue
+            // transition <unit> blocked --reason <text>`) still carries
+            // `intent-issue-in-progress` on GitHub — there is no GitHub-side
+            // signal this collector previously consulted to tell "silently
+            // stalled" apart from "correctly waiting on a recorded
+            // dependency". A blocked queue item exempts its issue from
+            // claimed-but-silent entirely; if the reconcile label hasn't
+            // been applied yet, the mismatch is surfaced as the
+            // transitional, informational `blocked-label-drift` kind
+            // instead — never as a silent-stall false positive.
+            var queueItem = queueState?.Items.FirstOrDefault(
+                candidate => string.Equals(candidate.ExecutionUnit, resolution.ExecutionUnit, StringComparison.Ordinal));
+            if (queueItem is { State: QueueItemState.Blocked })
+            {
+                if (!labels.Contains(WorkerNextActionConstants.Labels.IntentIssueBlocked))
+                {
+                    var blockedReason = string.Join("; ", queueItem.BlockedBy);
+                    items.Add(new StalledWorkItem
+                    {
+                        Kind = KindBlockedLabelDrift,
+                        ExecutionUnit = resolution.ExecutionUnit,
+                        Issue = issueRef,
+                        Pr = null,
+                        AgeMinutes = ComputeAgeMinutes(issue.UpdatedAt, now),
+                        IsInformational = true,
+                        RecommendedAction =
+                            $"queue-state reports `{resolution.ExecutionUnit}` as blocked (blocked_by: {blockedReason}), "
+                            + $"but issue #{issue.Number} does not yet carry the "
+                            + $"`{WorkerNextActionConstants.Labels.IntentIssueBlocked}` label — reconcile via: "
+                            + $"intent-cli automation issue-block --repo {repo} --issue {issue.Number} "
+                            + $"--reason \"{blockedReason}\" --write --format json",
+                    });
+                }
+
+                // Legitimately blocked either way — never claimed-but-silent.
+                continue;
+            }
 
             if (!TryParseActivityTimestamp(issue.UpdatedAt, out var issueActivity, out var issueProblem))
             {
@@ -851,6 +923,34 @@ internal static class AutomationStalledWorkCommand
                     + $"for {silentMinutes}m since claim — ask the assigned worker for a status update; "
                     + "do not assume completion, failure, or transition state from silence alone.",
             });
+        }
+    }
+
+    /// <summary>
+    /// G545: tolerant queue-state load for <see cref="CollectClaimedButSilent"/>'s
+    /// blocked exemption — missing or malformed queue-state is warned about
+    /// (mirroring <see cref="CollectMergedNotClosedOut"/>'s own convention)
+    /// but never fatal to the caller: it simply means the blocked exemption
+    /// cannot be evaluated for any candidate this call, so every issue falls
+    /// through to the pre-G545 claimed-but-silent logic unchanged.
+    /// </summary>
+    private static QueueState? TryLoadQueueStateForClaimedButSilent(
+        CliContext context, string domain, string repo, List<string> warnings)
+    {
+        var queueStateLocation = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(context.RepoRoot, domain, repo);
+        if (!File.Exists(queueStateLocation.Path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return QueueStateSerializer.Deserialize(File.ReadAllText(queueStateLocation.Path));
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            warnings.Add($"queue-state at '{queueStateLocation.Path}' could not be parsed: {exception.Message}; skipped the claimed-but-silent blocked exemption.");
+            return null;
         }
     }
 

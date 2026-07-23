@@ -77,6 +77,15 @@ internal static class WorkflowLabelPaletteContract
             Color = "0E8A16",
             Description = "PR is approved by intent automation review; ready to merge + close out."
         },
+        // G545: issue-level mirror of queue-state's state=blocked, applied/
+        // cleared only via `automation issue-block`. Coexists with
+        // intent-issue-in-progress rather than replacing it.
+        new()
+        {
+            Name = "intent-issue-blocked",
+            Color = "C5DEF5",
+            Description = "Issue is blocked in queue-state (see linked blocked_by reason); worker still owns it."
+        },
         // G374: structured worker-signal protocol. These two labels are
         // the durable pending/handled markers a child implementation
         // worker uses to hand a blocker / follow-up / scope-warning back

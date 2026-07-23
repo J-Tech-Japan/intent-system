@@ -555,6 +555,137 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
     }
 
+    // ─── G545: queue-blocked exemption + blocked-label-drift ───────────────
+
+    [Fact]
+    public void Execute_ClaimedButSilent_QueueBlockedUnit_NoBlockedLabelYet_ReportsBlockedLabelDriftNotSilent()
+    {
+        // G545 field finding (sekiban-as-a-service, 2026-07-21): SKS-G818 is
+        // state=blocked in queue-state (blocked_by SKS-G837), but the
+        // GitHub issue still only carries intent-issue-in-progress -- no
+        // reconcile label yet. Must never fire claimed-but-silent; must
+        // instead surface the transitional blocked-label-drift kind naming
+        // the reconcile command.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("SKS-G818", "sekiban-as-a-service");
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-21T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G818",
+                  "title": "SKS-G818 title",
+                  "state": "blocked",
+                  "dependencies": [],
+                  "blocked_by": ["SKS-G837"],
+                  "clarification_return_path": "intents/sekiban-as-a-service/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+        var issue = BuildIssue(818, "SKS-G818: Queue-blocked but still marked in-progress on GitHub", FixedNow.AddHours(-25),
+            updatedAt: FixedNow.AddHours(-25), labels: ["intent-target", "intent-issue-in-progress"]);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "sekiban-as-a-service", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindBlockedLabelDrift, item.GetProperty("kind").GetString());
+        Assert.True(item.GetProperty("is_informational").GetBoolean());
+        Assert.Equal("SKS-G818", item.GetProperty("execution_unit").GetString());
+        Assert.Equal(818, item.GetProperty("issue").GetProperty("number").GetInt32());
+        var recommendedAction = item.GetProperty("recommended_action").GetString();
+        Assert.Contains("automation issue-block", recommendedAction, StringComparison.Ordinal);
+        Assert.Contains("--issue 818", recommendedAction, StringComparison.Ordinal);
+        Assert.Contains("SKS-G837", recommendedAction, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            other => other.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindClaimedButSilent);
+    }
+
+    [Fact]
+    public void Execute_ClaimedButSilent_QueueBlockedUnit_AlreadyHasBlockedLabel_FullyExempt_NoItemAtAll()
+    {
+        // Once GitHub has been reconciled (intent-issue-blocked applied),
+        // labels and queue-state agree -- neither claimed-but-silent nor
+        // blocked-label-drift should fire.
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("SKS-G818", "sekiban-as-a-service");
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-21T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G818",
+                  "title": "SKS-G818 title",
+                  "state": "blocked",
+                  "dependencies": [],
+                  "blocked_by": ["SKS-G837"],
+                  "clarification_return_path": "intents/sekiban-as-a-service/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+        var issue = BuildIssue(818, "SKS-G818: Reconciled", FixedNow.AddHours(-25),
+            updatedAt: FixedNow.AddHours(-25), labels: ["intent-target", "intent-issue-in-progress", "intent-issue-blocked"]);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "sekiban-as-a-service", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("items").GetArrayLength());
+    }
+
+    [Fact]
+    public void Execute_ClaimedButSilent_QueueStatePresentButNotBlocked_StillFiresClaimedButSilent_NoWeakening()
+    {
+        // No-weakening: a claimed, non-blocked, silent-past-threshold unit
+        // must still fire claimed-but-silent even when queue-state.json
+        // exists and is readable (proving the G545 exemption is scoped
+        // strictly to state=blocked, not "queue-state exists at all").
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("G540", "intent-cli");
+        workspace.WriteQueueState(BuildReadyQueueStateJson("G540"));
+        var issue = BuildIssue(1200, "G540: Something claimed and gone quiet", FixedNow.AddHours(-25),
+            updatedAt: FixedNow.AddHours(-25), labels: ["intent-target", "intent-issue-in-progress"]);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", "intent-cli", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(AutomationStalledWorkCommand.KindClaimedButSilent, item.GetProperty("kind").GetString());
+        Assert.Equal("G540", item.GetProperty("execution_unit").GetString());
+    }
+
     [Fact]
     public void Execute_MergedPr_NeverTreatedAsPrCreatedNotReviewingOrClaimedButSilent()
     {
@@ -1868,6 +1999,52 @@ public sealed class AutomationStalledWorkCommandTests : IDisposable
         Assert.Contains(AutomationStalledWorkCommand.KindBacklogReadyIdle, messageBody, StringComparison.Ordinal);
         Assert.Contains("G600", messageBody, StringComparison.Ordinal);
         Assert.Contains("issue publish-flow", messageBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_Heartbeat_SurfacesBlockedLabelDriftInMessageBody_G545()
+    {
+        using var workspace = new StalledWorkWorkspace();
+        workspace.WritePacketDomain("SKS-G818", "sekiban-as-a-service");
+        workspace.WriteQueueState(
+            """
+            {
+              "schema_version": "1",
+              "updated_at": "2026-07-21T00:00:00Z",
+              "items": [
+                {
+                  "execution_unit": "SKS-G818",
+                  "title": "SKS-G818 title",
+                  "state": "blocked",
+                  "dependencies": [],
+                  "blocked_by": ["SKS-G837"],
+                  "clarification_return_path": "intents/sekiban-as-a-service/clarifications/open.md",
+                  "packet_paths": {"implementation": "a", "review_context": "b", "yaml": "c"},
+                  "worker_role": "coder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
+                }
+              ]
+            }
+            """);
+        var issue = BuildIssue(818, "SKS-G818: Queue-blocked but still marked in-progress on GitHub", FixedNow.AddHours(-25),
+            updatedAt: FixedNow.AddHours(-25), labels: ["intent-target", "intent-issue-in-progress"]);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new FakeLister(issues: [issue]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationHeartbeatCommand.Execute(
+            workspace.Context,
+            ["--domain", "sekiban-as-a-service", "--repo", "J-Tech-Japan/intent-system", "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.True(doc.RootElement.GetProperty("stale").GetBoolean());
+        var messageBody = doc.RootElement.GetProperty("message_body").GetString();
+        Assert.Contains(AutomationStalledWorkCommand.KindBlockedLabelDrift, messageBody, StringComparison.Ordinal);
+        Assert.Contains("SKS-G818", messageBody, StringComparison.Ordinal);
+        Assert.Contains("FYI:", messageBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(AutomationStalledWorkCommand.KindClaimedButSilent, messageBody, StringComparison.Ordinal);
     }
 
     private static string BuildCompleteContractBody()

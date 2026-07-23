@@ -180,6 +180,7 @@ internal static class CommandRouter
                 ["host-queue-item-recovery"] = AutomationHostQueueItemRecoveryCommand.Execute,
                 ["host-sync-preflight"] = AutomationHostSyncPreflightCommand.Execute,
                 ["intent-target-gap-recovery"] = AutomationIntentTargetGapRecoveryCommand.Execute,
+                ["issue-block"] = AutomationIssueBlockCommand.Execute,
                 ["issue-publish"] = AutomationIssuePublishCommand.Execute,
                 ["issue-release"] = AutomationIssueReleaseCommand.Execute,
                 ["issue-retire"] = AutomationIssueRetireCommand.Execute,
