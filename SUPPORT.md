@@ -25,7 +25,7 @@ problem you are trying to solve.
 
 ## Questions and community discussion
 
-For general questions, join the [J-Tech JAPAN OSS Discord](https://discord.gg/7H3nQ9SFW)
+For general questions, join the [J-Tech JAPAN OSS Discord](https://discord.gg/z9FnEgm6mp)
 for community discussion and lightweight support, or open a GitHub Discussion.
 Discord is not a formal support channel and carries no SLA.
 

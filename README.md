@@ -136,7 +136,7 @@ each answer until a stop condition is reached.
 
 ## Community
 
-Join the [J-Tech JAPAN OSS Discord](https://discord.gg/7H3nQ9SFW) for community
+Join the [J-Tech JAPAN OSS Discord](https://discord.gg/z9FnEgm6mp) for community
 discussion, questions, and lightweight support. Discord is for general chat;
 for reproducible bugs or actionable feature requests, please open a
 [GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) instead.
