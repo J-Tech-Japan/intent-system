@@ -48,4 +48,4 @@ The host can live in a **separate host repository** or in the **same repository 
 
 ## Community
 
-Join the [J-Tech JAPAN OSS Discord](https://discord.gg/kMdv978X) for community discussion and questions. For bugs or actionable feature requests, open a [GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) instead. Security reports go to [SECURITY.md](../../SECURITY.md), not Discord.
+Join the [J-Tech JAPAN OSS Discord](https://discord.gg/7H3nQ9SFW) for community discussion and questions. For bugs or actionable feature requests, open a [GitHub issue](https://github.com/J-Tech-Japan/intent-system/issues) instead. Security reports go to [SECURITY.md](../../SECURITY.md), not Discord.
