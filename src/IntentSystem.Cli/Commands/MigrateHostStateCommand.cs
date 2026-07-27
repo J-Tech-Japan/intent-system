@@ -197,7 +197,12 @@ internal static class MigrateHostStateCommand
             UpdatedAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime(),
             Items = mergedItems
         };
-        File.WriteAllText(scopedQueueStatePath, QueueStateSerializer.Serialize(mergedState));
+        // G548: guarded write. Migration only ever ADDS items to the scoped
+        // state, so any item that would disappear is unrequested loss.
+        QueueStatePersistence.Persist(
+            scopedQueueStatePath,
+            scopedQueueState ?? new QueueState { SchemaVersion = "1", UpdatedAt = mergedState.UpdatedAt, Items = Array.Empty<QueueItem>() },
+            mergedState);
 
         // Append new runs to scoped runs.jsonl.
         if (plan.RunsToAdd.Count > 0)

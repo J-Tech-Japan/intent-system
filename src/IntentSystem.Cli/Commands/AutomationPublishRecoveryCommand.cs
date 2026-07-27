@@ -404,7 +404,8 @@ internal static class AutomationPublishRecoveryCommand
             Items = items,
             UpdatedAt = DateTimeOffset.UtcNow
         };
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updated));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(queueStatePath, queueState, updated);
 
         // G390 (review follow-up, Finding 1): a --write recovery must record a
         // durable run event so the repair is auditable and closeout-plan can

@@ -1792,6 +1792,66 @@ deliberately left on the legacy whole-file behavior (out of scope for this
 slice); `RunLogSerializer` / the RunEvent required-field contract are
 unchanged.
 
+### Queue-state writes are guarded: no-item-loss invariant and stale-base re-application (G548)
+
+`queue-state.json` is **one file shared by every domain** on a multi-domain
+host, written concurrently by several loops from different checkouts. Every
+canonical writer deserializes the whole file, mutates in memory, and
+reserializes the whole file — so a read-modify-write race does not merely
+conflict, it **silently erases** whatever the stale in-memory copy happened
+not to contain.
+
+**Field incident, 2026-07-23** (host commit `2ab082cf`): a sekiban-domain
+write recorded a G841 PR linkage from a base read an hour earlier and dropped
+the intent-cli G545 queue item seeded in between. Nothing errored; the commit
+message claimed only the linkage change. The loss stayed invisible for four
+days, then surfaced as `closeout-plan host-metadata-blocked` and combined
+with the `pr-is-draft` recovery gate into a circular deadlock. Restoration
+took three canonical surfaces plus an operator (host commit `c0897649`).
+
+Every canonical mutation now writes through one shared guard
+(`QueueStatePersistence.Persist`), which enforces three things:
+
+1. **Stale-base detection and re-application.** The state the caller *read*
+   is compared against what is on disk *now*, at persist time (through the
+   same serializer round-trip, so pure formatting drift is never mistaken for
+   a concurrent write). On a mismatch the caller's mutation — derived
+   automatically as an item-level delta between its base and its outgoing
+   state — is re-applied to the **fresh** state instead of persisting the
+   stale copy, and the re-application is reported back so it is never
+   invisible.
+2. **No-item-loss invariant.** Any execution unit present on disk but missing
+   from the outgoing state, and not named as an expected removal, **aborts
+   the write** — naming the exact units and the canonical recovery path
+   (`queue-seed-from-packet` → idempotent `issue publish-flow` rerun →
+   `closeout-plan --write-recovered-linkage`). The file is left untouched.
+   An on-disk state that cannot be *read* also aborts, since neither
+   guarantee can be established against it.
+3. **Item-scoped re-application.** A re-applied mutation touches only the
+   units its delta actually covers, plus `updated_at`. Every unrelated item
+   is carried through byte-identically from the fresh state, in the fresh
+   state's order — so a stale copy's older view of another item can never
+   overwrite a newer one.
+
+**Explicit removals stay legitimate.** Retire (G525), the completed-item
+lifecycle, and any operation whose contract names the item it may remove pass
+those units as expected removals. The invariant targets **unrequested** loss
+only; an allow-list entry excuses that unit and nothing else. Retire itself
+needs no entry — it rewrites the item as `state=retired` rather than removing
+it.
+
+**Multi-writer expectations for shared hosts.** Concurrent canonical writers
+are supported and expected: a losing writer is repaired (re-applied), not
+rejected, so no loop has to serialize against another. What is *not*
+supported is a writer that bypasses the guard — hand-editing
+`queue-state.json`, or a new command calling `File.WriteAllText` directly.
+Deliberately out of scope, and unchanged by this slice: a per-domain queue
+file split (a future design decision; a recurrence after this lands is the
+escalation criterion), file-locking daemons, cross-process mutexes, and
+git-level merge strategy — the 2ab082cf loss happened inside a
+fast-forward-clean history, so the defense has to sit at the writer, before
+anything reaches a commit.
+
 ---
 
 ## Version flow

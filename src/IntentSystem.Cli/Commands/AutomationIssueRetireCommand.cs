@@ -447,7 +447,13 @@ internal static class AutomationIssueRetireCommand
                 UpdatedAt = now,
                 Items = updatedItems,
             };
-            File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
+            // G548: guarded write. Retire never REMOVES an item (it rewrites
+            // it as state=retired), so no removal is expected here — any item
+            // that would disappear is unrequested loss.
+            QueueStatePersistence.Persist(
+                queueStatePath,
+                queueState ?? new QueueState { SchemaVersion = "1", UpdatedAt = now, Items = Array.Empty<QueueItem>() },
+                updatedState);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
         {

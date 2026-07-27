@@ -840,7 +840,8 @@ internal static class ReviewCloseoutPlanCommand
         };
 
         Directory.CreateDirectory(Path.GetDirectoryName(legacyQueueStatePath)!);
-        File.WriteAllText(legacyQueueStatePath, QueueStateSerializer.Serialize(updatedState));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(legacyQueueStatePath, queueState, updatedState);
 
         var runsLogPath = Path.Combine(repoRoot, ".intent-cli", "runs.jsonl");
         Directory.CreateDirectory(Path.GetDirectoryName(runsLogPath)!);

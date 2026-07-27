@@ -374,7 +374,7 @@ internal static class AutomationIssueBlockCommand
             AppendRunEvent(runLogPath, runEvent);
         }
 
-        WriteQueueState(queueStatePath, updatedState);
+        WriteQueueState(queueStatePath, queueState, updatedState);
 
         var finalItem = updatedState.Items.First(item => string.Equals(item.ExecutionUnit, executionUnit, StringComparison.Ordinal));
         return new QueueQueueSideResult(false, true, finalItem.State, finalItem.BlockedBy);
@@ -592,7 +592,7 @@ internal static class AutomationIssueBlockCommand
         File.AppendAllText(runLogPath, RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
     }
 
-    private static void WriteQueueState(string queueStatePath, QueueState state)
+    private static void WriteQueueState(string queueStatePath, QueueState baseState, QueueState state)
     {
         if (WriteQueueStateOverride is not null)
         {
@@ -600,7 +600,8 @@ internal static class AutomationIssueBlockCommand
             return;
         }
 
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(state));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(queueStatePath, baseState, state);
     }
 
     private static string BuildSummary(

@@ -866,7 +866,8 @@ internal static class IssuePublishFlowCommand
             UpdatedAt = publishedAt,
         };
 
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(updatedState));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(queueStatePath, queueState, updatedState);
         return true;
     }
 

@@ -96,7 +96,7 @@ internal static class QueueTransitionCommand
                     return 0;
                 }
 
-                PersistTransition(context, new QueueTransitionResult
+                PersistTransition(context, queueState, new QueueTransitionResult
                 {
                     UpdatedState = retireResult.UpdatedState,
                     Event = retireResult.Event!
@@ -121,7 +121,7 @@ internal static class QueueTransitionCommand
                     TransitionActor,
                     DateTimeOffset.UtcNow);
 
-            PersistTransition(context, result);
+            PersistTransition(context, queueState, result);
 
             writer.WriteLine($"Transitioned {args[0]} to {FormatState(targetState)}.");
             return 0;
@@ -275,10 +275,13 @@ internal static class QueueTransitionCommand
         return state is QueueItemState.Blocked or QueueItemState.ClarifyBlocked;
     }
 
-    private static void PersistTransition(CliContext context, QueueTransitionResult result)
+    private static void PersistTransition(CliContext context, QueueState baseState, QueueTransitionResult result)
     {
         var queueStatePath = context.GetQueueStatePath();
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(result.UpdatedState));
+        // G548: guarded write — never silently drops another domain's item,
+        // and re-applies this item-scoped transition if the shared file moved
+        // since it was read.
+        QueueStatePersistence.Persist(queueStatePath, baseState, result.UpdatedState);
 
         var runLogPath = context.GetRunLogPath();
         var runLogDirectory = Path.GetDirectoryName(runLogPath)

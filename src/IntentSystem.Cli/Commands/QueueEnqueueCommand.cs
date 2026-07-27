@@ -50,7 +50,7 @@ internal static class QueueEnqueueCommand
 
             if (result.WasEnqueued)
             {
-                PersistEnqueue(context, result);
+                PersistEnqueue(context, queueState, result);
             }
 
             QueueEnqueueRenderer.WriteSummary(writer, new QueueEnqueueCommandResult
@@ -159,10 +159,11 @@ internal static class QueueEnqueueCommand
         };
     }
 
-    internal static void PersistEnqueue(CliContext context, QueueEnqueueResult result)
+    internal static void PersistEnqueue(CliContext context, QueueState baseState, QueueEnqueueResult result)
     {
         var queueStatePath = context.GetQueueStatePath();
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(result.UpdatedState));
+        // G548: guarded write (no-item-loss + stale-base re-application).
+        QueueStatePersistence.Persist(queueStatePath, baseState, result.UpdatedState);
 
         if (result.Event is null)
         {

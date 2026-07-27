@@ -345,7 +345,7 @@ internal static class QueueReprioritizeCommand
 
         try
         {
-            WriteQueueState(queueStatePath, finalState);
+            WriteQueueState(queueStatePath, currentOnDisk, finalState);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -480,7 +480,7 @@ internal static class QueueReprioritizeCommand
         File.AppendAllText(runLogPath, RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
     }
 
-    private static void WriteQueueState(string queueStatePath, QueueState state)
+    private static void WriteQueueState(string queueStatePath, QueueState baseState, QueueState state)
     {
         if (WriteQueueStateOverride is not null)
         {
@@ -488,7 +488,10 @@ internal static class QueueReprioritizeCommand
             return;
         }
 
-        File.WriteAllText(queueStatePath, QueueStateSerializer.Serialize(state));
+        // G548: guarded write. This command already re-reads the file before
+        // writing (G537), so the base handed to the guard is that fresh read
+        // — the guard then still catches a write racing in between.
+        QueueStatePersistence.Persist(queueStatePath, baseState, state);
     }
 
     /// <summary>
