@@ -393,11 +393,24 @@ behind would keep a "cleared" unit permanently unselectable, merely
 relocating the drift from GitHub into queue-state.
 
 The execution unit is a **required positional argument**, never inferred
-from the issue title. When the queue item declares a `linked_issue`, its
-number is cross-checked against `--issue` and a mismatch is refused rather
-than trusted — the command will not label a possibly-wrong issue. A unit
-that is already blocked with a *different* reason is likewise refused, not
-silently overwritten; clear it first.
+from the issue title. The queue item must additionally carry a **complete
+`linked_issue`** — both a repo and a number — and both must agree with
+`--repo`/`--issue`: the repo is compared canonically (URL/ssh/`.git`/
+trailing-slash shapes normalized to `owner/repo`) and case-insensitively,
+the number exactly. Missing linkage, a different repo, and a different
+number are each refused; a missing linkage is absent evidence, not consent,
+and number-only agreement proves nothing because issue #818 exists in
+almost every repository. A unit already blocked with a *different* reason is
+likewise refused, not silently overwritten; clear it first.
+
+A present but unreadable/unparseable `runs.jsonl` is also a hard stop: the
+command refuses before appending, writing queue-state, or even *reading*
+GitHub labels, and names `intent-cli automation runs-audit` as the repair
+path. Transitioning against a trail it cannot parse would corrupt that trail
+further and would decide retry-vs-fresh-append from no evidence at all. A
+**missing** run log remains the valid first-event case. Every refusal above
+happens before any interaction with the run log, queue-state, or GitHub, so
+all three sides are left byte-identical.
 
 **Write ordering is fail-loud and repairable.** The `runs.jsonl` audit event
 is appended FIRST and `queue-state.json` written SECOND (matching `queue

@@ -263,26 +263,58 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
     }
 
     [Fact]
-    public void Execute_LinkedIssueMismatch_RefusesBeforeAnyMutation()
+    public void Execute_LinkedIssueNumberMismatch_RefusesBeforeAnyInteraction()
     {
-        using var workspace = new Workspace(QueueItemState.Queued, linkedIssueNumber: 999);
-        var mutator = workspace.UseMutator("intent-issue-in-progress");
-        var queueBefore = workspace.ReadQueueStateBytes();
+        using var workspace = new Workspace(
+            QueueItemState.Queued,
+            linkedIssue: new LinkedIssue { Repo = Repo, Number = 999 });
 
-        var (exitCode, output) = workspace.RunRaw(BlockArgs());
-
-        Assert.Equal(1, exitCode);
-        Assert.Contains("linked_issue is #999", output, StringComparison.Ordinal);
-        Assert.Contains("refusing to label a possibly-wrong issue", output, StringComparison.Ordinal);
-        Assert.Equal(queueBefore, workspace.ReadQueueStateBytes());
-        Assert.Empty(workspace.ReadRunEvents());
-        Assert.Empty(mutator.Transitions);
+        AssertRefusedWithoutTouchingAnything(workspace, BlockArgs(), "linked_issue is #999");
     }
 
     [Fact]
-    public void Execute_LinkedIssueMatches_Proceeds()
+    public void Execute_LinkedIssueRepoMismatch_SameNumber_RefusesBeforeAnyInteraction()
     {
-        using var workspace = new Workspace(QueueItemState.Queued, linkedIssueNumber: Issue);
+        // The dangerous case: issue #818 exists in almost every repository,
+        // so number-only agreement is not evidence of the same issue.
+        using var workspace = new Workspace(
+            QueueItemState.Queued,
+            linkedIssue: new LinkedIssue { Repo = "some-other-org/some-other-repo", Number = Issue });
+
+        AssertRefusedWithoutTouchingAnything(
+            workspace, BlockArgs(), "refusing to label an issue in a different repository");
+    }
+
+    [Fact]
+    public void Execute_LinkedIssueMissingEntirely_RefusesBeforeAnyInteraction()
+    {
+        // Absent linkage is missing evidence, not consent.
+        using var workspace = new Workspace(QueueItemState.Queued, omitLinkedIssue: true);
+
+        AssertRefusedWithoutTouchingAnything(
+            workspace, BlockArgs(), "has no complete queue-state linked_issue");
+    }
+
+    [Fact]
+    public void Execute_LinkedIssueNumberMissing_RefusesBeforeAnyInteraction()
+    {
+        using var workspace = new Workspace(
+            QueueItemState.Queued,
+            linkedIssue: new LinkedIssue { Repo = Repo, Number = null });
+
+        AssertRefusedWithoutTouchingAnything(
+            workspace, BlockArgs(), "has no complete queue-state linked_issue");
+    }
+
+    [Fact]
+    public void Execute_LinkedIssueRepoDiffersOnlyInCaseOrUrlShape_IsCanonicallyEqual_AndProceeds()
+    {
+        // GitHub owner/repo names are case-insensitive, and queue-state has
+        // been observed carrying URL/.git shapes. Canonical equality must not
+        // be mistaken for a mismatch and block a legitimate transition.
+        using var workspace = new Workspace(
+            QueueItemState.Queued,
+            linkedIssue: new LinkedIssue { Repo = "https://github.com/Sekiban-As-A-Service/Sekiban.git", Number = Issue });
         var mutator = workspace.UseMutator("intent-issue-in-progress");
 
         var result = workspace.Run(BlockArgs());
@@ -523,6 +555,67 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
         AssertSidesAgree(workspace, mutator, expectedBlocked: true);
     }
 
+    [Fact]
+    public void Execute_ExistingRunLogUnparseable_FailsLoudBeforeAnyInteraction()
+    {
+        // A present-but-unreadable audit trail must stop everything: no
+        // append, no queue write, no label read or mutation. Appending into a
+        // file whose existing content cannot be parsed would both corrupt the
+        // trail further and decide retry-vs-fresh-append from no evidence.
+        using var workspace = new Workspace(QueueItemState.Queued);
+        var mutator = workspace.UseMutator("intent-issue-in-progress");
+        workspace.WriteRawRunLog("{\"ts\":\"2026-07-21T10:00:00Z\",\"execution_unit\":\"SKS-G818\"" + Environment.NewLine + "not json at all" + Environment.NewLine);
+        var queueBefore = workspace.ReadQueueStateBytes();
+        var runLogBefore = workspace.ReadRunLogBytes();
+
+        var (exitCode, output) = workspace.RunRaw(BlockArgs());
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("could not be read", output, StringComparison.Ordinal);
+        Assert.Contains("Refusing to transition against an unreadable audit trail", output, StringComparison.Ordinal);
+        Assert.Contains("intent-cli automation runs-audit", output, StringComparison.Ordinal);
+
+        Assert.Equal(queueBefore, workspace.ReadQueueStateBytes());
+        Assert.Equal(runLogBefore, workspace.ReadRunLogBytes());
+        Assert.Equal(0, mutator.ReadCount);
+        Assert.Empty(mutator.Transitions);
+    }
+
+    [Fact]
+    public void Execute_ExistingRunLogUnparseable_AlsoFailsLoudOnClearAndDryRun()
+    {
+        using var workspace = new Workspace(QueueItemState.Blocked, blockedBy: [Reason]);
+        var mutator = workspace.UseMutator("intent-issue-in-progress", BlockedLabel);
+        workspace.WriteRawRunLog("}{ this is not a run event" + Environment.NewLine);
+        var runLogBefore = workspace.ReadRunLogBytes();
+
+        var (clearExit, clearOutput) = workspace.RunRaw(ClearArgs());
+        var (dryRunExit, dryRunOutput) = workspace.RunRaw(
+            [Unit, "--repo", Repo, "--issue", "818", "--reason", Reason, "--format", "json"]);
+
+        Assert.Equal(1, clearExit);
+        Assert.Equal(1, dryRunExit);
+        Assert.Contains("could not be read", clearOutput, StringComparison.Ordinal);
+        Assert.Contains("could not be read", dryRunOutput, StringComparison.Ordinal);
+        Assert.Equal(runLogBefore, workspace.ReadRunLogBytes());
+        Assert.Equal(0, mutator.ReadCount);
+        Assert.Empty(mutator.Transitions);
+    }
+
+    [Fact]
+    public void Execute_MissingRunLog_RemainsTheValidFirstEventCase()
+    {
+        using var workspace = new Workspace(QueueItemState.Queued);
+        var mutator = workspace.UseMutator("intent-issue-in-progress");
+        Assert.False(File.Exists(workspace.RunLogPath));
+
+        var result = workspace.Run(BlockArgs());
+
+        Assert.True(result.Converged);
+        Assert.Single(workspace.ReadRunEvents());
+        AssertSidesAgree(workspace, mutator, expectedBlocked: true);
+    }
+
     // ---------------------------------------------------------------
     // Routing / help.
     // ---------------------------------------------------------------
@@ -571,6 +664,27 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
         [Unit, "--repo", Repo, "--issue", "818", "--clear", "--write", "--format", "json"];
 
     /// <summary>
+    /// A fail-closed refusal must leave ALL THREE sides untouched: the
+    /// queue-state file byte-identical, the run log byte-identical, and
+    /// GitHub not even read (let alone mutated).
+    /// </summary>
+    private static void AssertRefusedWithoutTouchingAnything(Workspace workspace, string[] args, string expectedMessage)
+    {
+        var mutator = workspace.UseMutator("intent-issue-in-progress");
+        var queueBefore = workspace.ReadQueueStateBytes();
+        var runLogBefore = workspace.ReadRunLogBytes();
+
+        var (exitCode, output) = workspace.RunRaw(args);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(expectedMessage, output, StringComparison.Ordinal);
+        Assert.Equal(queueBefore, workspace.ReadQueueStateBytes());
+        Assert.Equal(runLogBefore, workspace.ReadRunLogBytes());
+        Assert.Equal(0, mutator.ReadCount);
+        Assert.Empty(mutator.Transitions);
+    }
+
+    /// <summary>
     /// The acceptance the round-2 review demands: the ACTUAL persisted queue
     /// state and the ACTUAL label set say the same thing about "blocked".
     /// </summary>
@@ -592,10 +706,14 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
         public Exception? ThrowOnRead { get; set; }
         public Exception? ThrowOnApply { get; set; }
 
+        /// <summary>Any GitHub interaction at all — a fail-closed refusal must leave this at 0.</summary>
+        public int ReadCount { get; private set; }
+
         public FakeMutator(IEnumerable<string> labels) => Labels = labels.ToList();
 
         public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number)
         {
+            ReadCount++;
             if (ThrowOnRead is not null)
             {
                 throw ThrowOnRead;
@@ -633,7 +751,17 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
 
     private sealed class Workspace : IDisposable
     {
-        public Workspace(QueueItemState state, IReadOnlyList<string>? blockedBy = null, int? linkedIssueNumber = null)
+        /// <param name="linkedIssue">
+        /// Overrides the default COMPLETE, canonical linkage. Safe/happy
+        /// fixtures deliberately leave this at the default so they exercise
+        /// the same complete-linkage requirement production callers face.
+        /// </param>
+        /// <param name="omitLinkedIssue">Drops <c>linked_issue</c> entirely.</param>
+        public Workspace(
+            QueueItemState state,
+            IReadOnlyList<string>? blockedBy = null,
+            LinkedIssue? linkedIssue = null,
+            bool omitLinkedIssue = false)
         {
             RootPath = Directory.CreateTempSubdirectory("automation-issue-block-tests-").FullName;
             Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
@@ -649,7 +777,13 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
                 UpdatedAt = FixedNow,
                 Items =
                 [
-                    CreateItem(Unit, state, blockedBy ?? [], linkedIssueNumber),
+                    CreateItem(
+                        Unit,
+                        state,
+                        blockedBy ?? [],
+                        omitLinkedIssue
+                            ? null
+                            : linkedIssue ?? new LinkedIssue { Repo = Repo, Number = Issue, Url = $"https://github.com/{Repo}/issues/{Issue}" }),
                     CreateItem("SKS-G901", QueueItemState.Queued, [], null),
                 ],
             }));
@@ -687,12 +821,16 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
 
         public string ReadQueueStateBytes() => File.ReadAllText(QueueStatePath);
 
+        public string ReadRunLogBytes() => File.Exists(RunLogPath) ? File.ReadAllText(RunLogPath) : "(absent)";
+
+        public void WriteRawRunLog(string content) => File.WriteAllText(RunLogPath, content);
+
         public IReadOnlyList<RunEvent> ReadRunEvents() =>
             File.Exists(RunLogPath)
                 ? RunLogSerializer.DeserializeAll(File.ReadAllText(RunLogPath))
                 : Array.Empty<RunEvent>();
 
-        private static QueueItem CreateItem(string executionUnit, QueueItemState state, IReadOnlyList<string> blockedBy, int? linkedIssueNumber) =>
+        private static QueueItem CreateItem(string executionUnit, QueueItemState state, IReadOnlyList<string> blockedBy, LinkedIssue? linkedIssue) =>
             new()
             {
                 ExecutionUnit = executionUnit,
@@ -707,9 +845,7 @@ public sealed class AutomationIssueBlockCommandTests : IDisposable
                     ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
                     Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml",
                 },
-                LinkedIssue = linkedIssueNumber is null
-                    ? null
-                    : new LinkedIssue { Repo = Repo, Number = linkedIssueNumber, Url = $"https://github.com/{Repo}/issues/{linkedIssueNumber}" },
+                LinkedIssue = linkedIssue,
                 WorkerRole = "coder",
                 ReviewRole = "reviewer",
                 Priority = "normal",

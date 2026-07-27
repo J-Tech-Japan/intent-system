@@ -23,10 +23,13 @@ namespace IntentSystem.Cli.Commands;
 /// left queue-state untouched, immediately recreating the exact drift this
 /// slice exists to close. The execution unit is now a REQUIRED positional
 /// argument (never guessed from the issue title) so "which queue item does
-/// this affect" is resolved exactly, not heuristically — and, when the
-/// queue item declares a <see cref="QueueItem.LinkedIssue"/>, its number is
-/// cross-checked against <c>--issue</c>, refusing to label a possibly-wrong
-/// issue rather than trusting the caller blindly.
+/// this affect" is resolved exactly, not heuristically — and the queue item
+/// must carry a COMPLETE <see cref="QueueItem.LinkedIssue"/> whose repo
+/// (canonicalized, case-insensitive) and number BOTH agree with
+/// <c>--repo</c>/<c>--issue</c> (G545 round 3). Missing linkage, a different
+/// repo, and a different number are each refused before any interaction
+/// with the run log, queue-state, or GitHub — a missing linkage is absent
+/// evidence, not consent, and issue #818 exists in almost every repository.
 ///
 /// Fail-closed, repairable write order — mirrors <see
 /// cref="QueueReprioritizeCommand"/>'s established convention: the queue-side
@@ -130,17 +133,26 @@ internal static class AutomationIssueBlockCommand
             return 1;
         }
 
-        if (queueItem.LinkedIssue is { Number: { } linkedNumber } && linkedNumber != issue)
+        if (!TryValidateLinkedIssue(queueItem, executionUnit!, repo!, issue!.Value, out var linkageError))
         {
-            writer.WriteLine(
-                $"'{executionUnit}'s queue-state linked_issue is #{linkedNumber}, not the requested #{issue}; "
-                + "refusing to label a possibly-wrong issue. Re-invoke with the linked issue number, or fix the "
-                + "queue-state linkage first.");
+            writer.WriteLine(linkageError);
             return 1;
         }
 
         var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var runLogPath = context.GetRunLogPath();
+
+        // G545 round 3: a present-but-unreadable audit trail stops everything
+        // BEFORE any interaction — no append, no queue write, no label read or
+        // mutation. Transitioning against a run log we cannot parse would
+        // record the transition into a file whose existing content is already
+        // unknown, and would decide retry-vs-fresh-append from no evidence at
+        // all. A MISSING run log stays the valid first-event case.
+        if (!TryLoadRunEvents(runLogPath, out var runEvents, out var runLogError))
+        {
+            writer.WriteLine(runLogError);
+            return 1;
+        }
         var beforeState = queueItem.State;
         var beforeBlockedBy = queueItem.BlockedBy;
 
@@ -148,8 +160,8 @@ internal static class AutomationIssueBlockCommand
         try
         {
             queueResult = clear
-                ? ConvergeQueueSide(queueStatePath, runLogPath, queueState, queueItem, executionUnit!, UnblockTargetState, reason: null, write, now)
-                : ConvergeQueueSide(queueStatePath, runLogPath, queueState, queueItem, executionUnit!, QueueItemState.Blocked, reason, write, now);
+                ? ConvergeQueueSide(queueStatePath, runLogPath, runEvents, queueState, queueItem, executionUnit!, UnblockTargetState, reason: null, write, now)
+                : ConvergeQueueSide(queueStatePath, runLogPath, runEvents, queueState, queueItem, executionUnit!, QueueItemState.Blocked, reason, write, now);
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
         {
@@ -289,6 +301,7 @@ internal static class AutomationIssueBlockCommand
     private static QueueQueueSideResult ConvergeQueueSide(
         string queueStatePath,
         string runLogPath,
+        IReadOnlyList<RunEvent> runEvents,
         QueueState queueState,
         QueueItem queueItem,
         string executionUnit,
@@ -334,7 +347,7 @@ internal static class AutomationIssueBlockCommand
         }
 
         var eventName = targetState == QueueItemState.Blocked ? "blocked" : MapUnblockEventName(targetState);
-        var pendingEvent = FindPendingRetryEvent(runLogPath, executionUnit, eventName, reason);
+        var pendingEvent = FindPendingRetryEvent(runEvents, executionUnit, eventName, reason);
 
         RunEvent runEvent;
         QueueState updatedState;
@@ -410,26 +423,9 @@ internal static class AutomationIssueBlockCommand
     /// cycle reusing the same reason text), the matching event is historical,
     /// not pending, and a fresh event is appended instead.
     /// </summary>
-    private static RunEvent? FindPendingRetryEvent(string runLogPath, string executionUnit, string eventName, string? reason)
+    private static RunEvent? FindPendingRetryEvent(
+        IReadOnlyList<RunEvent> events, string executionUnit, string eventName, string? reason)
     {
-        if (!File.Exists(runLogPath))
-        {
-            return null;
-        }
-
-        IReadOnlyList<RunEvent> events;
-        try
-        {
-            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or JsonException)
-        {
-            // Fail OPEN: an unreadable runs.jsonl must never suppress a
-            // genuinely-needed audit event. Worst case is a redundant
-            // append once the file is repaired.
-            return null;
-        }
-
         var lastForUnit = events.LastOrDefault(runEvent => string.Equals(runEvent.ExecutionUnit, executionUnit, StringComparison.Ordinal));
         if (lastForUnit is null
             || !string.Equals(lastForUnit.Event, eventName, StringComparison.Ordinal)
@@ -444,6 +440,142 @@ internal static class AutomationIssueBlockCommand
         }
 
         return lastForUnit;
+    }
+
+    /// <summary>
+    /// G545 round 3: the queue item's <c>linked_issue</c> must be COMPLETE
+    /// (present, with both a repo and a number) and must agree with BOTH
+    /// <c>--repo</c> and <c>--issue</c>. A missing linkage is not "no
+    /// objection" — it is missing evidence, and this command is the one that
+    /// binds a queue item to a GitHub issue, so it must not guess. Repos are
+    /// compared canonically (URL/ssh/<c>.git</c>/trailing-slash shapes
+    /// normalized to <c>owner/repo</c>) and case-insensitively, since GitHub
+    /// owner/repo names are case-insensitive; the issue number is compared
+    /// exactly. Same number in a DIFFERENT repo is the dangerous case this
+    /// closes: issue #818 exists in almost every repository.
+    /// </summary>
+    private static bool TryValidateLinkedIssue(QueueItem queueItem, string executionUnit, string repo, int issue, out string error)
+    {
+        var linked = queueItem.LinkedIssue;
+        if (linked is null || string.IsNullOrWhiteSpace(linked.Repo) || linked.Number is null)
+        {
+            error =
+                $"'{executionUnit}' has no complete queue-state linked_issue (need both repo and number, found "
+                + $"{DescribeLinkage(linked)}); refusing to bind issue #{issue} in {repo} to it. Record the linkage "
+                + "in queue-state.json first, then re-run this exact command.";
+            return false;
+        }
+
+        var canonicalLinkedRepo = CanonicalizeRepo(linked.Repo);
+        var canonicalRequestedRepo = CanonicalizeRepo(repo);
+        if (canonicalLinkedRepo is null || canonicalRequestedRepo is null)
+        {
+            error =
+                $"'{executionUnit}'s queue-state linked_issue repo '{linked.Repo}' or the requested repo '{repo}' is "
+                + "not a recognizable owner/repo; refusing to act on an ambiguous repository.";
+            return false;
+        }
+
+        if (!string.Equals(canonicalLinkedRepo, canonicalRequestedRepo, StringComparison.Ordinal))
+        {
+            error =
+                $"'{executionUnit}'s queue-state linked_issue is in {linked.Repo}, not the requested {repo}; "
+                + "refusing to label an issue in a different repository (the same issue number exists in almost "
+                + "every repo). Re-invoke against the linked repo, or fix the queue-state linkage first.";
+            return false;
+        }
+
+        if (linked.Number.Value != issue)
+        {
+            error =
+                $"'{executionUnit}'s queue-state linked_issue is #{linked.Number.Value}, not the requested #{issue}; "
+                + "refusing to label a possibly-wrong issue. Re-invoke with the linked issue number, or fix the "
+                + "queue-state linkage first.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static string DescribeLinkage(LinkedIssue? linked) => linked is null
+        ? "no linked_issue at all"
+        : $"repo '{(string.IsNullOrWhiteSpace(linked.Repo) ? "(none)" : linked.Repo)}', number {(linked.Number is null ? "(none)" : linked.Number.Value.ToString(System.Globalization.CultureInfo.InvariantCulture))}";
+
+    /// <summary>
+    /// Normalizes the GitHub repository shapes queue-state has been observed
+    /// to carry (bare <c>owner/repo</c>, an https URL, an ssh remote, any of
+    /// them with a <c>.git</c> suffix or trailing slash) down to a
+    /// lowercased <c>owner/repo</c>. Returns null when the value is not a
+    /// recognizable repository, so the caller can fail closed rather than
+    /// compare two unparseable strings.
+    /// </summary>
+    private static string? CanonicalizeRepo(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var normalized = value.Trim();
+        if (normalized.Contains("://", StringComparison.Ordinal)
+            || normalized.StartsWith("git@", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                normalized = GitHubRepositoryTargetResolver.ParseRemoteUrl(normalized);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+            {
+                return null;
+            }
+        }
+
+        normalized = normalized.Trim('/');
+        if (normalized.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[..^4];
+        }
+
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return segments.Length == 2
+            ? $"{segments[0].ToLowerInvariant()}/{segments[1].ToLowerInvariant()}"
+            : null;
+    }
+
+    /// <summary>
+    /// G545 round 3: loads the existing audit trail, failing LOUD when the
+    /// file is present but unreadable/unparseable. The previous fail-open
+    /// behavior let the command append a fresh event and mutate queue-state
+    /// against a trail whose content it could not read — deciding
+    /// "retry or fresh append" from no evidence, and writing into a file
+    /// already known to be corrupt. A MISSING run log is still the valid
+    /// first-event case and yields an empty list.
+    /// </summary>
+    private static bool TryLoadRunEvents(string runLogPath, out IReadOnlyList<RunEvent> events, out string error)
+    {
+        events = Array.Empty<RunEvent>();
+        error = string.Empty;
+
+        if (!File.Exists(runLogPath))
+        {
+            return true;
+        }
+
+        try
+        {
+            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            return true;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or JsonException)
+        {
+            error =
+                $"the existing run log at {runLogPath} could not be read: {exception.Message}. Refusing to transition "
+                + "against an unreadable audit trail — nothing was appended, no queue state was written, and GitHub "
+                + "labels were not read or changed. Repair the run log first (e.g. `intent-cli automation runs-audit "
+                + "--format json`), then re-run this exact command.";
+            return false;
+        }
     }
 
     private static void AppendRunEvent(string runLogPath, RunEvent runEvent)

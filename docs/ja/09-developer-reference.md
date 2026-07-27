@@ -399,10 +399,24 @@ reason を残すと「clear された」はずの unit が永久に選択不能�
 drift を GitHub から queue-state へ移動させただけになります。
 
 execution unit は**必須の positional 引数**であり、issue title から推測する
-ことはありません。queue item が `linked_issue` を宣言している場合、その番号が
-`--issue` と突き合わせられ、不一致は信用せずに拒否されます——誤った issue に
-label を付ける可能性を排除するためです。既に**異なる** reason で blocked に
-なっている unit も同様に、黙って上書きせず拒否します(先に clear してください)。
+ことはありません。さらに queue item は**完全な `linked_issue`**(repo と
+number の両方)を持っている必要があり、その両方が `--repo`/`--issue` と
+一致しなければなりません: repo は canonical 化(URL / ssh / `.git` / 末尾
+スラッシュの各形を `owner/repo` へ正規化)した上で case-insensitive に、
+number は厳密に比較されます。linkage 欠落・repo 不一致・number 不一致は
+いずれも拒否されます——linkage の欠落は「異議なし」ではなく証拠の欠如であり、
+また issue #818 はほぼ全ての repository に存在するため number の一致だけでは
+同一 issue の証明になりません。既に**異なる** reason で blocked になっている
+unit も同様に、黙って上書きせず拒否します(先に clear してください)。
+
+`runs.jsonl` が存在するのに読めない/parse できない場合も hard stop です:
+audit 追記・queue-state 書き込みはもちろん、GitHub label の**読み取り前**に
+拒否し、修復手段として `intent-cli automation runs-audit` を名指しします。
+parse できない trail に対して transition すると、その trail をさらに壊した上、
+「retry か新規追記か」を証拠ゼロで判断することになるためです。run log が
+**存在しない**場合は従来どおり正当な first-event ケースです。上記の拒否は
+いずれも run log / queue-state / GitHub への一切の interaction より前に
+起きるため、3つの side すべてが byte 単位で無変更のまま残ります。
 
 **書き込み順序は fail-loud かつ repairable です。** `runs.jsonl` の audit
 event を先に追記し、`queue-state.json` の書き込みを後に行います
